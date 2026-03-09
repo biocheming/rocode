@@ -9,7 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use chrono::{TimeZone, Utc};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use rocode_command::interactive::{parse_interactive_command, InteractiveCommand};
 use rocode_command::output_blocks::{BlockTone, StatusBlock};
 use rocode_command::CommandRegistry;
@@ -426,6 +426,12 @@ impl App {
 
         match event {
             Event::Key(key) => {
+                // Ignore key release events to prevent duplicate input on Windows
+                // See: https://github.com/crossterm-rs/crossterm/issues/797
+                if key.kind == KeyEventKind::Release {
+                    return Ok(());
+                }
+
                 let key = normalize_key_event(*key);
 
                 // Handle inline permission prompt before dialogs
