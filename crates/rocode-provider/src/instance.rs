@@ -1,0 +1,144 @@
+use async_trait::async_trait;
+use reqwest::Client;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use crate::{
+    runtime::ProviderRuntime, ChatRequest, ChatResponse, ModelInfo, ProtocolImpl, Provider,
+    ProviderConfig, ProviderError, StreamResult,
+};
+
+/// Runtime provider instance combining protocol implementation + config + models.
+pub struct ProviderInstance {
+    id: String,
+    name: String,
+    config: ProviderConfig,
+    protocol: Arc<dyn ProtocolImpl>,
+    client: Client,
+    models: HashMap<String, ModelInfo>,
+    runtime: Option<ProviderRuntime>,
+}
+
+impl ProviderInstance {
+    pub fn new(
+        id: String,
+        name: String,
+        config: ProviderConfig,
+        protocol: Arc<dyn ProtocolImpl>,
+        models: HashMap<String, ModelInfo>,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            config,
+            protocol,
+            client: Client::new(),
+            models,
+            runtime: None,
+        }
+    }
+
+    pub fn with_runtime(mut self, runtime: ProviderRuntime) -> Self {
+        self.runtime = Some(runtime);
+        self
+    }
+
+    pub fn runtime(&self) -> Option<&ProviderRuntime> {
+        self.runtime.as_ref()
+    }
+
+    pub fn get_model(&self, id: &str) -> Option<&ModelInfo> {
+        self.models.get(id)
+    }
+
+    pub fn models(&self) -> Vec<ModelInfo> {
+        self.models.values().cloned().collect()
+    }
+}
+
+#[async_trait]
+impl Provider for ProviderInstance {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn models(&self) -> Vec<ModelInfo> {
+        self.models.values().cloned().collect()
+    }
+
+    fn get_model(&self, id: &str) -> Option<&ModelInfo> {
+        self.models.get(id)
+    }
+
+    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
+        let _permit = if let Some(runtime) = &self.runtime {
+            if runtime.is_preflight_enabled() {
+                if let Some(preflight) = &runtime.preflight {
+                    preflight.check().await?
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let result = self
+            .protocol
+            .chat(&self.client, &self.config, request)
+            .await;
+
+        if let Some(runtime) = &self.runtime {
+            if runtime.is_preflight_enabled() {
+                if let Some(preflight) = &runtime.preflight {
+                    match &result {
+                        Ok(_) => preflight.on_success(),
+                        Err(_) => preflight.on_failure(),
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    async fn chat_stream(&self, request: ChatRequest) -> Result<StreamResult, ProviderError> {
+        let _permit = if let Some(runtime) = &self.runtime {
+            if runtime.is_preflight_enabled() {
+                if let Some(preflight) = &runtime.preflight {
+                    preflight.check().await?
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let result = self
+            .protocol
+            .chat_stream(&self.client, &self.config, request)
+            .await;
+
+        if let Some(runtime) = &self.runtime {
+            if runtime.is_preflight_enabled() {
+                if let Some(preflight) = &runtime.preflight {
+                    match &result {
+                        Ok(_) => preflight.on_success(),
+                        Err(_) => preflight.on_failure(),
+                    }
+                }
+            }
+        }
+
+        result
+    }
+}

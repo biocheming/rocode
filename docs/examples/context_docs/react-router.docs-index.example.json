@@ -1,0 +1,25 @@
+{
+  "$schema": "./context-docs-index.schema.json",
+  "libraryId": "react-router",
+  "version": "7",
+  "pages": [
+    {
+      "pageId": "guides/data-loading",
+      "title": "Data Loading",
+      "url": "https://reactrouter.com/start/data-loading",
+      "summary": "Use loaders to fetch data before rendering routes.",
+      "content": "Loaders let you fetch data before rendering. Use redirect from a loader when a route should navigate instead of rendering.",
+      "headings": ["loader", "redirect"],
+      "tags": ["data", "navigation"]
+    },
+    {
+      "pageId": "api/components/router-provider",
+      "title": "RouterProvider",
+      "url": "https://reactrouter.com/api/components/RouterProvider",
+      "summary": "RouterProvider renders the current route tree.",
+      "content": "RouterProvider provides the routing context and renders matches.",
+      "headings": ["provider", "router"],
+      "tags": ["components"]
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+[package]
+name = "rocode-orchestrator"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rocode-core = { path = "../rocode-core" }
+rocode-provider = { path = "../rocode-provider" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+petgraph = { workspace = true }
+jsonc-parser = { version = "0.29.0", features = ["serde"] }
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }

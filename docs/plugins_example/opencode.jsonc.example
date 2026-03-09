@@ -1,0 +1,11 @@
+{
+  // Compatibility path remains opencode.jsonc/opencode.json
+  "plugin": [
+    "file:///ABS/PATH/TO/docs/plugins_example/ts/example-plugin.ts"
+  ],
+  "skills": {
+    "paths": [
+      "./.opencode/skills"
+    ]
+  }
+}

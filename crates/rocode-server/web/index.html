@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ROCode Web</title>
+    <link rel="stylesheet" href="/web/app.css" />
+  </head>
+  <body>
+    <div class="shell" id="appShell">
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-top">
+          <div class="window-buttons" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </div>
+          <button id="sidebarToggle" class="sidebar-toggle" title="Toggle Sidebar">
+            <span></span>
+          </button>
+        </div>
+
+        <nav class="menu">
+          <button class="menu-item active">Home</button>
+          <button class="menu-item">Automate</button>
+          <button class="menu-item">Skills</button>
+        </nav>
+
+        <div class="search-wrap">
+          <input id="projectSearch" type="text" placeholder="Search projects..." />
+        </div>
+
+        <section class="project-panel">
+          <div class="project-head">
+            <h2>Projects</h2>
+            <span id="projectCount" class="muted">0</span>
+          </div>
+          <div id="projectTree" class="project-tree"></div>
+        </section>
+
+        <footer class="sidebar-footer">
+          <button class="menu-item">Settings</button>
+        </footer>
+      </aside>
+
+      <main class="workspace">
+        <div class="bg-layer"></div>
+
+        <section id="heroPanel" class="hero">
+          <p class="hero-logo">ROCode</p>
+          <h1 id="heroGreeting">Good evening</h1>
+          <p class="hero-sub">Pick a project and start a focused coding session.</p>
+          <div class="hero-actions">
+            <button class="chip-action" data-template="Scaffold a clean Rust module with tests.">
+              Create module
+            </button>
+            <button class="chip-action" data-template="Refactor this file for readability and performance.">
+              Refactor
+            </button>
+            <button class="chip-action" data-template="Investigate the failing tests and propose fixes.">
+              Investigate
+            </button>
+          </div>
+        </section>
+
+        <section id="conversationPanel" class="conversation hidden">
+          <header class="conversation-header">
+            <div>
+              <p class="label">Current Session</p>
+              <h3 id="sessionTitle">No session</h3>
+              <div id="sessionMeta" class="session-meta"></div>
+            </div>
+            <div class="header-actions">
+              <button id="commandBtn" class="ghost-btn">Commands</button>
+              <button id="newSessionBtn" class="ghost-btn">New</button>
+              <button id="forkSessionBtn" class="ghost-btn">Fork</button>
+              <button id="compactSessionBtn" class="ghost-btn">Compact</button>
+              <button id="renameSessionBtn" class="ghost-btn">Rename</button>
+              <button id="shareSessionBtn" class="ghost-btn">Share</button>
+              <button id="deleteSessionBtn" class="ghost-btn ghost-danger">Delete</button>
+              <button id="refreshSession" class="ghost-btn">Refresh</button>
+            </div>
+          </header>
+          <div id="messageFeed" class="message-feed"></div>
+        </section>
+
+        <section class="composer-shell">
+          <form id="composerForm" class="composer">
+            <textarea
+              id="composerInput"
+              rows="1"
+              placeholder="Send a message to ROCode..."
+            ></textarea>
+            <div class="composer-tools">
+              <span id="statusBadge" class="badge">Idle</span>
+              <span id="tokenUsage" class="muted">tokens: 0 / 0</span>
+              <span id="agentBadge" class="muted">mode: auto</span>
+              <span class="muted">`/` commands enabled</span>
+              <button id="sendButton" type="submit" class="send-btn">Send</button>
+            </div>
+          </form>
+        </section>
+
+        <section id="commandPanel" class="command-panel hidden" role="dialog" aria-modal="true">
+          <div class="command-card">
+            <header class="command-head">
+              <h4>Command Panel</h4>
+              <button id="commandClose" class="ghost-btn">Close</button>
+            </header>
+            <div class="command-grid">
+              <section>
+                <p class="label">/model</p>
+                <select id="modelSelect"></select>
+              </section>
+              <section>
+                <p class="label">/theme</p>
+                <select id="themeSelect"></select>
+              </section>
+              <section>
+                <p class="label">/mode</p>
+                <select id="agentSelect"></select>
+              </section>
+              <section>
+                <p class="label">/session</p>
+                <div class="command-action-grid">
+                  <button id="commandSessionNewBtn" class="command-action-btn">New</button>
+                  <button id="commandSessionForkBtn" class="command-action-btn">Fork</button>
+                  <button id="commandSessionCompactBtn" class="command-action-btn">Compact</button>
+                  <button id="commandSessionRenameBtn" class="command-action-btn">Rename</button>
+                  <button id="commandSessionShareBtn" class="command-action-btn">Share</button>
+                  <button id="commandSessionDeleteBtn" class="command-action-btn ghost-danger">Delete</button>
+                </div>
+                <div id="commandSessionList" class="command-session-list"></div>
+              </section>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/web/app.js" defer></script>
+  </body>
+</html>
