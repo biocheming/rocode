@@ -1,0 +1,54 @@
+{
+  "$schema": "https://rocode.dev/schemas/scheduler-profile.schema.json",
+  "version": "2026-03-06",
+
+  "defaults": {
+    "profile": "sisyphus-default"
+  },
+
+  "profiles": {
+    "sisyphus-default": {
+      "orchestrator": "sisyphus",
+      "description": "OMO-aligned delegation-first scheduler profile. Classify the request, route to the best execution posture, then drive execution to completion in one orchestrated loop.",
+      // Optional: override the model used by the scheduler for this profile.
+      // Per-agent model (agentTree agent.model) takes precedence over this.
+      // If omitted, the session's current model is used as fallback.
+      "model": {
+        "providerId": "anthropic",
+        "modelId": "claude-sonnet-4-20250514"
+      },
+      "skillList": [
+        "request-analysis",
+        "route",
+        "execution-orchestration"
+      ],
+      "stages": [
+        "request-analysis",
+        "route",
+        "execution-orchestration"
+      ],
+      "skillTree": {
+        "contextMarkdown": "Route once, preserve request intent, and let the shared execution kernel own the loop until completion."
+      },
+      "agentTree": {
+        "agent": {
+          "name": "deep-worker"
+        },
+        "children": [
+          {
+            "agent": {
+              "name": "code-explorer"
+            },
+            "prompt": "Map implementation hotspots and collect repository evidence before execution commits to a change."
+          },
+          {
+            "agent": {
+              "name": "docs-researcher"
+            },
+            "prompt": "Bring in external documentation only when it materially changes execution risk or design constraints."
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rocode.dev/schemas/context-docs-registry.schema.json",
+  "title": "ROCode Context Docs Registry",
+  "description": "Registry file for the context_docs tool. Each library entry points to a docs index file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["libraries"],
+  "properties": {
+    "libraries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/library"
+      }
+    }
+  },
+  "$defs": {
+    "library": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "libraryId",
+        "displayName",
+        "sourceFamily",
+        "indexPath"
+      ],
+      "properties": {
+        "libraryId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable canonical identifier used by context_docs queries."
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-facing product or library name."
+        },
+        "aliases": {
+          "type": "array",
+          "description": "Alternative names used by resolve_library matching.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": []
+        },
+        "sourceFamily": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Logical source family such as official_docs, mdn, framework_docs, library_docs."
+        },
+        "defaultVersion": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Default version hint surfaced by resolve_library and page resolution."
+        },
+        "homepage": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Homepage or docs landing page URL.",
+          "format": "uri"
+        },
+        "indexPath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path to the docs index JSON, resolved relative to this registry file if not absolute."
+        }
+      }
+    }
+  }
+}

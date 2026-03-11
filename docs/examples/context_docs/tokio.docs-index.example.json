@@ -1,0 +1,25 @@
+{
+  "$schema": "./context-docs-index.schema.json",
+  "libraryId": "tokio",
+  "version": "1.x",
+  "pages": [
+    {
+      "pageId": "runtime/builder",
+      "title": "Runtime Builder",
+      "url": "https://docs.rs/tokio/latest/tokio/runtime/struct.Builder.html",
+      "summary": "Configure a Tokio runtime.",
+      "content": "Builder configures the multi-threaded Tokio runtime and related runtime options.",
+      "headings": ["builder", "runtime"],
+      "tags": ["runtime", "configuration"]
+    },
+    {
+      "pageId": "runtime/handle",
+      "title": "Runtime Handle",
+      "url": "https://docs.rs/tokio/latest/tokio/runtime/struct.Handle.html",
+      "summary": "Access a running Tokio runtime.",
+      "content": "Handle lets you spawn tasks onto an existing Tokio runtime from outside the runtime context.",
+      "headings": ["handle", "spawn"],
+      "tags": ["runtime", "tasks"]
+    }
+  ]
+}

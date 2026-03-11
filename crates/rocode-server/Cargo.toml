@@ -1,0 +1,41 @@
+[package]
+name = "rocode-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rocode-core = { path = "../rocode-core" }
+rocode-agent = { path = "../rocode-agent" }
+rocode-orchestrator = { path = "../rocode-orchestrator" }
+rocode-provider = { path = "../rocode-provider" }
+rocode-session = { path = "../rocode-session" }
+rocode-storage = { path = "../rocode-storage" }
+rocode-types = { path = "../rocode-types" }
+rocode-config = { path = "../rocode-config" }
+rocode-permission = { path = "../rocode-permission" }
+rocode-mcp = { path = "../rocode-mcp" }
+rocode-plugin = { path = "../rocode-plugin" }
+rocode-tool = { path = "../rocode-tool" }
+rocode-command = { path = "../rocode-command" }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+axum = { version = "0.8", features = ["ws"] }
+axum-extra = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tokio-stream = { workspace = true, features = ["sync"] }
+tokio-tungstenite = "0.26"
+dirs = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+once_cell = { workspace = true }
+portable-pty = { workspace = true }

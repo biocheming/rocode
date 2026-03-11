@@ -1,0 +1,182 @@
+/* ═══════════════════════════════════════════════════════════════
+   ROCode Design System - CSS Variables
+   Version: 2.0
+   Philosophy: Minimal, Consistent, Content-Focused
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ─────────────────────────────────────────────────────────────
+     Color System - Dark Theme (Default)
+     Strictly limited palette for consistency
+     ───────────────────────────────────────────────────────────── */
+
+  /* Background Colors - 3 layers only */
+  --bg-base: #0d1117;
+  --bg-surface: #161b22;
+  --bg-elevated: #21262d;
+  --bg-overlay: rgba(13, 17, 23, 0.85);
+
+  /* Text Colors - 4 layers for clear hierarchy */
+  --text-primary: #f0f6fc;
+  --text-secondary: #8b949e;
+  --text-tertiary: #6e7681;
+  --text-disabled: #484f58;
+
+  /* Border Colors - 2 layers */
+  --border-default: #30363d;
+  --border-subtle: #21262d;
+
+  /* Accent Colors - 4 semantic colors only */
+  --accent-primary: #58a6ff;
+  --accent-primary-soft: rgba(88, 166, 255, 0.15);
+  --accent-primary-hover: #79b8ff;
+
+  --accent-success: #3fb950;
+  --accent-success-soft: rgba(63, 185, 80, 0.15);
+
+  --accent-warning: #d29922;
+  --accent-warning-soft: rgba(210, 153, 34, 0.15);
+
+  --accent-error: #f85149;
+  --accent-error-soft: rgba(248, 81, 73, 0.15);
+
+  /* Special Message Colors */
+  --accent-user: #1f6feb;
+  --accent-ai: #238636;
+
+  /* ─────────────────────────────────────────────────────────────
+     Spacing System - 4px base unit
+     Consistent spacing creates rhythm
+     ───────────────────────────────────────────────────────────── */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* ─────────────────────────────────────────────────────────────
+     Border Radius System - 4 sizes
+     Consistent rounding for visual harmony
+     ───────────────────────────────────────────────────────────── */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-full: 9999px;
+
+  /* ─────────────────────────────────────────────────────────────
+     Typography System
+     Clear hierarchy with limited sizes
+     ───────────────────────────────────────────────────────────── */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
+  --font-mono: 'SF Mono', SFMono-Regular, 'JetBrains Mono', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+
+  --font-normal: 400;
+  --font-medium: 500;
+  --font-semibold: 600;
+  --font-bold: 700;
+
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.625;
+
+  /* ─────────────────────────────────────────────────────────────
+     Shadow System - Subtle for dark theme
+     ───────────────────────────────────────────────────────────── */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-focus: 0 0 0 2px rgba(88, 166, 255, 0.3);
+
+  /* ─────────────────────────────────────────────────────────────
+     Animation System
+     Subtle, purposeful motion
+     ───────────────────────────────────────────────────────────── */
+  --duration-fast: 0.1s;
+  --duration-normal: 0.15s;
+  --duration-slow: 0.25s;
+  --duration-slower: 0.35s;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* ─────────────────────────────────────────────────────────────
+     Layout Constants
+     ───────────────────────────────────────────────────────────── */
+  --sidebar-width: 260px;
+  --sidebar-width-collapsed: 0px;
+  --header-height: 56px;
+  --composer-min-height: 64px;
+  --max-content-width: 900px;
+
+  /* ─────────────────────────────────────────────────────────────
+     Z-Index Scale
+     ───────────────────────────────────────────────────────────── */
+  --z-base: 0;
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-fixed: 300;
+  --z-modal-backdrop: 400;
+  --z-modal: 500;
+  --z-popover: 600;
+  --z-tooltip: 700;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Light Theme Override
+   ───────────────────────────────────────────────────────────── */
+[data-theme="light"] {
+  --bg-base: #ffffff;
+  --bg-surface: #f6f8fa;
+  --bg-elevated: #eaeef2;
+  --bg-overlay: rgba(255, 255, 255, 0.9);
+
+  --text-primary: #1f2328;
+  --text-secondary: #656d76;
+  --text-tertiary: #8c959f;
+  --text-disabled: #b7bdc4;
+
+  --border-default: #d0d7de;
+  --border-subtle: #eaeef2;
+
+  --shadow-sm: 0 1px 2px rgba(31, 35, 40, 0.04);
+  --shadow-md: 0 3px 8px rgba(31, 35, 40, 0.08);
+  --shadow-lg: 0 8px 24px rgba(31, 35, 40, 0.12);
+  --shadow-focus: 0 0 0 2px rgba(9, 105, 218, 0.3);
+}
+
+/* ─────────────────────────────────────────────────────────────
+   High Contrast Theme
+   For accessibility
+   ───────────────────────────────────────────────────────────── */
+[data-theme="high-contrast"] {
+  --bg-base: #000000;
+  --bg-surface: #0a0a0a;
+  --bg-elevated: #141414;
+
+  --text-primary: #ffffff;
+  --text-secondary: #e0e0e0;
+  --text-tertiary: #a0a0a0;
+  --text-disabled: #666666;
+
+  --border-default: #666666;
+  --border-subtle: #333333;
+
+  --accent-primary: #4da3ff;
+  --accent-success: #56d364;
+  --accent-warning: #e3b341;
+  --accent-error: #ff7b72;
+}

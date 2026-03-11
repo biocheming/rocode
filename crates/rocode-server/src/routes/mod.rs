@@ -1,0 +1,698 @@
+mod config;
+mod file;
+mod global;
+mod mcp;
+mod permission;
+mod plugin_auth;
+mod process;
+mod project;
+mod provider;
+mod pty;
+mod session;
+mod stream;
+mod task;
+mod tui;
+
+// Re-export all pub items from sub-modules so `pub use routes::*` in lib.rs continues to work.
+use self::plugin_auth::{ensure_plugin_loader_active, plugin_auth_routes};
+use self::process::process_routes;
+use self::task::task_routes;
+pub use config::*;
+pub use file::*;
+pub use global::*;
+pub use mcp::*;
+pub use permission::*;
+pub use project::*;
+pub use provider::*;
+pub use pty::*;
+pub use session::*;
+pub use tui::*;
+
+use axum::{
+    extract::{Path, State},
+    http::HeaderMap,
+    response::sse::{Event, Sse},
+    routing::{get, post, put},
+    Json, Router,
+};
+use futures::stream::Stream;
+use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::convert::Infallible;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use tokio_stream::{wrappers::BroadcastStream, StreamExt};
+
+use crate::web;
+use crate::{ApiError, Result, ServerState};
+use rocode_agent::{AgentMode, AgentRegistry};
+use rocode_config::Config as AppConfig;
+use rocode_orchestrator::{SchedulerConfig, SchedulerPresetKind};
+use rocode_permission::PermissionRuleset;
+use rocode_plugin::subprocess::{PluginLoader, PluginSubprocessError};
+use rocode_provider::AuthInfo;
+
+pub fn router() -> Router<Arc<ServerState>> {
+    Router::new()
+        .route("/", get(web::index))
+        .route("/web/app.css", get(web::app_css))
+        .route("/web/app.js", get(web::app_js))
+        .route("/health", get(health))
+        .route("/event", get(event_stream))
+        .route("/path", get(get_paths))
+        .route("/vcs", get(get_vcs_info))
+        .route("/command", get(list_commands))
+        .route("/agent", get(list_agents))
+        .route("/mode", get(list_execution_modes))
+        .route("/skill", get(list_skills))
+        .route("/lsp", get(get_lsp_status))
+        .route("/formatter", get(get_formatter_status))
+        .route("/auth/{id}", put(set_auth).delete(delete_auth))
+        .route("/doc", get(get_doc))
+        .route("/log", post(write_log))
+        .nest("/session", session_routes())
+        .nest("/provider", provider_routes())
+        .nest("/config", config_routes())
+        .nest("/mcp", mcp_routes())
+        .nest("/file", file_routes())
+        .nest("/find", find_routes())
+        .nest("/permission", permission_routes())
+        .nest("/project", project_routes())
+        .nest("/pty", pty_routes())
+        .nest("/question", question_routes())
+        .nest("/tui", tui_routes())
+        .nest("/process", process_routes())
+        .nest("/task", task_routes())
+        .nest("/global", global_routes())
+        .nest("/experimental", experimental_routes())
+        .nest("/plugin", plugin_auth_routes())
+}
+
+#[derive(Debug, Serialize)]
+struct HealthResponse {
+    status: String,
+    version: String,
+}
+
+async fn health() -> Json<HealthResponse> {
+    Json(HealthResponse {
+        status: "ok".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    })
+}
+
+// --- /doc endpoint: returns OpenAPI-style documentation info ---
+
+#[derive(Debug, Serialize)]
+struct DocInfo {
+    title: String,
+    version: String,
+    description: String,
+    openapi: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DocResponse {
+    info: DocInfo,
+}
+
+async fn get_doc() -> Json<DocResponse> {
+    Json(DocResponse {
+        info: DocInfo {
+            title: "rocode".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            description: "rocode api".to_string(),
+            openapi: "3.1.1".to_string(),
+        },
+    })
+}
+
+// --- /log endpoint: accepts a log entry and writes it via tracing ---
+
+#[derive(Debug, Deserialize)]
+struct WriteLogRequest {
+    service: String,
+    level: String,
+    message: String,
+    #[serde(default)]
+    extra: Option<HashMap<String, serde_json::Value>>,
+}
+
+async fn write_log(Json(req): Json<WriteLogRequest>) -> Result<Json<bool>> {
+    let extra_str = req
+        .extra
+        .as_ref()
+        .map(|e| serde_json::to_string(e).unwrap_or_default())
+        .unwrap_or_default();
+
+    match req.level.as_str() {
+        "debug" => tracing::debug!(service = %req.service, extra = %extra_str, "{}", req.message),
+        "info" => tracing::info!(service = %req.service, extra = %extra_str, "{}", req.message),
+        "warn" => tracing::warn!(service = %req.service, extra = %extra_str, "{}", req.message),
+        "error" => tracing::error!(service = %req.service, extra = %extra_str, "{}", req.message),
+        other => {
+            return Err(ApiError::BadRequest(format!(
+                "invalid log level: '{}', expected one of: debug, info, warn, error",
+                other
+            )));
+        }
+    }
+
+    Ok(Json(true))
+}
+
+async fn event_stream(
+    State(state): State<Arc<ServerState>>,
+) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
+    let rx = state.event_bus.subscribe();
+    Sse::new(BroadcastStream::new(rx).filter_map(|result| match result {
+        Ok(event) => Some(Ok(Event::default().data(event))),
+        Err(_) => None,
+    }))
+}
+
+#[derive(Debug, Serialize)]
+struct PathsResponse {
+    home: String,
+    config: String,
+    data: String,
+    cwd: String,
+}
+
+async fn get_paths() -> Result<Json<PathsResponse>> {
+    let home = dirs::home_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let config = dirs::config_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let data = dirs::data_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    Ok(Json(PathsResponse {
+        home,
+        config,
+        data,
+        cwd,
+    }))
+}
+
+#[derive(Debug, Serialize)]
+struct VcsInfo {
+    system: Option<String>,
+    branch: Option<String>,
+    root: Option<String>,
+}
+
+async fn get_vcs_info() -> Result<Json<VcsInfo>> {
+    Ok(Json(VcsInfo {
+        system: Some("git".to_string()),
+        branch: None,
+        root: None,
+    }))
+}
+
+#[derive(Debug, Serialize)]
+struct CommandInfo {
+    id: String,
+    name: String,
+    description: Option<String>,
+}
+
+async fn list_commands() -> Result<Json<Vec<CommandInfo>>> {
+    Ok(Json(vec![
+        CommandInfo {
+            id: "build".to_string(),
+            name: "Build".to_string(),
+            description: Some("Build the project".to_string()),
+        },
+        CommandInfo {
+            id: "test".to_string(),
+            name: "Test".to_string(),
+            description: Some("Run tests".to_string()),
+        },
+        CommandInfo {
+            id: "lint".to_string(),
+            name: "Lint".to_string(),
+            description: Some("Run linter".to_string()),
+        },
+    ]))
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AgentApiModelRef {
+    #[serde(rename = "modelID")]
+    model_id: String,
+    #[serde(rename = "providerID")]
+    provider_id: String,
+}
+
+/// Matches the TS `Agent.Info` schema returned by the original OpenCode `/agent` endpoint.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentInfo {
+    /// Extra field for TUI backward compat (not in TS schema, harmless).
+    id: String,
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    mode: AgentMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    native: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hidden: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    color: Option<String>,
+    permission: PermissionRuleset,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<AgentApiModelRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    variant: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resolved_prompt: Option<String>,
+    options: HashMap<String, serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    steps: Option<u32>,
+}
+
+static AGENT_LIST_CACHE: Lazy<RwLock<Option<Vec<AgentInfo>>>> = Lazy::new(|| RwLock::new(None));
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExecutionModeInfo {
+    id: String,
+    name: String,
+    kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hidden: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    orchestrator: Option<String>,
+}
+
+static MODE_LIST_CACHE: Lazy<RwLock<Option<Vec<ExecutionModeInfo>>>> =
+    Lazy::new(|| RwLock::new(None));
+
+/// Random token generated at server startup. Plugin-host receives it via
+/// `ROCODE_INTERNAL_TOKEN` env var and sends it back in `x-rocode-internal-token` header.
+/// Prevents external clients from forging the internal-request header.
+static INTERNAL_TOKEN: Lazy<String> = Lazy::new(|| {
+    use std::fmt::Write;
+    let mut buf = String::with_capacity(32);
+    for b in &uuid::Uuid::new_v4().as_bytes()[..16] {
+        let _ = write!(buf, "{:02x}", b);
+    }
+    buf
+});
+
+pub fn internal_token() -> &'static str {
+    &INTERNAL_TOKEN
+}
+
+fn is_valid_internal_request(headers: &HeaderMap) -> bool {
+    let Some(value) = headers
+        .get("x-rocode-plugin-internal")
+        .and_then(|v| v.to_str().ok())
+    else {
+        return false;
+    };
+    let trimmed = value.trim();
+    if !(trimmed == "1" || trimmed.eq_ignore_ascii_case("true")) {
+        return false;
+    }
+    // Verify token
+    let Some(token) = headers
+        .get("x-rocode-internal-token")
+        .and_then(|v| v.to_str().ok())
+    else {
+        tracing::warn!("internal request header present but missing token");
+        return false;
+    };
+    token.trim() == INTERNAL_TOKEN.as_str()
+}
+
+fn should_apply_plugin_config_hooks(headers: &HeaderMap) -> bool {
+    !is_valid_internal_request(headers)
+}
+
+async fn list_agents(
+    State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<AgentInfo>>> {
+    if !should_apply_plugin_config_hooks(&headers) {
+        if let Some(cached) = AGENT_LIST_CACHE.read().await.clone() {
+            return Ok(Json(cached));
+        }
+        let config = state.config_store.config();
+        return Ok(Json(build_agent_list(Some(&config))));
+    }
+
+    // Ensure plugins are alive before calling config hooks (P1 fix: idle-shutdown recovery)
+    let _ = ensure_plugin_loader_active(&state).await?;
+
+    let mut config = (*state.config_store.config()).clone();
+    if let Some(loader) = get_plugin_loader() {
+        apply_plugin_config_hooks(loader, &mut config).await;
+    }
+
+    state.config_store.set_plugin_applied(config.clone()).await;
+    let agents = build_agent_list(Some(&config));
+    *AGENT_LIST_CACHE.write().await = Some(agents.clone());
+    Ok(Json(agents))
+}
+
+fn build_agent_list(config: Option<&AppConfig>) -> Vec<AgentInfo> {
+    let registry = AgentRegistry::from_optional_config(config);
+    registry
+        .list()
+        .into_iter()
+        .map(|agent| AgentInfo {
+            id: agent.name.clone(),
+            name: agent.name.clone(),
+            description: agent.description.clone(),
+            mode: agent.mode,
+            native: if agent.native { Some(true) } else { None },
+            hidden: if agent.hidden { Some(true) } else { None },
+            top_p: agent.top_p,
+            temperature: agent.temperature,
+            color: agent.color.clone(),
+            permission: agent.permission.clone(),
+            model: agent.model.as_ref().map(|m| AgentApiModelRef {
+                model_id: m.model_id.clone(),
+                provider_id: m.provider_id.clone(),
+            }),
+            variant: agent.variant.clone(),
+            prompt: agent.system_prompt.clone(),
+            resolved_prompt: agent.resolved_system_prompt(),
+            options: agent.options.clone(),
+            steps: agent.max_steps,
+        })
+        .collect()
+}
+
+fn builtin_preset_mode_description(preset: SchedulerPresetKind) -> &'static str {
+    match preset {
+        SchedulerPresetKind::Sisyphus => "OMO-aligned delegation-first orchestration preset",
+        SchedulerPresetKind::Prometheus => "OMO-aligned planning-first orchestration preset",
+        SchedulerPresetKind::Atlas => "OMO-aligned graph-oriented orchestration preset",
+        SchedulerPresetKind::Hephaestus => "OMO-aligned autonomous execution preset",
+    }
+}
+
+fn build_builtin_preset_mode_list() -> Vec<ExecutionModeInfo> {
+    SchedulerPresetKind::public_presets()
+        .iter()
+        .copied()
+        .map(|preset| ExecutionModeInfo {
+            id: preset.as_str().to_string(),
+            name: preset.as_str().to_string(),
+            kind: "preset".to_string(),
+            description: Some(builtin_preset_mode_description(preset).to_string()),
+            mode: None,
+            hidden: None,
+            color: None,
+            orchestrator: Some(preset.as_str().to_string()),
+        })
+        .collect()
+}
+
+fn build_external_scheduler_profile_mode_list(
+    config: Option<&AppConfig>,
+) -> Vec<ExecutionModeInfo> {
+    let Some(config) = config else {
+        return Vec::new();
+    };
+
+    let Some(scheduler_path) = config
+        .scheduler_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Vec::new();
+    };
+
+    let scheduler_config = match SchedulerConfig::load_from_file(scheduler_path) {
+        Ok(config) => config,
+        Err(error) => {
+            tracing::warn!(path = %scheduler_path, %error, "failed to load external scheduler profiles for execution modes");
+            return Vec::new();
+        }
+    };
+
+    let mut profiles = scheduler_config
+        .profiles
+        .into_iter()
+        .map(|(profile_name, profile)| ExecutionModeInfo {
+            id: profile_name.clone(),
+            name: profile_name,
+            kind: "profile".to_string(),
+            description: profile.description.clone(),
+            mode: None,
+            hidden: None,
+            color: None,
+            orchestrator: profile.orchestrator.clone(),
+        })
+        .collect::<Vec<_>>();
+    profiles.sort_by(|a, b| a.name.cmp(&b.name));
+    profiles
+}
+
+fn build_execution_mode_list(config: Option<&AppConfig>) -> Vec<ExecutionModeInfo> {
+    let mut items = build_agent_list(config)
+        .into_iter()
+        .map(|agent| ExecutionModeInfo {
+            id: agent.id,
+            name: agent.name,
+            kind: "agent".to_string(),
+            description: agent.description,
+            mode: Some(match agent.mode {
+                AgentMode::All => "all".to_string(),
+                AgentMode::Primary => "primary".to_string(),
+                AgentMode::Subagent => "subagent".to_string(),
+            }),
+            hidden: agent.hidden,
+            color: agent.color,
+            orchestrator: None,
+        })
+        .collect::<Vec<_>>();
+    items.extend(build_builtin_preset_mode_list());
+    items.extend(build_external_scheduler_profile_mode_list(config));
+    items
+}
+
+async fn list_execution_modes(
+    State(state): State<Arc<ServerState>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<ExecutionModeInfo>>> {
+    if !should_apply_plugin_config_hooks(&headers) {
+        if let Some(cached) = MODE_LIST_CACHE.read().await.clone() {
+            return Ok(Json(cached));
+        }
+        let config = state.config_store.config();
+        return Ok(Json(build_execution_mode_list(Some(&config))));
+    }
+
+    let _ = ensure_plugin_loader_active(&state).await?;
+
+    let mut config = (*state.config_store.config()).clone();
+    if let Some(loader) = get_plugin_loader() {
+        apply_plugin_config_hooks(loader, &mut config).await;
+    }
+
+    state.config_store.set_plugin_applied(config.clone()).await;
+    let modes = build_execution_mode_list(Some(&config));
+    *MODE_LIST_CACHE.write().await = Some(modes.clone());
+    Ok(Json(modes))
+}
+
+pub async fn refresh_agent_cache(config_store: &rocode_config::ConfigStore) {
+    let mut config = (*config_store.config()).clone();
+
+    if let Some(loader) = get_plugin_loader() {
+        apply_plugin_config_hooks(loader, &mut config).await;
+    }
+
+    config_store.set_plugin_applied(config.clone()).await;
+    let agents = build_agent_list(Some(&config));
+    *AGENT_LIST_CACHE.write().await = Some(agents);
+    let modes = build_execution_mode_list(Some(&config));
+    *MODE_LIST_CACHE.write().await = Some(modes);
+}
+
+async fn apply_plugin_config_hooks(loader: &Arc<PluginLoader>, config: &mut AppConfig) {
+    let mut config_value = match serde_json::to_value(config.clone()) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(%error, "failed to serialize config for plugin config hook");
+            return;
+        }
+    };
+
+    for client in loader.clients().await {
+        match client
+            .invoke_hook("config", config_value.clone(), config_value.clone())
+            .await
+        {
+            Ok(next_config) => {
+                if next_config.is_object() {
+                    config_value = next_config;
+                } else {
+                    tracing::warn!(
+                        plugin = client.name(),
+                        "plugin config hook returned non-object config payload"
+                    );
+                }
+            }
+            Err(PluginSubprocessError::Rpc { code, .. }) if code == -32601 => {
+                // Plugin does not implement config hook.
+            }
+            Err(error) => {
+                tracing::warn!(
+                    plugin = client.name(),
+                    %error,
+                    "plugin config hook invocation failed"
+                );
+            }
+        }
+    }
+
+    match serde_json::from_value::<AppConfig>(config_value) {
+        Ok(next) => *config = next,
+        Err(error) => {
+            tracing::warn!(%error, "failed to deserialize config after plugin hooks");
+        }
+    }
+}
+
+async fn list_skills() -> Result<Json<Vec<String>>> {
+    let mut names: Vec<String> = rocode_tool::skill::list_available_skills()
+        .into_iter()
+        .map(|(name, _description)| name)
+        .collect();
+    names.sort_by_key(|name| name.to_ascii_lowercase());
+    names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    Ok(Json(names))
+}
+
+#[derive(Debug, Serialize)]
+struct LspStatus {
+    servers: Vec<String>,
+}
+
+async fn get_lsp_status() -> Result<Json<LspStatus>> {
+    Ok(Json(LspStatus {
+        servers: Vec::new(),
+    }))
+}
+
+#[derive(Debug, Serialize)]
+struct FormatterStatus {
+    formatters: Vec<String>,
+}
+
+async fn get_formatter_status() -> Result<Json<FormatterStatus>> {
+    Ok(Json(FormatterStatus {
+        formatters: Vec::new(),
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct SetAuthRequest {
+    #[serde(flatten)]
+    body: serde_json::Value,
+}
+
+async fn set_auth(
+    State(state): State<Arc<ServerState>>,
+    Path(id): Path<String>,
+    Json(req): Json<SetAuthRequest>,
+) -> Result<Json<serde_json::Value>> {
+    let auth_info = parse_auth_info_payload(req.body)
+        .ok_or_else(|| ApiError::BadRequest("Invalid auth payload".to_string()))?;
+    state.auth_manager.set(&id, auth_info).await;
+
+    // Rebuild the provider registry so newly-connected providers are
+    // available immediately (e.g. their models show up in /provider/).
+    state.rebuild_providers().await;
+    state.broadcast("config.updated");
+
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+async fn delete_auth(
+    State(state): State<Arc<ServerState>>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>> {
+    state.auth_manager.remove(&id).await;
+    state.rebuild_providers().await;
+    state.broadcast("config.updated");
+    Ok(Json(serde_json::json!({ "deleted": true })))
+}
+
+fn parse_auth_info_payload(payload: serde_json::Value) -> Option<AuthInfo> {
+    if let Ok(auth) = serde_json::from_value::<AuthInfo>(payload.clone()) {
+        return Some(auth);
+    }
+
+    let key = payload
+        .get("api_key")
+        .and_then(|v| v.as_str())
+        .or_else(|| payload.get("apiKey").and_then(|v| v.as_str()))
+        .or_else(|| payload.get("token").and_then(|v| v.as_str()))
+        .or_else(|| payload.get("key").and_then(|v| v.as_str()))
+        .map(str::to_string)?;
+
+    Some(AuthInfo::Api { key })
+}
+
+// ===========================================================================
+// Plugin auth routes
+// ===========================================================================
+
+static PLUGIN_LOADER: std::sync::OnceLock<Arc<PluginLoader>> = std::sync::OnceLock::new();
+
+/// Register the global PluginLoader so routes can access auth bridges.
+/// Called once during server startup after plugins are loaded.
+pub fn set_plugin_loader(loader: Arc<PluginLoader>) {
+    let _ = PLUGIN_LOADER.set(loader);
+}
+
+pub(crate) fn get_plugin_loader() -> Option<&'static Arc<PluginLoader>> {
+    PLUGIN_LOADER.get()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn execution_modes_include_builtin_public_presets_without_scheduler_path() {
+        let modes = build_execution_mode_list(Some(&AppConfig::default()));
+        let preset_names = modes
+            .into_iter()
+            .filter(|mode| mode.kind == "preset")
+            .map(|mode| mode.name)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            preset_names,
+            vec!["sisyphus", "prometheus", "atlas", "hephaestus",]
+        );
+    }
+}

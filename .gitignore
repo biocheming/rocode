@@ -1,0 +1,6 @@
+# Rust build output
+target/
+marscode/
+plans/
+# Cargo local config
+.cargo/config.toml

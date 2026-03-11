@@ -1,0 +1,234 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rocode.dev/schemas/scheduler-profile.schema.json",
+  "title": "ROCode Scheduler Profile Configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "type": "string"
+        }
+      }
+    },
+    "profiles": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/profile"
+      }
+    }
+  },
+  "$defs": {
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "orchestrator": {
+          "type": "string",
+          "enum": [
+            "sisyphus",
+            "prometheus",
+            "atlas",
+            "hephaestus"
+          ],
+          "description": "Supported presets are sisyphus, prometheus, atlas, and hephaestus."
+        },
+        "description": {
+          "type": "string"
+        },
+        "model": {
+          "$ref": "#/$defs/modelRef"
+        },
+        "skillList": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "stages": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "request-analysis",
+              "route",
+              "interview",
+              "plan",
+              "delegation",
+              "review",
+              "execution-orchestration",
+              "handoff",
+              "synthesis"
+            ]
+          }
+        },
+        "agentTree": {
+          "$ref": "#/$defs/agentTreeNode"
+        },
+        "skillGraph": {
+          "$ref": "#/$defs/skillGraph"
+        },
+        "skillTree": {
+          "$ref": "#/$defs/skillTree"
+        }
+      }
+    },
+    "modelRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["providerId", "modelId"],
+      "properties": {
+        "providerId": {
+          "type": "string"
+        },
+        "modelId": {
+          "type": "string"
+        }
+      }
+    },
+    "agentDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "systemPrompt": {
+          "type": "string"
+        },
+        "maxSteps": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "temperature": {
+          "type": "number"
+        },
+        "allowedTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "model": {
+          "$ref": "#/$defs/modelRef"
+        }
+      }
+    },
+    "agentTreeNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent"],
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/agentDescriptor"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agentTreeNode"
+          }
+        }
+      }
+    },
+    "skillGraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entryNodeId", "nodes"],
+      "properties": {
+        "entryNodeId": {
+          "type": "string"
+        },
+        "maxHops": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/skillGraphNode"
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/skillGraphEdge"
+          }
+        }
+      }
+    },
+    "skillGraphNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "agent"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "agent": {
+          "$ref": "#/$defs/agentDescriptor"
+        },
+        "prompt": {
+          "type": "string"
+        }
+      }
+    },
+    "skillGraphEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to"],
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "condition": {
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": ["always"]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "outputContains": {
+                  "type": "string"
+                },
+                "outputNotContains": {
+                  "type": "string"
+                }
+              },
+              "minProperties": 1,
+              "maxProperties": 1
+            }
+          ]
+        }
+      }
+    },
+    "skillTree": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contextMarkdown"],
+      "properties": {
+        "contextMarkdown": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

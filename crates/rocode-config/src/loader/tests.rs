@@ -1,0 +1,730 @@
+use super::*;
+use super::file_ops::{
+    migrate_legacy_toml_config, parse_jsonc, resolve_file_references, substitute_env_vars,
+};
+use super::markdown_parser::{
+    fallback_sanitize_yaml, parse_markdown_agent, parse_markdown_command,
+    serde_yaml_frontmatter_to_json, split_frontmatter,
+};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+struct TestDir {
+    path: PathBuf,
+}
+
+impl TestDir {
+    fn new(prefix: &str) -> Self {
+        let unique = format!(
+            "{}_{}_{}",
+            prefix,
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock error")
+                .as_nanos()
+        );
+        let path = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&path).expect("failed to create test temp dir");
+        Self { path }
+    }
+}
+
+impl Drop for TestDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+#[test]
+fn test_parse_jsonc_simple() {
+    let content = r#"{"model": "claude-3-opus"}"#;
+    let config: Config = parse_jsonc(content).unwrap();
+    assert_eq!(config.model, Some("claude-3-opus".to_string()));
+}
+
+#[test]
+fn test_parse_jsonc_with_comments() {
+    let content = r#"{
+        // This is a comment
+        "model": "claude-3-opus",
+        /* Multi-line
+            comment */
+        "theme": "dark"
+    }"#;
+    let config: Config = parse_jsonc(content).unwrap();
+    assert_eq!(config.model, Some("claude-3-opus".to_string()));
+    assert_eq!(config.theme, Some("dark".to_string()));
+}
+
+#[test]
+fn test_parse_jsonc_allows_trailing_comma_in_object() {
+    let content = r#"{
+        "model": "claude-3-opus",
+        "theme": "dark",
+    }"#;
+    let config: Config = parse_jsonc(content).unwrap();
+    assert_eq!(config.model, Some("claude-3-opus".to_string()));
+    assert_eq!(config.theme, Some("dark".to_string()));
+}
+
+#[test]
+fn test_parse_jsonc_allows_trailing_comma_in_array() {
+    let content = r#"{
+        "instructions": ["a.md", "b.md",],
+        "plugin": [
+            "p1",
+            "p2",
+        ],
+    }"#;
+    let config: Config = parse_jsonc(content).unwrap();
+    assert_eq!(
+        config.instructions,
+        vec!["a.md".to_string(), "b.md".to_string()]
+    );
+    // Old array format is backward-compatible: converted to HashMap
+    assert_eq!(config.plugin.len(), 2);
+    assert!(config.plugin.contains_key("p1"));
+    assert!(config.plugin.contains_key("p2"));
+}
+
+#[test]
+fn test_parse_jsonc_preserves_comment_markers_inside_strings() {
+    let content = r#"{
+        "provider": {
+            "openai": {
+                "base_url": "https://example.com/path//not-comment",
+                "api_key": "abc/*not-comment*/def"
+            }
+        }
+    }"#;
+    let config: Config = parse_jsonc(content).unwrap();
+    let provider = config.provider.unwrap();
+    let openai = provider.get("openai").unwrap();
+    assert_eq!(
+        openai.base_url.as_deref(),
+        Some("https://example.com/path//not-comment")
+    );
+    assert_eq!(openai.api_key.as_deref(), Some("abc/*not-comment*/def"));
+}
+
+#[test]
+fn test_config_merge() {
+    let mut config1 = Config {
+        model: Some("model1".to_string()),
+        instructions: vec!["inst1".to_string()],
+        ..Default::default()
+    };
+
+    let config2 = Config {
+        model: Some("model2".to_string()),
+        instructions: vec!["inst2".to_string()],
+        ..Default::default()
+    };
+
+    config1.merge(config2);
+
+    assert_eq!(config1.model, Some("model2".to_string()));
+    assert_eq!(
+        config1.instructions,
+        vec!["inst1".to_string(), "inst2".to_string()]
+    );
+}
+
+#[test]
+fn test_load_project_finds_and_merges_parent_configs() {
+    let temp = TestDir::new("rocode_config_findup");
+    let root = temp.path.join("repo");
+    let child = root.join("apps/web");
+    fs::create_dir_all(&child).unwrap();
+
+    fs::write(root.join("rocode.jsonc"), r#"{ "model": "parent-model" }"#).unwrap();
+    fs::write(
+        root.join("apps/rocode.jsonc"),
+        r#"{ "theme": "dark", "instructions": ["parent.md"] }"#,
+    )
+    .unwrap();
+    fs::write(
+        child.join("rocode.jsonc"),
+        r#"{ "instructions": ["child.md"] }"#,
+    )
+    .unwrap();
+
+    let mut loader = ConfigLoader::new();
+    loader.load_project(&child).unwrap();
+    let cfg = loader.config();
+
+    assert_eq!(cfg.model.as_deref(), Some("parent-model"));
+    assert_eq!(cfg.theme.as_deref(), Some("dark"));
+    assert_eq!(
+        cfg.instructions,
+        vec!["parent.md".to_string(), "child.md".to_string()]
+    );
+}
+
+#[test]
+fn test_load_project_stops_at_git_root() {
+    let temp = TestDir::new("rocode_config_gitroot");
+    let outer = temp.path.join("outer");
+    let repo = outer.join("repo");
+    let child = repo.join("sub");
+    fs::create_dir_all(&child).unwrap();
+    fs::create_dir_all(repo.join(".git")).unwrap();
+
+    fs::write(outer.join("rocode.jsonc"), r#"{ "model": "outer-model" }"#).unwrap();
+    fs::write(repo.join("rocode.jsonc"), r#"{ "model": "repo-model" }"#).unwrap();
+    fs::write(child.join("rocode.jsonc"), r#"{ "theme": "child-theme" }"#).unwrap();
+
+    let mut loader = ConfigLoader::new();
+    loader.load_project(&child).unwrap();
+    let cfg = loader.config();
+
+    assert_eq!(cfg.model.as_deref(), Some("repo-model"));
+    assert_eq!(cfg.theme.as_deref(), Some("child-theme"));
+}
+
+#[test]
+fn test_load_project_finds_up_dot_rocode_configs() {
+    let temp = TestDir::new("rocode_config_dotdir");
+    let root = temp.path.join("repo");
+    let child = root.join("service");
+    fs::create_dir_all(root.join(".git")).unwrap();
+    fs::create_dir_all(root.join(".rocode")).unwrap();
+    fs::create_dir_all(child.join(".rocode")).unwrap();
+
+    fs::write(
+        root.join(".rocode/rocode.jsonc"),
+        r#"{ "default_agent": "build", "instructions": ["root.md"] }"#,
+    )
+    .unwrap();
+    fs::write(
+        child.join(".rocode/rocode.jsonc"),
+        r#"{ "default_agent": "reviewer", "instructions": ["child.md"] }"#,
+    )
+    .unwrap();
+
+    let mut loader = ConfigLoader::new();
+    loader.load_project(&child).unwrap();
+    let cfg = loader.config();
+
+    assert_eq!(cfg.default_agent.as_deref(), Some("reviewer"));
+    assert_eq!(
+        cfg.instructions,
+        vec!["root.md".to_string(), "child.md".to_string()]
+    );
+}
+
+#[test]
+fn test_load_project_supports_rocode_top_level_files() {
+    let temp = TestDir::new("rocode_config_project_rocode_json");
+    let root = temp.path.join("repo");
+    let child = root.join("apps/web");
+    fs::create_dir_all(&child).unwrap();
+
+    fs::write(
+        root.join("rocode.jsonc"),
+        r#"{ "model": "parent-model", "instructions": ["root.md"] }"#,
+    )
+    .unwrap();
+    fs::write(
+        child.join("rocode.json"),
+        r#"{ "theme": "dark", "instructions": ["child.md"] }"#,
+    )
+    .unwrap();
+
+    let mut loader = ConfigLoader::new();
+    loader.load_project(&child).unwrap();
+    let cfg = loader.config();
+
+    assert_eq!(cfg.model.as_deref(), Some("parent-model"));
+    assert_eq!(cfg.theme.as_deref(), Some("dark"));
+    assert_eq!(
+        cfg.instructions,
+        vec!["root.md".to_string(), "child.md".to_string()]
+    );
+}
+
+#[test]
+fn test_load_project_ignores_opencode_files() {
+    let temp = TestDir::new("rocode_config_project_opencode_ignored");
+    let root = temp.path.join("repo");
+    let child = root.join("apps/web");
+    fs::create_dir_all(&child).unwrap();
+
+    fs::write(
+        root.join("opencode.jsonc"),
+        r#"{ "model": "legacy-model", "instructions": ["legacy.md"] }"#,
+    )
+    .unwrap();
+    fs::write(
+        child.join("rocode.json"),
+        r#"{ "theme": "dark", "instructions": ["current.md"] }"#,
+    )
+    .unwrap();
+
+    let mut loader = ConfigLoader::new();
+    loader.load_project(&child).unwrap();
+    let cfg = loader.config();
+
+    assert_ne!(cfg.model.as_deref(), Some("legacy-model"));
+    assert_eq!(cfg.theme.as_deref(), Some("dark"));
+    assert_eq!(cfg.instructions, vec!["current.md".to_string()]);
+}
+
+#[test]
+fn test_load_from_file_normalizes_scheduler_path_relative_to_config_file() {
+    let temp = TestDir::new("rocode_config_scheduler_path");
+    let root = temp.path.join("repo");
+    let config_dir = root.join(".rocode");
+    fs::create_dir_all(&config_dir).unwrap();
+
+    fs::write(
+        config_dir.join("rocode.jsonc"),
+        r#"{ "schedulerPath": "scheduler/sisyphus.jsonc" }"#,
+    )
+    .unwrap();
+
+    let mut loader = ConfigLoader::new();
+    loader
+        .load_from_file(config_dir.join("rocode.jsonc"))
+        .unwrap();
+
+    assert_eq!(
+        loader.config().scheduler_path.as_deref(),
+        Some(
+            config_dir
+                .join("scheduler/sisyphus.jsonc")
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+}
+
+#[test]
+fn test_load_all_reads_plugins_from_plugin_paths() {
+    let temp = TestDir::new("rocode_config_plugin_paths");
+    let root = temp.path.join("repo");
+    fs::create_dir_all(root.join(".git")).unwrap();
+    fs::create_dir_all(root.join(".opencode/plugins")).unwrap();
+    let plugin_path = root.join(".opencode/plugins/legacy-plugin.ts");
+    fs::write(&plugin_path, "export default {};\n").unwrap();
+    fs::create_dir_all(root.join(".rocode")).unwrap();
+    fs::write(
+        root.join(".rocode/rocode.json"),
+        r#"{
+  "plugin_paths": {
+"legacy-opencode": ".opencode/plugins"
+  }
+}"#,
+    )
+    .unwrap();
+
+    let mut loader = ConfigLoader::new();
+    let cfg = loader.load_all(&root).unwrap();
+
+    // File plugins are keyed by file stem
+    assert!(
+        cfg.plugin.contains_key("legacy-plugin"),
+        "expected legacy-plugin key in {:?}",
+        cfg.plugin
+    );
+    let plugin_cfg = &cfg.plugin["legacy-plugin"];
+    assert_eq!(plugin_cfg.plugin_type, "file");
+    assert_eq!(
+        plugin_cfg.path.as_deref(),
+        Some(plugin_path.to_str().unwrap())
+    );
+}
+
+#[test]
+fn test_load_all_reads_plugins_from_default_rocode_plugin_dir() {
+    let temp = TestDir::new("rocode_config_plugin_default_dir");
+    let root = temp.path.join("repo");
+    fs::create_dir_all(root.join(".git")).unwrap();
+    fs::create_dir_all(root.join(".rocode/plugins")).unwrap();
+    let plugin_path = root.join(".rocode/plugins/default-plugin.ts");
+    fs::write(&plugin_path, "export default {};\n").unwrap();
+
+    let mut loader = ConfigLoader::new();
+    let cfg = loader.load_all(&root).unwrap();
+
+    assert!(
+        cfg.plugin.contains_key("default-plugin"),
+        "expected default-plugin key in {:?}",
+        cfg.plugin
+    );
+    let plugin_cfg = &cfg.plugin["default-plugin"];
+    assert_eq!(plugin_cfg.plugin_type, "file");
+    assert_eq!(
+        plugin_cfg.path.as_deref(),
+        Some(plugin_path.to_str().unwrap())
+    );
+}
+
+#[test]
+fn test_load_all_preserves_explicit_file_plugin() {
+    let temp = TestDir::new("rocode_config_plugin_list_preserved");
+    let root = temp.path.join("repo");
+    fs::create_dir_all(root.join(".git")).unwrap();
+    fs::write(
+        root.join("rocode.json"),
+        r#"{
+  "plugin": ["file:///tmp/should-not-be-loaded.ts"]
+}"#,
+    )
+    .unwrap();
+
+    let mut loader = ConfigLoader::new();
+    let cfg = loader.load_all(&root).unwrap();
+
+    // Explicitly configured file plugins are preserved in config.
+    // The plugin loader handles load failures at runtime.
+    assert!(
+        cfg.plugin.contains_key("should-not-be-loaded"),
+        "expected explicit file plugin to be preserved, got {:?}",
+        cfg.plugin
+    );
+    assert_eq!(cfg.plugin["should-not-be-loaded"].plugin_type, "file");
+}
+
+#[test]
+fn test_substitute_env_vars() {
+    std::env::set_var("ROCODE_TEST_VAR", "test_value");
+    let input = r#"{"api_key": "{env:ROCODE_TEST_VAR}"}"#;
+    let result = substitute_env_vars(input);
+    assert_eq!(result, r#"{"api_key": "test_value"}"#);
+    std::env::remove_var("ROCODE_TEST_VAR");
+}
+
+#[test]
+fn test_substitute_env_vars_missing() {
+    let input = r#"{"api_key": "{env:NONEXISTENT_VAR_12345}"}"#;
+    let result = substitute_env_vars(input);
+    assert_eq!(result, r#"{"api_key": ""}"#);
+}
+
+#[test]
+fn test_resolve_file_references() {
+    let temp = TestDir::new("rocode_file_ref");
+    let secret_path = temp.path.join("secret.txt");
+    fs::write(&secret_path, "my-secret-key").unwrap();
+
+    let input = r#"{"api_key": "{file:secret.txt}"}"#.to_string();
+    let result = resolve_file_references(&input, &temp.path).unwrap();
+    assert_eq!(result, r#"{"api_key": "my-secret-key"}"#);
+}
+
+#[test]
+fn test_resolve_file_references_skips_comments() {
+    let temp = TestDir::new("rocode_file_ref_comment");
+    let input = r#"{
+        // "api_key": "{file:secret.txt}"
+        "model": "claude"
+    }"#;
+    let result = resolve_file_references(input, &temp.path).unwrap();
+    assert!(result.contains("{file:secret.txt}"));
+}
+
+#[test]
+fn test_resolve_file_references_absolute_path() {
+    let temp = TestDir::new("rocode_file_ref_abs");
+    let secret_path = temp.path.join("abs_secret.txt");
+    fs::write(&secret_path, "absolute-secret").unwrap();
+
+    let input = format!(r#"{{"api_key": "{{file:{}}}"}}"#, secret_path.display());
+    let result = resolve_file_references(&input, &temp.path).unwrap();
+    assert!(result.contains("absolute-secret"));
+}
+
+#[test]
+fn test_update_config() {
+    let temp = TestDir::new("rocode_update_config");
+
+    let patch = Config {
+        model: Some("claude-3-opus".to_string()),
+        ..Default::default()
+    };
+
+    update_config(&temp.path, &patch).unwrap();
+
+    let content = fs::read_to_string(temp.path.join("rocode.json")).unwrap();
+    let config: Config = serde_json::from_str(&content).unwrap();
+    assert_eq!(config.model, Some("claude-3-opus".to_string()));
+}
+
+// ── YAML frontmatter parsing tests ──────────────────────────────
+
+#[test]
+fn test_split_frontmatter_basic() {
+    let content = "---\nname: test\ndescription: hello\n---\nBody content here.";
+    let (fm, body) = split_frontmatter(content);
+    assert!(fm.is_some());
+    let fm = fm.unwrap();
+    assert!(fm.contains("name: test"));
+    assert!(fm.contains("description: hello"));
+    assert!(body.contains("Body content here."));
+}
+
+#[test]
+fn test_split_frontmatter_no_frontmatter() {
+    let content = "Just a regular markdown file.";
+    let (fm, body) = split_frontmatter(content);
+    assert!(fm.is_none());
+    assert_eq!(body, content);
+}
+
+#[test]
+fn test_yaml_frontmatter_flat_key_values() {
+    let yaml = "name: reviewer\ndescription: Review code\nmodel: claude-3-opus";
+    let json = serde_yaml_frontmatter_to_json(yaml);
+    assert_eq!(json["name"], "reviewer");
+    assert_eq!(json["description"], "Review code");
+    assert_eq!(json["model"], "claude-3-opus");
+}
+
+#[test]
+fn test_yaml_frontmatter_booleans_and_numbers() {
+    let yaml = "disable: true\nhidden: false\nsteps: 100\ntemperature: 0.7";
+    let json = serde_yaml_frontmatter_to_json(yaml);
+    assert_eq!(json["disable"], true);
+    assert_eq!(json["hidden"], false);
+    assert_eq!(json["steps"], 100);
+    assert_eq!(json["temperature"], 0.7);
+}
+
+#[test]
+fn test_yaml_frontmatter_inline_list() {
+    let yaml = "tools: [bash, read, write]";
+    let json = serde_yaml_frontmatter_to_json(yaml);
+    let tools = json["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 3);
+    assert_eq!(tools[0], "bash");
+    assert_eq!(tools[1], "read");
+    assert_eq!(tools[2], "write");
+}
+
+#[test]
+fn test_yaml_frontmatter_dash_list() {
+    let yaml = "tools:\n  - bash\n  - read\n  - write";
+    let json = serde_yaml_frontmatter_to_json(yaml);
+    let tools = json["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 3);
+    assert_eq!(tools[0], "bash");
+    assert_eq!(tools[1], "read");
+    assert_eq!(tools[2], "write");
+}
+
+#[test]
+fn test_yaml_frontmatter_nested_object() {
+    let yaml = "tools:\n  bash: true\n  read: false";
+    let json = serde_yaml_frontmatter_to_json(yaml);
+    let tools = json["tools"].as_object().unwrap();
+    assert_eq!(tools["bash"], true);
+    assert_eq!(tools["read"], false);
+}
+
+#[test]
+fn test_yaml_frontmatter_block_scalar_literal() {
+    let yaml = "prompt: |\n  Line one\n  Line two";
+    let json = serde_yaml_frontmatter_to_json(yaml);
+    let prompt = json["prompt"].as_str().unwrap();
+    assert!(prompt.contains("Line one"));
+    assert!(prompt.contains("Line two"));
+}
+
+#[test]
+fn test_yaml_frontmatter_block_scalar_strip() {
+    let yaml = "prompt: |-\n  Line one\n  Line two";
+    let json = serde_yaml_frontmatter_to_json(yaml);
+    let prompt = json["prompt"].as_str().unwrap();
+    assert!(prompt.contains("Line one"));
+    assert!(!prompt.ends_with('\n'));
+}
+
+#[test]
+fn test_yaml_frontmatter_comments_skipped() {
+    let yaml = "# This is a comment\nname: test\n# Another comment\ndescription: hello";
+    let json = serde_yaml_frontmatter_to_json(yaml);
+    assert_eq!(json["name"], "test");
+    assert_eq!(json["description"], "hello");
+}
+
+#[test]
+fn test_yaml_frontmatter_quoted_values() {
+    let yaml = "name: \"quoted value\"\ndescription: 'single quoted'";
+    let json = serde_yaml_frontmatter_to_json(yaml);
+    assert_eq!(json["name"], "quoted value");
+    assert_eq!(json["description"], "single quoted");
+}
+
+#[test]
+fn test_fallback_sanitize_yaml_colon_in_value() {
+    let yaml = "description: Use model: claude-3 for tasks\nname: test";
+    let sanitized = fallback_sanitize_yaml(yaml);
+    assert!(sanitized.contains("description: |-"));
+    assert!(sanitized.contains("  Use model: claude-3 for tasks"));
+    assert!(sanitized.contains("name: test"));
+}
+
+#[test]
+fn test_fallback_sanitize_yaml_preserves_quoted() {
+    let yaml = "description: \"already: quoted\"\nname: test";
+    let sanitized = fallback_sanitize_yaml(yaml);
+    // Quoted values should not be converted to block scalars
+    assert!(sanitized.contains("description: \"already: quoted\""));
+}
+
+#[test]
+fn test_fallback_sanitize_yaml_preserves_block_scalar() {
+    let yaml = "description: |\n  block content\nname: test";
+    let sanitized = fallback_sanitize_yaml(yaml);
+    assert!(sanitized.contains("description: |"));
+}
+
+#[test]
+fn test_yaml_frontmatter_value_with_colon_via_fallback() {
+    // This YAML has a value with a colon, which would confuse naive parsers.
+    // The fallback sanitization should handle it.
+    let yaml = "description: Use model: claude-3 for tasks\nname: test";
+    let json = serde_yaml_frontmatter_to_json(yaml);
+    // After fallback, description should be preserved
+    assert_eq!(json["name"], "test");
+    let desc = json["description"].as_str().unwrap();
+    assert!(desc.contains("model: claude-3"));
+}
+
+#[test]
+fn test_yaml_frontmatter_inline_map() {
+    let yaml = "options: {verbose: true, timeout: 30}";
+    let json = serde_yaml_frontmatter_to_json(yaml);
+    let options = json["options"].as_object().unwrap();
+    assert_eq!(options["verbose"], true);
+    assert_eq!(options["timeout"], 30);
+}
+
+#[test]
+fn test_yaml_frontmatter_empty_value() {
+    let yaml = "name:\ndescription: hello";
+    let json = serde_yaml_frontmatter_to_json(yaml);
+    assert!(json["name"].is_null());
+    assert_eq!(json["description"], "hello");
+}
+
+#[test]
+fn test_parse_markdown_agent_with_frontmatter() {
+    let temp = TestDir::new("rocode_md_agent");
+    let agent_dir = temp.path.join("agents");
+    fs::create_dir_all(&agent_dir).unwrap();
+    fs::write(
+        agent_dir.join("reviewer.md"),
+        "---\ndescription: Reviews code changes\nmode: subagent\nmodel: claude-3-opus\n---\n\nYou are a code reviewer.\n",
+    )
+    .unwrap();
+
+    let result = parse_markdown_agent(&agent_dir.join("reviewer.md"), &temp.path);
+    assert!(result.is_some());
+    let (name, config) = result.unwrap();
+    assert_eq!(name, "reviewer");
+    assert_eq!(config.description.as_deref(), Some("Reviews code changes"));
+    assert_eq!(config.model.as_deref(), Some("claude-3-opus"));
+    assert!(config.prompt.unwrap().contains("You are a code reviewer."));
+}
+
+#[test]
+fn test_parse_markdown_command_with_frontmatter() {
+    let temp = TestDir::new("rocode_md_cmd");
+    let cmd_dir = temp.path.join("commands");
+    fs::create_dir_all(&cmd_dir).unwrap();
+    fs::write(
+        cmd_dir.join("review.md"),
+        "---\ndescription: Run a code review\nagent: reviewer\n---\n\nPlease review the changes.\n",
+    )
+    .unwrap();
+
+    let result = parse_markdown_command(&cmd_dir.join("review.md"), &temp.path);
+    assert!(result.is_some());
+    let (name, config) = result.unwrap();
+    assert_eq!(name, "review");
+    assert_eq!(config.description.as_deref(), Some("Run a code review"));
+    assert_eq!(config.agent.as_deref(), Some("reviewer"));
+    assert!(config
+        .template
+        .unwrap()
+        .contains("Please review the changes."));
+}
+
+#[test]
+fn test_parse_markdown_agent_with_tools_map() {
+    let temp = TestDir::new("rocode_md_agent_tools");
+    let agent_dir = temp.path.join("agents");
+    fs::create_dir_all(&agent_dir).unwrap();
+    fs::write(
+        agent_dir.join("safe.md"),
+        "---\ndescription: Safe agent\ntools:\n  bash: false\n  read: true\n---\n\nSafe prompt.\n",
+    )
+    .unwrap();
+
+    let result = parse_markdown_agent(&agent_dir.join("safe.md"), &temp.path);
+    assert!(result.is_some());
+    let (_name, config) = result.unwrap();
+    assert_eq!(config.description.as_deref(), Some("Safe agent"));
+    let tools = config.tools.unwrap();
+    assert_eq!(tools.get("bash"), Some(&false));
+    assert_eq!(tools.get("read"), Some(&true));
+}
+
+#[test]
+fn test_parse_markdown_agent_colon_in_description_fallback() {
+    let temp = TestDir::new("rocode_md_agent_colon");
+    let agent_dir = temp.path.join("agents");
+    fs::create_dir_all(&agent_dir).unwrap();
+    // Description contains a colon -- this is the case the fallback handles
+    fs::write(
+        agent_dir.join("tricky.md"),
+        "---\ndescription: Use model: claude for tasks\nmode: primary\n---\n\nTricky prompt.\n",
+    )
+    .unwrap();
+
+    let result = parse_markdown_agent(&agent_dir.join("tricky.md"), &temp.path);
+    assert!(result.is_some());
+    let (_name, config) = result.unwrap();
+    let desc = config.description.unwrap();
+    assert!(desc.contains("model: claude"));
+}
+
+#[test]
+fn legacy_toml_config_migrates_to_rocode_json() {
+    let temp = TestDir::new("rocode_legacy_toml");
+    let config_dir = temp.path.join("rocode");
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(
+        config_dir.join("config"),
+        r#"
+provider = "anthropic"
+model = "claude-3-5-sonnet"
+theme = "dark"
+"#,
+    )
+    .unwrap();
+
+    let mut config = Config::default();
+    let migrated = migrate_legacy_toml_config(&config_dir, &mut config);
+    assert!(migrated.is_some());
+    assert_eq!(config.model.as_deref(), Some("anthropic/claude-3-5-sonnet"));
+    assert_eq!(config.theme.as_deref(), Some("dark"));
+    assert_eq!(
+        config.schema.as_deref(),
+        Some("https://opencode.ai/config.json") //no rocode.ai domain name now
+    );
+
+    let json_path = config_dir.join("rocode.json");
+    assert!(json_path.exists());
+    assert!(!config_dir.join("config").exists());
+
+    let content = fs::read_to_string(json_path).unwrap();
+    let written: Config = serde_json::from_str(&content).unwrap();
+    assert_eq!(
+        written.model.as_deref(),
+        Some("anthropic/claude-3-5-sonnet")
+    );
+    assert_eq!(written.theme.as_deref(), Some("dark"));
+}

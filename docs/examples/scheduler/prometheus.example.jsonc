@@ -1,0 +1,65 @@
+{
+  "$schema": "https://rocode.dev/schemas/scheduler-profile.schema.json",
+  "version": "2026-03-06",
+
+  "defaults": {
+    "profile": "prometheus-default"
+  },
+
+  "profiles": {
+    "prometheus-default": {
+      "orchestrator": "prometheus",
+      "description": "OMO-aligned planning-first scheduler profile. Clarify requirements, produce a concrete plan, review it, and hand off an implementation-ready response without autonomous execution.",
+      // Optional: override the model used by the scheduler for this profile.
+      // Planning benefits from a high-reasoning model.
+      "model": {
+        "providerId": "anthropic",
+        "modelId": "claude-opus-4-6"
+      },
+      "skillList": [
+        "request-analysis",
+        "route",
+        "interview",
+        "plan",
+        "review",
+        "handoff"
+      ],
+      "stages": [
+        "request-analysis",
+        "route",
+        "interview",
+        "plan",
+        "review",
+        "handoff"
+      ],
+      "skillTree": {
+        "contextMarkdown": "Collect only the clarifications needed to remove ambiguity, then freeze the plan and hand off a reviewed implementation path."
+      },
+      "agentTree": {
+        "agent": {
+          "name": "deep-worker"
+        },
+        "children": [
+          {
+            "agent": {
+              "name": "code-explorer"
+            },
+            "prompt": "Collect repository evidence and implementation hotspots needed to ground the plan in the current codebase."
+          },
+          {
+            "agent": {
+              "name": "docs-researcher"
+            },
+            "prompt": "Bring in external documentation only when it changes design constraints, API usage, or implementation risk."
+          },
+          {
+            "agent": {
+              "name": "architecture-advisor"
+            },
+            "prompt": "Review the proposed plan for missing constraints, semantic duplication, and unsafe shortcuts before handoff."
+          }
+        ]
+      }
+    }
+  }
+}

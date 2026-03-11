@@ -1,0 +1,45 @@
+[package]
+name = "rocode-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rocode"
+path = "src/main.rs"
+
+[dependencies]
+rocode-core = { path = "../rocode-core" }
+rocode-orchestrator = { path = "../rocode-orchestrator" }
+rocode-util = { path = "../rocode-util" }
+rocode-config = { path = "../rocode-config" }
+rocode-grep = { path = "../rocode-grep" }
+rocode-permission = { path = "../rocode-permission" }
+rocode-server = { path = "../rocode-server" }
+rocode-agent = { path = "../rocode-agent" }
+rocode-provider = { path = "../rocode-provider" }
+rocode-plugin = { path = "../rocode-plugin" }
+rocode-session = { path = "../rocode-session" }
+rocode-storage = { path = "../rocode-storage" }
+rocode-tool = { path = "../rocode-tool" }
+rocode-tui = { path = "../rocode-tui" }
+rocode-types = { path = "../rocode-types" }
+rocode-command = { path = "../rocode-command" }
+rocode-lsp = { path = "../rocode-lsp" }
+clap = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }
+sqlx = { workspace = true }
+url = { workspace = true }
+which = { workspace = true }
+crossterm = "0.27"

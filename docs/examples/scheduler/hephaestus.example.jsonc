@@ -1,0 +1,37 @@
+{
+  "$schema": "https://rocode.dev/schemas/scheduler-profile.schema.json",
+  "version": "2026-03-06",
+
+  "defaults": {
+    "profile": "hephaestus-default"
+  },
+
+  "profiles": {
+    "hephaestus-default": {
+      "orchestrator": "hephaestus",
+      "description": "OMO-aligned autonomous execution scheduler profile. Keep orchestration overhead low, execute deeply, and verify concretely before finishing.",
+      // Optional: override the model used by the scheduler for this profile.
+      // Deep autonomous execution benefits from strong coding models.
+      "model": {
+        "providerId": "openai",
+        "modelId": "gpt-5.2"
+      },
+      "skillList": [
+        "request-analysis",
+        "execution-orchestration"
+      ],
+      "stages": [
+        "request-analysis",
+        "execution-orchestration"
+      ],
+      "skillTree": {
+        "contextMarkdown": "Prefer direct execution over extra coordination layers, but keep verification discipline high before settling the result."
+      },
+      "agentTree": {
+        "agent": {
+          "name": "deep-worker"
+        }
+      }
+    }
+  }
+}

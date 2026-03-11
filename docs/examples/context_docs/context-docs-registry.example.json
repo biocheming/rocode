@@ -1,0 +1,23 @@
+{
+  "$schema": "./context-docs-registry.schema.json",
+  "libraries": [
+    {
+      "libraryId": "react-router",
+      "displayName": "React Router",
+      "aliases": ["react router", "rr"],
+      "sourceFamily": "official_docs",
+      "defaultVersion": "7",
+      "homepage": "https://reactrouter.com/",
+      "indexPath": "./react-router.docs-index.example.json"
+    },
+    {
+      "libraryId": "tokio",
+      "displayName": "Tokio",
+      "aliases": ["tokio-rs"],
+      "sourceFamily": "library_docs",
+      "defaultVersion": "1.x",
+      "homepage": "https://docs.rs/tokio/latest/tokio/",
+      "indexPath": "./tokio.docs-index.example.json"
+    }
+  ]
+}

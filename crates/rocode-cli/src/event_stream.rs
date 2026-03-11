@@ -1,0 +1,391 @@
+//! SSE (Server-Sent Events) subscription for the CLI.
+//!
+//! Connects to the server's `/event` endpoint and forwards parsed events
+//! to the CLI's REPL loop via an unbounded channel.  Auto-reconnects on
+//! disconnect with exponential backoff (capped at 5 s).
+
+use std::time::Duration;
+
+use serde_json;
+use tokio::sync::mpsc;
+
+use crate::util::server_url;
+
+// ── Event types ──────────────────────────────────────────────────────
+
+/// Events the CLI cares about, parsed from the SSE stream.
+#[derive(Debug, Clone)]
+pub enum CliServerEvent {
+    /// Session state changed — fetch latest session to diff messages.
+    SessionUpdated {
+        session_id: String,
+        source: Option<String>,
+    },
+    /// Session became busy (prompt running).
+    SessionBusy { session_id: String },
+    /// Session became idle (prompt finished).
+    SessionIdle { session_id: String },
+    /// Session is retrying.
+    SessionRetrying { session_id: String },
+    /// A question was created and needs user interaction.
+    QuestionCreated {
+        request_id: String,
+        session_id: String,
+        /// Raw question definitions from the server (Vec<QuestionDef> JSON).
+        questions_json: serde_json::Value,
+    },
+    /// A question was replied (by another client).
+    QuestionReplied { request_id: String },
+    /// A question was rejected (by another client).
+    QuestionRejected { request_id: String },
+    /// A tool call started.
+    ToolCallStarted {
+        session_id: String,
+        tool_call_id: String,
+        tool_name: String,
+    },
+    /// An output block was emitted (message, tool result, etc.).
+    OutputBlock {
+        id: Option<String>,
+        payload: serde_json::Value,
+    },
+    /// An error event from the server.
+    Error {
+        error: String,
+        message_id: Option<String>,
+        done: Option<bool>,
+    },
+    /// Token usage update.
+    Usage {
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        message_id: Option<String>,
+    },
+    /// Unknown event type (logged but ignored).
+    Unknown {
+        event: String,
+        data: serde_json::Value,
+    },
+}
+
+// ── SSE subscriber ───────────────────────────────────────────────────
+
+/// Spawn a background task that subscribes to the server's SSE stream
+/// and forwards parsed events to `tx`.
+///
+/// The task runs until `tx` is closed (all receivers dropped) or the
+/// cancellation token is cancelled.
+pub fn spawn_sse_subscriber(
+    base_url: String,
+    session_id: String,
+    tx: mpsc::UnboundedSender<CliServerEvent>,
+    cancel: tokio_util::sync::CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut backoff = Duration::from_millis(400);
+        let max_backoff = Duration::from_secs(5);
+
+        loop {
+            if cancel.is_cancelled() {
+                break;
+            }
+
+            match connect_and_consume(&base_url, &session_id, &tx, &cancel).await {
+                Ok(()) => {
+                    // Clean shutdown (cancel requested).
+                    break;
+                }
+                Err(e) => {
+                    if cancel.is_cancelled() {
+                        break;
+                    }
+                    tracing::warn!(
+                        "SSE connection lost: {}. Reconnecting in {:?}…",
+                        e,
+                        backoff
+                    );
+                    tokio::select! {
+                        _ = tokio::time::sleep(backoff) => {}
+                        _ = cancel.cancelled() => break,
+                    }
+                    backoff = (backoff * 2).min(max_backoff);
+                }
+            }
+        }
+
+        tracing::debug!("SSE subscriber exiting");
+    })
+}
+
+/// Connect to the SSE endpoint and consume events until disconnect.
+async fn connect_and_consume(
+    base_url: &str,
+    session_id: &str,
+    tx: &mpsc::UnboundedSender<CliServerEvent>,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> anyhow::Result<()> {
+    let url = server_url(base_url, "/event");
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(&url)
+        .header("Accept", "text/event-stream")
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        anyhow::bail!("SSE connect failed: {}", resp.status());
+    }
+
+    let mut stream = resp.bytes_stream();
+    let mut buffer = String::new();
+    let mut current_event = String::new();
+    let mut current_data = String::new();
+
+    use futures::StreamExt;
+
+    loop {
+        tokio::select! {
+            chunk = stream.next() => {
+                match chunk {
+                    Some(Ok(bytes)) => {
+                        buffer.push_str(&String::from_utf8_lossy(&bytes));
+
+                        // Process complete SSE frames (separated by blank lines).
+                        while let Some(pos) = buffer.find("\n\n") {
+                            let frame = buffer[..pos].to_string();
+                            buffer = buffer[pos + 2..].to_string();
+
+                            current_event.clear();
+                            current_data.clear();
+
+                            for line in frame.lines() {
+                                if let Some(value) = line.strip_prefix("event: ") {
+                                    current_event = value.trim().to_string();
+                                } else if let Some(value) = line.strip_prefix("data: ") {
+                                    if !current_data.is_empty() {
+                                        current_data.push('\n');
+                                    }
+                                    current_data.push_str(value);
+                                } else if line.starts_with("data:") {
+                                    // data: with no space — value is empty
+                                    if !current_data.is_empty() {
+                                        current_data.push('\n');
+                                    }
+                                }
+                            }
+
+                            if !current_data.is_empty() {
+                                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&current_data) {
+                                    if let Some(evt) = parse_event(&current_event, &json, session_id) {
+                                        if tx.send(evt).is_err() {
+                                            // Receiver dropped.
+                                            return Ok(());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Some(Err(e)) => {
+                        return Err(e.into());
+                    }
+                    None => {
+                        // Stream ended.
+                        anyhow::bail!("SSE stream ended");
+                    }
+                }
+            }
+            _ = cancel.cancelled() => {
+                return Ok(());
+            }
+        }
+    }
+}
+
+/// Parse an SSE event JSON payload into a `CliServerEvent`.
+///
+/// Returns `None` for events that belong to other sessions (session
+/// filtering) or events we don't care about.
+fn parse_event(
+    event_name: &str,
+    json: &serde_json::Value,
+    my_session_id: &str,
+) -> Option<CliServerEvent> {
+    // Helper to extract session_id from various field names.
+    let event_session_id = json
+        .get("sessionID")
+        .or_else(|| json.get("sessionId"))
+        .or_else(|| json.get("session_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    // Determine event type from SSE event name or payload's "type" field.
+    let event_type = if !event_name.is_empty() {
+        event_name.to_string()
+    } else {
+        json.get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+
+    // Global events (no session filter).
+    match event_type.as_str() {
+        "config.updated" => {
+            // Could handle config reload, but for now skip.
+            return None;
+        }
+        _ => {}
+    }
+
+    // Session-scoped events — filter by session_id.
+    let is_my_session =
+        event_session_id.is_empty() || event_session_id == my_session_id;
+
+    match event_type.as_str() {
+        "session.updated" => {
+            if !is_my_session {
+                return None;
+            }
+            let source = json.get("source").and_then(|v| v.as_str()).map(String::from);
+            Some(CliServerEvent::SessionUpdated {
+                session_id: event_session_id.to_string(),
+                source,
+            })
+        }
+        "session.status" => {
+            if !is_my_session {
+                return None;
+            }
+            let status = json.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            match status {
+                "busy" => Some(CliServerEvent::SessionBusy {
+                    session_id: event_session_id.to_string(),
+                }),
+                "idle" => Some(CliServerEvent::SessionIdle {
+                    session_id: event_session_id.to_string(),
+                }),
+                "retry" => Some(CliServerEvent::SessionRetrying {
+                    session_id: event_session_id.to_string(),
+                }),
+                _ => None,
+            }
+        }
+        "question.created" => {
+            if !is_my_session {
+                return None;
+            }
+            let request_id = json
+                .get("requestID")
+                .or_else(|| json.get("requestId"))
+                .or_else(|| json.get("request_id"))
+                .or_else(|| json.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let questions_json = json
+                .get("questions")
+                .cloned()
+                .unwrap_or(serde_json::Value::Array(vec![]));
+            Some(CliServerEvent::QuestionCreated {
+                request_id,
+                session_id: event_session_id.to_string(),
+                questions_json,
+            })
+        }
+        "question.replied" => {
+            let request_id = json
+                .get("requestID")
+                .or_else(|| json.get("requestId"))
+                .or_else(|| json.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            Some(CliServerEvent::QuestionReplied { request_id })
+        }
+        "question.rejected" => {
+            let request_id = json
+                .get("requestID")
+                .or_else(|| json.get("requestId"))
+                .or_else(|| json.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            Some(CliServerEvent::QuestionRejected { request_id })
+        }
+        "tool_call.start" => {
+            if !is_my_session {
+                return None;
+            }
+            let tool_call_id = json
+                .get("toolCallId")
+                .or_else(|| json.get("tool_call_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let tool_name = json
+                .get("toolName")
+                .or_else(|| json.get("tool_name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            Some(CliServerEvent::ToolCallStarted {
+                session_id: event_session_id.to_string(),
+                tool_call_id,
+                tool_name,
+            })
+        }
+        "output_block" => {
+            // Output blocks may or may not carry a session_id.
+            let id = json.get("id").and_then(|v| v.as_str()).map(String::from);
+            Some(CliServerEvent::OutputBlock {
+                id,
+                payload: json.clone(),
+            })
+        }
+        "error" => {
+            let error = json
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error")
+                .to_string();
+            let message_id = json
+                .get("message_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let done = json.get("done").and_then(|v| v.as_bool());
+            Some(CliServerEvent::Error {
+                error,
+                message_id,
+                done,
+            })
+        }
+        "usage" => {
+            let prompt_tokens = json
+                .get("prompt_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let completion_tokens = json
+                .get("completion_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let message_id = json
+                .get("message_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            Some(CliServerEvent::Usage {
+                prompt_tokens,
+                completion_tokens,
+                message_id,
+            })
+        }
+        _ => {
+            tracing::trace!("Unknown SSE event: {}", event_type);
+            Some(CliServerEvent::Unknown {
+                event: event_type,
+                data: json.clone(),
+            })
+        }
+    }
+}

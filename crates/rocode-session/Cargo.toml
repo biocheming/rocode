@@ -1,0 +1,39 @@
+[package]
+name = "rocode-session"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rocode-core = { path = "../rocode-core" }
+rocode-util = { path = "../rocode-util" }
+rocode-types = { path = "../rocode-types" }
+rocode-storage = { path = "../rocode-storage" }
+rocode-provider = { path = "../rocode-provider" }
+rocode-orchestrator = { path = "../rocode-orchestrator" }
+rocode-tool = { path = "../rocode-tool" }
+rocode-mcp = { path = "../rocode-mcp" }
+rocode-lsp = { path = "../rocode-lsp" }
+rocode-plugin = { path = "../rocode-plugin" }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+regex = { workspace = true }
+dirs = { workspace = true }
+glob = { workspace = true }
+reqwest = { workspace = true }
+sqlx = { workspace = true }
+url = { workspace = true }
+base64 = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
