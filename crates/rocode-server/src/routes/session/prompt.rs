@@ -854,7 +854,11 @@ pub(super) async fn session_prompt(
                 if let Ok(server_event) = serde_json::from_value::<ServerEvent>(event) {
                     if let Some(payload) = server_event.to_json_string() {
                         state.broadcast(&payload);
+                    } else {
+                        tracing::warn!("failed to serialize ServerEvent from prompt event_broadcast");
                     }
+                } else {
+                    tracing::warn!("ignored non-ServerEvent payload in prompt event_broadcast");
                 }
             }))
         };

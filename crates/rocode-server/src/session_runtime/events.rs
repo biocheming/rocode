@@ -192,3 +192,32 @@ pub(crate) fn broadcast_session_updated(
 pub(crate) fn broadcast_config_updated(state: &ServerState) {
     broadcast_server_event(state, &ServerEvent::ConfigUpdated);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ServerEvent;
+    use rocode_command::output_blocks::{OutputBlock, StatusBlock};
+
+    #[test]
+    fn server_event_serializes_output_block_wrapper() {
+        let event = ServerEvent::output_block(
+            "session-1",
+            &OutputBlock::Status(StatusBlock::success("ok")),
+            Some("block-1"),
+        );
+
+        let value = event.to_json_value().expect("event json");
+        assert_eq!(value["type"], "output_block");
+        assert_eq!(value["sessionID"], "session-1");
+        assert_eq!(value["id"], "block-1");
+        assert_eq!(value["block"]["kind"], "status");
+        assert_eq!(value["block"]["tone"], "success");
+        assert_eq!(value["block"]["text"], "ok");
+    }
+
+    #[test]
+    fn config_updated_event_serializes_as_tagged_type() {
+        let value = ServerEvent::ConfigUpdated.to_json_value().expect("event json");
+        assert_eq!(value, serde_json::json!({ "type": "config.updated" }));
+    }
+}
