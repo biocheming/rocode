@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::session_runtime::events::{broadcast_server_event, ServerEvent};
 use crate::{ApiError, Result, ServerState};
 
 pub(crate) fn permission_routes() -> Router<Arc<ServerState>> {
@@ -65,15 +66,14 @@ async fn reply_permission(
         pending.retain(|_, item| item.session_id != permission.session_id);
     }
 
-    state.broadcast(
-        &serde_json::json!({
-            "type": "permission.replied",
-            "requestID": id,
-            "sessionID": permission.session_id,
-            "reply": req.reply,
-            "message": req.message,
-        })
-        .to_string(),
+    broadcast_server_event(
+        state.as_ref(),
+        &ServerEvent::PermissionReplied {
+            session_id: permission.session_id,
+            request_id: id,
+            reply: req.reply,
+            message: req.message,
+        },
     );
     Ok(Json(true))
 }

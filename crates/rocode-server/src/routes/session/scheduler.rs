@@ -25,6 +25,7 @@ use crate::session_runtime::{
     finalize_active_scheduler_stage_cancelled, first_user_message_text, ModelPricing,
     SessionOutputBlockHook, SessionSchedulerLifecycleHook,
 };
+use crate::session_runtime::events::broadcast_session_updated;
 use crate::{Result, ServerState};
 
 use super::super::tui::request_question_answers;
@@ -1180,14 +1181,7 @@ pub async fn run_local_scheduler_prompt(
         let mut sessions = state.sessions.lock().await;
         sessions.update(session);
     }
-    state.broadcast(
-        &serde_json::json!({
-            "type": "session.updated",
-            "sessionID": &session_id,
-            "source": "prompt.completed",
-        })
-        .to_string(),
-    );
+    broadcast_session_updated(state.as_ref(), session_id.clone(), "prompt.completed");
     set_session_run_status(&state, &session_id, SessionRunStatus::Idle).await;
 
     if let Some(output_hook) = output_hook {

@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::recovery::RecoveryExecutionContext;
 use crate::runtime_control::SessionRunStatus;
+use crate::session_runtime::events::{broadcast_session_updated, ServerEvent};
 use crate::session_runtime::{
     ensure_default_session_title, finalize_active_scheduler_stage_cancelled,
     first_user_message_text, ModelPricing, SessionSchedulerLifecycleHook,
@@ -386,13 +387,10 @@ pub(super) async fn session_prompt(
                 let mut sessions = task_state.sessions.lock().await;
                 sessions.update(session.clone());
             }
-            task_state.broadcast(
-                &serde_json::json!({
-                    "type": "session.updated",
-                    "sessionID": session_id,
-                    "source": "prompt.scheduler.pending",
-                })
-                .to_string(),
+            broadcast_session_updated(
+                task_state.as_ref(),
+                session_id.clone(),
+                "prompt.scheduler.pending",
             );
 
             let agent_registry = Arc::new(AgentRegistry::from_config(&task_config));
@@ -656,13 +654,10 @@ pub(super) async fn session_prompt(
                 let mut sessions = task_state.sessions.lock().await;
                 sessions.update(session.clone());
             }
-            task_state.broadcast(
-                &serde_json::json!({
-                    "type": "session.updated",
-                    "sessionID": session_id,
-                    "source": "prompt.scheduler.completed",
-                })
-                .to_string(),
+            broadcast_session_updated(
+                task_state.as_ref(),
+                session_id.clone(),
+                "prompt.scheduler.completed",
             );
             persist_sessions_if_enabled(&task_state).await;
             return;
@@ -745,32 +740,36 @@ pub(super) async fn session_prompt(
                         .entry(message.id.clone())
                         .or_insert((false, 0));
                     if !*started {
-                        let payload = serde_json::json!({
-                            "type": "output_block",
-                            "sessionID": &snapshot_id,
-                            "block": {
+                        let event = ServerEvent::OutputBlock {
+                            session_id: snapshot_id.clone(),
+                            block: serde_json::json!({
                                 "kind": "reasoning",
                                 "phase": "start",
                                 "text": "",
                                 "id": &message.id,
-                            },
-                        });
-                        let _ = update_state.event_bus.send(payload.to_string());
+                            }),
+                            id: Some(message.id.clone()),
+                        };
+                        if let Some(payload) = event.to_json_string() {
+                            let _ = update_state.event_bus.send(payload);
+                        }
                         *started = true;
                     }
                     if reasoning.len() > *emitted_len {
                         let delta = &reasoning[*emitted_len..];
-                        let payload = serde_json::json!({
-                            "type": "output_block",
-                            "sessionID": &snapshot_id,
-                            "block": {
+                        let event = ServerEvent::OutputBlock {
+                            session_id: snapshot_id.clone(),
+                            block: serde_json::json!({
                                 "kind": "reasoning",
                                 "phase": "delta",
                                 "text": delta,
                                 "id": &message.id,
-                            },
-                        });
-                        let _ = update_state.event_bus.send(payload.to_string());
+                            }),
+                            id: Some(message.id.clone()),
+                        };
+                        if let Some(payload) = event.to_json_string() {
+                            let _ = update_state.event_bus.send(payload);
+                        }
                         *emitted_len = reasoning.len();
                     }
                 }
@@ -780,14 +779,7 @@ pub(super) async fn session_prompt(
                     let mut sessions = update_state.sessions.lock().await;
                     sessions.update(snapshot.clone());
                 }
-                update_state.broadcast(
-                    &serde_json::json!({
-                        "type": "session.updated",
-                        "sessionID": snapshot_id,
-                        "source": "prompt.stream",
-                    })
-                    .to_string(),
-                );
+                broadcast_session_updated(update_state.as_ref(), snapshot_id, "prompt.stream");
 
                 // 2. Queue latest snapshot for async persistence (coalesced).
                 *persist_latest.lock().await = Some(snapshot);
@@ -797,17 +789,19 @@ pub(super) async fn session_prompt(
             // Emit reasoning "end" for any started reasoning blocks.
             for (message_id, (started, _)) in &reasoning_state {
                 if *started {
-                    let payload = serde_json::json!({
-                        "type": "output_block",
-                        "sessionID": &last_session_id,
-                        "block": {
+                    let event = ServerEvent::OutputBlock {
+                        session_id: last_session_id.clone(),
+                        block: serde_json::json!({
                             "kind": "reasoning",
                             "phase": "end",
                             "text": "",
                             "id": message_id,
-                        },
-                    });
-                    let _ = update_state.event_bus.send(payload.to_string());
+                        }),
+                        id: Some(message_id.clone()),
+                    };
+                    if let Some(payload) = event.to_json_string() {
+                        let _ = update_state.event_bus.send(payload);
+                    }
                 }
             }
 
@@ -857,7 +851,11 @@ pub(super) async fn session_prompt(
         let event_broadcast: Option<rocode_session::prompt::EventBroadcastHook> = {
             let state = task_state.clone();
             Some(Arc::new(move |event| {
-                state.broadcast(event);
+                if let Ok(server_event) = serde_json::from_value::<ServerEvent>(event) {
+                    if let Some(payload) = server_event.to_json_string() {
+                        state.broadcast(&payload);
+                    }
+                }
             }))
         };
 
@@ -978,14 +976,7 @@ pub(super) async fn session_prompt(
             let mut sessions = task_state.sessions.lock().await;
             sessions.update(session);
         }
-        task_state.broadcast(
-            &serde_json::json!({
-                "type": "session.updated",
-                "sessionID": session_id,
-                "source": "prompt.final",
-            })
-            .to_string(),
-        );
+        broadcast_session_updated(task_state.as_ref(), session_id.clone(), "prompt.final");
         // Normal path reached — defuse the guard so we handle cleanup explicitly.
         _idle_guard.defuse();
         set_session_run_status(&task_state, &session_id, SessionRunStatus::Idle).await;

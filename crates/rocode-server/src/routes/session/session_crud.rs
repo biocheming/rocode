@@ -9,6 +9,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::runtime_control::SessionRunStatus;
+use crate::session_runtime::events::broadcast_session_updated;
 use crate::{ApiError, Result, ServerState};
 
 // ─── Request / Response structs ───────────────────────────────────────
@@ -610,14 +611,7 @@ pub(super) async fn set_session_title(
     sessions.update(updated.clone());
     let info = session_to_info(&updated);
     drop(sessions);
-    state.broadcast(
-        &serde_json::json!({
-            "type": "session.updated",
-            "sessionID": id,
-            "source": "session.title.set",
-        })
-        .to_string(),
-    );
+    broadcast_session_updated(state.as_ref(), id, "session.title.set");
     persist_sessions_if_enabled(&state).await;
     Ok(Json(info))
 }

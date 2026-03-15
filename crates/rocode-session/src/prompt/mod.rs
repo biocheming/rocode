@@ -177,7 +177,7 @@ pub struct AgentParams {
 }
 
 pub type SessionUpdateHook = Arc<dyn Fn(&Session) + Send + Sync + 'static>;
-pub type EventBroadcastHook = Arc<dyn Fn(&str) + Send + Sync + 'static>;
+pub type EventBroadcastHook = Arc<dyn Fn(serde_json::Value) + Send + Sync + 'static>;
 pub type AgentLookup =
     Arc<dyn Fn(&str) -> Option<rocode_tool::TaskAgentInfo> + Send + Sync + 'static>;
 pub type PublishBusHook = Arc<
@@ -591,7 +591,7 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                             "toolCallId": id,
                             "toolName": next_name,
                         });
-                        broadcast(&event.to_string());
+                        broadcast(event);
                     }
 
                     let entry =
@@ -676,7 +676,7 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                         "sessionID": self.session.id,
                         "toolCallId": &call.id,
                     });
-                    broadcast(&event.to_string());
+                    broadcast(event);
                 }
 
                 let entry =

@@ -13,6 +13,9 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::session_runtime::{
     assistant_reasoning_text, assistant_visible_text, scheduler_stage_block_from_message,
 };
+use crate::session_runtime::events::{
+    broadcast_session_updated, send_sse_server_event, ServerEvent,
+};
 use crate::{ApiError, ServerState};
 use rocode_agent::{AgentInfo, AgentRegistry};
 use rocode_command::agent_presenter::output_block_to_web;
@@ -28,58 +31,36 @@ use super::session::{
 };
 use super::tui::{request_question_answers_with_hook, QuestionEventHook};
 
-pub(crate) async fn send_sse_json_event(
-    tx: &mpsc::Sender<std::result::Result<Event, Infallible>>,
-    name: &str,
-    payload: serde_json::Value,
-) {
-    if let Ok(event) = Event::default().event(name).json_data(payload) {
-        let _ = tx.send(Ok(event)).await;
-    }
-}
-
 pub(crate) async fn send_stream_error_event(
     tx: &mpsc::Sender<std::result::Result<Event, Infallible>>,
+    session_id: Option<String>,
     message_id: Option<String>,
     done: Option<bool>,
     error: String,
 ) {
-    let mut payload = serde_json::Map::new();
-    payload.insert("error".to_string(), serde_json::Value::String(error));
-    if let Some(message_id) = message_id {
-        payload.insert(
-            "message_id".to_string(),
-            serde_json::Value::String(message_id),
-        );
-    }
-    if let Some(done) = done {
-        payload.insert("done".to_string(), serde_json::Value::Bool(done));
-    }
-    send_sse_json_event(tx, "error", serde_json::Value::Object(payload)).await;
+    let event = ServerEvent::Error {
+        session_id,
+        error,
+        message_id,
+        done,
+    };
+    send_sse_server_event(tx, &event).await;
 }
 
 pub(crate) async fn send_stream_usage_event(
     tx: &mpsc::Sender<std::result::Result<Event, Infallible>>,
+    session_id: Option<String>,
     message_id: Option<String>,
     prompt_tokens: u64,
     completion_tokens: u64,
 ) {
-    let mut payload = serde_json::Map::new();
-    payload.insert(
-        "prompt_tokens".to_string(),
-        serde_json::Value::Number(prompt_tokens.into()),
-    );
-    payload.insert(
-        "completion_tokens".to_string(),
-        serde_json::Value::Number(completion_tokens.into()),
-    );
-    if let Some(message_id) = message_id {
-        payload.insert(
-            "message_id".to_string(),
-            serde_json::Value::String(message_id),
-        );
-    }
-    send_sse_json_event(tx, "usage", serde_json::Value::Object(payload)).await;
+    let event = ServerEvent::Usage {
+        session_id,
+        prompt_tokens,
+        completion_tokens,
+        message_id,
+    };
+    send_sse_server_event(tx, &event).await;
 }
 
 #[derive(Default)]
@@ -119,11 +100,12 @@ impl StreamSnapshotEmitter {
         for message in &snapshot.messages {
             match message.role {
                 SessionMessageRole::Assistant => {
-                    self.emit_assistant_message(tx, message, &mut tool_names)
+                    self.emit_assistant_message(tx, &snapshot.id, message, &mut tool_names)
                         .await;
                 }
                 SessionMessageRole::Tool => {
-                    self.emit_tool_results(tx, message, &tool_names).await;
+                    self.emit_tool_results(tx, &snapshot.id, message, &tool_names)
+                        .await;
                 }
                 _ => {}
             }
@@ -133,10 +115,11 @@ impl StreamSnapshotEmitter {
     async fn emit_assistant_message(
         &mut self,
         tx: &mpsc::Sender<std::result::Result<Event, Infallible>>,
+        session_id: &str,
         message: &SessionMessage,
         tool_names: &mut HashMap<String, String>,
     ) {
-        if self.emit_scheduler_stage(tx, message).await {
+        if self.emit_scheduler_stage(tx, session_id, message).await {
             return;
         }
 
@@ -144,6 +127,7 @@ impl StreamSnapshotEmitter {
         if !state.started {
             emit_output_block(
                 tx,
+                session_id,
                 OutputBlock::Message(MessageBlock::start(MessageRole::Assistant)),
                 Some(message.id.as_str()),
             )
@@ -168,6 +152,7 @@ impl StreamSnapshotEmitter {
             if !state.reasoning_started {
                 emit_output_block(
                     tx,
+                    session_id,
                     OutputBlock::Reasoning(ReasoningBlock::start()),
                     Some(message.id.as_str()),
                 )
@@ -182,6 +167,7 @@ impl StreamSnapshotEmitter {
             if !reasoning_delta.is_empty() {
                 emit_output_block(
                     tx,
+                    session_id,
                     OutputBlock::Reasoning(ReasoningBlock::delta(reasoning_delta)),
                     Some(message.id.as_str()),
                 )
@@ -200,6 +186,7 @@ impl StreamSnapshotEmitter {
         if !delta.is_empty() {
             emit_output_block(
                 tx,
+                session_id,
                 OutputBlock::Message(MessageBlock::delta(MessageRole::Assistant, delta)),
                 Some(message.id.as_str()),
             )
@@ -230,6 +217,7 @@ impl StreamSnapshotEmitter {
             if !call_state.started {
                 emit_output_block(
                     tx,
+                    session_id,
                     OutputBlock::Tool(ToolBlock::start(trimmed_name.to_string())),
                     Some(id.as_str()),
                 )
@@ -241,6 +229,7 @@ impl StreamSnapshotEmitter {
             if detail.is_some() && detail != call_state.detail {
                 emit_output_block(
                     tx,
+                    session_id,
                     OutputBlock::Tool(ToolBlock::running(
                         trimmed_name.to_string(),
                         detail.clone().unwrap_or_default(),
@@ -255,7 +244,14 @@ impl StreamSnapshotEmitter {
         if let Some(usage) = message.usage.as_ref() {
             let current = (usage.input_tokens, usage.output_tokens);
             if state.usage != Some(current) {
-                send_stream_usage_event(tx, Some(message.id.clone()), current.0, current.1).await;
+                send_stream_usage_event(
+                    tx,
+                    Some(session_id.to_string()),
+                    Some(message.id.clone()),
+                    current.0,
+                    current.1,
+                )
+                .await;
                 state.usage = Some(current);
             }
         }
@@ -264,6 +260,7 @@ impl StreamSnapshotEmitter {
             if state.reasoning_started {
                 emit_output_block(
                     tx,
+                    session_id,
                     OutputBlock::Reasoning(ReasoningBlock::end()),
                     Some(message.id.as_str()),
                 )
@@ -271,6 +268,7 @@ impl StreamSnapshotEmitter {
             }
             emit_output_block(
                 tx,
+                session_id,
                 OutputBlock::Message(MessageBlock::end(MessageRole::Assistant)),
                 Some(message.id.as_str()),
             )
@@ -282,6 +280,7 @@ impl StreamSnapshotEmitter {
     async fn emit_scheduler_stage(
         &mut self,
         tx: &mpsc::Sender<std::result::Result<Event, Infallible>>,
+        session_id: &str,
         message: &SessionMessage,
     ) -> bool {
         let Some(block) = scheduler_stage_block_from_message(message) else {
@@ -297,6 +296,7 @@ impl StreamSnapshotEmitter {
 
         emit_output_block(
             tx,
+            session_id,
             OutputBlock::SchedulerStage(Box::new(block)),
             Some(message.id.as_str()),
         )
@@ -307,6 +307,7 @@ impl StreamSnapshotEmitter {
     async fn emit_tool_results(
         &mut self,
         tx: &mpsc::Sender<std::result::Result<Event, Infallible>>,
+        session_id: &str,
         message: &SessionMessage,
         tool_names: &HashMap<String, String>,
     ) {
@@ -339,23 +340,19 @@ impl StreamSnapshotEmitter {
             } else {
                 OutputBlock::Tool(ToolBlock::done(tool_name, detail))
             };
-            emit_output_block(tx, block, Some(tool_call_id.as_str())).await;
+            emit_output_block(tx, session_id, block, Some(tool_call_id.as_str())).await;
         }
     }
 }
 
 async fn emit_output_block(
     tx: &mpsc::Sender<std::result::Result<Event, Infallible>>,
+    session_id: &str,
     block: OutputBlock,
     id: Option<&str>,
 ) {
-    let mut payload = output_block_to_web(&block);
-    if let serde_json::Value::Object(ref mut map) = payload {
-        if let Some(id) = id {
-            map.insert("id".to_string(), serde_json::Value::String(id.to_string()));
-        }
-    }
-    send_sse_json_event(tx, "output_block", payload).await;
+    let event = ServerEvent::output_block(session_id.to_string(), &block, id);
+    send_sse_server_event(tx, &event).await;
 }
 
 fn assistant_finished(message: &SessionMessage) -> bool {
@@ -530,14 +527,7 @@ pub(crate) async fn stream_message(
         (selected_variant, session.clone())
     };
 
-    state.broadcast(
-        &serde_json::json!({
-            "type": "session.updated",
-            "sessionID": session_id,
-            "source": "stream.request",
-        })
-        .to_string(),
-    );
+    broadcast_session_updated(state.as_ref(), session_id.clone(), "stream.request");
 
     let tool_defs = filtered_tool_definitions(
         rocode_session::resolve_tools(state.tool_registry.as_ref()).await,
@@ -570,14 +560,7 @@ pub(crate) async fn stream_message(
                     let mut sessions = update_state.sessions.lock().await;
                     sessions.update(snapshot.clone());
                 }
-                update_state.broadcast(
-                    &serde_json::json!({
-                        "type": "session.updated",
-                        "sessionID": snapshot_id,
-                        "source": "stream.prompt",
-                    })
-                    .to_string(),
-                );
+                broadcast_session_updated(update_state.as_ref(), snapshot_id, "stream.prompt");
                 emitter.emit_snapshot(&update_sse_tx, &snapshot).await;
             }
         });
@@ -629,7 +612,9 @@ pub(crate) async fn stream_message(
                         .unwrap_or("question.event")
                         .to_string();
                     tokio::spawn(async move {
-                        send_sse_json_event(&sse_tx, &event_name, payload).await;
+                        if let Ok(event) = Event::default().event(&event_name).json_data(payload) {
+                            let _ = sse_tx.send(Ok(event)).await;
+                        }
                     });
                 });
                 Box::pin(async move {
@@ -647,7 +632,11 @@ pub(crate) async fn stream_message(
         let event_broadcast: Option<rocode_session::prompt::EventBroadcastHook> = {
             let state = stream_state.clone();
             Some(Arc::new(move |event| {
-                state.broadcast(event);
+                if let Ok(server_event) = serde_json::from_value::<ServerEvent>(event) {
+                    if let Some(payload) = server_event.to_json_string() {
+                        state.broadcast(&payload);
+                    }
+                }
             }))
         };
 
@@ -706,7 +695,14 @@ pub(crate) async fn stream_message(
                 .rev()
                 .find(|message| matches!(message.role, SessionMessageRole::Assistant))
                 .map(|message| message.id.clone());
-            send_stream_error_event(&stream_tx, message_id, Some(true), error.to_string()).await;
+            send_stream_error_event(
+                &stream_tx,
+                Some(stream_session_id.clone()),
+                message_id,
+                Some(true),
+                error.to_string(),
+            )
+            .await;
         }
 
         drop(update_tx);
@@ -727,14 +723,7 @@ pub(crate) async fn stream_message(
             let mut sessions = stream_state.sessions.lock().await;
             sessions.update(session);
         }
-        stream_state.broadcast(
-            &serde_json::json!({
-                "type": "session.updated",
-                "sessionID": stream_session_id,
-                "source": "stream.final",
-            })
-            .to_string(),
-        );
+        broadcast_session_updated(stream_state.as_ref(), stream_session_id.clone(), "stream.final");
 
         if let Err(err) = stream_state
             .flush_session_to_storage(&stream_session_id)

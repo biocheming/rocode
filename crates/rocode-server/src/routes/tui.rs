@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, Notify};
 
+use crate::session_runtime::events::{broadcast_server_event, ServerEvent};
 pub(crate) use crate::runtime_control::QuestionInfo;
 use crate::runtime_control::QuestionReply;
 use crate::{ApiError, Result, ServerState};
@@ -65,15 +66,16 @@ pub(crate) async fn request_question_answers_with_hook(
         .await;
     let request_id = question_info.id.clone();
 
-    let created_event = serde_json::json!({
-        "type": "question.created",
-        "requestID": request_id,
-        "sessionID": session_id,
-        "questions": questions,
-    });
-    state.broadcast(&created_event.to_string());
+    let created_event = ServerEvent::QuestionCreated {
+        session_id: session_id.clone(),
+        request_id,
+        questions: serde_json::to_value(&questions).unwrap_or_else(|_| serde_json::Value::Array(vec![])),
+    };
+    broadcast_server_event(state.as_ref(), &created_event);
     if let Some(hook) = event_hook.as_ref() {
-        hook(created_event);
+        if let Some(payload) = created_event.to_json_value() {
+            hook(payload);
+        }
     }
 
     let wait_result = tokio::time::timeout(Duration::from_secs(300), rx).await;
@@ -83,22 +85,29 @@ pub(crate) async fn request_question_answers_with_hook(
     match wait_result {
         Ok(Ok(QuestionReply::Answers(answers))) => {
             if let Some(hook) = event_hook.as_ref() {
-                hook(serde_json::json!({
-                    "type": "question.replied",
-                    "requestID": question_info.id,
-                    "sessionID": question_info.session_id,
-                    "answers": answers,
-                }));
+                let event = ServerEvent::QuestionReplied {
+                    session_id: question_info.session_id,
+                    request_id: question_info.id,
+                    answers: Some(
+                        serde_json::to_value(&answers).unwrap_or(serde_json::Value::Null),
+                    ),
+                };
+                if let Some(payload) = event.to_json_value() {
+                    hook(payload);
+                }
             }
             Ok(answers)
         }
         Ok(Ok(QuestionReply::Rejected)) => {
             if let Some(hook) = event_hook.as_ref() {
-                hook(serde_json::json!({
-                    "type": "question.rejected",
-                    "requestID": question_info.id,
-                    "sessionID": question_info.session_id,
-                }));
+                let event = ServerEvent::QuestionRejected {
+                    session_id: question_info.session_id,
+                    request_id: question_info.id,
+                    reason: None,
+                };
+                if let Some(payload) = event.to_json_value() {
+                    hook(payload);
+                }
             }
             Err(rocode_tool::ToolError::QuestionRejected(
                 "User rejected question request".to_string(),
@@ -106,12 +115,14 @@ pub(crate) async fn request_question_answers_with_hook(
         }
         Ok(Ok(QuestionReply::Cancelled)) => {
             if let Some(hook) = event_hook.as_ref() {
-                hook(serde_json::json!({
-                    "type": "question.rejected",
-                    "requestID": question_info.id,
-                    "sessionID": question_info.session_id,
-                    "reason": "cancelled",
-                }));
+                let event = ServerEvent::QuestionRejected {
+                    session_id: question_info.session_id,
+                    request_id: question_info.id,
+                    reason: Some("cancelled".to_string()),
+                };
+                if let Some(payload) = event.to_json_value() {
+                    hook(payload);
+                }
             }
             Err(rocode_tool::ToolError::Cancelled)
         }
@@ -137,14 +148,13 @@ pub(crate) async fn cancel_questions_for_session(
     }
 
     for question in &cancelled {
-        state.broadcast(
-            &serde_json::json!({
-                "type": "question.rejected",
-                "requestID": question.id,
-                "sessionID": question.session_id,
-                "reason": "cancelled",
-            })
-            .to_string(),
+        broadcast_server_event(
+            state.as_ref(),
+            &ServerEvent::QuestionRejected {
+                session_id: question.session_id.clone(),
+                request_id: question.id.clone(),
+                reason: Some("cancelled".to_string()),
+            },
         );
     }
 
@@ -181,14 +191,13 @@ async fn reply_question(
         .await
         .ok_or_else(|| ApiError::NotFound(format!("Question request not found: {}", id)))?;
 
-    state.broadcast(
-        &serde_json::json!({
-            "type": "question.replied",
-            "requestID": id,
-            "sessionID": question.session_id,
-            "answers": req.answers,
-        })
-        .to_string(),
+    broadcast_server_event(
+        state.as_ref(),
+        &ServerEvent::QuestionReplied {
+            session_id: question.session_id,
+            request_id: id,
+            answers: Some(serde_json::to_value(&req.answers).unwrap_or(serde_json::Value::Null)),
+        },
     );
     Ok(Json(true))
 }
@@ -203,13 +212,13 @@ async fn reject_question(
         .await
         .ok_or_else(|| ApiError::NotFound(format!("Question request not found: {}", id)))?;
 
-    state.broadcast(
-        &serde_json::json!({
-            "type": "question.rejected",
-            "requestID": id,
-            "sessionID": question.session_id,
-        })
-        .to_string(),
+    broadcast_server_event(
+        state.as_ref(),
+        &ServerEvent::QuestionRejected {
+            session_id: question.session_id,
+            request_id: id,
+            reason: None,
+        },
     );
     Ok(Json(true))
 }

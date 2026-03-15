@@ -1,7 +1,10 @@
+pub(crate) mod events;
+
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use self::events::broadcast_session_updated;
 use crate::runtime_control::{ExecutionPatch, ExecutionStatus, FieldUpdate};
 use crate::ServerState;
 use rocode_command::output_blocks::{
@@ -191,14 +194,7 @@ impl SessionSchedulerLifecycleHook {
                 }
             }
 
-            self.state.broadcast(
-                &serde_json::json!({
-                    "type": "session.updated",
-                    "sessionID": &self.session_id,
-                    "source": source,
-                })
-                .to_string(),
-            );
+            broadcast_session_updated(&self.state, self.session_id.clone(), source);
         }
 
         if let Some(message) = message_snapshot.as_ref() {
@@ -361,14 +357,7 @@ where
     sessions.update(session);
     drop(sessions);
 
-    state.broadcast(
-        &serde_json::json!({
-            "type": "session.updated",
-            "sessionID": session_id,
-            "source": source,
-        })
-        .to_string(),
-    );
+    broadcast_session_updated(state, session_id.to_string(), source.to_string());
     Some(result)
 }
 
@@ -1008,13 +997,10 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                 child_message_id,
             });
 
-        self.state.broadcast(
-            &serde_json::json!({
-                "type": "session.updated",
-                "sessionID": &self.session_id,
-                "source": "prompt.scheduler.stage.start",
-            })
-            .to_string(),
+        broadcast_session_updated(
+            &self.state,
+            self.session_id.clone(),
+            "prompt.scheduler.stage.start",
         );
     }
 
@@ -1048,13 +1034,10 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                 sessions.update(child);
             }
             drop(sessions);
-            self.state.broadcast(
-                &serde_json::json!({
-                    "type": "session.updated",
-                    "sessionID": &child_sid,
-                    "source": "prompt.scheduler.stage.content",
-                })
-                .to_string(),
+            broadcast_session_updated(
+                &self.state,
+                child_sid,
+                "prompt.scheduler.stage.content",
             );
             return;
         }
@@ -1078,13 +1061,10 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
             self.emit_stage_block(message);
         }
 
-        self.state.broadcast(
-            &serde_json::json!({
-                "type": "session.updated",
-                "sessionID": &self.session_id,
-                "source": "prompt.scheduler.stage.content",
-            })
-            .to_string(),
+        broadcast_session_updated(
+            &self.state,
+            self.session_id.clone(),
+            "prompt.scheduler.stage.content",
         );
     }
 
@@ -1147,13 +1127,10 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                 sessions.update(child);
             }
             drop(sessions);
-            self.state.broadcast(
-                &serde_json::json!({
-                    "type": "session.updated",
-                    "sessionID": &child_sid,
-                    "source": "prompt.scheduler.stage.reasoning",
-                })
-                .to_string(),
+            broadcast_session_updated(
+                &self.state,
+                child_sid,
+                "prompt.scheduler.stage.reasoning",
             );
             return;
         }
@@ -1177,13 +1154,10 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
             self.emit_stage_block(message);
         }
 
-        self.state.broadcast(
-            &serde_json::json!({
-                "type": "session.updated",
-                "sessionID": &self.session_id,
-                "source": "prompt.scheduler.stage.reasoning",
-            })
-            .to_string(),
+        broadcast_session_updated(
+            &self.state,
+            self.session_id.clone(),
+            "prompt.scheduler.stage.reasoning",
         );
     }
 
@@ -1302,13 +1276,10 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                     self.emit_stage_block(message);
                 }
 
-                self.state.broadcast(
-                    &serde_json::json!({
-                        "type": "session.updated",
-                        "sessionID": &self.session_id,
-                        "source": "prompt.scheduler.stage",
-                    })
-                    .to_string(),
+                broadcast_session_updated(
+                    &self.state,
+                    self.session_id.clone(),
+                    "prompt.scheduler.stage",
                 );
                 self.state
                     .runtime_control
@@ -2438,14 +2409,7 @@ pub(crate) async fn emit_scheduler_stage_message(input: SchedulerStageMessageInp
     sessions.update(session);
     drop(sessions);
 
-    state.broadcast(
-        &serde_json::json!({
-            "type": "session.updated",
-            "sessionID": session_id,
-            "source": "prompt.scheduler.stage",
-        })
-        .to_string(),
-    );
+    broadcast_session_updated(state, session_id.to_string(), "prompt.scheduler.stage");
 }
 
 pub(crate) struct SchedulerStageMessageInput<'a> {

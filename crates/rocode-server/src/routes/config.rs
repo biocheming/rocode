@@ -3,6 +3,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::session_runtime::events::broadcast_config_updated;
 use crate::{Result, ServerState};
 use rocode_config::Config as AppConfig;
 
@@ -26,7 +27,7 @@ async fn patch_config(
         .patch(patch)
         .map_err(|e| crate::ApiError::BadRequest(e.to_string()))?;
     state.config_store.invalidate_plugin_cache().await;
-    state.broadcast(&serde_json::json!({ "type": "config.updated" }).to_string());
+    broadcast_config_updated(state.as_ref());
     // Invalidate mode caches so next request rebuilds with new config
     *crate::routes::AGENT_LIST_CACHE.write().await = None;
     *crate::routes::MODE_LIST_CACHE.write().await = None;

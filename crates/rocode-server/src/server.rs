@@ -30,6 +30,7 @@ use rocode_storage::{Database, MessageRepository, SessionRepository};
 
 use crate::routes;
 use crate::runtime_control::RuntimeControlRegistry;
+use crate::session_runtime::events::ServerEvent;
 use crate::stage_event_log::StageEventLog;
 
 const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:4096";
@@ -251,15 +252,15 @@ impl ServerState {
         let event_log_for_callback = stage_event_log.clone();
         let runtime_control = Arc::new(RuntimeControlRegistry::with_topology_callback(Arc::new(
             move |ctx: &crate::runtime_control::TopologyChangeContext| {
-                let _ = topology_tx.send(
-                    serde_json::json!({
-                        "type": "execution.topology.changed",
-                        "sessionID": ctx.session_id,
-                        "executionID": ctx.execution_id,
-                        "stageID": ctx.stage_id,
-                    })
-                    .to_string(),
-                );
+                if let Some(payload) = (ServerEvent::TopologyChanged {
+                    session_id: ctx.session_id.clone(),
+                    execution_id: Some(ctx.execution_id.clone()),
+                    stage_id: ctx.stage_id.clone(),
+                })
+                .to_json_string()
+                {
+                    let _ = topology_tx.send(payload);
+                }
                 // Record a StageEvent into the stage event log.
                 let event = rocode_command::stage_protocol::StageEvent {
                     event_id: format!("evt_{}", uuid::Uuid::new_v4().simple()),

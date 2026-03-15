@@ -44,6 +44,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 
+use crate::session_runtime::events::broadcast_config_updated;
 use crate::web;
 use crate::{ApiError, Result, ServerState};
 use rocode_agent::{AgentMode, AgentRegistry};
@@ -633,7 +634,7 @@ async fn set_auth(
     // Rebuild the provider registry so newly-connected providers are
     // available immediately (e.g. their models show up in /provider/).
     state.rebuild_providers().await;
-    state.broadcast("config.updated");
+    broadcast_config_updated(state.as_ref());
 
     Ok(Json(serde_json::json!({ "success": true })))
 }
@@ -644,7 +645,7 @@ async fn delete_auth(
 ) -> Result<Json<serde_json::Value>> {
     state.auth_manager.remove(&id).await;
     state.rebuild_providers().await;
-    state.broadcast("config.updated");
+    broadcast_config_updated(state.as_ref());
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
 

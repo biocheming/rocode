@@ -480,7 +480,8 @@ pub(crate) async fn consume_remote_sse(
         }
 
         if event_type == "output_block" {
-            if let Some(block) = parse_output_block(&parsed) {
+            let payload = parsed.get("block").unwrap_or(&parsed);
+            if let Some(block) = parse_output_block(payload) {
                 let style = CliStyle::detect();
                 print!("{}", render_cli_block_rich(&block, &style));
                 io::stdout().flush()?;
