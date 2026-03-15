@@ -156,7 +156,10 @@ impl ServerEvent {
     }
 
     pub(crate) fn to_sse_event(&self) -> Option<Event> {
-        Event::default().event(self.event_name()).json_data(self).ok()
+        Event::default()
+            .event(self.event_name())
+            .json_data(self)
+            .ok()
     }
 }
 
@@ -217,7 +220,9 @@ mod tests {
 
     #[test]
     fn config_updated_event_serializes_as_tagged_type() {
-        let value = ServerEvent::ConfigUpdated.to_json_value().expect("event json");
+        let value = ServerEvent::ConfigUpdated
+            .to_json_value()
+            .expect("event json");
         assert_eq!(value, serde_json::json!({ "type": "config.updated" }));
     }
 }

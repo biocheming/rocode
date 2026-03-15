@@ -10,9 +10,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, Notify};
 
-use crate::session_runtime::events::{broadcast_server_event, ServerEvent};
 pub(crate) use crate::runtime_control::QuestionInfo;
 use crate::runtime_control::QuestionReply;
+use crate::session_runtime::events::{broadcast_server_event, ServerEvent};
 use crate::{ApiError, Result, ServerState};
 
 pub(crate) fn question_routes() -> Router<Arc<ServerState>> {
@@ -69,7 +69,8 @@ pub(crate) async fn request_question_answers_with_hook(
     let created_event = ServerEvent::QuestionCreated {
         session_id: session_id.clone(),
         request_id,
-        questions: serde_json::to_value(&questions).unwrap_or_else(|_| serde_json::Value::Array(vec![])),
+        questions: serde_json::to_value(&questions)
+            .unwrap_or_else(|_| serde_json::Value::Array(vec![])),
     };
     broadcast_server_event(state.as_ref(), &created_event);
     if let Some(hook) = event_hook.as_ref() {
@@ -484,4 +485,143 @@ async fn submit_tui_response(Json(body): Json<serde_json::Value>) -> Json<bool> 
     drop(queue);
     TUI_RESPONSE_NOTIFY.notify_one();
     Json(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ServerState;
+    use std::sync::{Arc, Mutex as StdMutex};
+
+    fn sample_question() -> rocode_tool::QuestionDef {
+        rocode_tool::QuestionDef {
+            header: Some("Scope".to_string()),
+            question: "Proceed with migration?".to_string(),
+            options: vec![rocode_tool::QuestionOption {
+                label: "Yes".to_string(),
+                description: Some("Continue".to_string()),
+            }],
+            multiple: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn request_question_answers_hook_emits_created_and_replied_events() {
+        let state = Arc::new(ServerState::new());
+        let session_id = "session-1".to_string();
+        let captured = Arc::new(StdMutex::new(Vec::<serde_json::Value>::new()));
+        let captured_hook = captured.clone();
+        let event_hook: QuestionEventHook = Arc::new(move |payload| {
+            captured_hook.lock().expect("capture lock").push(payload);
+        });
+
+        let state_for_answer = state.clone();
+        let captured_for_answer = captured.clone();
+        let responder = tokio::spawn(async move {
+            loop {
+                let maybe_request_id = {
+                    let events = captured_for_answer.lock().expect("capture lock");
+                    events.iter().find_map(|event| {
+                        let ty = event.get("type").and_then(|value| value.as_str())?;
+                        if ty == "question.created" {
+                            event
+                                .get("requestID")
+                                .and_then(|value| value.as_str())
+                                .map(str::to_string)
+                        } else {
+                            None
+                        }
+                    })
+                };
+                if let Some(request_id) = maybe_request_id.as_deref() {
+                    state_for_answer
+                        .runtime_control
+                        .answer_question(request_id, vec![vec!["Yes".to_string()]])
+                        .await;
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        });
+
+        let answers = request_question_answers_with_hook(
+            state,
+            session_id.clone(),
+            vec![sample_question()],
+            Some(event_hook),
+        )
+        .await
+        .expect("question answers");
+
+        responder.await.expect("responder join");
+        assert_eq!(answers, vec![vec!["Yes".to_string()]]);
+
+        let events = captured.lock().expect("capture lock");
+        assert!(events.iter().any(|event| {
+            event.get("type").and_then(|value| value.as_str()) == Some("question.created")
+                && event.get("sessionID").and_then(|value| value.as_str())
+                    == Some(session_id.as_str())
+        }));
+        assert!(events.iter().any(|event| {
+            event.get("type").and_then(|value| value.as_str()) == Some("question.replied")
+        }));
+    }
+
+    #[tokio::test]
+    async fn request_question_answers_hook_emits_rejected_event_on_reject() {
+        let state = Arc::new(ServerState::new());
+        let captured = Arc::new(StdMutex::new(Vec::<serde_json::Value>::new()));
+        let captured_hook = captured.clone();
+        let event_hook: QuestionEventHook = Arc::new(move |payload| {
+            captured_hook.lock().expect("capture lock").push(payload);
+        });
+
+        let state_for_reject = state.clone();
+        let captured_for_reject = captured.clone();
+        let rejector = tokio::spawn(async move {
+            loop {
+                let maybe_request_id = {
+                    let events = captured_for_reject.lock().expect("capture lock");
+                    events.iter().find_map(|event| {
+                        let ty = event.get("type").and_then(|value| value.as_str())?;
+                        if ty == "question.created" {
+                            event
+                                .get("requestID")
+                                .and_then(|value| value.as_str())
+                                .map(str::to_string)
+                        } else {
+                            None
+                        }
+                    })
+                };
+                if let Some(request_id) = maybe_request_id.as_deref() {
+                    state_for_reject
+                        .runtime_control
+                        .reject_question(request_id)
+                        .await;
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        });
+
+        let result = request_question_answers_with_hook(
+            state,
+            "session-2".to_string(),
+            vec![sample_question()],
+            Some(event_hook),
+        )
+        .await;
+
+        rejector.await.expect("rejector join");
+        assert!(matches!(
+            result,
+            Err(rocode_tool::ToolError::QuestionRejected(_))
+        ));
+
+        let events = captured.lock().expect("capture lock");
+        assert!(events.iter().any(|event| {
+            event.get("type").and_then(|value| value.as_str()) == Some("question.rejected")
+        }));
+    }
 }

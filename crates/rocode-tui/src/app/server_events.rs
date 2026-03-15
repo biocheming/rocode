@@ -336,6 +336,7 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
                 let message_id = block
                     .get("id")
                     .and_then(|item| item.as_str())
+                    .or_else(|| value.get("id").and_then(|item| item.as_str()))
                     .unwrap_or_default();
 
                 let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
@@ -349,5 +350,51 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::forward_server_event;
+    use crate::event::{CustomEvent, StateChange};
+    use crate::Event;
+    use std::sync::mpsc::channel;
+
+    #[test]
+    fn output_block_reasoning_falls_back_to_wrapper_id() {
+        let (tx, rx) = channel();
+        forward_server_event(
+            &[serde_json::json!({
+                "type": "output_block",
+                "sessionID": "session-1",
+                "id": "message-1",
+                "block": {
+                    "kind": "reasoning",
+                    "phase": "delta",
+                    "text": "thinking",
+                }
+            })
+            .to_string()],
+            &tx,
+        );
+
+        let event = rx.recv().expect("reasoning event");
+        let Event::Custom(custom) = event else {
+            panic!("expected custom event");
+        };
+        let CustomEvent::StateChanged(StateChange::ReasoningUpdated {
+            session_id,
+            message_id,
+            phase,
+            text,
+        }) = *custom
+        else {
+            panic!("expected reasoning update");
+        };
+
+        assert_eq!(session_id, "session-1");
+        assert_eq!(message_id, "message-1");
+        assert_eq!(phase, "delta");
+        assert_eq!(text, "thinking");
     }
 }

@@ -4,26 +4,22 @@ use axum::{
     Json,
 };
 use futures::stream::Stream;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::session_runtime::{
-    assistant_reasoning_text, assistant_visible_text, scheduler_stage_block_from_message,
-};
 use crate::session_runtime::events::{
     broadcast_session_updated, send_sse_server_event, ServerEvent,
 };
+use crate::session_runtime::scheduler_stage_block_from_message;
 use crate::{ApiError, ServerState};
 use rocode_agent::{AgentInfo, AgentRegistry};
 use rocode_command::agent_presenter::output_block_to_web;
-use rocode_command::output_blocks::{
-    MessageBlock, MessageRole, OutputBlock, ReasoningBlock, ToolBlock,
-};
+use rocode_command::output_blocks::OutputBlock;
 use rocode_provider::ToolDefinition;
-use rocode_session::{MessageRole as SessionMessageRole, PartType, Session, SessionMessage};
+use rocode_session::{MessageRole as SessionMessageRole, Session, SessionMessage};
 
 use super::session::{
     resolve_prompt_request_config, resolved_session_directory, to_task_agent_info,
@@ -65,28 +61,21 @@ pub(crate) async fn send_stream_usage_event(
 
 #[derive(Default)]
 struct AssistantEmitState {
-    started: bool,
-    emitted_text: String,
-    /// Tracks the reasoning text emitted so far for delta computation.
-    emitted_reasoning: String,
-    /// Whether we emitted a reasoning-start block for the current message.
-    reasoning_started: bool,
-    ended: bool,
     usage: Option<(u64, u64)>,
 }
 
-#[derive(Default)]
-struct ToolCallEmitState {
-    started: bool,
-    detail: Option<String>,
-}
-
-#[derive(Default)]
 struct StreamSnapshotEmitter {
     assistants: HashMap<String, AssistantEmitState>,
-    tool_calls: HashMap<String, ToolCallEmitState>,
-    emitted_tool_result_parts: HashSet<String>,
     scheduler_stages: HashMap<String, String>,
+}
+
+impl Default for StreamSnapshotEmitter {
+    fn default() -> Self {
+        Self {
+            assistants: HashMap::new(),
+            scheduler_stages: HashMap::new(),
+        }
+    }
 }
 
 impl StreamSnapshotEmitter {
@@ -95,17 +84,10 @@ impl StreamSnapshotEmitter {
         tx: &mpsc::Sender<std::result::Result<Event, Infallible>>,
         snapshot: &Session,
     ) {
-        let mut tool_names = HashMap::new();
-
         for message in &snapshot.messages {
             match message.role {
                 SessionMessageRole::Assistant => {
-                    self.emit_assistant_message(tx, &snapshot.id, message, &mut tool_names)
-                        .await;
-                }
-                SessionMessageRole::Tool => {
-                    self.emit_tool_results(tx, &snapshot.id, message, &tool_names)
-                        .await;
+                    self.emit_assistant_message(tx, &snapshot.id, message).await;
                 }
                 _ => {}
             }
@@ -117,130 +99,12 @@ impl StreamSnapshotEmitter {
         tx: &mpsc::Sender<std::result::Result<Event, Infallible>>,
         session_id: &str,
         message: &SessionMessage,
-        tool_names: &mut HashMap<String, String>,
     ) {
         if self.emit_scheduler_stage(tx, session_id, message).await {
             return;
         }
 
         let state = self.assistants.entry(message.id.clone()).or_default();
-        if !state.started {
-            emit_output_block(
-                tx,
-                session_id,
-                OutputBlock::Message(MessageBlock::start(MessageRole::Assistant)),
-                Some(message.id.as_str()),
-            )
-            .await;
-            state.started = true;
-        }
-
-        // ── Reasoning (thinking) blocks ──
-        let reasoning = assistant_reasoning_text(message);
-        tracing::debug!(
-            message_id = %message.id,
-            reasoning_len = reasoning.len(),
-            "emit_assistant_message: checking reasoning"
-        );
-        if !reasoning.is_empty() {
-            tracing::info!(
-                message_id = %message.id,
-                reasoning_len = reasoning.len(),
-                reasoning_preview = %reasoning.chars().take(100).collect::<String>(),
-                "emit_assistant_message: emitting reasoning block"
-            );
-            if !state.reasoning_started {
-                emit_output_block(
-                    tx,
-                    session_id,
-                    OutputBlock::Reasoning(ReasoningBlock::start()),
-                    Some(message.id.as_str()),
-                )
-                .await;
-                state.reasoning_started = true;
-            }
-            let reasoning_delta = if reasoning.starts_with(&state.emitted_reasoning) {
-                reasoning[state.emitted_reasoning.len()..].to_string()
-            } else {
-                reasoning.clone()
-            };
-            if !reasoning_delta.is_empty() {
-                emit_output_block(
-                    tx,
-                    session_id,
-                    OutputBlock::Reasoning(ReasoningBlock::delta(reasoning_delta)),
-                    Some(message.id.as_str()),
-                )
-                .await;
-                state.emitted_reasoning = reasoning;
-            }
-        }
-
-        // ── Text blocks ──
-        let text = assistant_visible_text(message);
-        let delta = if text.starts_with(&state.emitted_text) {
-            text[state.emitted_text.len()..].to_string()
-        } else {
-            text.clone()
-        };
-        if !delta.is_empty() {
-            emit_output_block(
-                tx,
-                session_id,
-                OutputBlock::Message(MessageBlock::delta(MessageRole::Assistant, delta)),
-                Some(message.id.as_str()),
-            )
-            .await;
-            state.emitted_text = text;
-        }
-
-        for part in &message.parts {
-            let PartType::ToolCall {
-                id,
-                name,
-                input,
-                status,
-                raw,
-                ..
-            } = &part.part_type
-            else {
-                continue;
-            };
-
-            let trimmed_name = name.trim();
-            if trimmed_name.is_empty() {
-                continue;
-            }
-
-            tool_names.insert(id.clone(), trimmed_name.to_string());
-            let call_state = self.tool_calls.entry(id.clone()).or_default();
-            if !call_state.started {
-                emit_output_block(
-                    tx,
-                    session_id,
-                    OutputBlock::Tool(ToolBlock::start(trimmed_name.to_string())),
-                    Some(id.as_str()),
-                )
-                .await;
-                call_state.started = true;
-            }
-
-            let detail = tool_progress_detail(input, raw.as_deref(), status);
-            if detail.is_some() && detail != call_state.detail {
-                emit_output_block(
-                    tx,
-                    session_id,
-                    OutputBlock::Tool(ToolBlock::running(
-                        trimmed_name.to_string(),
-                        detail.clone().unwrap_or_default(),
-                    )),
-                    Some(id.as_str()),
-                )
-                .await;
-                call_state.detail = detail;
-            }
-        }
-
         if let Some(usage) = message.usage.as_ref() {
             let current = (usage.input_tokens, usage.output_tokens);
             if state.usage != Some(current) {
@@ -254,26 +118,6 @@ impl StreamSnapshotEmitter {
                 .await;
                 state.usage = Some(current);
             }
-        }
-
-        if !state.ended && assistant_finished(message) {
-            if state.reasoning_started {
-                emit_output_block(
-                    tx,
-                    session_id,
-                    OutputBlock::Reasoning(ReasoningBlock::end()),
-                    Some(message.id.as_str()),
-                )
-                .await;
-            }
-            emit_output_block(
-                tx,
-                session_id,
-                OutputBlock::Message(MessageBlock::end(MessageRole::Assistant)),
-                Some(message.id.as_str()),
-            )
-            .await;
-            state.ended = true;
         }
     }
 
@@ -303,46 +147,6 @@ impl StreamSnapshotEmitter {
         .await;
         true
     }
-
-    async fn emit_tool_results(
-        &mut self,
-        tx: &mpsc::Sender<std::result::Result<Event, Infallible>>,
-        session_id: &str,
-        message: &SessionMessage,
-        tool_names: &HashMap<String, String>,
-    ) {
-        for part in &message.parts {
-            let PartType::ToolResult {
-                tool_call_id,
-                content,
-                is_error,
-                title,
-                ..
-            } = &part.part_type
-            else {
-                continue;
-            };
-
-            if !self.emitted_tool_result_parts.insert(part.id.clone()) {
-                continue;
-            }
-
-            let tool_name = tool_names
-                .get(tool_call_id)
-                .cloned()
-                .unwrap_or_else(|| tool_call_id.clone());
-            let detail = tool_result_detail(title.as_deref(), content);
-            let block = if *is_error {
-                OutputBlock::Tool(ToolBlock::error(
-                    tool_name,
-                    detail.unwrap_or_else(|| content.clone()),
-                ))
-            } else {
-                OutputBlock::Tool(ToolBlock::done(tool_name, detail))
-            };
-            emit_output_block(tx, session_id, block, Some(tool_call_id.as_str())).await;
-        }
-    }
 }
 
 async fn emit_output_block(
@@ -353,57 +157,6 @@ async fn emit_output_block(
 ) {
     let event = ServerEvent::output_block(session_id.to_string(), &block, id);
     send_sse_server_event(tx, &event).await;
-}
-
-fn assistant_finished(message: &SessionMessage) -> bool {
-    message.finish.is_some()
-        || message.metadata.contains_key("completed_at")
-        || message.metadata.contains_key("finish_reason")
-}
-
-fn tool_progress_detail(
-    input: &serde_json::Value,
-    raw: Option<&str>,
-    status: &rocode_session::ToolCallStatus,
-) -> Option<String> {
-    if let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) {
-        return Some(raw.to_string());
-    }
-
-    match status {
-        rocode_session::ToolCallStatus::Pending | rocode_session::ToolCallStatus::Running => {
-            if input.is_null() {
-                return None;
-            }
-            if let Some(obj) = input.as_object() {
-                if obj.is_empty() {
-                    return None;
-                }
-            }
-            if let Some(arr) = input.as_array() {
-                if arr.is_empty() {
-                    return None;
-                }
-            }
-            if let Some(text) = input.as_str() {
-                let trimmed = text.trim();
-                if trimmed.is_empty() {
-                    return None;
-                }
-                return Some(trimmed.to_string());
-            }
-            Some(input.to_string())
-        }
-        rocode_session::ToolCallStatus::Completed | rocode_session::ToolCallStatus::Error => None,
-    }
-}
-
-fn tool_result_detail(title: Option<&str>, content: &str) -> Option<String> {
-    match title.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(title) => Some(format!("{title}: {content}")),
-        None if content.trim().is_empty() => None,
-        None => Some(content.to_string()),
-    }
 }
 
 fn filtered_tool_definitions(
@@ -636,11 +389,27 @@ pub(crate) async fn stream_message(
                     if let Some(payload) = server_event.to_json_string() {
                         state.broadcast(&payload);
                     } else {
-                        tracing::warn!("failed to serialize ServerEvent from stream event_broadcast");
+                        tracing::warn!(
+                            "failed to serialize ServerEvent from stream event_broadcast"
+                        );
                     }
                 } else {
                     tracing::warn!("ignored non-ServerEvent payload in stream event_broadcast");
                 }
+            }))
+        };
+        let output_block_hook: Option<rocode_session::prompt::OutputBlockHook> = {
+            let sse_tx = stream_tx.clone();
+            Some(Arc::new(move |event| {
+                let sse_tx = sse_tx.clone();
+                tokio::spawn(async move {
+                    let server_event = ServerEvent::output_block(
+                        event.session_id,
+                        &event.block,
+                        event.id.as_deref(),
+                    );
+                    send_sse_server_event(&sse_tx, &server_event).await;
+                });
             }))
         };
 
@@ -656,6 +425,7 @@ pub(crate) async fn stream_message(
                     hooks: rocode_session::prompt::PromptHooks {
                         update_hook: Some(update_hook),
                         event_broadcast,
+                        output_block_hook,
                         agent_lookup,
                         ask_question_hook,
                         publish_bus_hook: None,
@@ -727,7 +497,11 @@ pub(crate) async fn stream_message(
             let mut sessions = stream_state.sessions.lock().await;
             sessions.update(session);
         }
-        broadcast_session_updated(stream_state.as_ref(), stream_session_id.clone(), "stream.final");
+        broadcast_session_updated(
+            stream_state.as_ref(),
+            stream_session_id.clone(),
+            "stream.final",
+        );
 
         if let Err(err) = stream_state
             .flush_session_to_storage(&stream_session_id)

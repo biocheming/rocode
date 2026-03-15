@@ -33,6 +33,9 @@ use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
+use rocode_command::output_blocks::{
+    MessageBlock, MessageRole as OutputMessageRole, OutputBlock, ReasoningBlock, ToolBlock,
+};
 use rocode_orchestrator::runtime::events::{
     CancelToken as RuntimeCancelToken, FinishReason as RuntimeFinishReason,
     LoopError as RuntimeLoopError, LoopEvent, StepBoundary, ToolCallReady as RuntimeToolCallReady,
@@ -147,6 +150,8 @@ struct StreamToolState {
     input: serde_json::Value,
     status: crate::ToolCallStatus,
     state: crate::ToolState,
+    emitted_output_start: bool,
+    emitted_output_detail: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
@@ -178,6 +183,13 @@ pub struct AgentParams {
 
 pub type SessionUpdateHook = Arc<dyn Fn(&Session) + Send + Sync + 'static>;
 pub type EventBroadcastHook = Arc<dyn Fn(serde_json::Value) + Send + Sync + 'static>;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputBlockEvent {
+    pub session_id: String,
+    pub block: OutputBlock,
+    pub id: Option<String>,
+}
+pub type OutputBlockHook = Arc<dyn Fn(OutputBlockEvent) + Send + Sync + 'static>;
 pub type AgentLookup =
     Arc<dyn Fn(&str) -> Option<rocode_tool::TaskAgentInfo> + Send + Sync + 'static>;
 pub type PublishBusHook = Arc<
@@ -201,6 +213,7 @@ pub type AskQuestionHook = Arc<
 pub struct PromptHooks {
     pub update_hook: Option<SessionUpdateHook>,
     pub event_broadcast: Option<EventBroadcastHook>,
+    pub output_block_hook: Option<OutputBlockHook>,
     pub agent_lookup: Option<AgentLookup>,
     pub ask_question_hook: Option<AskQuestionHook>,
     pub publish_bus_hook: Option<PublishBusHook>,
@@ -491,6 +504,7 @@ struct SessionStepSink<'a> {
     assistant_index: usize,
     update_hook: Option<&'a SessionUpdateHook>,
     event_broadcast: Option<&'a EventBroadcastHook>,
+    output_block_hook: Option<&'a OutputBlockHook>,
     last_emit: Instant,
     tool_calls: HashMap<String, StreamToolState>,
     stream_tool_results: Vec<StreamToolResultEntry>,
@@ -502,6 +516,8 @@ struct SessionStepSink<'a> {
     cache_write_tokens: u64,
     executed_local_tools_this_step: bool,
     step_complete: Arc<AtomicBool>,
+    assistant_output_started: bool,
+    reasoning_output_started: bool,
 }
 
 impl<'a> SessionStepSink<'a> {
@@ -510,6 +526,7 @@ impl<'a> SessionStepSink<'a> {
         assistant_index: usize,
         update_hook: Option<&'a SessionUpdateHook>,
         event_broadcast: Option<&'a EventBroadcastHook>,
+        output_block_hook: Option<&'a OutputBlockHook>,
         step_complete: Arc<AtomicBool>,
     ) -> Self {
         Self {
@@ -517,6 +534,7 @@ impl<'a> SessionStepSink<'a> {
             assistant_index,
             update_hook,
             event_broadcast,
+            output_block_hook,
             last_emit: Instant::now() - Duration::from_millis(STREAM_UPDATE_INTERVAL_MS),
             tool_calls: HashMap::new(),
             stream_tool_results: Vec::new(),
@@ -528,6 +546,8 @@ impl<'a> SessionStepSink<'a> {
             cache_write_tokens: 0,
             executed_local_tools_this_step: false,
             step_complete,
+            assistant_output_started: false,
+            reasoning_output_started: false,
         }
     }
 
@@ -543,6 +563,64 @@ impl<'a> SessionStepSink<'a> {
             executed_local_tools_this_step: self.executed_local_tools_this_step,
         }
     }
+
+    fn assistant_message_id(&self) -> Option<String> {
+        self.session
+            .messages
+            .get(self.assistant_index)
+            .map(|message| message.id.clone())
+    }
+
+    fn emit_output_block(&self, block: OutputBlock, id: Option<String>) {
+        if let Some(output_block_hook) = self.output_block_hook {
+            output_block_hook(OutputBlockEvent {
+                session_id: self.session.id.clone(),
+                block,
+                id,
+            });
+        }
+    }
+
+    fn ensure_assistant_output_started(&mut self) {
+        if self.assistant_output_started {
+            return;
+        }
+        self.emit_output_block(
+            OutputBlock::Message(MessageBlock::start(OutputMessageRole::Assistant)),
+            self.assistant_message_id(),
+        );
+        self.assistant_output_started = true;
+    }
+
+    fn ensure_reasoning_output_started(&mut self) {
+        self.ensure_assistant_output_started();
+        if self.reasoning_output_started {
+            return;
+        }
+        self.emit_output_block(
+            OutputBlock::Reasoning(ReasoningBlock::start()),
+            self.assistant_message_id(),
+        );
+        self.reasoning_output_started = true;
+    }
+
+    fn finish_output_blocks(&mut self) {
+        let assistant_message_id = self.assistant_message_id();
+        if self.reasoning_output_started {
+            self.emit_output_block(
+                OutputBlock::Reasoning(ReasoningBlock::end()),
+                assistant_message_id.clone(),
+            );
+            self.reasoning_output_started = false;
+        }
+        if self.assistant_output_started {
+            self.emit_output_block(
+                OutputBlock::Message(MessageBlock::end(OutputMessageRole::Assistant)),
+                assistant_message_id,
+            );
+            self.assistant_output_started = false;
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -550,9 +628,17 @@ impl<'a> LoopSink for SessionStepSink<'a> {
     async fn on_event(&mut self, event: &LoopEvent) -> std::result::Result<(), RuntimeLoopError> {
         match event {
             LoopEvent::TextChunk(text) => {
+                self.ensure_assistant_output_started();
                 if let Some(assistant) = self.session.messages.get_mut(self.assistant_index) {
                     SessionPrompt::append_delta_part(assistant, false, text);
                 }
+                self.emit_output_block(
+                    OutputBlock::Message(MessageBlock::delta(
+                        OutputMessageRole::Assistant,
+                        text.clone(),
+                    )),
+                    self.assistant_message_id(),
+                );
                 self.session.touch();
                 SessionPrompt::maybe_emit_session_update(
                     self.update_hook,
@@ -562,9 +648,14 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                 );
             }
             LoopEvent::ReasoningChunk { text, .. } => {
+                self.ensure_reasoning_output_started();
                 if let Some(assistant) = self.session.messages.get_mut(self.assistant_index) {
                     SessionPrompt::append_delta_part(assistant, true, text);
                 }
+                self.emit_output_block(
+                    OutputBlock::Reasoning(ReasoningBlock::delta(text.clone())),
+                    self.assistant_message_id(),
+                );
                 self.session.touch();
                 SessionPrompt::maybe_emit_session_update(
                     self.update_hook,
@@ -594,72 +685,127 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                         broadcast(event);
                     }
 
-                    let entry =
-                        self.tool_calls
-                            .entry(id.clone())
-                            .or_insert_with(|| StreamToolState {
-                                name: String::new(),
-                                raw_input: String::new(),
-                                input: serde_json::json!({}),
-                                status: crate::ToolCallStatus::Pending,
-                                state: crate::ToolState::Pending {
+                    let (tool_input, tool_raw, tool_state, should_emit_start) = {
+                        let entry =
+                            self.tool_calls
+                                .entry(id.clone())
+                                .or_insert_with(|| StreamToolState {
+                                    name: String::new(),
+                                    raw_input: String::new(),
                                     input: serde_json::json!({}),
-                                    raw: String::new(),
-                                },
-                            });
-                    if entry.name.is_empty() {
-                        entry.name = next_name.clone();
-                    }
-                    entry.status = crate::ToolCallStatus::Pending;
-                    entry.state = crate::ToolState::Pending {
-                        input: entry.input.clone(),
-                        raw: entry.raw_input.clone(),
+                                    status: crate::ToolCallStatus::Pending,
+                                    state: crate::ToolState::Pending {
+                                        input: serde_json::json!({}),
+                                        raw: String::new(),
+                                    },
+                                    emitted_output_start: false,
+                                    emitted_output_detail: None,
+                                });
+                        if entry.name.is_empty() {
+                            entry.name = next_name.clone();
+                        }
+                        let should_emit_start = !entry.emitted_output_start;
+                        if should_emit_start {
+                            entry.emitted_output_start = true;
+                        }
+                        entry.status = crate::ToolCallStatus::Pending;
+                        entry.state = crate::ToolState::Pending {
+                            input: entry.input.clone(),
+                            raw: entry.raw_input.clone(),
+                        };
+                        (
+                            entry.input.clone(),
+                            entry.raw_input.clone(),
+                            entry.state.clone(),
+                            should_emit_start,
+                        )
                     };
+                    if should_emit_start {
+                        self.ensure_assistant_output_started();
+                        self.emit_output_block(
+                            OutputBlock::Tool(ToolBlock::start(next_name.clone())),
+                            Some(id.clone()),
+                        );
+                    }
                     if let Some(assistant) = self.session.messages.get_mut(self.assistant_index) {
                         SessionPrompt::upsert_tool_call_part(
                             assistant,
                             id,
                             Some(next_name),
-                            Some(entry.input.clone()),
-                            Some(entry.raw_input.clone()),
+                            Some(tool_input),
+                            Some(tool_raw),
                             Some(crate::ToolCallStatus::Pending),
-                            Some(entry.state.clone()),
+                            Some(tool_state),
                         );
                     }
                 }
                 if !partial_input.is_empty() {
-                    let entry =
-                        self.tool_calls
-                            .entry(id.clone())
-                            .or_insert_with(|| StreamToolState {
-                                name: String::new(),
-                                raw_input: String::new(),
-                                input: serde_json::json!({}),
-                                status: crate::ToolCallStatus::Pending,
-                                state: crate::ToolState::Pending {
+                    let (tool_input, tool_raw, tool_state, tool_name, detail) = {
+                        let entry =
+                            self.tool_calls
+                                .entry(id.clone())
+                                .or_insert_with(|| StreamToolState {
+                                    name: String::new(),
+                                    raw_input: String::new(),
                                     input: serde_json::json!({}),
-                                    raw: String::new(),
-                                },
-                            });
-                    entry.raw_input.push_str(partial_input);
-                    if rocode_provider::is_parsable_json(&entry.raw_input) {
-                        if let Ok(parsed) = serde_json::from_str(&entry.raw_input) {
-                            entry.input = parsed;
+                                    status: crate::ToolCallStatus::Pending,
+                                    state: crate::ToolState::Pending {
+                                        input: serde_json::json!({}),
+                                        raw: String::new(),
+                                    },
+                                    emitted_output_start: false,
+                                    emitted_output_detail: None,
+                                });
+                        entry.raw_input.push_str(partial_input);
+                        if rocode_provider::is_parsable_json(&entry.raw_input) {
+                            if let Ok(parsed) = serde_json::from_str(&entry.raw_input) {
+                                entry.input = parsed;
+                            }
                         }
-                    }
-                    entry.state = crate::ToolState::Pending {
-                        input: entry.input.clone(),
-                        raw: entry.raw_input.clone(),
+                        entry.state = crate::ToolState::Pending {
+                            input: entry.input.clone(),
+                            raw: entry.raw_input.clone(),
+                        };
+                        let detail = tool_progress_detail(
+                            &entry.input,
+                            Some(entry.raw_input.as_str()),
+                            &crate::ToolCallStatus::Pending,
+                        );
+                        let tool_name = if entry.name.trim().is_empty() {
+                            id.clone()
+                        } else {
+                            entry.name.clone()
+                        };
+                        let should_emit_detail = detail.as_ref().is_some_and(|detail| {
+                            entry.emitted_output_detail.as_ref() != Some(detail)
+                        });
+                        if should_emit_detail {
+                            entry.emitted_output_detail = detail.clone();
+                        }
+                        (
+                            entry.input.clone(),
+                            entry.raw_input.clone(),
+                            entry.state.clone(),
+                            tool_name,
+                            if should_emit_detail { detail } else { None },
+                        )
                     };
+                    if let Some(detail) = detail {
+                        self.ensure_assistant_output_started();
+                        self.emit_output_block(
+                            OutputBlock::Tool(ToolBlock::running(tool_name, detail)),
+                            Some(id.clone()),
+                        );
+                    }
                     if let Some(assistant) = self.session.messages.get_mut(self.assistant_index) {
                         SessionPrompt::upsert_tool_call_part(
                             assistant,
                             id,
                             None,
-                            Some(entry.input.clone()),
-                            Some(entry.raw_input.clone()),
+                            Some(tool_input),
+                            Some(tool_raw),
                             Some(crate::ToolCallStatus::Pending),
-                            Some(entry.state.clone()),
+                            Some(tool_state),
                         );
                     }
                 }
@@ -679,40 +825,79 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                     broadcast(event);
                 }
 
-                let entry =
-                    self.tool_calls
-                        .entry(call.id.clone())
-                        .or_insert_with(|| StreamToolState {
-                            name: String::new(),
-                            raw_input: String::new(),
-                            input: serde_json::json!({}),
-                            status: crate::ToolCallStatus::Pending,
-                            state: crate::ToolState::Pending {
+                let (tool_input, tool_raw, tool_state, should_emit_start, detail) = {
+                    let entry =
+                        self.tool_calls
+                            .entry(call.id.clone())
+                            .or_insert_with(|| StreamToolState {
+                                name: String::new(),
+                                raw_input: String::new(),
                                 input: serde_json::json!({}),
-                                raw: String::new(),
-                            },
-                        });
-                entry.name = call.name.clone();
-                entry.input = call.arguments.clone();
-                entry.raw_input = serde_json::to_string(&call.arguments).unwrap_or_default();
-                entry.status = crate::ToolCallStatus::Running;
-                entry.state = crate::ToolState::Running {
-                    input: entry.input.clone(),
-                    title: None,
-                    metadata: None,
-                    time: crate::RunningTime {
-                        start: chrono::Utc::now().timestamp_millis(),
-                    },
+                                status: crate::ToolCallStatus::Pending,
+                                state: crate::ToolState::Pending {
+                                    input: serde_json::json!({}),
+                                    raw: String::new(),
+                                },
+                                emitted_output_start: false,
+                                emitted_output_detail: None,
+                            });
+                    entry.name = call.name.clone();
+                    entry.input = call.arguments.clone();
+                    entry.raw_input = serde_json::to_string(&call.arguments).unwrap_or_default();
+                    let should_emit_start = !entry.emitted_output_start;
+                    if should_emit_start {
+                        entry.emitted_output_start = true;
+                    }
+                    let detail = tool_progress_detail(
+                        &entry.input,
+                        Some(entry.raw_input.as_str()),
+                        &crate::ToolCallStatus::Running,
+                    );
+                    let should_emit_detail = detail
+                        .as_ref()
+                        .is_some_and(|detail| entry.emitted_output_detail.as_ref() != Some(detail));
+                    if should_emit_detail {
+                        entry.emitted_output_detail = detail.clone();
+                    }
+                    entry.status = crate::ToolCallStatus::Running;
+                    entry.state = crate::ToolState::Running {
+                        input: entry.input.clone(),
+                        title: None,
+                        metadata: None,
+                        time: crate::RunningTime {
+                            start: chrono::Utc::now().timestamp_millis(),
+                        },
+                    };
+                    (
+                        entry.input.clone(),
+                        entry.raw_input.clone(),
+                        entry.state.clone(),
+                        should_emit_start,
+                        if should_emit_detail { detail } else { None },
+                    )
                 };
+                self.ensure_assistant_output_started();
+                if should_emit_start {
+                    self.emit_output_block(
+                        OutputBlock::Tool(ToolBlock::start(call.name.clone())),
+                        Some(call.id.clone()),
+                    );
+                }
+                if let Some(detail) = detail {
+                    self.emit_output_block(
+                        OutputBlock::Tool(ToolBlock::running(call.name.clone(), detail)),
+                        Some(call.id.clone()),
+                    );
+                }
                 if let Some(assistant) = self.session.messages.get_mut(self.assistant_index) {
                     SessionPrompt::upsert_tool_call_part(
                         assistant,
                         &call.id,
                         Some(&call.name),
-                        Some(entry.input.clone()),
-                        Some(entry.raw_input.clone()),
+                        Some(tool_input),
+                        Some(tool_raw),
                         Some(crate::ToolCallStatus::Running),
-                        Some(entry.state.clone()),
+                        Some(tool_state),
                     );
                 }
                 self.session.touch();
@@ -742,8 +927,10 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                     self.cache_read_tokens = self.cache_read_tokens.max(usage.cache_read_tokens);
                     self.cache_write_tokens = self.cache_write_tokens.max(usage.cache_write_tokens);
                 }
+                self.finish_output_blocks();
             }
             LoopEvent::Error(msg) => {
+                self.finish_output_blocks();
                 return Err(RuntimeLoopError::ModelError(msg.clone()));
             }
         }
@@ -851,6 +1038,17 @@ impl<'a> LoopSink for SessionStepSink<'a> {
             attachments,
         ));
 
+        let detail = tool_result_detail(result.title.as_deref(), &result.output);
+        let block = if result.is_error {
+            OutputBlock::Tool(ToolBlock::error(
+                result.tool_name.clone(),
+                detail.unwrap_or_else(|| result.output.clone()),
+            ))
+        } else {
+            OutputBlock::Tool(ToolBlock::done(result.tool_name.clone(), detail))
+        };
+        self.emit_output_block(block, Some(call.id.clone()));
+
         self.session.touch();
         SessionPrompt::maybe_emit_session_update(
             self.update_hook,
@@ -869,6 +1067,51 @@ impl<'a> LoopSink for SessionStepSink<'a> {
             self.step_complete.store(true, Ordering::Relaxed);
         }
         Ok(())
+    }
+}
+
+fn tool_progress_detail(
+    input: &serde_json::Value,
+    raw: Option<&str>,
+    status: &crate::ToolCallStatus,
+) -> Option<String> {
+    if let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) {
+        return Some(raw.to_string());
+    }
+
+    match status {
+        crate::ToolCallStatus::Pending | crate::ToolCallStatus::Running => {
+            if input.is_null() {
+                return None;
+            }
+            if let Some(obj) = input.as_object() {
+                if obj.is_empty() {
+                    return None;
+                }
+            }
+            if let Some(arr) = input.as_array() {
+                if arr.is_empty() {
+                    return None;
+                }
+            }
+            if let Some(text) = input.as_str() {
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    return None;
+                }
+                return Some(trimmed.to_string());
+            }
+            Some(input.to_string())
+        }
+        crate::ToolCallStatus::Completed | crate::ToolCallStatus::Error => None,
+    }
+}
+
+fn tool_result_detail(title: Option<&str>, content: &str) -> Option<String> {
+    match title.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(title) => Some(format!("{title}: {content}")),
+        None if content.trim().is_empty() => None,
+        None => Some(content.to_string()),
     }
 }
 
@@ -1388,6 +1631,7 @@ impl SessionPrompt {
             input.assistant_index,
             input.step_ctx.hooks.update_hook.as_ref(),
             input.step_ctx.hooks.event_broadcast.as_ref(),
+            input.step_ctx.hooks.output_block_hook.as_ref(),
             step_complete,
         );
         let policy = LoopPolicy {
@@ -2606,6 +2850,112 @@ mod tests {
             .map(SessionMessage::get_text)
             .unwrap_or_default();
         assert_eq!(final_text, "Hello");
+    }
+
+    #[tokio::test]
+    async fn prompt_with_output_block_hook_emits_realtime_blocks() {
+        let prompt = SessionPrompt::default();
+        let mut session = Session::new("proj", ".");
+        let provider = Arc::new(ScriptedStreamProvider {
+            model: ModelInfo {
+                id: "test-model".to_string(),
+                name: "Test Model".to_string(),
+                provider: "mock".to_string(),
+                context_window: 8192,
+                max_input_tokens: None,
+                max_output_tokens: 1024,
+                supports_vision: false,
+                supports_tools: false,
+                cost_per_million_input: 0.0,
+                cost_per_million_output: 0.0,
+            },
+            events: vec![
+                StreamEvent::Start,
+                StreamEvent::ReasoningDelta {
+                    id: "reasoning-1".to_string(),
+                    text: "thinking".to_string(),
+                },
+                StreamEvent::TextDelta("Hello".to_string()),
+                StreamEvent::FinishStep {
+                    finish_reason: Some("stop".to_string()),
+                    usage: StreamUsage::default(),
+                    provider_metadata: None,
+                },
+                StreamEvent::Done,
+            ],
+        });
+
+        let emitted = Arc::new(StdMutex::new(Vec::<OutputBlockEvent>::new()));
+        let emitted_sink = emitted.clone();
+        let hook: OutputBlockHook = Arc::new(move |event| {
+            emitted_sink
+                .lock()
+                .expect("output block lock should not poison")
+                .push(event);
+        });
+
+        let input = PromptInput {
+            session_id: session.id.clone(),
+            message_id: None,
+            model: Some(ModelRef {
+                provider_id: "mock".to_string(),
+                model_id: "test-model".to_string(),
+            }),
+            agent: None,
+            no_reply: false,
+            system: None,
+            variant: None,
+            parts: vec![PartInput::Text {
+                text: "Say hello".to_string(),
+            }],
+            tools: None,
+        };
+
+        prompt
+            .prompt_with_update_hook(
+                input,
+                &mut session,
+                PromptRequestContext {
+                    provider,
+                    system_prompt: None,
+                    tools: Vec::new(),
+                    compiled_request: CompiledExecutionRequest::default(),
+                    hooks: PromptHooks {
+                        output_block_hook: Some(hook),
+                        ..Default::default()
+                    },
+                },
+            )
+            .await
+            .expect("prompt_with_update_hook should succeed");
+
+        use rocode_command::output_blocks::{MessagePhase, OutputBlock};
+
+        let emitted = emitted.lock().expect("output block lock should not poison");
+        assert!(emitted.iter().all(|event| event.session_id == session.id));
+        let blocks = emitted
+            .iter()
+            .map(|event| event.block.clone())
+            .collect::<Vec<_>>();
+
+        assert!(matches!(
+            blocks.as_slice(),
+            [
+                OutputBlock::Message(message_start),
+                OutputBlock::Reasoning(reasoning_start),
+                OutputBlock::Reasoning(reasoning_delta),
+                OutputBlock::Message(message_delta),
+                OutputBlock::Reasoning(reasoning_end),
+                OutputBlock::Message(message_end),
+            ] if message_start.phase == MessagePhase::Start
+                && reasoning_start.phase == MessagePhase::Start
+                && reasoning_delta.phase == MessagePhase::Delta
+                && reasoning_delta.text == "thinking"
+                && message_delta.phase == MessagePhase::Delta
+                && message_delta.text == "Hello"
+                && reasoning_end.phase == MessagePhase::End
+                && message_end.phase == MessagePhase::End
+        ));
     }
 
     #[tokio::test]

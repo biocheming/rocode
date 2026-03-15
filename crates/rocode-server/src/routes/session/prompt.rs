@@ -14,7 +14,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::recovery::RecoveryExecutionContext;
 use crate::runtime_control::SessionRunStatus;
-use crate::session_runtime::events::{broadcast_session_updated, ServerEvent};
+use crate::session_runtime::events::{
+    broadcast_server_event, broadcast_session_updated, ServerEvent,
+};
 use crate::session_runtime::{
     ensure_default_session_title, finalize_active_scheduler_stage_cancelled,
     first_user_message_text, ModelPricing, SessionSchedulerLifecycleHook,
@@ -712,100 +714,17 @@ pub(super) async fn session_prompt(
         };
 
         let mut update_task = tokio::spawn(async move {
-            // Track emitted reasoning length per assistant message for incremental broadcast.
-            let mut reasoning_state: std::collections::HashMap<String, (bool, usize)> =
-                std::collections::HashMap::new();
-            let mut last_session_id = String::new();
-
             while let Some(snapshot) = update_rx.recv().await {
                 let snapshot_id = snapshot.id.clone();
-                last_session_id = snapshot_id.clone();
-
-                // Broadcast incremental reasoning blocks to event_bus for TUI real-time display.
-                for message in &snapshot.messages {
-                    if !matches!(message.role, rocode_session::MessageRole::Assistant) {
-                        continue;
-                    }
-                    let reasoning = crate::session_runtime::assistant_reasoning_text(message);
-                    if reasoning.is_empty() {
-                        continue;
-                    }
-                    tracing::debug!(
-                        session_id = %snapshot_id,
-                        message_id = %message.id,
-                        reasoning_len = reasoning.len(),
-                        "prompt update_task: detected reasoning content"
-                    );
-                    let (started, emitted_len) = reasoning_state
-                        .entry(message.id.clone())
-                        .or_insert((false, 0));
-                    if !*started {
-                        let event = ServerEvent::OutputBlock {
-                            session_id: snapshot_id.clone(),
-                            block: serde_json::json!({
-                                "kind": "reasoning",
-                                "phase": "start",
-                                "text": "",
-                                "id": &message.id,
-                            }),
-                            id: Some(message.id.clone()),
-                        };
-                        if let Some(payload) = event.to_json_string() {
-                            let _ = update_state.event_bus.send(payload);
-                        }
-                        *started = true;
-                    }
-                    if reasoning.len() > *emitted_len {
-                        let delta = &reasoning[*emitted_len..];
-                        let event = ServerEvent::OutputBlock {
-                            session_id: snapshot_id.clone(),
-                            block: serde_json::json!({
-                                "kind": "reasoning",
-                                "phase": "delta",
-                                "text": delta,
-                                "id": &message.id,
-                            }),
-                            id: Some(message.id.clone()),
-                        };
-                        if let Some(payload) = event.to_json_string() {
-                            let _ = update_state.event_bus.send(payload);
-                        }
-                        *emitted_len = reasoning.len();
-                    }
-                }
-
-                // 1. Update in-memory state + WebSocket broadcast FIRST (low latency).
                 {
                     let mut sessions = update_state.sessions.lock().await;
                     sessions.update(snapshot.clone());
                 }
                 broadcast_session_updated(update_state.as_ref(), snapshot_id, "prompt.stream");
 
-                // 2. Queue latest snapshot for async persistence (coalesced).
                 *persist_latest.lock().await = Some(snapshot);
                 persist_notify.notify_one();
             }
-
-            // Emit reasoning "end" for any started reasoning blocks.
-            for (message_id, (started, _)) in &reasoning_state {
-                if *started {
-                    let event = ServerEvent::OutputBlock {
-                        session_id: last_session_id.clone(),
-                        block: serde_json::json!({
-                            "kind": "reasoning",
-                            "phase": "end",
-                            "text": "",
-                            "id": message_id,
-                        }),
-                        id: Some(message_id.clone()),
-                    };
-                    if let Some(payload) = event.to_json_string() {
-                        let _ = update_state.event_bus.send(payload);
-                    }
-                }
-            }
-
-            // Channel closed — signal persist worker to flush final snapshot.
             persist_notify.notify_one();
         });
         // Keep persist_worker handle at this scope so the outer timeout path can abort it.
@@ -855,11 +774,21 @@ pub(super) async fn session_prompt(
                     if let Some(payload) = server_event.to_json_string() {
                         state.broadcast(&payload);
                     } else {
-                        tracing::warn!("failed to serialize ServerEvent from prompt event_broadcast");
+                        tracing::warn!(
+                            "failed to serialize ServerEvent from prompt event_broadcast"
+                        );
                     }
                 } else {
                     tracing::warn!("ignored non-ServerEvent payload in prompt event_broadcast");
                 }
+            }))
+        };
+        let output_block_hook: Option<rocode_session::prompt::OutputBlockHook> = {
+            let state = task_state.clone();
+            Some(Arc::new(move |event| {
+                let server_event =
+                    ServerEvent::output_block(event.session_id, &event.block, event.id.as_deref());
+                broadcast_server_event(state.as_ref(), &server_event);
             }))
         };
 
@@ -920,6 +849,7 @@ pub(super) async fn session_prompt(
                     hooks: rocode_session::prompt::PromptHooks {
                         update_hook: Some(update_hook),
                         event_broadcast,
+                        output_block_hook,
                         agent_lookup,
                         ask_question_hook,
                         publish_bus_hook,

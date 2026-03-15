@@ -3210,6 +3210,7 @@ dependencies = [
  "glob",
  "regex",
  "reqwest",
+ "rocode-command",
  "rocode-core",
  "rocode-lsp",
  "rocode-mcp",

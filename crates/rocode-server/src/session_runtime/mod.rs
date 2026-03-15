@@ -8,7 +8,8 @@ use self::events::broadcast_session_updated;
 use crate::runtime_control::{ExecutionPatch, ExecutionStatus, FieldUpdate};
 use crate::ServerState;
 use rocode_command::output_blocks::{
-    OutputBlock, SchedulerDecisionBlock, SchedulerDecisionField, SchedulerDecisionRenderSpec,
+    MessageBlock, MessageRole as OutputMessageRole, OutputBlock, ReasoningBlock,
+    SchedulerDecisionBlock, SchedulerDecisionField, SchedulerDecisionRenderSpec,
     SchedulerDecisionSection, SchedulerStageBlock,
 };
 use rocode_orchestrator::{
@@ -18,10 +19,11 @@ use rocode_orchestrator::{
     ToolOutput as OrchestratorToolOutput,
 };
 use rocode_provider::Provider;
+use rocode_session::prompt::{OutputBlockEvent, OutputBlockHook};
 use rocode_session::snapshot::Snapshot;
 use rocode_session::{MessageRole, MessageUsage, PartType, Session, SessionMessage};
 
-pub type SessionOutputBlockHook = Arc<dyn Fn(OutputBlock) + Send + Sync>;
+pub type SessionOutputBlockHook = OutputBlockHook;
 
 #[derive(Clone)]
 struct ActiveStageMessage {
@@ -35,6 +37,8 @@ struct ActiveStageMessage {
     child_session_id: Option<String>,
     /// The assistant message ID within the child session where content flows.
     child_message_id: Option<String>,
+    /// Whether a reasoning stream has started for the child-session assistant message.
+    child_reasoning_started: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -214,8 +218,23 @@ impl SessionSchedulerLifecycleHook {
             return;
         };
         if let Some(block) = scheduler_stage_block_from_message(message) {
-            output_hook(OutputBlock::SchedulerStage(Box::new(block)));
+            output_hook(OutputBlockEvent {
+                session_id: self.session_id.clone(),
+                block: OutputBlock::SchedulerStage(Box::new(block)),
+                id: Some(message.id.clone()),
+            });
         }
+    }
+
+    fn emit_output_block(&self, session_id: String, block: OutputBlock, id: Option<String>) {
+        let Some(output_hook) = self.output_hook.as_ref() else {
+            return;
+        };
+        output_hook(OutputBlockEvent {
+            session_id,
+            block,
+            id,
+        });
     }
 
     /// Capture a git worktree snapshot and store its hash in the active stage
@@ -847,6 +866,15 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
         } else {
             (None, None)
         };
+        if let (Some(child_sid), Some(child_mid)) =
+            (child_session_id.as_ref(), child_message_id.as_ref())
+        {
+            self.emit_output_block(
+                child_sid.clone(),
+                OutputBlock::Message(MessageBlock::start(OutputMessageRole::Assistant)),
+                Some(child_mid.clone()),
+            );
+        }
 
         let message = session.add_assistant_message();
         let message_id = message.id.clone();
@@ -995,6 +1023,7 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                 live_usage: rocode_orchestrator::runtime::events::StepUsage::default(),
                 child_session_id,
                 child_message_id,
+                child_reasoning_started: false,
             });
 
         broadcast_session_updated(
@@ -1034,11 +1063,15 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                 sessions.update(child);
             }
             drop(sessions);
-            broadcast_session_updated(
-                &self.state,
-                child_sid,
-                "prompt.scheduler.stage.content",
+            self.emit_output_block(
+                child_sid.clone(),
+                OutputBlock::Message(MessageBlock::delta(
+                    OutputMessageRole::Assistant,
+                    content_delta.to_string(),
+                )),
+                Some(child_mid),
             );
+            broadcast_session_updated(&self.state, child_sid, "prompt.scheduler.stage.content");
             return;
         }
 
@@ -1082,14 +1115,23 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
             "on_scheduler_stage_reasoning called"
         );
 
-        let (message_id, child_session_id, child_message_id) = {
-            let guard = self.active_stage_messages.lock().await;
-            match guard.last() {
-                Some(active) => (
-                    Some(active.message_id.clone()),
-                    active.child_session_id.clone(),
-                    active.child_message_id.clone(),
-                ),
+        let (message_id, child_session_id, child_message_id, start_child_reasoning) = {
+            let mut guard = self.active_stage_messages.lock().await;
+            match guard.last_mut() {
+                Some(active) => {
+                    let start_child_reasoning = active.child_session_id.is_some()
+                        && active.child_message_id.is_some()
+                        && !active.child_reasoning_started;
+                    if start_child_reasoning {
+                        active.child_reasoning_started = true;
+                    }
+                    (
+                        Some(active.message_id.clone()),
+                        active.child_session_id.clone(),
+                        active.child_message_id.clone(),
+                        start_child_reasoning,
+                    )
+                }
                 None => {
                     // Non-scheduler-stage mode: find current assistant message
                     drop(guard);
@@ -1101,12 +1143,12 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                             .rev()
                             .find(|m| m.role == MessageRole::Assistant)
                         {
-                            (Some(last_assistant.id.clone()), None, None)
+                            (Some(last_assistant.id.clone()), None, None, false)
                         } else {
-                            (None, None, None)
+                            (None, None, None, false)
                         }
                     } else {
-                        (None, None, None)
+                        (None, None, None, false)
                     }
                 }
             }
@@ -1127,11 +1169,19 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                 sessions.update(child);
             }
             drop(sessions);
-            broadcast_session_updated(
-                &self.state,
-                child_sid,
-                "prompt.scheduler.stage.reasoning",
+            if start_child_reasoning {
+                self.emit_output_block(
+                    child_sid.clone(),
+                    OutputBlock::Reasoning(ReasoningBlock::start()),
+                    Some(child_mid.clone()),
+                );
+            }
+            self.emit_output_block(
+                child_sid.clone(),
+                OutputBlock::Reasoning(ReasoningBlock::delta(reasoning_delta.to_string())),
+                Some(child_mid),
             );
+            broadcast_session_updated(&self.state, child_sid, "prompt.scheduler.stage.reasoning");
             return;
         }
 
@@ -1255,9 +1305,12 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                     message_snapshot = Some(message.clone());
                 }
 
+                let child_session_id = active.child_session_id.clone();
+                let child_message_id = active.child_message_id.clone();
+
                 // Finalize child session assistant message if present.
                 if let (Some(ref child_sid), Some(ref child_mid)) =
-                    (active.child_session_id, active.child_message_id)
+                    (child_session_id.as_ref(), child_message_id.as_ref())
                 {
                     if let Some(mut child) = sessions.get(child_sid).cloned() {
                         if let Some(msg) = child.get_message_mut(child_mid) {
@@ -1274,6 +1327,25 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
 
                 if let Some(message) = message_snapshot.as_ref() {
                     self.emit_stage_block(message);
+                }
+                if let (Some(child_sid), Some(child_mid)) = (child_session_id, child_message_id) {
+                    if active.child_reasoning_started {
+                        self.emit_output_block(
+                            child_sid.clone(),
+                            OutputBlock::Reasoning(ReasoningBlock::end()),
+                            Some(child_mid.clone()),
+                        );
+                    }
+                    self.emit_output_block(
+                        child_sid.clone(),
+                        OutputBlock::Message(MessageBlock::end(OutputMessageRole::Assistant)),
+                        Some(child_mid.clone()),
+                    );
+                    broadcast_session_updated(
+                        &self.state,
+                        child_sid,
+                        "prompt.scheduler.stage.child.final",
+                    );
                 }
 
                 broadcast_session_updated(
@@ -2436,19 +2508,6 @@ pub fn assistant_visible_text(message: &SessionMessage) -> String {
     rocode_session::sanitize_display_text(&out)
 }
 
-/// Extract concatenated reasoning / thinking text from the message.
-///
-/// Mirrors `assistant_visible_text` but for `PartType::Reasoning` parts.
-pub fn assistant_reasoning_text(message: &SessionMessage) -> String {
-    let mut out = String::new();
-    for part in &message.parts {
-        if let PartType::Reasoning { text } = &part.part_type {
-            out.push_str(text);
-        }
-    }
-    out
-}
-
 pub fn scheduler_stage_block_from_message(message: &SessionMessage) -> Option<SchedulerStageBlock> {
     let metadata = &message.metadata;
     let text = assistant_visible_text(message);
@@ -2747,6 +2806,7 @@ mod tests {
         Role, StreamResult,
     };
     use std::collections::HashMap;
+    use std::sync::Mutex as StdMutex;
 
     #[derive(Debug)]
     struct MockProvider {
@@ -3324,6 +3384,122 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("frontend")
         );
+    }
+
+    #[tokio::test]
+    async fn lifecycle_hook_routes_child_session_content_to_child_session() {
+        let state = Arc::new(ServerState::new());
+        let session_id = {
+            let mut sessions = state.sessions.lock().await;
+            sessions.create("project", ".").id
+        };
+        let emitted = Arc::new(StdMutex::new(Vec::<OutputBlockEvent>::new()));
+        let emitted_hook = emitted.clone();
+        let exec_ctx = OrchestratorExecutionContext {
+            session_id: session_id.clone(),
+            workdir: ".".to_string(),
+            agent_name: "atlas".to_string(),
+            metadata: HashMap::new(),
+        };
+        let hook = SessionSchedulerLifecycleHook::new(
+            state.clone(),
+            session_id.clone(),
+            "atlas".to_string(),
+        )
+        .with_output_hook(Some(Arc::new(move |event| {
+            emitted_hook
+                .lock()
+                .expect("output block lock should not poison")
+                .push(event);
+        })));
+
+        hook.on_scheduler_stage_start(
+            "atlas",
+            "execution-orchestration",
+            2,
+            Some(&SchedulerStageCapabilities {
+                skill_list: vec![],
+                agents: vec![],
+                categories: vec![],
+                child_session: true,
+            }),
+            &exec_ctx,
+        )
+        .await;
+        hook.on_scheduler_stage_content(
+            "execution-orchestration",
+            2,
+            "child session streamed content",
+            &exec_ctx,
+        )
+        .await;
+        hook.on_scheduler_stage_reasoning(
+            "execution-orchestration",
+            2,
+            "child session streamed reasoning",
+            &exec_ctx,
+        )
+        .await;
+        hook.on_scheduler_stage_end(
+            "atlas",
+            "execution-orchestration",
+            2,
+            2,
+            "## Execution Orchestration\n\nFinal stage body",
+            &exec_ctx,
+        )
+        .await;
+
+        let sessions = state.sessions.lock().await;
+        let parent = sessions
+            .get(&session_id)
+            .expect("parent session should exist");
+        let parent_stage_message = parent.messages.last().expect("parent stage message");
+        let child_session_id = parent_stage_message
+            .metadata
+            .get("scheduler_stage_child_session_id")
+            .and_then(|value| value.as_str())
+            .expect("child session id")
+            .to_string();
+
+        let child = sessions
+            .get(&child_session_id)
+            .expect("child session should exist");
+        let child_message = child.messages.last().expect("child assistant message");
+        assert_eq!(child_message.get_text(), "child session streamed content");
+        assert_eq!(child_message.finish.as_deref(), Some("end_turn"));
+        assert_eq!(child.parent_id.as_deref(), Some(session_id.as_str()));
+        drop(sessions);
+
+        let emitted = emitted
+            .lock()
+            .expect("output block lock should not poison")
+            .clone();
+        let child_blocks = emitted
+            .into_iter()
+            .filter(|event| event.session_id == child_session_id)
+            .map(|event| event.block)
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            child_blocks.as_slice(),
+            [
+                OutputBlock::Message(message_start),
+                OutputBlock::Message(message_delta),
+                OutputBlock::Reasoning(reasoning_start),
+                OutputBlock::Reasoning(reasoning_delta),
+                OutputBlock::Reasoning(reasoning_end),
+                OutputBlock::Message(message_end),
+            ] if message_start == &MessageBlock::start(OutputMessageRole::Assistant)
+                && message_delta
+                    == &MessageBlock::delta(
+                        OutputMessageRole::Assistant,
+                        "child session streamed content",
+                    )
+                && reasoning_start == &ReasoningBlock::start()
+                && reasoning_delta == &ReasoningBlock::delta("child session streamed reasoning")
+                && reasoning_end == &ReasoningBlock::end()
+                && message_end == &MessageBlock::end(OutputMessageRole::Assistant)
+        ));
     }
 
     #[tokio::test]

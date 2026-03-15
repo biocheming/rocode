@@ -434,4 +434,26 @@ mod tests {
         ));
         assert!(other_event.is_none());
     }
+
+    #[test]
+    fn question_created_from_child_session_is_not_filtered() {
+        let payload = serde_json::json!({
+            "type": "question.created",
+            "sessionID": "child-session-1",
+            "requestID": "question-1",
+            "questions": [{
+                "header": "Scope",
+                "question": "Proceed?",
+                "options": [{"label": "Yes"}]
+            }]
+        });
+
+        let event = parse_event("", &payload, "parent-session-1");
+
+        assert!(matches!(
+            event,
+            Some(CliServerEvent::QuestionCreated { session_id, request_id, .. })
+                if session_id == "child-session-1" && request_id == "question-1"
+        ));
+    }
 }

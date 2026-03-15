@@ -20,13 +20,14 @@ use tokio_util::sync::CancellationToken;
 
 use crate::request_options::{resolve_compiled_execution_request, ExecutionResolutionContext};
 use crate::runtime_control::SessionRunStatus;
+use crate::session_runtime::events::broadcast_session_updated;
 use crate::session_runtime::{
     assistant_visible_text, ensure_default_session_title,
     finalize_active_scheduler_stage_cancelled, first_user_message_text, ModelPricing,
     SessionOutputBlockHook, SessionSchedulerLifecycleHook,
 };
-use crate::session_runtime::events::broadcast_session_updated;
 use crate::{Result, ServerState};
+use rocode_session::prompt::OutputBlockEvent;
 
 use super::super::tui::request_question_answers;
 use super::cancel::is_scheduler_cancellation_error;
@@ -1186,10 +1187,14 @@ pub async fn run_local_scheduler_prompt(
 
     if let Some(output_hook) = output_hook {
         if !assistant_text.trim().is_empty() {
-            output_hook(OutputBlock::Message(MessageBlock::full(
-                OutputMessageRole::Assistant,
-                assistant_text.clone(),
-            )));
+            output_hook(OutputBlockEvent {
+                session_id: session_id.clone(),
+                block: OutputBlock::Message(MessageBlock::full(
+                    OutputMessageRole::Assistant,
+                    assistant_text.clone(),
+                )),
+                id: Some(assistant_message_id.clone()),
+            });
         }
     }
 
