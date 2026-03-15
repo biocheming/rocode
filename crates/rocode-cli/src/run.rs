@@ -5,18 +5,12 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use rocode_agent::executor::AgentError as AgentExecutorError;
-use rocode_agent::{
-    AgentExecutor, AgentInfo, AgentMessage, AgentRegistry, Conversation, MessageRole,
-    PersistedSubsessionState,
-};
-use rocode_command::cli_markdown::MarkdownStreamer;
+use rocode_agent::{AgentInfo, AgentRegistry};
 use rocode_command::cli_panel::CliPanelFrame;
 #[cfg(test)]
 use rocode_command::cli_panel::{
     display_width, pad_right_display, truncate_display, wrap_display_text,
 };
-use rocode_command::cli_permission::build_cli_permission_callback;
 use rocode_command::cli_prompt::{
     PromptCompletion, PromptFrame, PromptSession, PromptSessionEvent,
 };
@@ -28,82 +22,31 @@ use rocode_command::cli_style::CliStyle;
 use rocode_command::interactive::{parse_interactive_command, InteractiveCommand};
 use rocode_command::output_blocks::{
     render_cli_block_rich, MessageBlock, MessagePhase, MessageRole as OutputMessageRole,
-    OutputBlock, QueueItemBlock, ReasoningBlock, SchedulerStageBlock, StatusBlock,
+    OutputBlock, QueueItemBlock, SchedulerStageBlock, StatusBlock,
 };
-use rocode_command::{CommandContext, CommandRegistry};
 use rocode_config::loader::load_config;
-use rocode_config::{Config, SkillTreeNodeConfig};
+use rocode_config::Config;
 use rocode_core::agent_task_registry::{global_task_registry, AgentTaskStatus};
 use rocode_orchestrator::{
-    resolve_skill_markdown_repo, scheduler_plan_from_profile, scheduler_request_defaults_from_plan,
-    SchedulerConfig, SchedulerPresetKind, SchedulerProfileConfig, SchedulerRequestDefaults,
-    SkillTreeNode, SkillTreeRequestPlan,
+    scheduler_plan_from_profile, scheduler_request_defaults_from_plan, SchedulerConfig,
+    SchedulerPresetKind, SchedulerProfileConfig, SchedulerRequestDefaults,
 };
 use rocode_provider::ProviderRegistry;
-use rocode_server::{
-    abort_local_session_execution, run_local_scheduler_prompt, LocalSchedulerPromptRequest,
-    ServerState,
-};
-use rocode_session::system::{EnvironmentContext, SystemPrompt};
-use rocode_tool::registry::create_default_registry;
 use rocode_util::util::color::strip_ansi;
 use tokio::sync::{mpsc, Mutex as AsyncMutex};
 use tokio_util::sync::CancellationToken;
 
-use crate::agent_stream_adapter::stream_prompt_to_blocks_with_cancel;
 use crate::api_client::{CliApiClient, McpStatusInfo, MessageTokensInfo, SessionInfo};
 use crate::cli::RunOutputFormat;
 use crate::event_stream::{self, CliServerEvent};
 use crate::providers::{render_help, setup_providers};
-use crate::remote::{run_non_interactive_attach, RemoteAttachOptions};
+use crate::remote::{parse_output_block, run_non_interactive_attach, RemoteAttachOptions};
 use crate::server_lifecycle::discover_or_start_server;
 use crate::util::{
     append_cli_file_attachments, collect_run_input, parse_model_and_provider, truncate_text,
 };
 use rocode_command::branding::logo_lines;
 use rocode_tui::branding::{APP_SHORT_NAME, APP_TAGLINE, APP_VERSION_DATE};
-
-fn to_orchestrator_skill_tree(node: &SkillTreeNodeConfig) -> SkillTreeNode {
-    SkillTreeNode {
-        node_id: node.node_id.clone(),
-        markdown_path: node.markdown_path.clone(),
-        children: node
-            .children
-            .iter()
-            .map(to_orchestrator_skill_tree)
-            .collect(),
-    }
-}
-
-fn resolve_request_skill_tree_plan(
-    config: &Config,
-    scheduler_defaults: Option<&SchedulerRequestDefaults>,
-) -> Option<SkillTreeRequestPlan> {
-    if let Some(plan) = scheduler_defaults.and_then(|defaults| defaults.skill_tree_plan.clone()) {
-        return Some(plan);
-    }
-
-    let skill_tree = config.composition.as_ref()?.skill_tree.as_ref()?;
-    if matches!(skill_tree.enabled, Some(false)) {
-        return None;
-    }
-
-    let root = skill_tree.root.as_ref()?;
-    let root = to_orchestrator_skill_tree(root);
-    let markdown_repo = resolve_skill_markdown_repo(&config.skill_paths);
-
-    match SkillTreeRequestPlan::from_tree_with_separator(
-        &root,
-        &markdown_repo,
-        skill_tree.separator.as_deref(),
-    ) {
-        Ok(plan) => plan,
-        Err(error) => {
-            tracing::warn!(%error, "failed to build request skill tree plan");
-            None
-        }
-    }
-}
 
 fn resolve_requested_agent_name(
     config: &Config,
@@ -167,47 +110,6 @@ pub(crate) async fn run_non_interactive(options: RunNonInteractiveOptions) -> an
     append_cli_file_attachments(&mut input, &files)?;
     let show_thinking = thinking || input.trim().is_empty();
 
-    if let Some(base_url) = attach {
-        return run_non_interactive_attach(RemoteAttachOptions {
-            base_url,
-            input,
-            command,
-            continue_last,
-            session,
-            fork,
-            share,
-            model,
-            scheduler_profile: requested_scheduler_profile,
-            variant,
-            format,
-            title,
-        })
-        .await;
-    }
-
-    if continue_last || session.is_some() || fork || share {
-        println!(
-            "Note: session/share flags are currently applied when using `run --attach <server>`."
-        );
-    }
-
-    if let Some(command_name) = command {
-        let cwd = std::env::current_dir()?;
-        let mut registry = CommandRegistry::new();
-        let _ = registry.load_from_directory(&cwd);
-        let args = if input.trim().is_empty() {
-            Vec::new()
-        } else {
-            input
-                .split_whitespace()
-                .map(|part| part.to_string())
-                .collect::<Vec<_>>()
-        };
-        let rendered =
-            registry.execute(&command_name, CommandContext::new(cwd).with_arguments(args))?;
-        input = rendered;
-    }
-
     if input.trim().is_empty() {
         let (provider, model_id) = parse_model_and_provider(model);
         return run_chat_session(
@@ -215,42 +117,34 @@ pub(crate) async fn run_non_interactive(options: RunNonInteractiveOptions) -> an
             provider,
             requested_agent,
             requested_scheduler_profile,
-            None,
-            false,
             show_thinking,
         )
         .await;
     }
 
-    let (provider, model_id) = parse_model_and_provider(model);
-    run_chat_session(
-        model_id,
-        provider,
-        requested_agent,
-        requested_scheduler_profile,
-        Some(input.clone()),
-        true,
+    let base_url = if let Some(base_url) = attach {
+        base_url
+    } else {
+        discover_or_start_server(None).await?
+    };
+
+    run_non_interactive_attach(RemoteAttachOptions {
+        base_url,
+        input,
+        command,
+        continue_last,
+        session,
+        fork,
+        share,
+        model,
+        agent: requested_agent,
+        scheduler_profile: requested_scheduler_profile,
+        variant,
+        format,
+        title,
         show_thinking,
-    )
-    .await?;
-
-    match format {
-        RunOutputFormat::Default => {
-            println!("{}", input);
-        }
-        RunOutputFormat::Json => {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "message": input,
-                    "format": "json",
-                    "title": title,
-                })
-            );
-        }
-    }
-
-    Ok(())
+    })
+    .await
 }
 
 pub(crate) struct RunNonInteractiveOptions {
@@ -283,7 +177,6 @@ struct CliRunSelection {
 }
 
 struct CliExecutionRuntime {
-    executor: AgentExecutor,
     resolved_agent_name: String,
     resolved_scheduler_profile_name: Option<String>,
     resolved_model_label: String,
@@ -299,8 +192,6 @@ struct CliExecutionRuntime {
     exit_requested: Arc<AtomicBool>,
     active_abort: Arc<AsyncMutex<Option<CliActiveAbortHandle>>>,
     recovery_base_prompt: Option<String>,
-    local_scheduler_state: Option<Arc<ServerState>>,
-    local_scheduler_session_id: Option<String>,
     /// Shared spinner guard — updated each message cycle so that question/permission
     /// callbacks can pause the active spinner without holding a stale reference.
     spinner_guard: Arc<std::sync::Mutex<SpinnerGuard>>,
@@ -308,20 +199,13 @@ struct CliExecutionRuntime {
     api_client: Option<Arc<CliApiClient>>,
     /// Server-side session ID (created via HTTP POST /session).
     server_session_id: Option<String>,
-    /// Tracks the last rendered message ID from the server for incremental rendering.
-    last_rendered_message_id: Arc<std::sync::Mutex<Option<String>>>,
     show_thinking: bool,
 }
 
 struct CliRuntimeBuildInput<'a> {
     config: &'a Config,
-    current_dir: &'a Path,
-    provider_registry: Arc<rocode_provider::ProviderRegistry>,
-    tool_registry: Arc<rocode_tool::registry::ToolRegistry>,
     agent_registry: Arc<AgentRegistry>,
     selection: &'a CliRunSelection,
-    prior_conversation: Option<Conversation>,
-    prior_subsessions: Option<HashMap<String, PersistedSubsessionState>>,
 }
 
 #[derive(Clone)]
@@ -364,11 +248,6 @@ struct CliObservedExecutionNode {
 
 #[derive(Clone)]
 enum CliActiveAbortHandle {
-    Agent(CancellationToken),
-    Scheduler {
-        state: Arc<ServerState>,
-        session_id: String,
-    },
     /// Server-side execution — abort via HTTP POST.
     Server {
         api_client: Arc<CliApiClient>,
@@ -1483,85 +1362,13 @@ fn resolve_scheduler_runtime(
     }
 }
 
-fn apply_system_prompt_to_conversation(
-    conversation: Option<Conversation>,
-    system_prompt: &str,
-) -> Conversation {
-    let mut conversation = conversation.unwrap_or_default();
-    if let Some(first) = conversation.messages.first_mut() {
-        if matches!(first.role, MessageRole::System) {
-            first.content = system_prompt.to_string();
-            return conversation;
-        }
-    }
-    conversation
-        .messages
-        .insert(0, AgentMessage::system(system_prompt.to_string()));
-    conversation
-}
-
-fn compose_executor_system_prompt(agent_info: &AgentInfo, current_dir: &Path) -> String {
-    let (model_api_id, provider_id) = match &agent_info.model {
-        Some(m) => (m.model_id.clone(), m.provider_id.clone()),
-        None => (
-            "claude-sonnet-4-20250514".to_string(),
-            "anthropic".to_string(),
-        ),
-    };
-    let mut sections = Vec::new();
-    if let Some(agent_prompt) = agent_info.resolved_system_prompt() {
-        if !agent_prompt.trim().is_empty() {
-            sections.push(agent_prompt);
-        }
-    }
-    sections.push(SystemPrompt::for_model(&model_api_id).to_string());
-    let env_ctx = EnvironmentContext::from_current(
-        &model_api_id,
-        &provider_id,
-        current_dir.to_string_lossy().as_ref(),
-    );
-    sections.push(SystemPrompt::environment(&env_ctx));
-    sections.join("\n\n")
-}
-
-fn build_local_cli_server_state(
-    config: &Config,
-    provider_registry: &ProviderRegistry,
-    tool_registry: Arc<rocode_tool::registry::ToolRegistry>,
-) -> Arc<ServerState> {
-    let mut state = ServerState::new();
-
-    let mut providers = rocode_provider::ProviderRegistry::new();
-    for provider in provider_registry.list() {
-        providers.register_arc(provider);
-    }
-
-    state.providers = tokio::sync::RwLock::new(providers);
-    state.config_store = Arc::new(rocode_config::ConfigStore::new(config.clone()));
-    state.tool_registry = tool_registry;
-    state.prompt_runner = Arc::new(
-        rocode_session::SessionPrompt::new(Arc::new(tokio::sync::RwLock::new(
-            rocode_session::SessionStateManager::new(),
-        )))
-        .with_tool_runtime_config(rocode_tool::ToolRuntimeConfig::from_config(config)),
-    );
-    state.category_registry = Arc::new(rocode_config::CategoryRegistry::with_builtins());
-
-    Arc::new(state)
-}
-
 async fn build_cli_execution_runtime(
     input: CliRuntimeBuildInput<'_>,
 ) -> anyhow::Result<CliExecutionRuntime> {
     let CliRuntimeBuildInput {
         config,
-        current_dir,
-        provider_registry,
-        tool_registry,
         agent_registry,
         selection,
-        prior_conversation,
-        prior_subsessions,
     } = input;
     let observed_topology = Arc::new(Mutex::new(CliObservedExecutionTopology::default()));
     let frontend_projection = Arc::new(Mutex::new(CliFrontendProjection::default()));
@@ -1575,8 +1382,6 @@ async fn build_cli_execution_runtime(
     let scheduler_root_agent = scheduler_defaults
         .as_ref()
         .and_then(|defaults| defaults.root_agent_name.clone());
-    let request_skill_tree_plan =
-        resolve_request_skill_tree_plan(config, scheduler_defaults.as_ref());
     let agent_name = resolve_requested_agent_name(
         config,
         selection.requested_agent.as_deref(),
@@ -1607,72 +1412,12 @@ async fn build_cli_execution_runtime(
         .map(|m| format!("{}/{}", m.provider_id, m.model_id))
         .unwrap_or_else(|| "auto".to_string());
 
-    let local_scheduler_state = scheduler_profile_name.as_ref().map(|_| {
-        build_local_cli_server_state(config, provider_registry.as_ref(), tool_registry.clone())
-    });
-    let local_scheduler_session_id = if let Some(state) = local_scheduler_state.as_ref() {
-        let mut sessions = state.sessions.lock().await;
-        Some(
-            sessions
-                .create("rocode-cli", current_dir.to_string_lossy())
-                .id,
-        )
-    } else {
-        None
-    };
-
     // Shared spinner guard slot — closures capture this; process_message_with_mode
     // swaps in the real spinner's guard each cycle.
     let spinner_guard: Arc<std::sync::Mutex<SpinnerGuard>> =
         Arc::new(std::sync::Mutex::new(SpinnerGuard::noop()));
     let prompt_session_slot: Arc<std::sync::Mutex<Option<Arc<PromptSession>>>> =
         Arc::new(std::sync::Mutex::new(None));
-
-    let mut executor = AgentExecutor::new(
-        agent_info.clone(),
-        provider_registry,
-        tool_registry,
-        agent_registry.clone(),
-    )
-    .with_tool_runtime_config(rocode_tool::ToolRuntimeConfig::from_config(config))
-    .with_ask_question({
-        let observed_topology = observed_topology.clone();
-        let frontend_projection = frontend_projection.clone();
-        let spinner_guard = spinner_guard.clone();
-        let prompt_session_slot = prompt_session_slot.clone();
-        move |questions| {
-            let observed_topology = observed_topology.clone();
-            let frontend_projection = frontend_projection.clone();
-            let guard = spinner_guard
-                .lock()
-                .map(|g| g.clone())
-                .unwrap_or_else(|_| SpinnerGuard::noop());
-            let prompt_session_slot = prompt_session_slot.clone();
-            async move {
-                cli_ask_question(
-                    questions,
-                    observed_topology,
-                    frontend_projection,
-                    prompt_session_slot,
-                    guard,
-                )
-                .await
-            }
-        }
-    })
-    .with_ask_permission(build_cli_permission_callback(spinner_guard.clone()));
-
-    if let Some(states) = prior_subsessions {
-        executor = executor.with_persisted_subsessions(states);
-    }
-
-    let full_prompt = compose_executor_system_prompt(&agent_info, current_dir);
-    let conversation = apply_system_prompt_to_conversation(prior_conversation, &full_prompt);
-    *executor.conversation_mut() = conversation;
-
-    if let Some(plan) = request_skill_tree_plan {
-        executor = executor.with_request_skill_tree_plan(plan);
-    }
 
     tracing::info!(
         requested_agent = ?selection.requested_agent,
@@ -1685,7 +1430,6 @@ async fn build_cli_execution_runtime(
     );
 
     Ok(CliExecutionRuntime {
-        executor,
         resolved_agent_name: agent_name,
         resolved_scheduler_profile_name: scheduler_profile_name,
         resolved_model_label,
@@ -1701,12 +1445,9 @@ async fn build_cli_execution_runtime(
         exit_requested: Arc::new(AtomicBool::new(false)),
         active_abort: Arc::new(AsyncMutex::new(None)),
         recovery_base_prompt: None,
-        local_scheduler_state,
-        local_scheduler_session_id,
         spinner_guard,
         api_client: None,
         server_session_id: None,
-        last_rendered_message_id: Arc::new(std::sync::Mutex::new(None)),
         show_thinking: selection.show_thinking,
     })
 }
@@ -2031,17 +1772,6 @@ fn cli_attach_interactive_handles(
 
 async fn cli_trigger_abort(handle: CliActiveAbortHandle) -> bool {
     match handle {
-        CliActiveAbortHandle::Agent(token) => {
-            token.cancel();
-            true
-        }
-        CliActiveAbortHandle::Scheduler { state, session_id } => {
-            abort_local_session_execution(state, &session_id, true)
-                .await
-                .get("aborted")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-        }
         CliActiveAbortHandle::Server {
             api_client,
             session_id,
@@ -2649,8 +2379,6 @@ async fn run_chat_session(
     provider: Option<String>,
     requested_agent: Option<String>,
     requested_scheduler_profile: Option<String>,
-    initial_prompt: Option<String>,
-    single_shot: bool,
     show_thinking: bool,
 ) -> anyhow::Result<()> {
     let current_dir = std::env::current_dir()?;
@@ -2680,7 +2408,6 @@ async fn run_chat_session(
         std::process::exit(1);
     }
 
-    let tool_registry = Arc::new(create_default_registry().await);
     let agent_registry_arc = Arc::new(AgentRegistry::from_config(&config));
 
     // ── Server connection & recent session info ──────────────────────
@@ -2724,13 +2451,8 @@ async fn run_chat_session(
 
     let mut runtime = build_cli_execution_runtime(CliRuntimeBuildInput {
         config: &config,
-        current_dir: &current_dir,
-        provider_registry: provider_registry.clone(),
-        tool_registry: tool_registry.clone(),
         agent_registry: agent_registry_arc.clone(),
         selection: &selection,
-        prior_conversation: None,
-        prior_subsessions: None,
     })
     .await?;
     let repl_style = CliStyle::detect();
@@ -2748,13 +2470,6 @@ async fn run_chat_session(
         session_id = %server_session_id,
         "CLI connected to server and created session"
     );
-
-    if single_shot {
-        if let Some(prompt_text) = initial_prompt {
-            process_message(&mut runtime, &prompt_text).await?;
-        }
-        return Ok(());
-    }
 
     let shared_frontend_projection = runtime.frontend_projection.clone();
     let queued_inputs = runtime.queued_inputs.clone();
@@ -2892,12 +2607,6 @@ async fn run_chat_session(
     )
     .await;
 
-    if let Some(prompt_text) = initial_prompt {
-        runtime.busy_flag.store(true, Ordering::SeqCst);
-        process_message(&mut runtime, &prompt_text).await?;
-        runtime.busy_flag.store(false, Ordering::SeqCst);
-    }
-
     loop {
         let queued = {
             let mut queue = runtime.queued_inputs.lock().await;
@@ -2937,18 +2646,6 @@ async fn run_chat_session(
                                             &api_client,
                                             &request_id,
                                             &questions_json,
-                                        ).await;
-                                    }
-                                    CliServerEvent::SessionUpdated {
-                                        session_id,
-                                        source,
-                                    } => {
-                                        handle_session_updated_from_sse(
-                                            &runtime,
-                                            &api_client,
-                                            &session_id,
-                                            source.as_deref(),
-                                            &repl_style,
                                         ).await;
                                     }
                                     other => {
@@ -3010,7 +2707,15 @@ async fn run_chat_session(
                         OutputBlock::Status(StatusBlock::title(format!("↺ {}", action.label))),
                         &repl_style,
                     );
-                    process_message_with_mode(&mut runtime, &action.prompt, false).await?;
+                    run_server_prompt(
+                        &mut runtime,
+                        &api_client,
+                        &mut sse_rx,
+                        &action.prompt,
+                        &repl_style,
+                        false,
+                    )
+                    .await?;
                 }
                 InteractiveCommand::ClearScreen => {
                     if let Some(surface) = runtime.terminal_surface.as_ref() {
@@ -3029,12 +2734,9 @@ async fn run_chat_session(
                             let new_sid = new_session.id.clone();
                             runtime.server_session_id = Some(new_sid.clone());
 
-                            // Reset token stats and last rendered message ID for the new session.
+                            // Reset token stats for the new session.
                             if let Ok(mut proj) = runtime.frontend_projection.lock() {
                                 proj.token_stats = CliSessionTokenStats::default();
-                            }
-                            if let Ok(mut guard) = runtime.last_rendered_message_id.lock() {
-                                *guard = None;
                             }
 
                             let _ = print_block(
@@ -3234,19 +2936,12 @@ async fn run_chat_session(
                         );
                         continue;
                     }
-                    let prior_conversation = Some(runtime.executor.conversation().clone());
-                    let prior_subsessions = Some(runtime.executor.export_subsessions().await);
                     selection.provider = provider;
                     selection.model = model;
                     runtime = build_cli_execution_runtime(CliRuntimeBuildInput {
                         config: &config,
-                        current_dir: &current_dir,
-                        provider_registry: provider_registry.clone(),
-                        tool_registry: tool_registry.clone(),
                         agent_registry: agent_registry_arc.clone(),
                         selection: &selection,
-                        prior_conversation,
-                        prior_subsessions,
                     })
                     .await?;
                     runtime.frontend_projection = shared_frontend_projection.clone();
@@ -3317,21 +3012,14 @@ async fn run_chat_session(
                         );
                         continue;
                     }
-                    let prior_conversation = Some(runtime.executor.conversation().clone());
-                    let prior_subsessions = Some(runtime.executor.export_subsessions().await);
                     selection.requested_scheduler_profile = Some(name.clone());
                     selection.requested_agent = None;
                     selection.model = None;
                     selection.provider = None;
                     runtime = build_cli_execution_runtime(CliRuntimeBuildInput {
                         config: &config,
-                        current_dir: &current_dir,
-                        provider_registry: provider_registry.clone(),
-                        tool_registry: tool_registry.clone(),
                         agent_registry: agent_registry_arc.clone(),
                         selection: &selection,
-                        prior_conversation,
-                        prior_subsessions,
                     })
                     .await?;
                     runtime.frontend_projection = shared_frontend_projection.clone();
@@ -3462,19 +3150,12 @@ async fn run_chat_session(
                         );
                         continue;
                     }
-                    let prior_conversation = Some(runtime.executor.conversation().clone());
-                    let prior_subsessions = Some(runtime.executor.export_subsessions().await);
                     selection.requested_agent = Some(name.clone());
                     selection.requested_scheduler_profile = None;
                     runtime = build_cli_execution_runtime(CliRuntimeBuildInput {
                         config: &config,
-                        current_dir: &current_dir,
-                        provider_registry: provider_registry.clone(),
-                        tool_registry: tool_registry.clone(),
                         agent_registry: agent_registry_arc.clone(),
                         selection: &selection,
-                        prior_conversation,
-                        prior_subsessions,
                     })
                     .await?;
                     runtime.frontend_projection = shared_frontend_projection.clone();
@@ -3516,9 +3197,6 @@ async fn run_chat_session(
                             // Reset token stats and re-fetch from compacted session.
                             if let Ok(mut proj) = runtime.frontend_projection.lock() {
                                 proj.token_stats = CliSessionTokenStats::default();
-                            }
-                            if let Ok(mut guard) = runtime.last_rendered_message_id.lock() {
-                                *guard = None;
                             }
                             cli_refresh_server_info(
                                 &api_client,
@@ -3631,163 +3309,15 @@ async fn run_chat_session(
 
         runtime.busy_flag.store(true, Ordering::SeqCst);
 
-        // Scheduler mode with server connection: send prompt via HTTP only,
-        // execution and rendering handled via SSE events (session.updated,
-        // question.created, etc.). No local execution needed.
-        let scheduler_via_server = runtime.resolved_scheduler_profile_name.is_some()
-            && runtime.api_client.is_some()
-            && runtime.server_session_id.is_some();
-
-        if scheduler_via_server {
-            let api = runtime.api_client.as_ref().unwrap();
-            let sid = runtime.server_session_id.as_ref().unwrap();
-
-            // Reset last rendered message ID so we can track incremental rendering.
-            // The user message will be the first new message from the server.
-            // (We render it locally below, so start tracking after it.)
-
-            // Print user message locally.
-            let style = CliStyle::detect();
-            if let Ok(mut topology) = runtime.observed_topology.lock() {
-                topology.reset_for_run(
-                    &runtime.resolved_agent_name,
-                    runtime.resolved_scheduler_profile_name.as_deref(),
-                );
-            }
-            cli_frontend_set_phase(
-                &runtime.frontend_projection,
-                CliFrontendPhase::Busy,
-                Some(
-                    runtime
-                        .resolved_scheduler_profile_name
-                        .as_deref()
-                        .map(|profile| format!("preset {}", profile))
-                        .unwrap_or_else(|| "assistant response".to_string()),
-                ),
-            );
-            print_block(
-                Some(&runtime),
-                OutputBlock::Message(MessageBlock::full(OutputMessageRole::User, trimmed.clone())),
-                &style,
-            )?;
-
-            // Set up abort handle for server-side execution.
-            {
-                let mut active_abort = runtime.active_abort.lock().await;
-                *active_abort = Some(CliActiveAbortHandle::Server {
-                    api_client: api.clone(),
-                    session_id: sid.clone(),
-                });
-            }
-
-            // Store recovery base prompt.
-            runtime.recovery_base_prompt = Some(trimmed.clone());
-
-            // Send prompt to server via HTTP — execution happens server-side.
-            if let Err(e) = api
-                .send_prompt(
-                    sid,
-                    trimmed.clone(),
-                    Some(runtime.resolved_agent_name.clone()),
-                    runtime.resolved_scheduler_profile_name.clone(),
-                    (runtime.resolved_model_label != "auto")
-                        .then(|| runtime.resolved_model_label.clone()),
-                    None,
-                )
-                .await
-            {
-                let _ = print_block(
-                    Some(&runtime),
-                    OutputBlock::Status(StatusBlock::error(format!(
-                        "Failed to send prompt: {}",
-                        e
-                    ))),
-                    &repl_style,
-                );
-                runtime.busy_flag.store(false, Ordering::SeqCst);
-                let mut active_abort = runtime.active_abort.lock().await;
-                *active_abort = None;
-                continue;
-            }
-
-            // The REPL loop will continue — SSE events will drive rendering:
-            // - session.updated → handle_session_updated_from_sse (message rendering)
-            // - question.created → handle_question_from_sse (interactive Q&A)
-            // - session.idle → marks run complete
-            // Wait for the server-side execution to complete by draining SSE events.
-            loop {
-                match sse_rx.recv().await {
-                    Some(CliServerEvent::QuestionCreated {
-                        request_id,
-                        session_id: _,
-                        questions_json,
-                    }) => {
-                        handle_question_from_sse(
-                            &runtime,
-                            &api_client,
-                            &request_id,
-                            &questions_json,
-                        )
-                        .await;
-                    }
-                    Some(CliServerEvent::SessionUpdated { session_id, source }) => {
-                        handle_session_updated_from_sse(
-                            &runtime,
-                            &api_client,
-                            &session_id,
-                            source.as_deref(),
-                            &repl_style,
-                        )
-                        .await;
-                    }
-                    Some(CliServerEvent::SessionIdle { .. }) => {
-                        // Server-side execution is complete.
-                        cli_frontend_set_phase(
-                            &runtime.frontend_projection,
-                            CliFrontendPhase::Idle,
-                            None,
-                        );
-                        cli_refresh_prompt(&runtime);
-                        // Do a final message sync to catch any remaining messages.
-                        if let Some(sid) = runtime.server_session_id.as_deref() {
-                            handle_session_updated_from_sse(
-                                &runtime,
-                                &api_client,
-                                sid,
-                                Some("prompt.done"),
-                                &repl_style,
-                            )
-                            .await;
-                        }
-                        if let Ok(mut topology) = runtime.observed_topology.lock() {
-                            topology.finish_run(Some("Completed".to_string()));
-                        }
-                        cli_frontend_clear(&runtime);
-                        let _ = print_block(
-                            Some(&runtime),
-                            OutputBlock::Status(StatusBlock::success("Done.")),
-                            &repl_style,
-                        );
-                        break;
-                    }
-                    Some(other) => {
-                        handle_sse_event(&runtime, other, &repl_style);
-                    }
-                    None => {
-                        // SSE channel closed.
-                        break;
-                    }
-                }
-            }
-
-            {
-                let mut active_abort = runtime.active_abort.lock().await;
-                *active_abort = None;
-            }
-        } else {
-            // Non-scheduler (agent) mode: local execution only.
-            process_message(&mut runtime, &trimmed).await?;
-        }
+        run_server_prompt(
+            &mut runtime,
+            &api_client,
+            &mut sse_rx,
+            &trimmed,
+            &repl_style,
+            true,
+        )
+        .await?;
 
         // Drain any SSE events that arrived during processing.
         while let Ok(event) = sse_rx.try_recv() {
@@ -3799,16 +3329,6 @@ async fn run_chat_session(
                 } => {
                     handle_question_from_sse(&runtime, &api_client, &request_id, &questions_json)
                         .await;
-                }
-                CliServerEvent::SessionUpdated { session_id, source } => {
-                    handle_session_updated_from_sse(
-                        &runtime,
-                        &api_client,
-                        &session_id,
-                        source.as_deref(),
-                        &repl_style,
-                    )
-                    .await;
                 }
                 other => {
                     handle_sse_event(&runtime, other, &repl_style);
@@ -3828,8 +3348,155 @@ async fn run_chat_session(
     Ok(())
 }
 
-async fn process_message(runtime: &mut CliExecutionRuntime, input: &str) -> anyhow::Result<()> {
-    process_message_with_mode(runtime, input, true).await
+async fn run_server_prompt(
+    runtime: &mut CliExecutionRuntime,
+    api_client: &Arc<CliApiClient>,
+    sse_rx: &mut mpsc::UnboundedReceiver<CliServerEvent>,
+    input: &str,
+    style: &CliStyle,
+    update_recovery_base: bool,
+) -> anyhow::Result<()> {
+    if update_recovery_base {
+        runtime.recovery_base_prompt = Some(input.to_string());
+    }
+    if let Ok(mut topology) = runtime.observed_topology.lock() {
+        topology.reset_for_run(
+            &runtime.resolved_agent_name,
+            runtime.resolved_scheduler_profile_name.as_deref(),
+        );
+    }
+    if let Ok(mut snapshots) = runtime.scheduler_stage_snapshots.lock() {
+        snapshots.clear();
+    }
+    cli_frontend_set_phase(
+        &runtime.frontend_projection,
+        CliFrontendPhase::Busy,
+        Some(
+            runtime
+                .resolved_scheduler_profile_name
+                .as_deref()
+                .map(|profile| format!("preset {}", profile))
+                .unwrap_or_else(|| "assistant response".to_string()),
+        ),
+    );
+    print_block(
+        Some(runtime),
+        OutputBlock::Message(MessageBlock::full(
+            OutputMessageRole::User,
+            input.to_string(),
+        )),
+        style,
+    )?;
+
+    let Some(session_id) = runtime.server_session_id.clone() else {
+        anyhow::bail!("CLI server session is not initialized");
+    };
+
+    {
+        let mut active_abort = runtime.active_abort.lock().await;
+        *active_abort = Some(CliActiveAbortHandle::Server {
+            api_client: api_client.clone(),
+            session_id: session_id.clone(),
+        });
+    }
+
+    if let Err(error) = api_client
+        .send_prompt(
+            &session_id,
+            input.to_string(),
+            Some(runtime.resolved_agent_name.clone()),
+            runtime.resolved_scheduler_profile_name.clone(),
+            (runtime.resolved_model_label != "auto").then(|| runtime.resolved_model_label.clone()),
+            None,
+        )
+        .await
+    {
+        cli_frontend_set_phase(
+            &runtime.frontend_projection,
+            CliFrontendPhase::Failed,
+            Some("send prompt failed".to_string()),
+        );
+        let _ = print_block(
+            Some(runtime),
+            OutputBlock::Status(StatusBlock::error(format!(
+                "Failed to send prompt: {}",
+                error
+            ))),
+            style,
+        );
+        let mut active_abort = runtime.active_abort.lock().await;
+        *active_abort = None;
+        cli_frontend_clear(runtime);
+        return Ok(());
+    }
+
+    loop {
+        match sse_rx.recv().await {
+            Some(CliServerEvent::QuestionCreated {
+                request_id,
+                session_id: _,
+                questions_json,
+            }) => {
+                handle_question_from_sse(runtime, api_client, &request_id, &questions_json).await;
+            }
+            Some(CliServerEvent::SessionUpdated { session_id, source }) => {
+                handle_session_updated_from_sse(
+                    runtime,
+                    api_client,
+                    &session_id,
+                    source.as_deref(),
+                    style,
+                )
+                .await;
+            }
+            Some(CliServerEvent::SessionIdle {
+                session_id: idle_session_id,
+            }) => {
+                let is_current_session = runtime
+                    .server_session_id
+                    .as_deref()
+                    .is_some_and(|current| current == idle_session_id);
+                handle_sse_event(
+                    runtime,
+                    CliServerEvent::SessionIdle {
+                        session_id: idle_session_id,
+                    },
+                    style,
+                );
+                if !is_current_session {
+                    continue;
+                }
+                handle_session_updated_from_sse(
+                    runtime,
+                    api_client,
+                    &session_id,
+                    Some("prompt.done"),
+                    style,
+                )
+                .await;
+                if let Ok(mut topology) = runtime.observed_topology.lock() {
+                    topology.finish_run(Some("Completed".to_string()));
+                }
+                cli_frontend_clear(runtime);
+                let _ = print_block(
+                    Some(runtime),
+                    OutputBlock::Status(StatusBlock::success("Done.")),
+                    style,
+                );
+                break;
+            }
+            Some(other) => {
+                handle_sse_event(runtime, other, style);
+            }
+            None => break,
+        }
+    }
+
+    {
+        let mut active_abort = runtime.active_abort.lock().await;
+        *active_abort = None;
+    }
+    Ok(())
 }
 
 /// Handle an incoming SSE event from the server — update topology,
@@ -3914,17 +3581,63 @@ fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style:
                 style,
             );
         }
-        CliServerEvent::OutputBlock { id, payload } => {
-            // OutputBlock events from SSE carry a web-specific JSON format.
-            // TUI also doesn't process these — rendering comes from session.updated.
-            tracing::trace!(?id, "SSE output_block received");
-            let _ = payload; // Future: parse and render inline.
+        CliServerEvent::OutputBlock {
+            session_id,
+            id,
+            payload,
+        } => {
+            if !is_my_session(&session_id) {
+                return;
+            }
+            let block_payload = payload.get("block").unwrap_or(&payload);
+            let Some(block) = parse_output_block(block_payload) else {
+                tracing::debug!(?id, payload = %block_payload, "failed to parse output_block");
+                return;
+            };
+            if matches!(block, OutputBlock::Reasoning(_)) && !runtime.show_thinking {
+                return;
+            }
+            if let Ok(mut topology) = runtime.observed_topology.lock() {
+                topology.observe_block(&block);
+            }
+            cli_frontend_observe_block(&runtime.frontend_projection, &block);
+            match &block {
+                OutputBlock::SchedulerStage(stage)
+                    if !cli_should_emit_scheduler_stage_block(
+                        &runtime.scheduler_stage_snapshots,
+                        stage,
+                    ) => {}
+                OutputBlock::SchedulerStage(stage)
+                    if !cli_is_terminal_stage_status(stage.status.as_deref()) =>
+                {
+                    if let Ok(mut projection) = runtime.frontend_projection.lock() {
+                        projection.active_stage = Some(stage.as_ref().clone());
+                        projection.active_collapsed = false;
+                    }
+                    cli_refresh_prompt(runtime);
+                }
+                OutputBlock::SchedulerStage(_) => {
+                    if let Ok(mut projection) = runtime.frontend_projection.lock() {
+                        projection.active_stage = None;
+                        projection.active_collapsed = true;
+                    }
+                    cli_refresh_prompt(runtime);
+                    let _ = print_block(Some(runtime), block, style);
+                }
+                _ => {
+                    let _ = print_block(Some(runtime), block, style);
+                }
+            }
         }
         CliServerEvent::Error {
+            session_id,
             error,
             message_id,
             done,
         } => {
+            if !is_my_session(&session_id) {
+                return;
+            }
             tracing::error!(error, ?message_id, ?done, "server error");
             let _ = print_block(
                 Some(runtime),
@@ -3933,11 +3646,25 @@ fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style:
             );
         }
         CliServerEvent::Usage {
+            session_id,
             prompt_tokens,
             completion_tokens,
             message_id,
         } => {
+            if !is_my_session(&session_id) {
+                return;
+            }
             tracing::debug!(prompt_tokens, completion_tokens, ?message_id, "token usage");
+            if let Ok(mut projection) = runtime.frontend_projection.lock() {
+                projection.token_stats.input_tokens = projection
+                    .token_stats
+                    .input_tokens
+                    .saturating_add(prompt_tokens);
+                projection.token_stats.output_tokens = projection
+                    .token_stats
+                    .output_tokens
+                    .saturating_add(completion_tokens);
+            }
             if prompt_tokens > 0 || completion_tokens > 0 {
                 let _ = print_block(
                     Some(runtime),
@@ -4068,581 +3795,39 @@ async fn cli_refresh_server_info(
     }
 }
 
-/// Handle a `session.updated` SSE event: fetch new messages from the server
-/// and render them incrementally in the CLI.
+/// Handle a `session.updated` SSE event by refreshing cheap metadata only.
 async fn handle_session_updated_from_sse(
     runtime: &CliExecutionRuntime,
     api_client: &Arc<CliApiClient>,
     session_id: &str,
-    _source: Option<&str>,
-    style: &CliStyle,
+    source: Option<&str>,
+    _style: &CliStyle,
 ) {
     let server_sid = match runtime.server_session_id.as_deref() {
         Some(sid) if sid == session_id => sid,
         _ => return, // Not our session.
     };
-
-    // Get the last rendered message ID for incremental fetching.
-    let after = runtime
-        .last_rendered_message_id
-        .lock()
-        .ok()
-        .and_then(|guard| guard.clone());
-
-    // Fetch new messages from the server.
-    let messages = match api_client
-        .get_messages_after(server_sid, after.as_deref(), None)
-        .await
-    {
-        Ok(msgs) => msgs,
-        Err(e) => {
-            tracing::warn!("Failed to fetch messages after session.updated: {}", e);
-            return;
-        }
-    };
-
-    if messages.is_empty() {
+    let should_refresh = matches!(
+        source,
+        Some("prompt.done") | Some("stream.final") | Some("session.title")
+    );
+    if !should_refresh {
         return;
     }
-
-    // Render each new message as OutputBlocks.
-    for msg in &messages {
-        let role = match msg.role.as_str() {
-            "user" => OutputMessageRole::User,
-            "assistant" => OutputMessageRole::Assistant,
-            _ => OutputMessageRole::Assistant,
-        };
-
-        // Collect all text parts into a single string.
-        let mut text = String::new();
-        let mut has_scheduler_stage = false;
-
-        for part in &msg.parts {
-            match part.part_type.as_str() {
-                "text" => {
-                    if let Some(t) = part.text.as_deref() {
-                        if !text.is_empty() {
-                            text.push('\n');
-                        }
-                        text.push_str(t);
-                    }
-                }
-                "tool_call" => {
-                    if let Some(tc) = &part.tool_call {
-                        let _ = print_block(
-                            Some(runtime),
-                            OutputBlock::Status(StatusBlock::title(format!("⚙ {}", tc.name))),
-                            style,
-                        );
-                    }
-                }
-                "tool_result" => {
-                    // Tool results are usually shown via tool call display.
-                }
-                "reasoning" => {
-                    if let Some(t) = part.text.as_deref() {
-                        if !t.is_empty() {
-                            let _ = print_block(
-                                Some(runtime),
-                                OutputBlock::Reasoning(ReasoningBlock::full(t)),
-                                style,
-                            );
-                        }
-                    }
-                }
-                _ => {}
-            }
-
-            // Check for scheduler stage metadata.
-            if msg
-                .metadata
-                .as_ref()
-                .is_some_and(|m| m.contains_key("scheduler_stage_name"))
-            {
-                has_scheduler_stage = true;
-            }
-        }
-
-        // Render text content if present.
-        if !text.is_empty() {
-            if has_scheduler_stage {
-                // Render as scheduler stage block.
-                let stage_name = msg
-                    .metadata
-                    .as_ref()
-                    .and_then(|m| m.get("scheduler_stage_name"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("stage")
-                    .to_string();
-                let stage_index = msg
-                    .metadata
-                    .as_ref()
-                    .and_then(|m| m.get("scheduler_stage_index"))
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
-                let stage_total = msg
-                    .metadata
-                    .as_ref()
-                    .and_then(|m| m.get("scheduler_stage_total"))
-                    .and_then(|v| v.as_u64())
-                    .map(|v| v as u32);
-
-                let _ = print_block(
-                    Some(runtime),
-                    OutputBlock::SchedulerStage(Box::new(SchedulerStageBlock {
-                        stage_id: None,
-                        profile: runtime.resolved_scheduler_profile_name.clone(),
-                        stage: stage_name.clone(),
-                        title: stage_name,
-                        text,
-                        stage_index: Some(stage_index as u64),
-                        stage_total: stage_total.map(|v| v as u64),
-                        status: Some("done".to_string()),
-                        step: None,
-                        focus: None,
-                        last_event: None,
-                        waiting_on: None,
-                        activity: None,
-                        loop_budget: None,
-                        available_skill_count: None,
-                        available_agent_count: None,
-                        available_category_count: None,
-                        active_skills: vec![],
-                        active_agents: vec![],
-                        active_categories: vec![],
-                        done_agent_count: 0,
-                        total_agent_count: 0,
-                        prompt_tokens: None,
-                        completion_tokens: None,
-                        reasoning_tokens: None,
-                        cache_read_tokens: None,
-                        cache_write_tokens: None,
-                        decision: None,
-                        child_session_id: None,
-                    })),
-                    style,
-                );
-            } else if role == OutputMessageRole::User {
-                // Skip user messages — we already rendered them locally.
-            } else {
-                let _ = print_block(
-                    Some(runtime),
-                    OutputBlock::Message(MessageBlock::full(role, text)),
-                    style,
-                );
-            }
-        }
-
-        // Check for error.
-        if let Some(error) = &msg.error {
-            if !error.is_empty() {
-                let _ = print_block(
-                    Some(runtime),
-                    OutputBlock::Status(StatusBlock::error(error.clone())),
-                    style,
-                );
-            }
-        }
-    }
-
-    // Accumulate token stats from new assistant messages.
-    if let Ok(mut proj) = runtime.frontend_projection.lock() {
-        for msg in &messages {
-            if msg.role == "assistant" {
-                proj.token_stats.accumulate(&msg.tokens, msg.cost);
-            }
-        }
-    }
-
-    // Update the last rendered message ID.
-    if let Some(last_msg) = messages.last() {
-        if let Ok(mut guard) = runtime.last_rendered_message_id.lock() {
-            *guard = Some(last_msg.id.clone());
-        }
-    }
-}
-
-async fn process_scheduler_message(
-    runtime: &mut CliExecutionRuntime,
-    input: &str,
-    style: &CliStyle,
-) -> anyhow::Result<()> {
-    let state = runtime
-        .local_scheduler_state
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("local scheduler state is not initialized"))?;
-    let profile = runtime
-        .resolved_scheduler_profile_name
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("scheduler profile is not initialized"))?;
-    let session_id = runtime.local_scheduler_session_id.clone();
-    let model =
-        (runtime.resolved_model_label != "auto").then(|| runtime.resolved_model_label.clone());
-    if let Some(session_id) = session_id.clone() {
-        let mut active_abort = runtime.active_abort.lock().await;
-        *active_abort = Some(CliActiveAbortHandle::Scheduler {
-            state: state.clone(),
-            session_id,
-        });
-    }
-
-    if let Ok(mut shared) = runtime.spinner_guard.lock() {
-        *shared = SpinnerGuard::noop();
-    }
-    {
-        let mut active_abort = runtime.active_abort.lock().await;
-        *active_abort = None;
-    }
-
-    // Set an immediate session title from the prompt so the header shows
-    // something meaningful instead of "(untitled)" during execution.
-    {
-        let immediate_title = rocode_session::generate_session_title(input);
-        if !immediate_title.is_empty() && immediate_title != "New Session" {
+    match api_client.get_session(server_sid).await {
+        Ok(session) => {
             if let Ok(mut projection) = runtime.frontend_projection.lock() {
-                if projection.session_title.is_none() {
-                    projection.session_title = Some(immediate_title);
-                }
+                projection.session_title = Some(session.title);
             }
         }
-    }
-
-    let observed_topology = runtime.observed_topology.clone();
-    let frontend_projection = runtime.frontend_projection.clone();
-    let stage_snapshots = runtime.scheduler_stage_snapshots.clone();
-    let surface = runtime.terminal_surface.clone();
-    let prompt_session = runtime.prompt_session.clone();
-    let output_hook: Arc<dyn Fn(OutputBlock) + Send + Sync> = Arc::new({
-        let style = style.clone();
-        let surface = surface.clone();
-        let prompt_session = prompt_session.clone();
-        move |block| {
-            if let Ok(mut topology) = observed_topology.lock() {
-                topology.observe_block(&block);
-            }
-            cli_frontend_observe_block(&frontend_projection, &block);
-            match &block {
-                OutputBlock::SchedulerStage(stage)
-                    if !cli_should_emit_scheduler_stage_block(&stage_snapshots, stage) => {}
-                OutputBlock::SchedulerStage(stage)
-                    if !cli_is_terminal_stage_status(stage.status.as_deref()) =>
-                {
-                    if let Ok(mut projection) = frontend_projection.lock() {
-                        projection.active_stage = Some(stage.as_ref().clone());
-                        projection.active_collapsed = false; // auto-expand when stage is active
-                    }
-                    if let Some(prompt_session) = prompt_session.as_ref() {
-                        let _ = prompt_session.refresh();
-                    }
-                }
-                OutputBlock::SchedulerStage(_stage) => {
-                    if let Ok(mut projection) = frontend_projection.lock() {
-                        projection.active_stage = None;
-                        projection.active_collapsed = true; // auto-collapse when stage ends
-                    }
-                    if let Some(prompt_session) = prompt_session.as_ref() {
-                        let _ = prompt_session.refresh();
-                    }
-                    let _ = print_block_on_surface(surface.as_deref(), block, &style);
-                }
-                _ => {
-                    let _ = print_block_on_surface(surface.as_deref(), block, &style);
-                }
-            }
-        }
-    });
-
-    let result = run_local_scheduler_prompt(
-        state,
-        LocalSchedulerPromptRequest {
-            session_id,
-            directory: std::env::current_dir()?.display().to_string(),
-            prompt_text: input.to_string(),
-            display_prompt_text: input.to_string(),
-            scheduler_profile: profile,
-            model,
-            variant: None,
-        },
-        Some(output_hook),
-    )
-    .await;
-
-    if let Ok(mut shared) = runtime.spinner_guard.lock() {
-        *shared = SpinnerGuard::noop();
-    }
-
-    let outcome = match result {
-        Ok(outcome) => outcome,
         Err(error) => {
-            {
-                let mut active_abort = runtime.active_abort.lock().await;
-                *active_abort = None;
-            }
-            cli_frontend_set_phase(
-                &runtime.frontend_projection,
-                CliFrontendPhase::Failed,
-                Some("scheduler failed".to_string()),
+            tracing::debug!(
+                "Failed to refresh session title after session.updated: {}",
+                error
             );
-            return Err(error);
-        }
-    };
-    runtime.local_scheduler_session_id = Some(outcome.session_id.clone());
-
-    // Update session title in frontend projection
-    if let Some(state) = runtime.local_scheduler_state.as_ref() {
-        let sessions = state.sessions.lock().await;
-        if let Some(session) = sessions.get(&outcome.session_id) {
-            if let Ok(mut projection) = runtime.frontend_projection.lock() {
-                projection.session_title = Some(session.title.clone());
-            }
         }
     }
-
-    if outcome.cancelled {
-        cli_frontend_clear(runtime);
-        print_block(
-            Some(runtime),
-            OutputBlock::Status(StatusBlock::warning("Aborted current response.")),
-            style,
-        )?;
-    } else {
-        cli_frontend_clear(runtime);
-        if outcome.prompt_tokens > 0 || outcome.completion_tokens > 0 {
-            print_block(
-                Some(runtime),
-                OutputBlock::Status(StatusBlock::success(format!(
-                    "Done. tokens: prompt={} completion={}",
-                    outcome.prompt_tokens, outcome.completion_tokens
-                ))),
-                style,
-            )?;
-        } else {
-            print_block(
-                Some(runtime),
-                OutputBlock::Status(StatusBlock::success("Done.")),
-                style,
-            )?;
-        }
-    }
-
-    if let Ok(mut topology) = runtime.observed_topology.lock() {
-        topology.finish_run(Some(if outcome.cancelled {
-            "cancelled".to_string()
-        } else {
-            "completed".to_string()
-        }));
-    }
-    cli_frontend_clear(runtime);
-    Ok(())
-}
-
-async fn process_message_with_mode(
-    runtime: &mut CliExecutionRuntime,
-    input: &str,
-    update_recovery_base: bool,
-) -> anyhow::Result<()> {
-    if update_recovery_base {
-        runtime.recovery_base_prompt = Some(input.to_string());
-    }
-    let style = CliStyle::detect();
-    if let Ok(mut topology) = runtime.observed_topology.lock() {
-        topology.reset_for_run(
-            &runtime.resolved_agent_name,
-            runtime.resolved_scheduler_profile_name.as_deref(),
-        );
-    }
-    if let Ok(mut snapshots) = runtime.scheduler_stage_snapshots.lock() {
-        snapshots.clear();
-    }
-    cli_frontend_set_phase(
-        &runtime.frontend_projection,
-        CliFrontendPhase::Busy,
-        Some(
-            runtime
-                .resolved_scheduler_profile_name
-                .as_deref()
-                .map(|profile| format!("preset {}", profile))
-                .unwrap_or_else(|| "assistant response".to_string()),
-        ),
-    );
-
-    print_block(
-        Some(runtime),
-        OutputBlock::Message(MessageBlock::full(
-            OutputMessageRole::User,
-            input.to_string(),
-        )),
-        &style,
-    )?;
-
-    if runtime.resolved_scheduler_profile_name.is_some() {
-        return process_scheduler_message(runtime, input, &style).await;
-    }
-
-    if let Ok(mut shared) = runtime.spinner_guard.lock() {
-        *shared = SpinnerGuard::noop();
-    }
-    let cancel_token = CancellationToken::new();
-    let observed_topology = runtime.observed_topology.clone();
-    let frontend_projection = runtime.frontend_projection.clone();
-    let surface = runtime.terminal_surface.clone();
-    let show_thinking = runtime.show_thinking;
-    {
-        let mut active_abort = runtime.active_abort.lock().await;
-        *active_abort = Some(CliActiveAbortHandle::Agent(cancel_token.clone()));
-    }
-
-    let mut md_streamer = MarkdownStreamer::new(&style).with_continuation_prefix("  ");
-    let mut reasoning_buf = String::new();
-    let mut reasoning_notice_printed = false;
-    let run_future = Box::pin(stream_prompt_to_blocks_with_cancel(
-        &mut runtime.executor,
-        input,
-        cancel_token.clone(),
-        |block| {
-            if let Ok(mut topology) = observed_topology.lock() {
-                topology.observe_block(&block);
-            }
-            cli_frontend_observe_block(&frontend_projection, &block);
-            // Intercept message deltas for markdown rendering
-            match &block {
-                OutputBlock::Message(msg) if msg.phase == MessagePhase::Start => {
-                    print_block_on_surface(surface.as_deref(), block, &style)
-                }
-                OutputBlock::Message(msg) if msg.phase == MessagePhase::Delta => {
-                    let rendered = md_streamer.push(&msg.text);
-                    if !rendered.is_empty() {
-                        if let Some(surface) = surface.as_deref() {
-                            surface.print_text(&rendered)?;
-                        } else {
-                            print!("{}", rendered);
-                            io::stdout().flush()?;
-                        }
-                    }
-                    Ok(())
-                }
-                OutputBlock::Message(msg) if msg.phase == MessagePhase::End => {
-                    let remaining = md_streamer.finish();
-                    if !remaining.is_empty() {
-                        if let Some(surface) = surface.as_deref() {
-                            surface.print_text(&remaining)?;
-                        } else {
-                            print!("{}", remaining);
-                            io::stdout().flush()?;
-                        }
-                    }
-                    print_block_on_surface(surface.as_deref(), block, &style)
-                }
-                OutputBlock::Reasoning(r) if r.phase == MessagePhase::Start => {
-                    reasoning_buf.clear();
-                    reasoning_notice_printed = false;
-                    Ok(())
-                }
-                OutputBlock::Reasoning(r) if r.phase == MessagePhase::Delta => {
-                    let cleaned = r
-                        .text
-                        .replace("<think>", "")
-                        .replace("</think>", "")
-                        .replace("<think/>", "");
-                    if !cleaned.is_empty() {
-                        reasoning_buf.push_str(&cleaned);
-                        if show_thinking && !reasoning_notice_printed {
-                            let notice = format!("  {}\n", style.dim("💭 Thinking..."));
-                            if let Some(surface) = surface.as_deref() {
-                                surface.print_text(&notice)?;
-                            } else {
-                                print!("{}", notice);
-                                io::stdout().flush()?;
-                            }
-                            reasoning_notice_printed = true;
-                        }
-                    }
-                    Ok(())
-                }
-                OutputBlock::Reasoning(r) if r.phase == MessagePhase::End => {
-                    if show_thinking {
-                        let cleaned = reasoning_buf.trim();
-                        if !cleaned.is_empty() {
-                            let block = OutputBlock::Reasoning(ReasoningBlock::full(cleaned));
-                            print_block_on_surface(surface.as_deref(), block, &style)?;
-                        }
-                    }
-                    reasoning_buf.clear();
-                    Ok(())
-                }
-                OutputBlock::Tool(_tool) => {
-                    print_block_on_surface(surface.as_deref(), block, &style)
-                }
-                _ => print_block_on_surface(surface.as_deref(), block, &style),
-            }
-        },
-    ));
-    let stats = run_future.await;
-
-    {
-        let mut active_abort = runtime.active_abort.lock().await;
-        *active_abort = None;
-    }
-
-    let (prompt_tokens, completion_tokens, stream_failed, cancelled) = match stats {
-        Ok(stats) => (stats.prompt_tokens, stats.completion_tokens, false, false),
-        Err(error) => {
-            let cancelled = error
-                .downcast_ref::<AgentExecutorError>()
-                .is_some_and(|agent_error| matches!(agent_error, AgentExecutorError::Cancelled));
-            if cancelled {
-                cli_frontend_clear(runtime);
-                print_block(
-                    Some(runtime),
-                    OutputBlock::Status(StatusBlock::warning("Aborted current response.")),
-                    &style,
-                )?;
-            } else {
-                cli_frontend_set_phase(
-                    &runtime.frontend_projection,
-                    CliFrontendPhase::Failed,
-                    Some("run failed".to_string()),
-                );
-                print_block(
-                    Some(runtime),
-                    OutputBlock::Status(StatusBlock::error(error.to_string())),
-                    &style,
-                )?;
-            }
-            (0, 0, !cancelled, cancelled)
-        }
-    };
-
-    if !stream_failed && !cancelled {
-        cli_frontend_clear(runtime);
-        if prompt_tokens > 0 || completion_tokens > 0 {
-            print_block(
-                Some(runtime),
-                OutputBlock::Status(StatusBlock::success(format!(
-                    "Done. tokens: prompt={} completion={}",
-                    prompt_tokens, completion_tokens
-                ))),
-                &style,
-            )?;
-        } else {
-            print_block(
-                Some(runtime),
-                OutputBlock::Status(StatusBlock::success("Done.")),
-                &style,
-            )?;
-        }
-    }
-    if let Ok(mut topology) = runtime.observed_topology.lock() {
-        topology.finish_run(if cancelled {
-            Some("Cancelled".to_string())
-        } else if stream_failed {
-            Some("Failed".to_string())
-        } else {
-            Some("Completed".to_string())
-        });
-    }
-    cli_frontend_clear(runtime);
-    Ok(())
+    cli_refresh_server_info(api_client, &runtime.frontend_projection, Some(server_sid)).await;
 }
 
 #[derive(Debug, Clone)]

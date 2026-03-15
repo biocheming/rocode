@@ -45,17 +45,20 @@ pub enum CliServerEvent {
     },
     /// An output block was emitted (message, tool result, etc.).
     OutputBlock {
+        session_id: String,
         id: Option<String>,
         payload: serde_json::Value,
     },
     /// An error event from the server.
     Error {
+        session_id: String,
         error: String,
         message_id: Option<String>,
         done: Option<bool>,
     },
     /// Token usage update.
     Usage {
+        session_id: String,
         prompt_tokens: u64,
         completion_tokens: u64,
         message_id: Option<String>,
@@ -330,14 +333,21 @@ fn parse_event(
             })
         }
         "output_block" => {
+            if !is_my_session {
+                return None;
+            }
             // Output blocks may or may not carry a session_id.
             let id = json.get("id").and_then(|v| v.as_str()).map(String::from);
             Some(CliServerEvent::OutputBlock {
+                session_id: event_session_id.to_string(),
                 id,
                 payload: json.clone(),
             })
         }
         "error" => {
+            if !is_my_session {
+                return None;
+            }
             let error = json
                 .get("error")
                 .and_then(|v| v.as_str())
@@ -349,12 +359,16 @@ fn parse_event(
                 .map(String::from);
             let done = json.get("done").and_then(|v| v.as_bool());
             Some(CliServerEvent::Error {
+                session_id: event_session_id.to_string(),
                 error,
                 message_id,
                 done,
             })
         }
         "usage" => {
+            if !is_my_session {
+                return None;
+            }
             let prompt_tokens = json
                 .get("prompt_tokens")
                 .and_then(|v| v.as_u64())
@@ -368,6 +382,7 @@ fn parse_event(
                 .and_then(|v| v.as_str())
                 .map(String::from);
             Some(CliServerEvent::Usage {
+                session_id: event_session_id.to_string(),
                 prompt_tokens,
                 completion_tokens,
                 message_id,
@@ -380,5 +395,43 @@ fn parse_event(
                 data: json.clone(),
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_event, CliServerEvent};
+
+    #[test]
+    fn output_block_is_filtered_to_current_session() {
+        let mine = serde_json::json!({
+            "type": "output_block",
+            "sessionID": "session-1",
+            "block": {
+                "kind": "message",
+                "phase": "delta",
+                "role": "assistant",
+                "text": "hi"
+            }
+        });
+        let other = serde_json::json!({
+            "type": "output_block",
+            "sessionID": "session-2",
+            "block": {
+                "kind": "message",
+                "phase": "delta",
+                "role": "assistant",
+                "text": "nope"
+            }
+        });
+
+        let mine_event = parse_event("", &mine, "session-1");
+        let other_event = parse_event("", &other, "session-1");
+
+        assert!(matches!(
+            mine_event,
+            Some(CliServerEvent::OutputBlock { session_id, .. }) if session_id == "session-1"
+        ));
+        assert!(other_event.is_none());
     }
 }

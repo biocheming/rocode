@@ -2,9 +2,9 @@ use futures::StreamExt;
 use rocode_command::cli_style::CliStyle;
 use rocode_command::output_blocks::{
     render_cli_block_rich, BlockTone, MessageBlock, MessagePhase, MessageRole, OutputBlock,
-    QueueItemBlock, SchedulerDecisionBlock, SchedulerDecisionField, SchedulerDecisionRenderSpec,
-    SchedulerDecisionSection, SchedulerStageBlock, SessionEventBlock, SessionEventField,
-    StatusBlock, ToolBlock, ToolPhase,
+    QueueItemBlock, ReasoningBlock, SchedulerDecisionBlock, SchedulerDecisionField,
+    SchedulerDecisionRenderSpec, SchedulerDecisionSection, SchedulerStageBlock, SessionEventBlock,
+    SessionEventField, StatusBlock, ToolBlock, ToolPhase,
 };
 use serde::Deserialize;
 use std::io::{self, Write};
@@ -38,13 +38,15 @@ pub(crate) struct RemoteAttachOptions {
     pub fork: bool,
     pub share: bool,
     pub model: Option<String>,
+    pub agent: Option<String>,
     pub scheduler_profile: Option<String>,
     pub variant: Option<String>,
     pub format: RunOutputFormat,
     pub title: Option<String>,
+    pub show_thinking: bool,
 }
 
-fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBlock> {
+pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBlock> {
     let kind = payload.get("kind")?.as_str()?;
     match kind {
         "status" => {
@@ -120,6 +122,24 @@ fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBlock> {
                 detail,
                 structured: None,
             }))
+        }
+        "reasoning" => {
+            let phase = match payload
+                .get("phase")
+                .and_then(|v| v.as_str())
+                .unwrap_or("delta")
+            {
+                "start" => MessagePhase::Start,
+                "end" => MessagePhase::End,
+                "full" => MessagePhase::Full,
+                _ => MessagePhase::Delta,
+            };
+            let text = payload
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            Some(OutputBlock::Reasoning(ReasoningBlock { phase, text }))
         }
         "session_event" => Some(OutputBlock::SessionEvent(SessionEventBlock {
             event: payload
@@ -429,6 +449,7 @@ pub(crate) async fn consume_remote_sse(
     response: reqwest::Response,
     session_id: &str,
     format: RunOutputFormat,
+    show_thinking: bool,
 ) -> anyhow::Result<()> {
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
@@ -482,6 +503,9 @@ pub(crate) async fn consume_remote_sse(
         if event_type == "output_block" {
             let payload = parsed.get("block").unwrap_or(&parsed);
             if let Some(block) = parse_output_block(payload) {
+                if matches!(block, OutputBlock::Reasoning(_)) && !show_thinking {
+                    return Ok(());
+                }
                 let style = CliStyle::detect();
                 print!("{}", render_cli_block_rich(&block, &style));
                 io::stdout().flush()?;
@@ -544,10 +568,12 @@ pub(crate) async fn run_non_interactive_attach(options: RemoteAttachOptions) -> 
         fork,
         share,
         model,
+        agent,
         scheduler_profile,
         variant,
         format,
         title,
+        show_thinking,
     } = options;
     let client = reqwest::Client::new();
     let session_id =
@@ -570,6 +596,7 @@ pub(crate) async fn run_non_interactive_attach(options: RemoteAttachOptions) -> 
         .json(&serde_json::json!({
             "content": content,
             "model": model,
+            "agent": agent,
             "scheduler_profile": scheduler_profile,
             "variant": variant,
             "stream": true
@@ -583,19 +610,34 @@ pub(crate) async fn run_non_interactive_attach(options: RemoteAttachOptions) -> 
         anyhow::bail!("Remote run failed ({}): {}", status, body);
     }
 
-    consume_remote_sse(response, &session_id, format).await
+    consume_remote_sse(response, &session_id, format, show_thinking).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::parse_output_block;
     use rocode_command::governance_fixtures::canonical_scheduler_stage_fixture;
-    use rocode_command::output_blocks::OutputBlock;
+    use rocode_command::output_blocks::{MessagePhase, OutputBlock};
 
     #[test]
     fn parses_canonical_scheduler_stage_payload() {
         let fixture = canonical_scheduler_stage_fixture();
         let block = parse_output_block(&fixture.payload).expect("scheduler stage block");
         assert_eq!(block, OutputBlock::SchedulerStage(Box::new(fixture.block)));
+    }
+
+    #[test]
+    fn parses_reasoning_payload() {
+        let payload = serde_json::json!({
+            "kind": "reasoning",
+            "phase": "delta",
+            "text": "thinking"
+        });
+        let block = parse_output_block(&payload).expect("reasoning block");
+        assert!(matches!(
+            block,
+            OutputBlock::Reasoning(reasoning)
+                if reasoning.phase == MessagePhase::Delta && reasoning.text == "thinking"
+        ));
     }
 }
