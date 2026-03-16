@@ -52,9 +52,9 @@ async function abortCurrentExecution() {
 
 async function loadProviders() {
   try {
-    const response = await api("/provider");
+    const response = await api("/config/providers");
     const data = await response.json();
-    state.providers = data.all || [];
+    state.providers = data.providers || data.all || [];
     const preferredRefs = [];
     if (data.default) {
       for (const [provider, model] of Object.entries(data.default)) {

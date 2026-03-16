@@ -1164,6 +1164,34 @@ test("web repairs stale selected model against current provider catalogue", () =
   assert.equal(api.nodes.modelSelect.value, "anthropic/claude-sonnet-4");
 });
 
+test("web provider selector loads current configured providers from config endpoint", async () => {
+  const routes = new Map([
+    [
+      "/config/providers",
+      {
+        providers: [
+          {
+            id: "minimax-coding-plan",
+            name: "minimax-coding-plan",
+            models: [{ id: "m1", name: "m1", provider: "minimax-coding-plan" }],
+          },
+        ],
+        default: {
+          "minimax-coding-plan": "m1",
+        },
+      },
+    ],
+  ]);
+  const { api, context } = createHarness(routes);
+
+  await context.loadProviders();
+
+  assert.equal(api.state.providers.length, 1);
+  assert.equal(api.state.providers[0].id, "minimax-coding-plan");
+  assert.equal(api.state.selectedModel, "minimax-coding-plan/m1");
+  assert.equal(api.nodes.modelSelect.value, "minimax-coding-plan/m1");
+});
+
 test("web shared copy command writes current transcript to clipboard", async () => {
   const { api, context } = createHarness();
   api.state.uiCommands = [
