@@ -64,7 +64,7 @@ function updateSessionRuntimeMeta(session) {
 
 function currentWebUiPreferencesPatch() {
   return {
-    webTheme: state.selectedTheme || "midnight",
+    webTheme: state.selectedTheme || "daylight",
     webMode: state.selectedModeKey || null,
     showThinking: Boolean(state.showThinking),
   };
@@ -88,7 +88,7 @@ function applyWebUiPreferences(config = {}) {
   if (webTheme) {
     applyTheme(webTheme, { persist: false, announce: false });
   } else {
-    applyTheme(state.selectedTheme || "midnight", { persist: false, announce: false });
+    applyTheme(state.selectedTheme || "daylight", { persist: false, announce: false });
   }
 
   state.showThinking = Boolean(showThinking);
@@ -157,7 +157,10 @@ function renderMetaPills(entries) {
 function updateSessionMeta(session) {
   if (!nodes.sessionMeta) return;
   const entries = sessionMetaEntries(session);
-  nodes.sessionMeta.innerHTML = renderMetaPills(entries);
+  nodes.sessionMeta.innerHTML =
+    entries.length > 0
+      ? renderMetaPills(entries)
+      : `<span class="meta-pill"><span class="meta-label">context</span><span>Awaiting runtime metadata</span></span>`;
   updateSessionRuntimeMeta(session);
 }
 
@@ -282,7 +285,7 @@ function applyStreamUsage(payload) {
 
 function applyTheme(themeId, options = {}) {
   const { persist = true, announce = true } = options;
-  const valid = THEMES.some((t) => t.id === themeId) ? themeId : "midnight";
+  const valid = THEMES.some((t) => t.id === themeId) ? themeId : "daylight";
   state.selectedTheme = valid;
   nodes.shell.dataset.theme = valid;
   if (nodes.themeSelect.value !== valid) {

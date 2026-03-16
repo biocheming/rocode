@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
-use crate::loader::{resolve_configured_path, update_config};
+use crate::loader::{resolve_configured_path, update_config, write_config};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -62,6 +62,33 @@ impl ConfigStore {
         self.base.store(new_arc.clone());
 
         // Invalidate plugin cache synchronously (best-effort)
+        if let Ok(mut guard) = self.plugin_applied.try_write() {
+            *guard = None;
+        }
+
+        Ok(new_arc)
+    }
+
+    pub fn replace_with<F>(&self, mutator: F) -> anyhow::Result<Arc<Config>>
+    where
+        F: FnOnce(&mut Config) -> anyhow::Result<()>,
+    {
+        let current = self.config();
+        let mut updated = (*current).clone();
+        mutator(&mut updated)?;
+
+        if let Some(project_dir) = self
+            .project_dir
+            .read()
+            .expect("project_dir poisoned")
+            .as_deref()
+        {
+            write_config(project_dir, &updated)?;
+        }
+
+        let new_arc = Arc::new(updated);
+        self.base.store(new_arc.clone());
+
         if let Ok(mut guard) = self.plugin_applied.try_write() {
             *guard = None;
         }
@@ -142,11 +169,19 @@ impl ConfigStore {
         self.invalidate_plugin_cache().await;
         Ok(new_arc)
     }
+
+    pub fn project_dir(&self) -> Option<PathBuf> {
+        self.project_dir
+            .read()
+            .expect("project_dir poisoned")
+            .clone()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -270,5 +305,37 @@ mod tests {
         let ui = reloaded.ui_preferences.as_ref().expect("ui preferences");
         assert_eq!(reloaded.model.as_deref(), Some("before"));
         assert_eq!(ui.show_thinking, Some(true));
+    }
+
+    #[tokio::test]
+    async fn replace_with_persists_full_config_when_project_dir_is_known() {
+        let temp = TestDir::new("rocode_config_store_replace");
+        fs::write(
+            temp.path.join("rocode.json"),
+            r#"{ "provider": { "old": { "name": "Old" } } }"#,
+        )
+        .expect("seed config");
+
+        let store = ConfigStore::from_project_dir(&temp.path).expect("store");
+        store
+            .replace_with(|config| {
+                config.provider = Some(HashMap::from([(
+                    "new".to_string(),
+                    crate::schema::ProviderConfig {
+                        name: Some("New".to_string()),
+                        ..Default::default()
+                    },
+                )]));
+                Ok(())
+            })
+            .expect("replace");
+
+        let reloaded = store.reload().await.expect("reload");
+        let providers = reloaded.provider.as_ref().expect("provider map");
+        assert!(providers.get("old").is_none());
+        assert_eq!(
+            providers.get("new").and_then(|provider| provider.name.as_deref()),
+            Some("New")
+        );
     }
 }

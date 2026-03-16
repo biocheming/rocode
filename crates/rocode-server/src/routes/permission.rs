@@ -103,14 +103,30 @@ pub(crate) async fn request_permission(
     broadcast_server_event(
         state.as_ref(),
         &ServerEvent::PermissionRequested {
-            session_id,
+            session_id: session_id.clone(),
             permission_id: permission_id.clone(),
             info: serde_json::to_value(&info).unwrap_or(serde_json::Value::Null),
         },
     );
 
+    // Update aggregated runtime state: pending permission.
+    state
+        .runtime_state
+        .permission_requested(
+            &session_id,
+            &permission_id,
+            serde_json::to_value(&info).unwrap_or(serde_json::Value::Null),
+        )
+        .await;
+
     let wait_result = tokio::time::timeout(std::time::Duration::from_secs(300), rx).await;
     PERMISSION_WAITERS.lock().await.remove(&permission_id);
+
+    // Clear pending permission from aggregated runtime state.
+    state
+        .runtime_state
+        .permission_resolved(&session_id)
+        .await;
 
     match wait_result {
         Ok(Ok(PermissionReply { reply, message })) => match reply.as_str() {

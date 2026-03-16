@@ -94,6 +94,9 @@ async function sendPrompt(content) {
     await parseSSE(response, (name, payload) => {
       if (name === "output_block") {
         const handled = applyOutputBlockEvent(payload);
+        if (!handled) {
+          applyFocusedChildOutputBlockEvent(payload);
+        }
         const block = payload && payload.block ? payload.block : payload;
         if (handled && block && (block.kind === "scheduler_stage" || block.kind === "tool")) {
           scheduleExecutionTopologyRefresh();

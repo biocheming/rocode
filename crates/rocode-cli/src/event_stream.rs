@@ -139,7 +139,15 @@ async fn connect_and_consume(
     tx: &mpsc::UnboundedSender<CliServerEvent>,
     cancel: &tokio_util::sync::CancellationToken,
 ) -> anyhow::Result<()> {
-    let url = server_url(base_url, "/event");
+    // Subscribe with server-side session filter so we only receive events
+    // relevant to our session (plus global events like config.updated).
+    // This replaces most client-side is_my_session filtering, though we
+    // keep the client-side checks as a defense-in-depth measure.
+    let url = format!(
+        "{}?session={}",
+        server_url(base_url, "/event"),
+        session_id,
+    );
     let client = reqwest::Client::new();
 
     let resp = client
@@ -271,7 +279,17 @@ fn parse_event(
             if !is_my_session {
                 return None;
             }
-            let status = json.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            // Support both plain string "idle" and tagged object {"type": "idle"}
+            // formats. The server serializes SessionRunStatus with
+            // #[serde(tag = "type")] so the value is an object, but we also
+            // accept a plain string for forward compatibility.
+            let status = json
+                .get("status")
+                .and_then(|v| {
+                    v.as_str()
+                        .or_else(|| v.get("type").and_then(|t| t.as_str()))
+                })
+                .unwrap_or("");
             match status {
                 "busy" => Some(CliServerEvent::SessionBusy {
                     session_id: event_session_id.to_string(),
@@ -647,6 +665,57 @@ mod tests {
             event,
             Some(CliServerEvent::PermissionRequested { session_id, permission_id, .. })
                 if session_id == "session-1" && permission_id == "permission-1"
+        ));
+    }
+
+    #[test]
+    fn session_status_idle_tagged_object_is_parsed() {
+        // The server serializes SessionRunStatus with #[serde(tag = "type")]
+        // so idle becomes {"type": "idle"} rather than a plain string.
+        let payload = serde_json::json!({
+            "type": "session.status",
+            "sessionID": "session-1",
+            "status": {"type": "idle"}
+        });
+
+        let event = parse_event("", &payload, "session-1");
+
+        assert!(matches!(
+            event,
+            Some(CliServerEvent::SessionIdle { session_id }) if session_id == "session-1"
+        ));
+    }
+
+    #[test]
+    fn session_status_busy_tagged_object_is_parsed() {
+        let payload = serde_json::json!({
+            "type": "session.status",
+            "sessionID": "session-1",
+            "status": {"type": "busy"}
+        });
+
+        let event = parse_event("", &payload, "session-1");
+
+        assert!(matches!(
+            event,
+            Some(CliServerEvent::SessionBusy { session_id }) if session_id == "session-1"
+        ));
+    }
+
+    #[test]
+    fn session_status_plain_string_is_parsed() {
+        // Forward-compatible: also accept plain string format.
+        let payload = serde_json::json!({
+            "type": "session.status",
+            "sessionID": "session-1",
+            "status": "idle"
+        });
+
+        let event = parse_event("", &payload, "session-1");
+
+        assert!(matches!(
+            event,
+            Some(CliServerEvent::SessionIdle { session_id }) if session_id == "session-1"
         ));
     }
 }

@@ -74,6 +74,12 @@ function scheduleGlobalConfigRefresh(delay = 250) {
     globalConfigRefreshTimer = null;
     void Promise.all([loadProviders(), loadModes(), loadUiCommands()])
       .then(() => loadWebUiPreferences())
+      .then(() => {
+        if (nodes.commandPanel && !nodes.commandPanel.classList.contains("hidden")) {
+          return loadSettingsWorkspace({ force: true });
+        }
+        return null;
+      })
       .catch(() => {});
   }, delay);
 }
@@ -140,7 +146,7 @@ function handleGlobalServerEvent(name, payload) {
   if (type === "output_block") {
     if (state.streaming) return;
     const handled = applyOutputBlockEvent(payload);
-    if (!handled) return;
+    if (!handled && !applyFocusedChildOutputBlockEvent(payload)) return;
     const block = payload && payload.block ? payload.block : payload;
     if (block && (block.kind === "scheduler_stage" || block.kind === "tool")) {
       scheduleExecutionTopologyRefresh(60);

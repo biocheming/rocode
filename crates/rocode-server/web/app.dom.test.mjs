@@ -24,6 +24,7 @@ const jsModules = [
   "settings.js",
   "session-actions.js",
   "commands.js",
+  "terminal.js",
   "streaming.js",
   "global-events.js",
   "bootstrap.js",
@@ -37,6 +38,7 @@ const schedulerFixture = JSON.parse(
     "utf8",
   ),
 );
+const fixturePreviewHtml = fs.readFileSync(path.join(__dirname, "fixture-preview.html"), "utf8");
 
 class FakeClassList {
   constructor(element) {
@@ -374,7 +376,17 @@ function buildContext(routeMap = new Map()) {
 }
 
 function createHarness(routeMap = new Map()) {
-  const { context, testApi } = buildContext(routeMap);
+  const defaultRoutes = new Map([
+    ["/config", {}],
+    ["/provider/known", { providers: [] }],
+    ["/config/scheduler", { exists: false, content: "", profiles: [] }],
+    ["/mcp", {}],
+    ["/plugin/auth", []],
+    ["/lsp", { servers: [] }],
+    ["/formatter", { formatters: [] }],
+  ]);
+  const routes = new Map([...defaultRoutes, ...routeMap]);
+  const { context, testApi } = buildContext(routes);
   vm.createContext(context);
   vm.runInContext(appSource, context, { filename: "app.js" });
   return { api: testApi, context };
@@ -657,6 +669,147 @@ test("web output_block events route by session id and do not leak child content 
   assert.equal(handledWhileChildFocused, true);
   assert.equal(api.nodes.messageFeed.children.length, 1);
   assert.match(api.nodes.messageFeed.textContent, /child content/);
+});
+
+test("web execution topology renders compressed child session rail above the transcript", async () => {
+  const routes = new Map([
+    ["/session/session-1/message", []],
+    [
+      "/session/session-1/executions",
+      {
+        active_count: 2,
+        running_count: 2,
+        waiting_count: 0,
+        cancelling_count: 0,
+        roots: [
+          {
+            id: "prompt:session-1",
+            kind: "prompt_run",
+            status: "running",
+            label: "Prompt",
+            children: [
+              {
+                id: "task-1",
+                kind: "agent_task",
+                status: "running",
+                label: "research-agent",
+                recent_event: "Collecting evidence",
+                waiting_on: null,
+                stage_id: "stage-1",
+                updated_at: 1710000001000,
+                metadata: {
+                  child_session_id: "child-1",
+                },
+                children: [],
+              },
+              {
+                id: "task-2",
+                kind: "agent_task",
+                status: "waiting",
+                label: "review-agent",
+                recent_event: "Waiting for tool output",
+                waiting_on: "tool",
+                stage_id: "stage-2",
+                updated_at: 1710000002000,
+                metadata: {
+                  child_session_id: "child-2",
+                },
+                children: [],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    ["/session/session-1/recovery", { status: "idle", actions: [], checkpoints: [] }],
+  ]);
+
+  const { api } = createHarness(routes);
+  api.state.selectedSession = "session-1";
+  api.state.sessions = [
+    {
+      id: "session-1",
+      title: "Atlas governance",
+      directory: "/tmp/workspace",
+      updated: 1710000000000,
+      metadata: { scheduler_profile: "atlas" },
+    },
+  ];
+
+  await api.loadMessages();
+
+  assert.equal(api.nodes.childSessionRail.classList.contains("hidden"), false);
+  assert.match(api.nodes.childSessionRail.innerHTML, /2 active branches/);
+  assert.match(api.nodes.childSessionRail.innerHTML, /research-agent/);
+  assert.match(api.nodes.childSessionRail.innerHTML, /review-agent/);
+  assert.equal(api.nodes.focusedChildPanel.classList.contains("hidden"), false);
+  assert.match(api.nodes.focusedChildPanel.innerHTML, /Open Session/);
+});
+
+test("web focused child panel receives child output without polluting parent transcript", async () => {
+  const routes = new Map([
+    ["/session/session-1/message", []],
+    [
+      "/session/session-1/executions",
+      {
+        active_count: 1,
+        running_count: 1,
+        waiting_count: 0,
+        cancelling_count: 0,
+        roots: [
+          {
+            id: "prompt:session-1",
+            kind: "prompt_run",
+            status: "running",
+            label: "Prompt",
+            children: [
+              {
+                id: "task-1",
+                kind: "agent_task",
+                status: "running",
+                label: "research-agent",
+                recent_event: "Collecting evidence",
+                waiting_on: null,
+                stage_id: "stage-1",
+                updated_at: 1710000001000,
+                metadata: {
+                  child_session_id: "child-1",
+                },
+                children: [],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    ["/session/session-1/recovery", { status: "idle", actions: [], checkpoints: [] }],
+  ]);
+
+  const { api } = createHarness(routes);
+  api.state.selectedSession = "session-1";
+  api.state.sessions = [
+    {
+      id: "session-1",
+      title: "Atlas governance",
+      directory: "/tmp/workspace",
+      updated: 1710000000000,
+      metadata: { scheduler_profile: "atlas" },
+    },
+  ];
+
+  await api.loadMessages();
+  api.handleGlobalServerEvent("output_block", {
+    type: "output_block",
+    sessionID: "child-1",
+    block: {
+      kind: "reasoning",
+      phase: "delta",
+      text: "checking task evidence",
+    },
+  });
+
+  assert.equal(api.nodes.messageFeed.children.length, 0);
+  assert.match(api.nodes.focusedChildPanel.innerHTML, /checking task evidence/);
 });
 
 test("global server events forward output_block to the selected child session when idle", () => {
@@ -1334,4 +1487,57 @@ test("web command panel renders shared command catalogue", () => {
   assert.match(text(entry), /\/command/);
   assert.match(text(entry), /Command Palette/);
   assert.match(text(entry), /Navigation/);
+});
+
+test("web settings workspace exposes provider scheduler and integration tabs", () => {
+  const { api } = createHarness();
+  api.openCommandPanel("provider");
+
+  assert.ok(api.nodes.settingsProvidersPanel);
+  assert.ok(api.nodes.settingsSchedulerPanel);
+  assert.ok(api.nodes.settingsMcpPanel);
+  assert.ok(api.nodes.settingsPluginsPanel);
+  assert.ok(api.nodes.settingsLspPanel);
+});
+
+test("web settings uses inline rename UX for providers instead of prompt", async () => {
+  const routes = new Map([
+    [
+      "/config",
+      {
+        provider: {
+          minimax: {
+            name: "MiniMax",
+            id: "minimax",
+            models: {},
+          },
+        },
+      },
+    ],
+  ]);
+  const { api, context } = createHarness(routes);
+  await api.loadSettingsWorkspace({ force: true });
+  context.renameSelectedProvider();
+
+  assert.equal(api.nodes.settingsProviderInlineAction.classList.contains("hidden"), false);
+  assert.match(text(api.nodes.settingsProviderInlineAction), /Rename provider minimax/);
+});
+
+test("web settings uses inline create UX for providers instead of prompt", async () => {
+  const { api } = createHarness();
+  await api.loadSettingsWorkspace({ force: true });
+  api.createBlankProvider();
+
+  assert.equal(api.nodes.settingsProviderInlineAction.classList.contains("hidden"), false);
+  assert.match(text(api.nodes.settingsProviderInlineAction), /Create a new provider key/);
+});
+
+test("web fixture preview keeps the visual baseline landmarks", () => {
+  assert.match(fixturePreviewHtml, /class="shell"/);
+  assert.match(fixturePreviewHtml, /class="child-session-rail"/);
+  assert.match(fixturePreviewHtml, /class="focused-child-panel"/);
+  assert.match(fixturePreviewHtml, /class="message message-reasoning"/);
+  assert.match(fixturePreviewHtml, /class="message scheduler-stage"/);
+  assert.match(fixturePreviewHtml, /class="workspace-panel"/);
+  assert.match(fixturePreviewHtml, /class="composer"/);
 });

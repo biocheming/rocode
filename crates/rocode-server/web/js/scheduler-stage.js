@@ -309,7 +309,15 @@ function appendSchedulerStage(block) {
   article.appendChild(chips);
   article.appendChild(grid);
   article.appendChild(bodyNode);
-  nodes.messageFeed.appendChild(article);
+
+  const firstNonStageMessage = Array.from(nodes.messageFeed.children).find((child) =>
+    child.classList && child.classList.contains("message") && !child.classList.contains("scheduler-stage")
+  );
+  if (firstNonStageMessage) {
+    nodes.messageFeed.insertBefore(article, firstNonStageMessage);
+  } else {
+    nodes.messageFeed.appendChild(article);
+  }
   nodes.messageFeed.scrollTop = nodes.messageFeed.scrollHeight;
 
   const entry = {

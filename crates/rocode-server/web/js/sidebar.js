@@ -76,10 +76,10 @@ function renderProjects() {
 
   for (const project of state.projects) {
     const card = document.createElement("div");
-    card.style.marginBottom = "var(--space-3)";
+    card.className = "project-group";
 
     const trigger = document.createElement("button");
-    trigger.className = "session-item";
+    trigger.className = "session-item session-item-project";
     if (project.key === state.selectedProject) trigger.classList.add("active");
 
     const title = document.createElement("span");
@@ -108,11 +108,12 @@ function renderProjects() {
     card.appendChild(trigger);
 
     if (project.key === state.selectedProject) {
+      const body = document.createElement("div");
+      body.className = "project-group-body";
+
       for (const session of project.sessions) {
         const button = document.createElement("button");
-        button.className = "session-item";
-        button.style.marginLeft = "var(--space-3)";
-        button.style.paddingLeft = "var(--space-3)";
+        button.className = "session-item session-item-session";
 
         if (session.id === state.selectedSession) {
           button.classList.add("active");
@@ -139,8 +140,10 @@ function renderProjects() {
           }
         });
 
-        card.appendChild(button);
+        body.appendChild(button);
       }
+
+      card.appendChild(body);
     }
 
     nodes.projectTree.appendChild(card);

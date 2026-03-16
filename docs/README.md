@@ -39,8 +39,8 @@ This directory contains product-facing examples and design references for ROCode
   - Use these as implementation references, not as runtime config files
 - `docs/plans/README.md`
   - 架构计划入口
-- `docs/plans/three-surface-governance-roadmap.md`
-  - ROCode 三端治理的重构版正式路线图
+- `docs/plans/rocode-app-blueprint.md`
+  - `rocode-app` desktop-first 原生壳蓝图
 
 ## Context Docs Entry
 

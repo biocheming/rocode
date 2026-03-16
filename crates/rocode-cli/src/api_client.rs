@@ -19,8 +19,8 @@ pub use rocode_tui::api::{
     ExecutionModeInfo, FullProviderListResponse, KnownProvidersResponse, McpAuthStartInfo,
     McpStatusInfo, MessageInfo, MessageTokensInfo, PermissionRequestInfo, PromptRequest,
     ProviderListResponse, QuestionInfo, RecoveryActionKind, RevertRequest, RevertResponse,
-    SessionExecutionTopology, SessionInfo, SessionRecoveryProtocol, SessionStatusInfo,
-    ShareResponse, UpdateSessionRequest,
+    SessionExecutionTopology, SessionInfo, SessionRecoveryProtocol, SessionRuntimeState,
+    SessionStatusInfo, ShareResponse, UpdateSessionRequest,
 };
 
 /// Async HTTP client for communicating with the ROCode server.
@@ -255,6 +255,19 @@ impl CliApiClient {
         );
         let resp = self.client.get(&url).send().await?;
         Self::json_ok(resp, "get session executions").await
+    }
+
+    /// Fetch the aggregated runtime state for a session.
+    pub async fn get_session_runtime(
+        &self,
+        session_id: &str,
+    ) -> anyhow::Result<SessionRuntimeState> {
+        let url = server_url(
+            &self.base_url,
+            &format!("/session/{}/runtime", session_id),
+        );
+        let resp = self.client.get(&url).send().await?;
+        Self::json_ok(resp, "get session runtime").await
     }
 
     pub async fn get_session_recovery(

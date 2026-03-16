@@ -25,6 +25,14 @@ function wireEvents() {
     });
   });
 
+  if (nodes.heroNewSessionBtn) {
+    nodes.heroNewSessionBtn.addEventListener("click", () => {
+      void runUiAction("creating session", async () => {
+        await createAndSelectSession();
+      });
+    });
+  }
+
   nodes.forkSessionBtn.addEventListener("click", () => {
     void runUiAction("forking session", async () => {
       await forkCurrentSession();
@@ -73,6 +81,169 @@ function wireEvents() {
       closeCommandPanel();
     }
   });
+  if (nodes.settingsTabList) {
+    nodes.settingsTabList.addEventListener("click", (event) => {
+      const button =
+        event.target && event.target.dataset && event.target.dataset.settingsTab ? event.target : null;
+      if (!button) return;
+      setSettingsTab(button.dataset.settingsTab || "general");
+    });
+  }
+  if (nodes.settingsProviderReloadBtn) {
+    nodes.settingsProviderReloadBtn.addEventListener("click", () => {
+      void reloadProviderSettings().catch((error) => {
+        setProviderStatus(`Reload failed: ${String(error)}`, "error");
+      });
+    });
+  }
+  if (nodes.settingsProviderNewBtn) {
+    nodes.settingsProviderNewBtn.addEventListener("click", createBlankProvider);
+  }
+  if (nodes.settingsModelNewBtn) {
+    nodes.settingsModelNewBtn.addEventListener("click", createBlankModel);
+  }
+  if (nodes.settingsModelRenameBtn) {
+    nodes.settingsModelRenameBtn.addEventListener("click", () => {
+      void renameSelectedModel().catch((error) => {
+        setProviderStatus(`Rename failed: ${String(error)}`, "error");
+      });
+    });
+  }
+  if (nodes.settingsModelDeleteBtn) {
+    nodes.settingsModelDeleteBtn.addEventListener("click", () => {
+      void deleteSelectedModel().catch((error) => {
+        setProviderStatus(`Delete failed: ${String(error)}`, "error");
+      });
+    });
+  }
+  if (nodes.settingsProviderSaveBtn) {
+    nodes.settingsProviderSaveBtn.addEventListener("click", () => {
+      void saveSelectedProvider().catch((error) => {
+        setProviderStatus(`Save failed: ${String(error)}`, "error");
+      });
+    });
+  }
+  if (nodes.settingsProviderRenameBtn) {
+    nodes.settingsProviderRenameBtn.addEventListener("click", () => {
+      void renameSelectedProvider().catch((error) => {
+        setProviderStatus(`Rename failed: ${String(error)}`, "error");
+      });
+    });
+  }
+  if (nodes.settingsProviderDeleteBtn) {
+    nodes.settingsProviderDeleteBtn.addEventListener("click", () => {
+      void deleteSelectedProvider().catch((error) => {
+        setProviderStatus(`Delete failed: ${String(error)}`, "error");
+      });
+    });
+  }
+  if (nodes.settingsSchedulerReloadBtn) {
+    nodes.settingsSchedulerReloadBtn.addEventListener("click", () => {
+      void loadSettingsWorkspace({ force: true }).catch((error) => {
+        setSchedulerStatus(`Reload failed: ${String(error)}`, "error");
+      });
+    });
+  }
+  if (nodes.settingsSchedulerTemplateBtn) {
+    nodes.settingsSchedulerTemplateBtn.addEventListener("click", seedSchedulerTemplate);
+  }
+  if (nodes.settingsSchedulerSaveBtn) {
+    nodes.settingsSchedulerSaveBtn.addEventListener("click", () => {
+      void saveSchedulerSettings().catch((error) => {
+        setSchedulerStatus(`Save failed: ${String(error)}`, "error");
+      });
+    });
+  }
+  if (nodes.settingsMcpReloadBtn) {
+    nodes.settingsMcpReloadBtn.addEventListener("click", () => {
+      void reloadMcpSettings().catch((error) => {
+        setMcpStatus(`Reload failed: ${String(error)}`, "error");
+      });
+    });
+  }
+  if (nodes.settingsMcpNewBtn) {
+    nodes.settingsMcpNewBtn.addEventListener("click", createBlankMcp);
+  }
+  if (nodes.settingsMcpSaveBtn) {
+    nodes.settingsMcpSaveBtn.addEventListener("click", () => {
+      void saveSelectedMcp().catch((error) => {
+        setMcpStatus(`Save failed: ${String(error)}`, "error");
+      });
+    });
+  }
+  if (nodes.settingsMcpConnectBtn) {
+    nodes.settingsMcpConnectBtn.addEventListener("click", () => {
+      void connectSelectedMcp().catch((error) => {
+        setMcpStatus(`Connect failed: ${String(error)}`, "error");
+      });
+    });
+  }
+  if (nodes.settingsMcpRestartBtn) {
+    nodes.settingsMcpRestartBtn.addEventListener("click", () => {
+      void restartSelectedMcp().catch((error) => {
+        setMcpStatus(`Restart failed: ${String(error)}`, "error");
+      });
+    });
+  }
+  if (nodes.settingsMcpRenameBtn) {
+    nodes.settingsMcpRenameBtn.addEventListener("click", () => {
+      void renameSelectedMcp().catch((error) => {
+        setMcpStatus(`Rename failed: ${String(error)}`, "error");
+      });
+    });
+  }
+  if (nodes.settingsMcpDeleteBtn) {
+    nodes.settingsMcpDeleteBtn.addEventListener("click", () => {
+      void deleteSelectedMcp().catch((error) => {
+        setMcpStatus(`Delete failed: ${String(error)}`, "error");
+      });
+    });
+  }
+  if (nodes.settingsPluginReloadBtn) {
+    nodes.settingsPluginReloadBtn.addEventListener("click", () => {
+      void reloadPluginSettings().catch((error) => {
+        setPluginStatus(`Reload failed: ${String(error)}`, "error");
+      });
+    });
+  }
+  if (nodes.settingsPluginNewBtn) {
+    nodes.settingsPluginNewBtn.addEventListener("click", createBlankPlugin);
+  }
+  if (nodes.settingsPluginSaveBtn) {
+    nodes.settingsPluginSaveBtn.addEventListener("click", () => {
+      void saveSelectedPlugin().catch((error) => {
+        setPluginStatus(`Save failed: ${String(error)}`, "error");
+      });
+    });
+  }
+  if (nodes.settingsPluginRenameBtn) {
+    nodes.settingsPluginRenameBtn.addEventListener("click", () => {
+      void renameSelectedPlugin().catch((error) => {
+        setPluginStatus(`Rename failed: ${String(error)}`, "error");
+      });
+    });
+  }
+  if (nodes.settingsPluginDeleteBtn) {
+    nodes.settingsPluginDeleteBtn.addEventListener("click", () => {
+      void deleteSelectedPlugin().catch((error) => {
+        setPluginStatus(`Delete failed: ${String(error)}`, "error");
+      });
+    });
+  }
+  if (nodes.settingsLspReloadBtn) {
+    nodes.settingsLspReloadBtn.addEventListener("click", () => {
+      void reloadLspSettings().catch((error) => {
+        setLspStatus(`Reload failed: ${String(error)}`, "error");
+      });
+    });
+  }
+  if (nodes.settingsLspSaveBtn) {
+    nodes.settingsLspSaveBtn.addEventListener("click", () => {
+      void saveLspSettings().catch((error) => {
+        setLspStatus(`Save failed: ${String(error)}`, "error");
+      });
+    });
+  }
   nodes.recoveryPanel.addEventListener("click", (event) => {
     void handleRecoveryPanelClick(event);
   });
@@ -333,6 +504,7 @@ async function bootstrap() {
   updateTokenUsage();
   setBadge("loading", "warn");
   wireEvents();
+  initTerminalPanel();
   autoSizeInput();
   renderThemeOptions();
   updateComposerMeta();
@@ -340,6 +512,7 @@ async function bootstrap() {
 
   await Promise.all([loadProviders(), loadModes(), loadSessions(), loadUiCommands()]);
   await loadWebUiPreferences();
+  await loadTerminalSessions().catch(() => {});
   startGlobalServerEventStream();
 
   if (!state.streaming) {
@@ -369,6 +542,9 @@ function installTestApi() {
     loadWebUiPreferences,
     handleSlashCommand,
     openCommandPanel,
+    loadSettingsWorkspace,
+    createBlankProvider,
+    renameSelectedProvider,
     loadUiCommands,
     refreshSessionsIndex,
     handleGlobalServerEvent,

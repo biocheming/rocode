@@ -12,18 +12,26 @@
       <!-- ── SIDEBAR ──────────────────────────────────────────────── -->
       <aside class="sidebar" id="sidebar">
         <div class="sidebar-header">
-          <span class="sidebar-title">ROCode</span>
+          <div class="sidebar-brand">
+            <div class="sidebar-brand-copy">
+              <span class="sidebar-title">ROCode</span>
+              <span class="sidebar-subtitle">Chats</span>
+            </div>
+          </div>
           <div class="sidebar-actions">
             <button id="sidebarToggle" class="sidebar-btn" title="Toggle Sidebar">
-              <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 5h12M3 9h12M3 13h12"/></svg>
+              <span class="icon-glyph" aria-hidden="true">≡</span>
             </button>
             <button id="newSessionBtn" class="sidebar-btn" title="New Chat">
-              <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M9 4v10M4 9h10"/></svg>
+              <span class="icon-glyph" aria-hidden="true">⊕</span>
             </button>
           </div>
         </div>
 
         <div class="sidebar-search">
+          <span class="sidebar-search-icon">
+            <span class="icon-glyph" aria-hidden="true">⌕</span>
+          </span>
           <input id="projectSearch" type="text" placeholder="Search conversations…" />
         </div>
 
@@ -33,7 +41,7 @@
 
         <footer class="sidebar-footer">
           <button id="settingsToggleBtn" class="sidebar-footer-btn" title="Settings">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.4"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.05 3.05l1.42 1.42M11.53 11.53l1.42 1.42M3.05 12.95l1.42-1.42M11.53 4.47l1.42-1.42"/></svg>
+            <span class="icon-glyph" aria-hidden="true">⛭</span>
             <span>Settings</span>
           </button>
         </footer>
@@ -44,23 +52,33 @@
 
         <!-- HERO (no session) -->
         <section id="heroPanel" class="hero">
-          <div class="hero-logo">ROCode</div>
-          <h1 id="heroGreeting">Good evening</h1>
-          <p class="hero-subtitle">What can I help you build?</p>
+          <div class="hero-mark">
+            <div class="hero-logo">New chat</div>
+            <span id="heroGreeting" class="hero-kicker">Ready</span>
+          </div>
+          <p class="hero-subtitle">Select a session on the left or send a prompt to start.</p>
           <div class="hero-actions">
-            <button class="hero-chip" data-template="Scaffold a clean Rust module with tests.">Create module</button>
-            <button class="hero-chip" data-template="Refactor this file for readability and performance.">Refactor</button>
-            <button class="hero-chip" data-template="Investigate the failing tests and propose fixes.">Investigate</button>
+            <button id="heroNewSessionBtn" class="hero-chip" type="button">New session</button>
+            <button class="hero-chip" type="button" data-template="Inspect the repository and propose the next change.">Inspect repo</button>
+            <button class="hero-chip" type="button" data-template="Explain the current scheduler state and active child sessions.">Inspect runtime</button>
           </div>
         </section>
 
         <!-- CONVERSATION -->
         <section id="conversationPanel" class="conversation hidden">
           <header class="conversation-header">
-            <h3 id="sessionTitle" class="conversation-title">No session</h3>
+            <div class="conversation-header-main">
+              <h3 id="sessionTitle" class="conversation-title">No session</h3>
+            </div>
             <div class="conversation-actions">
-              <button id="overflowToggle" class="conversation-header-btn" title="Session actions">
-                <svg viewBox="0 0 18 18" fill="currentColor"><circle cx="4" cy="9" r="1.3"/><circle cx="9" cy="9" r="1.3"/><circle cx="14" cy="9" r="1.3"/></svg>
+              <button id="terminalToggleBtn" class="conversation-header-btn conversation-header-btn-terminal" title="Toggle terminal">
+                <span class="icon-glyph" aria-hidden="true">›_</span>
+              </button>
+              <button id="workspaceToggleBtn" class="conversation-header-btn conversation-header-btn-workspace" title="Toggle workspace rail">
+                <span class="icon-glyph" aria-hidden="true">▥</span>
+              </button>
+              <button id="overflowToggle" class="conversation-header-btn conversation-header-btn-overflow" title="Session actions">
+                <span class="icon-glyph" aria-hidden="true">⋯</span>
               </button>
             </div>
             <!-- Dropdown menu (hidden by default) -->
@@ -75,14 +93,69 @@
             </div>
           </header>
 
-          <div id="sessionRuntimeMeta" class="hidden" style="margin-bottom: var(--space-3);"></div>
-          <div id="sessionMeta" class="hidden"></div>
+          <div id="sessionRuntimeMeta" class="runtime-meta-strip hidden"></div>
 
-          <section id="executionPanel" class="hidden" style="background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-lg); padding: var(--space-4); margin-bottom: var(--space-4);"></section>
-          <section id="recoveryPanel" class="hidden" style="background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-lg); padding: var(--space-4); margin-bottom: var(--space-4);"></section>
-          <section id="stageInspectorPanel" class="hidden" style="background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-lg); padding: var(--space-4); margin-bottom: var(--space-4);"></section>
+          <div class="conversation-body">
+            <section class="conversation-stream">
+              <section class="runtime-rail">
+                <section id="childSessionRail" class="child-session-rail hidden"></section>
+                <section id="focusedChildPanel" class="focused-child-panel hidden"></section>
+                <section id="executionPanel" class="runtime-card hidden"></section>
+                <section id="recoveryPanel" class="runtime-card hidden"></section>
+                <section id="stageInspectorPanel" class="runtime-card hidden"></section>
+              </section>
 
-          <div id="messageFeed" class="message-feed"></div>
+              <div id="messageFeed" class="message-feed"></div>
+            </section>
+
+            <aside id="workspacePanel" class="workspace-panel">
+              <div class="workspace-panel-header">
+                <div>
+                  <div class="workspace-panel-kicker">Workspace</div>
+                  <h4 class="workspace-panel-title">Artifacts</h4>
+                </div>
+              </div>
+              <div class="workspace-panel-tabs">
+                <button class="workspace-tab active" type="button">Context</button>
+                <button class="workspace-tab" type="button" disabled>Diff</button>
+                <button class="workspace-tab" type="button" disabled>Canvas</button>
+              </div>
+              <div class="workspace-panel-body">
+                <section class="workspace-card">
+                  <div class="workspace-card-label">Session Context</div>
+                  <div id="sessionMeta" class="workspace-meta"></div>
+                </section>
+                <section class="workspace-card workspace-card-emphasis">
+                  <div class="workspace-card-label">Reserved</div>
+                  <h5>Diff / Preview / Canvas</h5>
+                  <p>This rail stays dedicated to inspectable artifacts.</p>
+                </section>
+                <section class="workspace-card">
+                  <div class="workspace-card-label">Rule</div>
+                  <p>Scheduler state belongs above the transcript, not in the workspace rail.</p>
+                </section>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section id="terminalPanel" class="terminal-panel hidden" aria-label="Terminal panel">
+          <header class="terminal-panel-header">
+            <div id="terminalTabList" class="terminal-tab-list"></div>
+            <div class="terminal-panel-actions">
+              <button id="terminalNewBtn" class="terminal-panel-btn" type="button" title="New terminal">
+                <span class="icon-glyph" aria-hidden="true">⊕</span>
+              </button>
+              <button id="terminalCollapseBtn" class="terminal-panel-btn" type="button" title="Hide terminal">
+                <span class="icon-glyph" aria-hidden="true">⌄</span>
+              </button>
+            </div>
+          </header>
+          <div id="terminalViewport" class="terminal-viewport"></div>
+          <form id="terminalInputForm" class="terminal-input-form">
+            <span class="terminal-input-prompt">$</span>
+            <input id="terminalInput" class="terminal-input" type="text" autocomplete="off" placeholder="Send input to active terminal" />
+          </form>
         </section>
 
         <!-- COMPOSER -->
@@ -110,7 +183,7 @@
               <div class="composer-actions">
                 <button id="cancelRunBtn" type="button" class="cancel-btn hidden">Cancel</button>
                 <button id="sendButton" type="submit" class="send-btn" disabled>
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12V4M4 7l4-4 4 4"/></svg>
+                  <span class="icon-glyph" aria-hidden="true">↗</span>
                 </button>
               </div>
             </div>
@@ -119,48 +192,399 @@
 
         <!-- SETTINGS OVERLAY -->
         <section id="commandPanel" class="overlay hidden" role="dialog" aria-modal="true">
-          <div class="modal">
+          <div class="modal settings-modal">
             <header class="modal-header">
               <div>
                 <h4 class="modal-title">Settings</h4>
-                <div id="commandRuntimeStrip" style="display: flex; gap: var(--space-2); margin-top: var(--space-2);">
+                <div id="commandRuntimeStrip" class="modal-meta-strip">
                   <span id="commandRuntimeBadge" class="badge">Ready</span>
                   <span id="commandRuntimeText" class="text-tertiary">Idle</span>
                 </div>
               </div>
-              <div style="display: flex; gap: var(--space-2);">
+              <div class="modal-actions">
                 <button id="commandAbortBtn" class="btn btn-danger hidden" type="button">Cancel</button>
                 <button id="commandClose" class="btn btn-secondary">Close</button>
               </div>
             </header>
-            <div class="modal-body">
-              <div class="form-group">
-                <label class="form-label">Model</label>
-                <select id="modelSelect" class="form-select"></select>
-              </div>
-              <div class="form-group">
-                <label class="form-label">Theme</label>
-                <select id="themeSelect" class="form-select"></select>
-              </div>
-              <div class="form-group">
-                <label class="form-label">Mode</label>
-                <select id="agentSelect" class="form-select"></select>
-              </div>
-              <div class="form-group">
-                <label class="form-label">Session Actions</label>
-                <div style="display: grid; gap: var(--space-2); grid-template-columns: repeat(3, 1fr);">
-                  <button id="commandSessionNewBtn" class="btn btn-secondary">New</button>
-                  <button id="commandSessionForkBtn" class="btn btn-secondary">Fork</button>
-                  <button id="commandSessionCompactBtn" class="btn btn-secondary">Compact</button>
-                  <button id="commandSessionRenameBtn" class="btn btn-secondary">Rename</button>
-                  <button id="commandSessionShareBtn" class="btn btn-secondary">Share</button>
-                  <button id="commandSessionDeleteBtn" class="btn btn-danger">Delete</button>
-                </div>
-                <div id="commandSessionList" style="margin-top: var(--space-3); display: grid; gap: var(--space-2); max-height: 200px; overflow-y: auto;"></div>
-              </div>
-              <div class="form-group">
-                <label class="form-label">Commands</label>
-                <div id="commandCatalog" style="display: grid; gap: var(--space-2); max-height: 220px; overflow-y: auto;"></div>
+            <div class="modal-body settings-modal-body">
+              <div class="settings-shell">
+                <nav id="settingsTabList" class="settings-tab-list" aria-label="Settings Sections">
+                  <button type="button" class="settings-tab-btn active" data-settings-tab="general">General</button>
+                  <button type="button" class="settings-tab-btn" data-settings-tab="providers">Providers</button>
+                  <button type="button" class="settings-tab-btn" data-settings-tab="scheduler">Scheduler</button>
+                  <button type="button" class="settings-tab-btn" data-settings-tab="mcp">MCP</button>
+                  <button type="button" class="settings-tab-btn" data-settings-tab="plugins">Plugins</button>
+                  <button type="button" class="settings-tab-btn" data-settings-tab="lsp">LSP</button>
+                  <button type="button" class="settings-tab-btn" data-settings-tab="commands">Commands</button>
+                  <button type="button" class="settings-tab-btn" data-settings-tab="sessions">Sessions</button>
+                </nav>
+
+                <section id="settingsGeneralPanel" class="settings-tab-panel">
+                  <div class="settings-panel-note">
+                    Core runtime defaults for the current browser surface. Provider credentials and scheduler profiles live in the next tabs.
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Model</label>
+                    <select id="modelSelect" class="form-select"></select>
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Theme</label>
+                    <select id="themeSelect" class="form-select"></select>
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Mode</label>
+                    <select id="agentSelect" class="form-select"></select>
+                  </div>
+                </section>
+
+                <section id="settingsProvidersPanel" class="settings-tab-panel hidden">
+                  <div class="settings-section-head">
+                    <div>
+                      <h5>Providers & Models</h5>
+                      <p>Manage provider credentials, runtime IDs, base URLs, and model catalogs from the same authority used by CLI and TUI.</p>
+                    </div>
+                    <div class="settings-section-actions">
+                      <button id="settingsProviderReloadBtn" type="button" class="btn btn-secondary">Reload</button>
+                      <button id="settingsProviderNewBtn" type="button" class="btn btn-primary">New Provider</button>
+                    </div>
+                  </div>
+                  <div class="settings-grid settings-grid-wide">
+                    <aside class="settings-pane settings-pane-list">
+                      <div class="settings-subhead">Configured</div>
+                      <div id="settingsProviderList" class="settings-list"></div>
+                      <div class="settings-subhead">Known Providers</div>
+                      <div id="settingsKnownProviderList" class="settings-list settings-list-compact"></div>
+                    </aside>
+                    <div class="settings-pane settings-pane-editor">
+                      <div id="settingsProviderEmptyState" class="settings-empty-state">
+                        Select a configured provider or add one from the known provider catalog.
+                      </div>
+                      <div id="settingsProviderEditor" class="hidden">
+                        <div class="settings-grid">
+                          <div class="form-group">
+                            <label class="form-label" for="settingsProviderKey">Provider Key</label>
+                            <input id="settingsProviderKey" class="form-input" type="text" placeholder="minimax" />
+                          </div>
+                          <div class="form-group">
+                            <label class="form-label" for="settingsProviderId">Runtime Provider ID</label>
+                            <input id="settingsProviderId" class="form-input" type="text" placeholder="minimax" />
+                          </div>
+                          <div class="form-group">
+                            <label class="form-label" for="settingsProviderName">Display Name</label>
+                            <input id="settingsProviderName" class="form-input" type="text" placeholder="MiniMax" />
+                          </div>
+                          <div class="form-group">
+                            <label class="form-label" for="settingsProviderBaseUrl">Base URL</label>
+                            <input id="settingsProviderBaseUrl" class="form-input" type="text" placeholder="https://api.example.com/v1" />
+                          </div>
+                        </div>
+                        <div class="form-group">
+                          <label class="form-label" for="settingsProviderApiKey">API Key</label>
+                          <input id="settingsProviderApiKey" class="form-input" type="password" placeholder="sk-..." />
+                        </div>
+                        <div class="form-group">
+                          <label class="form-label" for="settingsProviderEnv">Env Allowlist</label>
+                          <input id="settingsProviderEnv" class="form-input" type="text" placeholder="OPENAI_API_KEY, HTTP_PROXY" />
+                        </div>
+                        <div class="form-group">
+                          <label class="form-label" for="settingsProviderOptions">Provider Options (JSON)</label>
+                          <textarea id="settingsProviderOptions" class="form-input form-textarea settings-codearea" rows="5" placeholder='{"timeout": 30}'></textarea>
+                        </div>
+
+                        <div class="settings-section-head settings-section-head-tight">
+                          <div>
+                            <h6>Models</h6>
+                            <p>Model name, runtime id, capability flags, headers, and provider-specific parameters.</p>
+                          </div>
+                          <div class="settings-section-actions">
+                            <button id="settingsModelNewBtn" type="button" class="btn btn-secondary">New Model</button>
+                            <button id="settingsModelRenameBtn" type="button" class="btn btn-secondary">Rename Model</button>
+                            <button id="settingsModelDeleteBtn" type="button" class="btn btn-danger">Delete Model</button>
+                          </div>
+                        </div>
+                        <div id="settingsModelInlineAction" class="settings-inline-action hidden"></div>
+                        <div class="settings-grid settings-grid-wide">
+                          <aside class="settings-pane settings-pane-list">
+                            <div id="settingsModelList" class="settings-list"></div>
+                          </aside>
+                          <div class="settings-pane settings-pane-editor">
+                            <div id="settingsModelEmptyState" class="settings-empty-state">
+                              Select a model to edit its runtime id, display name, and parameters.
+                            </div>
+                            <div id="settingsModelEditor" class="hidden">
+                              <div class="settings-grid">
+                                <div class="form-group">
+                                  <label class="form-label" for="settingsModelKey">Model Key</label>
+                                  <input id="settingsModelKey" class="form-input" type="text" placeholder="mini-max-m1" />
+                                </div>
+                                <div class="form-group">
+                                  <label class="form-label" for="settingsModelRuntimeId">Runtime Model ID</label>
+                                  <input id="settingsModelRuntimeId" class="form-input" type="text" placeholder="MiniMax-M1" />
+                                </div>
+                                <div class="form-group">
+                                  <label class="form-label" for="settingsModelName">Display Name</label>
+                                  <input id="settingsModelName" class="form-input" type="text" placeholder="MiniMax M1" />
+                                </div>
+                                <div class="form-group">
+                                  <label class="form-label" for="settingsModelFamily">Family</label>
+                                  <input id="settingsModelFamily" class="form-input" type="text" placeholder="minimax" />
+                                </div>
+                              </div>
+                              <div class="settings-check-grid">
+                                <label class="settings-check"><input id="settingsModelReasoning" type="checkbox" /> <span>Reasoning</span></label>
+                                <label class="settings-check"><input id="settingsModelToolCall" type="checkbox" /> <span>Tool Calling</span></label>
+                                <label class="settings-check"><input id="settingsModelTemperature" type="checkbox" /> <span>Temperature</span></label>
+                                <label class="settings-check"><input id="settingsModelAttachment" type="checkbox" /> <span>Attachment</span></label>
+                              </div>
+                              <div class="form-group">
+                                <label class="form-label" for="settingsModelHeaders">Headers (JSON)</label>
+                                <textarea id="settingsModelHeaders" class="form-input form-textarea settings-codearea" rows="4" placeholder='{"x-foo": "bar"}'></textarea>
+                              </div>
+                              <div class="form-group">
+                                <label class="form-label" for="settingsModelOptions">Model Options (JSON)</label>
+                                <textarea id="settingsModelOptions" class="form-input form-textarea settings-codearea" rows="5" placeholder='{"reasoning_effort": "medium"}'></textarea>
+                              </div>
+                              <div class="form-group">
+                                <label class="form-label" for="settingsModelVariants">Variants (comma separated)</label>
+                                <input id="settingsModelVariants" class="form-input" type="text" placeholder="low, medium, high" />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                        <div class="settings-footer-actions">
+                          <div id="settingsProviderStatus" class="text-tertiary">Provider config is saved into /config authority.</div>
+                          <div class="settings-section-actions">
+                            <button id="settingsProviderRenameBtn" type="button" class="btn btn-secondary">Rename Provider</button>
+                            <button id="settingsProviderDeleteBtn" type="button" class="btn btn-danger">Delete Provider</button>
+                            <button id="settingsProviderSaveBtn" type="button" class="btn btn-primary">Save Provider</button>
+                          </div>
+                        </div>
+                        <div id="settingsProviderInlineAction" class="settings-inline-action hidden"></div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <section id="settingsSchedulerPanel" class="settings-tab-panel hidden">
+                  <div class="settings-section-head">
+                    <div>
+                      <h5>Scheduler Profiles</h5>
+                      <p>Create or edit the active scheduler config file directly. This drives preset/profile execution for all three surfaces.</p>
+                    </div>
+                    <div class="settings-section-actions">
+                      <button id="settingsSchedulerReloadBtn" type="button" class="btn btn-secondary">Reload</button>
+                      <button id="settingsSchedulerTemplateBtn" type="button" class="btn btn-secondary">Seed Template</button>
+                      <button id="settingsSchedulerSaveBtn" type="button" class="btn btn-primary">Save Scheduler</button>
+                    </div>
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label" for="settingsSchedulerPath">Scheduler File Path</label>
+                    <input id="settingsSchedulerPath" class="form-input" type="text" placeholder=".rocode/scheduler.jsonc" />
+                  </div>
+                  <div id="settingsSchedulerMeta" class="settings-inline-meta"></div>
+                  <div class="form-group">
+                    <label class="form-label">Profiles</label>
+                    <div id="settingsSchedulerProfiles" class="settings-chip-list"></div>
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label" for="settingsSchedulerContent">Scheduler Config</label>
+                    <textarea id="settingsSchedulerContent" class="form-input form-textarea settings-codearea settings-codearea-lg" rows="20" placeholder='{\n  "defaults": { "profile": "sisyphus-default" },\n  "profiles": {}\n}'></textarea>
+                  </div>
+                  <div id="settingsSchedulerStatus" class="text-tertiary">Edit JSONC directly here; the server will write the active scheduler file and refresh execution modes.</div>
+                </section>
+
+                <section id="settingsMcpPanel" class="settings-tab-panel hidden">
+                  <div class="settings-section-head">
+                    <div>
+                      <h5>MCP Servers</h5>
+                      <p>Manage configured MCP servers, inspect live runtime status, and connect or restart them from the same workspace.</p>
+                    </div>
+                    <div class="settings-section-actions">
+                      <button id="settingsMcpReloadBtn" type="button" class="btn btn-secondary">Reload</button>
+                      <button id="settingsMcpNewBtn" type="button" class="btn btn-primary">New MCP</button>
+                    </div>
+                  </div>
+                  <div class="settings-grid settings-grid-wide">
+                    <aside class="settings-pane settings-pane-list">
+                      <div class="settings-subhead">Configured / Runtime</div>
+                      <div id="settingsMcpList" class="settings-list"></div>
+                    </aside>
+                    <div class="settings-pane settings-pane-editor">
+                      <div id="settingsMcpEmptyState" class="settings-empty-state">
+                        Select an MCP server to edit command/url, env, timeout, and OAuth settings.
+                      </div>
+                      <div id="settingsMcpEditor" class="hidden">
+                        <div class="settings-grid">
+                          <div class="form-group">
+                            <label class="form-label" for="settingsMcpName">Server Name</label>
+                            <input id="settingsMcpName" class="form-input" type="text" placeholder="exa" />
+                          </div>
+                          <div class="form-group">
+                            <label class="form-label" for="settingsMcpType">Type</label>
+                            <select id="settingsMcpType" class="form-select">
+                              <option value="local">local</option>
+                              <option value="remote">remote</option>
+                            </select>
+                          </div>
+                          <div class="form-group">
+                            <label class="form-label" for="settingsMcpUrl">Remote URL</label>
+                            <input id="settingsMcpUrl" class="form-input" type="text" placeholder="https://mcp.example.com" />
+                          </div>
+                          <div class="form-group">
+                            <label class="form-label" for="settingsMcpTimeout">Timeout (ms)</label>
+                            <input id="settingsMcpTimeout" class="form-input" type="number" min="0" placeholder="30000" />
+                          </div>
+                        </div>
+                        <div class="settings-check-grid">
+                          <label class="settings-check"><input id="settingsMcpEnabled" type="checkbox" /> <span>Enabled</span></label>
+                        </div>
+                        <div class="form-group">
+                          <label class="form-label" for="settingsMcpCommand">Command / argv (JSON array)</label>
+                          <textarea id="settingsMcpCommand" class="form-input form-textarea settings-codearea" rows="4" placeholder='["npx", "-y", "@modelcontextprotocol/server-exa"]'></textarea>
+                        </div>
+                        <div class="form-group">
+                          <label class="form-label" for="settingsMcpEnv">Environment (JSON)</label>
+                          <textarea id="settingsMcpEnv" class="form-input form-textarea settings-codearea" rows="4" placeholder='{"EXA_API_KEY": "..." }'></textarea>
+                        </div>
+                        <div class="form-group">
+                          <label class="form-label" for="settingsMcpOauth">OAuth (JSON or false)</label>
+                          <textarea id="settingsMcpOauth" class="form-input form-textarea settings-codearea" rows="4" placeholder='{"clientId": "...", "scope": "..."}'></textarea>
+                        </div>
+                        <div class="settings-footer-actions">
+                          <div id="settingsMcpStatus" class="text-tertiary">Save updates to /config authority; runtime actions stay available beside it.</div>
+                          <div class="settings-section-actions">
+                            <button id="settingsMcpRenameBtn" type="button" class="btn btn-secondary">Rename</button>
+                            <button id="settingsMcpDeleteBtn" type="button" class="btn btn-danger">Delete</button>
+                            <button id="settingsMcpConnectBtn" type="button" class="btn btn-secondary">Connect</button>
+                            <button id="settingsMcpRestartBtn" type="button" class="btn btn-secondary">Restart</button>
+                            <button id="settingsMcpSaveBtn" type="button" class="btn btn-primary">Save MCP</button>
+                          </div>
+                        </div>
+                        <div id="settingsMcpInlineAction" class="settings-inline-action hidden"></div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <section id="settingsPluginsPanel" class="settings-tab-panel hidden">
+                  <div class="settings-section-head">
+                    <div>
+                      <h5>Plugins</h5>
+                      <p>Configure plugin packages and inspect available auth bridges so provider-specific integrations are visible instead of hidden in the backend.</p>
+                    </div>
+                    <div class="settings-section-actions">
+                      <button id="settingsPluginReloadBtn" type="button" class="btn btn-secondary">Reload</button>
+                      <button id="settingsPluginNewBtn" type="button" class="btn btn-primary">New Plugin</button>
+                    </div>
+                  </div>
+                  <div class="settings-grid settings-grid-wide">
+                    <aside class="settings-pane settings-pane-list">
+                      <div class="settings-subhead">Configured Plugins</div>
+                      <div id="settingsPluginList" class="settings-list"></div>
+                      <div class="settings-subhead">Auth Bridges</div>
+                      <div id="settingsPluginAuthList" class="settings-list settings-list-compact"></div>
+                    </aside>
+                    <div class="settings-pane settings-pane-editor">
+                      <div id="settingsPluginEmptyState" class="settings-empty-state">
+                        Select a plugin to edit package/path/runtime/options, or inspect auth bridges discovered from running plugins.
+                      </div>
+                      <div id="settingsPluginEditor" class="hidden">
+                        <div class="settings-grid">
+                          <div class="form-group">
+                            <label class="form-label" for="settingsPluginKey">Plugin Key</label>
+                            <input id="settingsPluginKey" class="form-input" type="text" placeholder="oh-my-opencode" />
+                          </div>
+                          <div class="form-group">
+                            <label class="form-label" for="settingsPluginType">Type</label>
+                            <select id="settingsPluginType" class="form-select">
+                              <option value="npm">npm</option>
+                              <option value="file">file</option>
+                              <option value="pip">pip</option>
+                              <option value="cargo">cargo</option>
+                              <option value="dylib">dylib</option>
+                            </select>
+                          </div>
+                          <div class="form-group">
+                            <label class="form-label" for="settingsPluginPackage">Package</label>
+                            <input id="settingsPluginPackage" class="form-input" type="text" placeholder="@scope/package" />
+                          </div>
+                          <div class="form-group">
+                            <label class="form-label" for="settingsPluginVersion">Version</label>
+                            <input id="settingsPluginVersion" class="form-input" type="text" placeholder="latest" />
+                          </div>
+                          <div class="form-group">
+                            <label class="form-label" for="settingsPluginPath">Path</label>
+                            <input id="settingsPluginPath" class="form-input" type="text" placeholder="./plugins/my-plugin" />
+                          </div>
+                          <div class="form-group">
+                            <label class="form-label" for="settingsPluginRuntime">Runtime</label>
+                            <input id="settingsPluginRuntime" class="form-input" type="text" placeholder="bun / python3.11" />
+                          </div>
+                        </div>
+                        <div class="form-group">
+                          <label class="form-label" for="settingsPluginOptions">Options (JSON)</label>
+                          <textarea id="settingsPluginOptions" class="form-input form-textarea settings-codearea" rows="5" placeholder='{"feature": true}'></textarea>
+                        </div>
+                        <div class="settings-footer-actions">
+                          <div id="settingsPluginStatus" class="text-tertiary">Plugin config is saved into the same /config authority used by CLI and TUI.</div>
+                          <div class="settings-section-actions">
+                            <button id="settingsPluginRenameBtn" type="button" class="btn btn-secondary">Rename</button>
+                            <button id="settingsPluginDeleteBtn" type="button" class="btn btn-danger">Delete</button>
+                            <button id="settingsPluginSaveBtn" type="button" class="btn btn-primary">Save Plugin</button>
+                          </div>
+                        </div>
+                        <div id="settingsPluginInlineAction" class="settings-inline-action hidden"></div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <section id="settingsLspPanel" class="settings-tab-panel hidden">
+                  <div class="settings-section-head">
+                    <div>
+                      <h5>LSP & Formatter</h5>
+                      <p>Inspect backend status and edit the current authority for language servers and formatters without dropping to manual config editing.</p>
+                    </div>
+                    <div class="settings-section-actions">
+                      <button id="settingsLspReloadBtn" type="button" class="btn btn-secondary">Reload</button>
+                      <button id="settingsLspSaveBtn" type="button" class="btn btn-primary">Save LSP / Formatter</button>
+                    </div>
+                  </div>
+                  <div id="settingsLspStatusSummary" class="settings-inline-meta"></div>
+                  <div class="settings-grid">
+                    <div class="form-group">
+                      <label class="form-label" for="settingsLspConfig">LSP Config (JSON)</label>
+                      <textarea id="settingsLspConfig" class="form-input form-textarea settings-codearea settings-codearea-lg" rows="16" placeholder='{"rust-analyzer": {"command": ["rust-analyzer"], "extensions": [".rs"]}}'></textarea>
+                    </div>
+                    <div class="form-group">
+                      <label class="form-label" for="settingsFormatterConfig">Formatter Config (JSON)</label>
+                      <textarea id="settingsFormatterConfig" class="form-input form-textarea settings-codearea settings-codearea-lg" rows="16" placeholder='{"prettier": {"command": ["prettier", "--write"], "extensions": [".ts", ".tsx"]}}'></textarea>
+                    </div>
+                  </div>
+                  <div id="settingsLspStatus" class="text-tertiary">Save writes both `lsp` and `formatter` authority in one PATCH.</div>
+                </section>
+
+                <section id="settingsCommandsPanel" class="settings-tab-panel hidden">
+                  <div class="form-group">
+                    <label class="form-label">Shared Commands</label>
+                    <div id="commandCatalog" style="display: grid; gap: var(--space-2); max-height: 420px; overflow-y: auto;"></div>
+                  </div>
+                </section>
+
+                <section id="settingsSessionsPanel" class="settings-tab-panel hidden">
+                  <div class="form-group">
+                    <label class="form-label">Session Actions</label>
+                    <div style="display: grid; gap: var(--space-2); grid-template-columns: repeat(3, 1fr);">
+                      <button id="commandSessionNewBtn" class="btn btn-secondary">New</button>
+                      <button id="commandSessionForkBtn" class="btn btn-secondary">Fork</button>
+                      <button id="commandSessionCompactBtn" class="btn btn-secondary">Compact</button>
+                      <button id="commandSessionRenameBtn" class="btn btn-secondary">Rename</button>
+                      <button id="commandSessionShareBtn" class="btn btn-secondary">Share</button>
+                      <button id="commandSessionDeleteBtn" class="btn btn-danger">Delete</button>
+                    </div>
+                    <div id="commandSessionList" style="margin-top: var(--space-3); display: grid; gap: var(--space-2); max-height: 280px; overflow-y: auto;"></div>
+                  </div>
+                </section>
               </div>
             </div>
           </div>
@@ -171,23 +595,23 @@
 
         <!-- QUESTION PANEL -->
         <section id="questionPanel" class="overlay hidden" role="dialog" aria-modal="true">
-          <div class="modal" style="max-width: 560px;">
+          <div class="modal compact-modal">
             <header class="modal-header">
               <div>
                 <h4 id="questionPanelTitle" class="modal-title">Answer Question</h4>
-                <div style="display: flex; gap: var(--space-2); margin-top: var(--space-2);">
+                <div class="modal-meta-strip">
                   <span id="questionPanelStatus" class="badge">Pending</span>
                   <span id="questionPanelMeta" class="text-tertiary">Question</span>
                 </div>
               </div>
-              <div style="display: flex; gap: var(--space-2);">
+              <div class="modal-actions">
                 <button id="questionRejectBtn" class="btn btn-danger" type="button">Reject</button>
                 <button id="questionClose" class="btn btn-secondary" type="button">Close</button>
               </div>
             </header>
-            <form id="questionForm" class="modal-body" style="display: flex; flex-direction: column; gap: var(--space-4);">
-              <div id="questionList" style="display: flex; flex-direction: column; gap: var(--space-3);"></div>
-              <div style="display: flex; justify-content: flex-end;">
+            <form id="questionForm" class="modal-body modal-form">
+              <div id="questionList" class="modal-stack modal-stack-tight"></div>
+              <div class="modal-footer-inline">
                 <button id="questionSubmitBtn" class="btn btn-primary" type="submit">Submit Answers</button>
               </div>
             </form>
@@ -195,23 +619,23 @@
         </section>
 
         <section id="permissionPanel" class="overlay hidden" role="dialog" aria-modal="true">
-          <div class="modal" style="max-width: 560px;">
+          <div class="modal compact-modal">
             <header class="modal-header">
               <div>
                 <h4 id="permissionPanelTitle" class="modal-title">Permission Request</h4>
-                <div style="display: flex; gap: var(--space-2); margin-top: var(--space-2);">
+                <div class="modal-meta-strip">
                   <span id="permissionPanelStatus" class="badge">Pending</span>
                   <span id="permissionPanelMeta" class="text-tertiary">Permission</span>
                 </div>
               </div>
-              <div style="display: flex; gap: var(--space-2);">
+              <div class="modal-actions">
                 <button id="permissionRejectBtn" class="btn btn-danger" type="button">Reject</button>
                 <button id="permissionClose" class="btn btn-secondary" type="button">Close</button>
               </div>
             </header>
-            <div class="modal-body" style="display: flex; flex-direction: column; gap: var(--space-4);">
-              <div id="permissionBody" style="display: flex; flex-direction: column; gap: var(--space-3);"></div>
-              <div style="display: flex; justify-content: flex-end; gap: var(--space-2);">
+            <div class="modal-body modal-form">
+              <div id="permissionBody" class="modal-stack modal-stack-tight"></div>
+              <div class="modal-footer-inline modal-footer-inline-spread">
                 <button id="permissionAllowBtn" class="btn btn-secondary" type="button">Allow Once</button>
                 <button id="permissionAlwaysBtn" class="btn btn-primary" type="button">Allow Always</button>
               </div>

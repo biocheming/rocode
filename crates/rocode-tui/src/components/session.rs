@@ -745,13 +745,7 @@ impl SessionView {
                                     prev_was_tool = false;
                                 }
                                 MessagePart::Reasoning { text } => {
-                                    // Hide reasoning in scheduler stage messages to reduce noise.
-                                    let is_stage_msg = msg
-                                        .metadata
-                                        .as_ref()
-                                        .and_then(|m| m.get("scheduler_stage"))
-                                        .is_some();
-                                    if show_thinking && !is_stage_msg {
+                                    if show_thinking {
                                         if prev_was_text || prev_was_tool {
                                             append_message_lines(
                                                 &mut lines,

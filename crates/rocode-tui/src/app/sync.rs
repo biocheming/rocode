@@ -21,6 +21,15 @@ impl App {
             self.context.clone(),
             session_id.to_string(),
         ));
+
+        // Update the SSE session filter so the listener reconnects
+        // with server-side filtering for this session.
+        if let Ok(mut filter) = self.sse_session_filter.lock() {
+            *filter = Some(session_id.to_string());
+        }
+
+        // Fetch initial runtime state for the new session.
+        self.refresh_session_runtime(session_id);
     }
 
     /// Refresh the cached execution topology when the server notifies us of a change.
@@ -35,6 +44,30 @@ impl App {
         };
         if let Ok(topology) = client.get_session_executions(session_id) {
             *self.context.execution_topology.write() = Some(topology);
+        }
+    }
+
+    /// Refresh the aggregated session runtime state from the server.
+    ///
+    /// Called on `session.status` events and periodically to keep the
+    /// TUI's runtime snapshot in sync without deriving it from individual
+    /// SSE events.
+    pub(super) fn refresh_session_runtime(&mut self, session_id: &str) {
+        let current = self.current_session_id();
+        if current.as_deref() != Some(session_id) {
+            return;
+        }
+        let client = self.context.api_client.read();
+        let Some(client) = client.as_ref() else {
+            return;
+        };
+        match client.get_session_runtime(session_id) {
+            Ok(runtime) => {
+                *self.context.session_runtime.write() = Some(runtime);
+            }
+            Err(err) => {
+                tracing::debug!(%err, session_id, "failed to fetch session runtime");
+            }
         }
     }
 

@@ -1,4 +1,5 @@
 pub(crate) mod events;
+pub(crate) mod state;
 
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -12,8 +13,8 @@ use crate::runtime_control::{ExecutionPatch, ExecutionStatus, FieldUpdate};
 use crate::ServerState;
 use rocode_command::output_blocks::{
     MessageBlock, MessageRole as OutputMessageRole, OutputBlock, ReasoningBlock,
-    SchedulerDecisionBlock, SchedulerDecisionField, SchedulerDecisionRenderSpec,
-    SchedulerDecisionSection, SchedulerStageBlock,
+    SchedulerDecisionBlock, SchedulerDecisionField, SchedulerDecisionRenderSpec, SchedulerDecisionSection,
+    SchedulerStageBlock,
 };
 use rocode_orchestrator::{
     parse_execution_gate_decision, parse_route_decision, scheduler_stage_observability,
@@ -40,6 +41,8 @@ struct ActiveStageMessage {
     child_message_id: Option<String>,
     /// Whether a reasoning stream has started for the child-session assistant message.
     child_reasoning_started: bool,
+    /// Whether a reasoning stream has started for the main session message.
+    reasoning_started: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -583,6 +586,12 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
             )
             .await;
 
+        // Update aggregated runtime state.
+        self.state
+            .runtime_state
+            .tool_started(&self.session_id, tool_call_id, tool_name)
+            .await;
+
         self.update_active_stage_message(
             |message, _active| {
                 apply_stage_capability_activity_evidence(
@@ -659,6 +668,12 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
         self.state
             .runtime_control
             .finish_tool_call(tool_call_id)
+            .await;
+
+        // Update aggregated runtime state.
+        self.state
+            .runtime_state
+            .tool_ended(&self.session_id, tool_call_id)
             .await;
 
         self.update_active_stage_message(
@@ -876,6 +891,11 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                 self.session_id.clone(),
                 child_sid.clone(),
             );
+            // Update aggregated runtime state.
+            self.state
+                .runtime_state
+                .child_attached(&self.session_id, child_sid)
+                .await;
             self.emit_output_block(
                 child_sid.clone(),
                 OutputBlock::Message(MessageBlock::start(OutputMessageRole::Assistant)),
@@ -1032,6 +1052,7 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                 child_session_id,
                 child_message_id,
                 child_reasoning_started: false,
+                reasoning_started: false,
             });
     }
 
@@ -1111,7 +1132,7 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
             "on_scheduler_stage_reasoning called"
         );
 
-        let (message_id, child_session_id, child_message_id, start_child_reasoning) = {
+        let (message_id, child_session_id, child_message_id, start_child_reasoning, start_reasoning) = {
             let mut guard = self.active_stage_messages.lock().await;
             match guard.last_mut() {
                 Some(active) => {
@@ -1121,11 +1142,17 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                     if start_child_reasoning {
                         active.child_reasoning_started = true;
                     }
+                    // For main session (non-child), track reasoning started
+                    let start_reasoning = active.child_session_id.is_none() && !active.reasoning_started;
+                    if start_reasoning {
+                        active.reasoning_started = true;
+                    }
                     (
                         Some(active.message_id.clone()),
                         active.child_session_id.clone(),
                         active.child_message_id.clone(),
                         start_child_reasoning,
+                        start_reasoning,
                     )
                 }
                 None => {
@@ -1139,12 +1166,12 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                             .rev()
                             .find(|m| m.role == MessageRole::Assistant)
                         {
-                            (Some(last_assistant.id.clone()), None, None, false)
+                            (Some(last_assistant.id.clone()), None, None, false, false)
                         } else {
-                            (None, None, None, false)
+                            (None, None, None, false, false)
                         }
                     } else {
-                        (None, None, None, false)
+                        (None, None, None, false, false)
                     }
                 }
             }
@@ -1181,6 +1208,22 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
             .await;
             return;
         }
+
+        // Non-child session: emit reasoning events for TUI/CLI to display
+        if start_reasoning {
+            self.emit_output_block(
+                self.session_id.clone(),
+                OutputBlock::Reasoning(ReasoningBlock::start()),
+                Some(message_id.clone()),
+            )
+            .await;
+        }
+        self.emit_output_block(
+            self.session_id.clone(),
+            OutputBlock::Reasoning(ReasoningBlock::delta(reasoning_delta.to_string())),
+            Some(message_id.clone()),
+        )
+        .await;
 
         let mut sessions = self.state.sessions.lock().await;
         let Some(mut session) = sessions.get(&self.session_id).cloned() else {
@@ -1339,6 +1382,21 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                         self.session_id.clone(),
                         child_sid.clone(),
                     );
+                    // Update aggregated runtime state.
+                    self.state
+                        .runtime_state
+                        .child_detached(&self.session_id, &child_sid)
+                        .await;
+                } else {
+                    // Non-child session: emit reasoning end if reasoning was started
+                    if active.reasoning_started {
+                        self.emit_output_block(
+                            self.session_id.clone(),
+                            OutputBlock::Reasoning(ReasoningBlock::end()),
+                            Some(active.message_id.clone()),
+                        )
+                        .await;
+                    }
                 }
                 self.state
                     .runtime_control
@@ -2801,6 +2859,7 @@ pub(crate) async fn ensure_default_session_title(
 mod tests {
     use super::*;
     use futures::stream;
+    use rocode_command::output_blocks::MessagePhase;
     use rocode_provider::{
         ChatRequest, ChatResponse, Choice, Content, Message, ModelInfo, Provider, ProviderError,
         Role, StreamResult,
@@ -3505,6 +3564,94 @@ mod tests {
                 && reasoning_end == &ReasoningBlock::end()
                 && message_end == &MessageBlock::end(OutputMessageRole::Assistant)
         ));
+    }
+
+    #[tokio::test]
+    async fn lifecycle_hook_emits_reasoning_blocks_for_non_child_session() {
+        let state = Arc::new(ServerState::new());
+        let session_id = {
+            let mut sessions = state.sessions.lock().await;
+            sessions.create("project", ".").id
+        };
+        let emitted = Arc::new(StdMutex::new(Vec::<OutputBlockEvent>::new()));
+        let emitted_hook = emitted.clone();
+        let exec_ctx = OrchestratorExecutionContext {
+            session_id: session_id.clone(),
+            workdir: ".".to_string(),
+            agent_name: "atlas".to_string(),
+            metadata: HashMap::new(),
+        };
+        let hook = SessionSchedulerLifecycleHook::new(
+            state.clone(),
+            session_id.clone(),
+            "atlas".to_string(),
+        )
+        .with_output_hook(Some(Arc::new(move |event| {
+            let emitted_hook = emitted_hook.clone();
+            Box::pin(async move {
+                emitted_hook
+                    .lock()
+                    .expect("output block lock should not poison")
+                    .push(event);
+            })
+        })));
+
+        // Start stage without child session (child_session: false)
+        hook.on_scheduler_stage_start(
+            "atlas",
+            "execution-orchestration",
+            1,
+            Some(&SchedulerStageCapabilities {
+                skill_list: vec![],
+                agents: vec![],
+                categories: vec![],
+                child_session: false,
+            }),
+            &exec_ctx,
+        )
+        .await;
+        hook.on_scheduler_stage_reasoning(
+            "execution-orchestration",
+            1,
+            "main session reasoning",
+            &exec_ctx,
+        )
+        .await;
+        hook.on_scheduler_stage_end(
+            "atlas",
+            "execution-orchestration",
+            1,
+            1,
+            "Final content",
+            &exec_ctx,
+        )
+        .await;
+
+        let emitted_blocks = emitted.lock().expect("emitted blocks").clone();
+
+        // Should emit reasoning start, delta, and end blocks
+        let reasoning_start = emitted_blocks.iter().find(|e| {
+            matches!(&e.block, OutputBlock::Reasoning(b) if b.phase == MessagePhase::Start)
+        });
+        let reasoning_delta = emitted_blocks.iter().find(|e| {
+            matches!(&e.block, OutputBlock::Reasoning(b) if b.text == "main session reasoning")
+        });
+        let reasoning_end = emitted_blocks.iter().find(|e| {
+            matches!(&e.block, OutputBlock::Reasoning(b) if b.phase == MessagePhase::End)
+        });
+
+        assert!(
+            reasoning_start.is_some(),
+            "should emit reasoning start for non-child session"
+        );
+        assert!(
+            reasoning_delta.is_some(),
+            "should emit reasoning delta for non-child session"
+        );
+        assert!(
+            reasoning_end.is_some(),
+            "should emit reasoning end for non-child session"
+        );
     }
 
     #[tokio::test]

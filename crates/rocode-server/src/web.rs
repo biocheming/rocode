@@ -80,6 +80,8 @@ const APP_JS: &str = concat!(
     "\n",
     include_str!("../web/js/commands.js"),
     "\n",
+    include_str!("../web/js/terminal.js"),
+    "\n",
     include_str!("../web/js/streaming.js"),
     "\n",
     include_str!("../web/js/global-events.js"),

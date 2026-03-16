@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::{Arc, Mutex as StdMutex};
 
 pub(super) fn env_var_enabled(name: &str) -> bool {
     let Ok(value) = std::env::var(name) else {
@@ -50,7 +51,15 @@ pub(super) fn resolve_tui_base_url() -> String {
     "http://localhost:3000".to_string()
 }
 
-pub(super) fn spawn_server_event_listener(event_tx: Sender<Event>, base_url: String) {
+/// Shared session filter. Updated by the app when the active session changes.
+/// The SSE listener thread reads this on each reconnect to build the URL.
+pub(super) type SessionFilter = Arc<StdMutex<Option<String>>>;
+
+pub(super) fn spawn_server_event_listener(
+    event_tx: Sender<Event>,
+    base_url: String,
+    session_filter: SessionFilter,
+) {
     thread::spawn(move || {
         let client = match reqwest::blocking::Client::builder()
             .connect_timeout(Duration::from_secs(2))
@@ -63,15 +72,32 @@ pub(super) fn spawn_server_event_listener(event_tx: Sender<Event>, base_url: Str
             }
         };
 
-        let event_url = format!("{}/event", base_url.trim_end_matches('/'));
+        let base_event_url = format!("{}/event", base_url.trim_end_matches('/'));
         loop {
+            // Read current session filter and build the SSE URL.
+            let current_filter = session_filter
+                .lock()
+                .ok()
+                .and_then(|guard| guard.clone());
+            let event_url = match &current_filter {
+                Some(sid) => format!("{}?session={}", base_event_url, sid),
+                None => base_event_url.clone(),
+            };
+
             match client
                 .get(&event_url)
                 .header(reqwest::header::ACCEPT, "text/event-stream")
                 .send()
             {
                 Ok(response) if response.status().is_success() => {
-                    consume_server_event_stream(response, &event_tx);
+                    consume_server_event_stream(
+                        response,
+                        &event_tx,
+                        &session_filter,
+                        &current_filter,
+                    );
+                    // consume returned — either stream ended or filter changed.
+                    // Loop around to reconnect with potentially new filter.
                 }
                 Ok(response) => {
                     tracing::debug!(
@@ -94,7 +120,12 @@ pub(super) fn spawn_server_event_listener(event_tx: Sender<Event>, base_url: Str
     });
 }
 
-fn consume_server_event_stream(response: reqwest::blocking::Response, event_tx: &Sender<Event>) {
+fn consume_server_event_stream(
+    response: reqwest::blocking::Response,
+    event_tx: &Sender<Event>,
+    session_filter: &SessionFilter,
+    connected_filter: &Option<String>,
+) {
     let mut reader = BufReader::new(response);
     let mut line = String::new();
     let mut data_lines: Vec<String> = Vec::new();
@@ -111,6 +142,23 @@ fn consume_server_event_stream(response: reqwest::blocking::Response, event_tx: 
                 if trimmed.is_empty() {
                     forward_server_event(&data_lines, event_tx);
                     data_lines.clear();
+
+                    // After each complete event frame, check whether the
+                    // session filter has changed. If so, break out to
+                    // trigger a reconnect with the updated URL.
+                    let current = session_filter
+                        .lock()
+                        .ok()
+                        .and_then(|guard| guard.clone());
+                    if current != *connected_filter {
+                        tracing::debug!(
+                            old = ?connected_filter,
+                            new = ?current,
+                            "session filter changed, reconnecting SSE"
+                        );
+                        break;
+                    }
+
                     continue;
                 }
                 if trimmed.starts_with(':') {

@@ -307,6 +307,21 @@ pub(super) async fn set_session_run_status(
         .set_session_run_status(session_id, status.clone())
         .await;
 
+    // Mirror run-status transition into the aggregated SessionRuntimeState.
+    match &status {
+        SessionRunStatus::Busy => {
+            state.runtime_state.mark_running(session_id, None).await;
+        }
+        SessionRunStatus::Idle => {
+            state.runtime_state.mark_idle(session_id).await;
+        }
+        SessionRunStatus::Retry { .. } => {
+            // Retry is still a "running" variant from the runtime state
+            // perspective — the session is not idle.
+            state.runtime_state.mark_running(session_id, None).await;
+        }
+    }
+
     state.broadcast(
         &serde_json::json!({
             "type": "session.status",
@@ -496,8 +511,29 @@ pub(super) async fn delete_session(
         .runtime_control
         .set_session_run_status(&id, SessionRunStatus::Idle)
         .await;
+    state.runtime_state.remove(&id).await;
     persist_sessions_if_enabled(&state).await;
     Ok(Json(serde_json::json!({ "deleted": true })))
+}
+
+/// `GET /session/{id}/runtime` — aggregated runtime state snapshot for a session.
+pub(super) async fn get_session_runtime(
+    State(state): State<Arc<ServerState>>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::session_runtime::state::SessionRuntimeState>> {
+    match state.runtime_state.get(&id).await {
+        Some(runtime) => Ok(Json(runtime)),
+        None => {
+            // Session may exist but never had a prompt run. Return a default idle state.
+            let sessions = state.sessions.lock().await;
+            if sessions.get(&id).is_some() {
+                drop(sessions);
+                Ok(Json(crate::session_runtime::state::SessionRuntimeState::new(id)))
+            } else {
+                Err(ApiError::SessionNotFound(id))
+            }
+        }
+    }
 }
 
 pub(super) async fn get_session_children(

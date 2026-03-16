@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en" data-theme="daylight">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ROCode Settings Preview</title>
+    <link rel="stylesheet" href="./styles/app.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <div class="sidebar-brand">
+            <div class="sidebar-brand-copy">
+              <span class="sidebar-title">ROCode</span>
+              <span class="sidebar-subtitle">Chats</span>
+            </div>
+          </div>
+          <div class="sidebar-actions">
+            <button class="sidebar-btn" type="button">
+              <span class="icon-glyph" aria-hidden="true">⊕</span>
+            </button>
+          </div>
+        </div>
+        <div class="sidebar-search">
+          <input type="text" value="settings" />
+        </div>
+      </aside>
+
+      <main class="workspace"></main>
+    </div>
+
+    <section class="overlay" role="dialog" aria-modal="true">
+      <div class="modal settings-modal">
+        <header class="modal-header">
+          <div>
+            <h4 class="modal-title">Settings</h4>
+            <div class="modal-meta-strip">
+              <span class="badge ok">ready</span>
+              <span class="text-tertiary">Idle</span>
+            </div>
+          </div>
+          <div class="modal-actions">
+            <button class="btn btn-secondary" type="button">Close</button>
+          </div>
+        </header>
+        <div class="modal-body settings-modal-body">
+          <div class="settings-shell">
+            <nav class="settings-tab-list" aria-label="Settings Sections">
+              <button type="button" class="settings-tab-btn">General</button>
+              <button type="button" class="settings-tab-btn active">Providers</button>
+              <button type="button" class="settings-tab-btn">Scheduler</button>
+              <button type="button" class="settings-tab-btn">MCP</button>
+              <button type="button" class="settings-tab-btn">Plugins</button>
+              <button type="button" class="settings-tab-btn">LSP</button>
+              <button type="button" class="settings-tab-btn">Commands</button>
+              <button type="button" class="settings-tab-btn">Sessions</button>
+            </nav>
+
+            <section class="settings-tab-panel">
+              <div class="settings-section-head">
+                <div>
+                  <h5>Providers & Models</h5>
+                  <p>Manage provider credentials, runtime IDs, base URLs, and model catalogs from the same authority used by CLI and TUI.</p>
+                </div>
+                <div class="settings-section-actions">
+                  <button type="button" class="btn btn-secondary">Reload</button>
+                  <button type="button" class="btn btn-primary">New Provider</button>
+                </div>
+              </div>
+
+              <div class="settings-grid settings-grid-wide">
+                <aside class="settings-pane settings-pane-list">
+                  <div class="settings-subhead">Configured</div>
+                  <div class="settings-list">
+                    <button type="button" class="settings-item active">
+                      <span class="settings-item-title">opencode</span>
+                      <span class="settings-item-meta">2 models</span>
+                    </button>
+                    <button type="button" class="settings-item">
+                      <span class="settings-item-title">zhipuai-coding-plan</span>
+                      <span class="settings-item-meta">1 model</span>
+                    </button>
+                  </div>
+                </aside>
+
+                <div class="settings-pane settings-pane-editor">
+                  <div class="form-group">
+                    <label class="form-label">Provider Key</label>
+                    <input class="form-input" type="text" value="opencode" />
+                  </div>
+                  <div class="settings-grid">
+                    <div class="form-group">
+                      <label class="form-label">Runtime ID</label>
+                      <input class="form-input" type="text" value="opencode" />
+                    </div>
+                    <div class="form-group">
+                      <label class="form-label">Display Name</label>
+                      <input class="form-input" type="text" value="OpenCode" />
+                    </div>
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Base URL</label>
+                    <input class="form-input" type="text" value="https://api.example.dev/v1" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">API Key</label>
+                    <input class="form-input" type="password" value="sk-live-demo" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Models</label>
+                    <div class="settings-list">
+                      <button type="button" class="settings-item active">
+                        <span class="settings-item-title">gpt-5</span>
+                        <span class="settings-item-meta">reasoning + tools</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="settings-footer-actions">
+                    <span class="text-tertiary">Saved to shared config authority.</span>
+                    <div class="settings-section-actions">
+                      <button type="button" class="btn btn-secondary">Rename</button>
+                      <button type="button" class="btn btn-danger">Delete</button>
+                      <button type="button" class="btn btn-primary">Save Provider</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </section>
+  </body>
+</html>

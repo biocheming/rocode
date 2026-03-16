@@ -29,7 +29,7 @@ pub use session::*;
 pub use tui::*;
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::HeaderMap,
     response::sse::{Event, Sse},
     routing::{get, post, put},
@@ -169,22 +169,66 @@ async fn write_log(Json(req): Json<WriteLogRequest>) -> Result<Json<bool>> {
     Ok(Json(true))
 }
 
+#[derive(Debug, Deserialize)]
+struct EventStreamQuery {
+    /// Optional session ID to filter events by. When set, only events belonging
+    /// to this session (or global events like `config.updated`) are forwarded.
+    #[serde(default)]
+    session: Option<String>,
+}
+
 async fn event_stream(
     State(state): State<Arc<ServerState>>,
+    Query(query): Query<EventStreamQuery>,
 ) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
-    stream_server_events(state.event_bus.subscribe())
+    stream_server_events(state.event_bus.subscribe(), query.session)
 }
 
 const EVENT_OUTPUT_BLOCK_BATCH_MS: u64 = 24;
 
 pub(crate) fn stream_server_events(
     mut rx: broadcast::Receiver<String>,
+    session_filter: Option<String>,
 ) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
     let (tx, out_rx) = mpsc::channel(128);
 
     tokio::spawn(async move {
         let mut pending: Option<ServerEvent> = None;
         let delay = std::time::Duration::from_millis(EVENT_OUTPUT_BLOCK_BATCH_MS);
+
+        // Closure to check if an event matches the session filter.
+        // Global events (session_id == None) always pass through.
+        let matches_filter = |event: &ServerEvent| -> bool {
+            let Some(ref filter) = session_filter else {
+                return true; // no filter — pass everything
+            };
+            match event.session_id() {
+                Some(sid) => sid == filter.as_str(),
+                None => true, // global events pass through
+            }
+        };
+
+        // Same check but for raw JSON strings that failed to parse as ServerEvent.
+        // Extract "sessionID" from JSON to apply filter.
+        let raw_matches_filter = |raw: &str| -> bool {
+            let Some(ref filter) = session_filter else {
+                return true;
+            };
+            // Fast-path: if no "sessionID" key, treat as global.
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+                return true;
+            };
+            match value.get("sessionID").and_then(|v| v.as_str()) {
+                Some(sid) => sid == filter.as_str(),
+                None => {
+                    // Also check "parentID" for child_session events.
+                    match value.get("parentID").and_then(|v| v.as_str()) {
+                        Some(pid) => pid == filter.as_str(),
+                        None => true, // global event
+                    }
+                }
+            }
+        };
 
         loop {
             if pending.is_some() {
@@ -193,6 +237,10 @@ pub(crate) fn stream_server_events(
                         match recv {
                             Ok(raw) => {
                                 if let Some(next) = parse_server_event(&raw) {
+                                    // Apply session filter — skip events for other sessions.
+                                    if !matches_filter(&next) {
+                                        continue;
+                                    }
                                     if let Some(current) = pending.as_mut() {
                                         if merge_output_block_delta(current, &next) {
                                             continue;
@@ -209,6 +257,10 @@ pub(crate) fn stream_server_events(
                                         break;
                                     }
                                 } else {
+                                    // Raw event that didn't parse — apply filter on raw JSON.
+                                    if !raw_matches_filter(&raw) {
+                                        continue;
+                                    }
                                     if let Some(flushed) = pending.take() {
                                         if send_server_event_json(&tx, &flushed).await.is_err() {
                                             break;
@@ -246,13 +298,23 @@ pub(crate) fn stream_server_events(
                 match rx.recv().await {
                     Ok(raw) => {
                         if let Some(event) = parse_server_event(&raw) {
+                            // Apply session filter.
+                            if !matches_filter(&event) {
+                                continue;
+                            }
                             if is_mergeable_output_delta(&event) {
                                 pending = Some(event);
                             } else if send_server_event_json(&tx, &event).await.is_err() {
                                 break;
                             }
-                        } else if send_raw_server_event(&tx, raw).await.is_err() {
-                            break;
+                        } else {
+                            // Raw event — apply filter on raw JSON.
+                            if !raw_matches_filter(&raw) {
+                                continue;
+                            }
+                            if send_raw_server_event(&tx, raw).await.is_err() {
+                                break;
+                            }
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => {}

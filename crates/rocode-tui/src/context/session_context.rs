@@ -324,6 +324,7 @@ impl SessionContext {
         text: &str,
     ) {
         if message_id.is_empty() {
+            tracing::warn!("update_reasoning_incremental called with empty message_id for session {session_id}");
             return;
         }
         let messages = self.messages.entry(session_id.to_string()).or_default();
@@ -458,12 +459,9 @@ impl SessionContext {
             "start" => {
                 message.role = role;
                 message.content.clear();
-                message.parts.retain(|part| {
-                    !matches!(
-                        part,
-                        MessagePart::Text { .. } | MessagePart::Reasoning { .. }
-                    )
-                });
+                message
+                    .parts
+                    .retain(|part| !matches!(part, MessagePart::Text { .. }));
             }
             "delta" => {
                 if let Some(MessagePart::Text { text: existing }) = message
@@ -501,7 +499,25 @@ impl SessionContext {
         block_id: Option<&str>,
         payload: &serde_json::Value,
     ) {
-        let message_id = block_id.unwrap_or_default();
+        // When block_id is None or empty, fall back to the last assistant message
+        // for this session so reasoning is not silently discarded.
+        let fallback_id;
+        let message_id = match block_id {
+            Some(id) if !id.is_empty() => id,
+            _ => {
+                fallback_id = self
+                    .messages
+                    .get(session_id)
+                    .and_then(|msgs| {
+                        msgs.iter()
+                            .rev()
+                            .find(|m| m.role == MessageRole::Assistant)
+                            .map(|m| m.id.clone())
+                    })
+                    .unwrap_or_else(|| format!("_reasoning_{session_id}"));
+                &fallback_id
+            }
+        };
         let phase = payload
             .get("phase")
             .and_then(|value| value.as_str())
@@ -1013,5 +1029,52 @@ mod tests {
             .and_then(|messages| messages.iter().find(|message| message.id == "assistant-1"))
             .expect("child assistant message");
         assert!(message.content.contains("hello child"));
+    }
+
+    #[test]
+    fn message_start_preserves_existing_reasoning_parts() {
+        let mut ctx = SessionContext::new();
+
+        ctx.apply_output_block_incremental(
+            "session-1",
+            Some("assistant-1"),
+            &json!({
+                "kind": "reasoning",
+                "phase": "start",
+                "text": ""
+            }),
+        );
+        ctx.apply_output_block_incremental(
+            "session-1",
+            Some("assistant-1"),
+            &json!({
+                "kind": "reasoning",
+                "phase": "delta",
+                "text": "thinking..."
+            }),
+        );
+        ctx.apply_output_block_incremental(
+            "session-1",
+            Some("assistant-1"),
+            &json!({
+                "kind": "message",
+                "phase": "start",
+                "role": "assistant",
+                "text": ""
+            }),
+        );
+
+        let message = ctx
+            .messages
+            .get("session-1")
+            .and_then(|messages| messages.iter().find(|message| message.id == "assistant-1"))
+            .expect("assistant message");
+
+        assert!(message.parts.iter().any(|part| {
+            matches!(
+                part,
+                MessagePart::Reasoning { text } if text == "thinking..."
+            )
+        }));
     }
 }

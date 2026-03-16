@@ -220,6 +220,7 @@ pub struct ServerState {
     pub(crate) message_repo: Option<MessageRepository>,
     pub category_registry: Arc<rocode_config::CategoryRegistry>,
     pub(crate) todo_manager: rocode_session::TodoManager,
+    pub(crate) runtime_state: Arc<crate::session_runtime::state::RuntimeStateStore>,
 }
 
 pub struct ApiPerfCounters {
@@ -303,6 +304,7 @@ impl ServerState {
             message_repo: None,
             category_registry: Arc::new(rocode_config::CategoryRegistry::empty()),
             todo_manager: rocode_session::TodoManager::new(),
+            runtime_state: Arc::new(crate::session_runtime::state::RuntimeStateStore::new()),
         }
     }
 

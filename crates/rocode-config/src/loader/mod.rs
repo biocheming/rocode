@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 pub(crate) use discovery::resolve_configured_path;
 pub use transforms::{
     deduplicate_plugins, get_plugin_name, load_config, load_config_with_remote, update_config,
-    update_global_config,
+    update_global_config, write_config,
 };
 
 use discovery::{

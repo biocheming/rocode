@@ -39,10 +39,10 @@ use self::recovery::{execute_session_recovery, get_session_recovery};
 use self::session_crud::{
     archive_session, cancel_tool_call, clear_session_revert, create_session, delete_session,
     execute_command, execute_shell, fork_session, get_message, get_session, get_session_children,
-    get_session_diff, get_session_summary, get_session_todos, list_sessions, prompt_async,
-    session_revert, session_status, session_unrevert, set_session_permission, set_session_summary,
-    set_session_title, share_session, start_compaction, unshare_session, update_part,
-    update_session,
+    get_session_diff, get_session_runtime, get_session_summary, get_session_todos, list_sessions,
+    prompt_async, session_revert, session_status, session_unrevert, set_session_permission,
+    set_session_summary, set_session_title, share_session, start_compaction, unshare_session,
+    update_part, update_session,
 };
 
 use super::stream::stream_message;
@@ -59,6 +59,7 @@ pub(crate) fn session_routes() -> Router<Arc<ServerState>> {
                 .delete(delete_session),
         )
         .route("/{id}/children", get(get_session_children))
+        .route("/{id}/runtime", get(get_session_runtime))
         .route("/{id}/executions", get(get_session_executions))
         .route(
             "/{id}/executions/{execution_id}/cancel",

@@ -156,6 +156,7 @@ function clearFeed() {
   state.streamToolBlocks.clear();
   state.streamEventBlocks.clear();
   state.streamStageBlocks.clear();
+  state.childSessionLiveBlocks.clear();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

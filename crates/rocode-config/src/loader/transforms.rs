@@ -21,6 +21,19 @@ fn project_config_write_path(project_dir: &Path) -> PathBuf {
         .unwrap_or_else(|| project_dir.join(".rocode/rocode.json"))
 }
 
+fn write_config_file(config_path: &Path, config: &Config) -> Result<()> {
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let json =
+        serde_json::to_string_pretty(config).with_context(|| "Failed to serialize config")?;
+    fs::write(config_path, json)
+        .with_context(|| format!("Failed to write config to {:?}", config_path))?;
+
+    Ok(())
+}
+
 pub(super) fn merge_agent_config(target: &mut AgentConfig, source: AgentConfig) {
     if source.name.is_some() {
         target.name = source.name;
@@ -210,10 +223,6 @@ pub async fn load_config_with_remote<P: AsRef<Path>>(project_dir: P) -> Result<C
 pub fn update_config(project_dir: &Path, patch: &Config) -> Result<()> {
     let config_path = project_config_write_path(project_dir);
 
-    if let Some(parent) = config_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
     let existing = if config_path.exists() {
         let content = fs::read_to_string(&config_path)?;
         parse_jsonc(&content).unwrap_or_default()
@@ -223,13 +232,13 @@ pub fn update_config(project_dir: &Path, patch: &Config) -> Result<()> {
 
     let mut merged = existing;
     merged.merge(patch.clone());
+    write_config_file(&config_path, &merged)
+}
 
-    let json =
-        serde_json::to_string_pretty(&merged).with_context(|| "Failed to serialize config")?;
-    fs::write(&config_path, json)
-        .with_context(|| format!("Failed to write config to {:?}", config_path))?;
-
-    Ok(())
+/// Replace the project-level config with an already-updated full config.
+pub fn write_config(project_dir: &Path, config: &Config) -> Result<()> {
+    let config_path = project_config_write_path(project_dir);
+    write_config_file(&config_path, config)
 }
 
 /// Update global config by merging a patch.

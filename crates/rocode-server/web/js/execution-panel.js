@@ -1,5 +1,265 @@
 // ── Execution & Recovery Panels ────────────────────────────────────────────
 
+function childSessionIdForNode(node) {
+  if (!node) return null;
+  if (node.child_session_id) return node.child_session_id;
+  const meta = node.metadata || {};
+  return meta.child_session_id || meta.childSessionId || null;
+}
+
+function childSessionIdsFromTopology(topology = state.executionTopology) {
+  return new Set(
+    uniqueChildSessionEntries(collectChildSessionEntries((topology && topology.roots) || [])).map(
+      (entry) => entry.childSessionId
+    )
+  );
+}
+
+function ensureChildSessionLiveState(sessionId) {
+  if (!state.childSessionLiveBlocks.has(sessionId)) {
+    state.childSessionLiveBlocks.set(sessionId, []);
+  }
+  return state.childSessionLiveBlocks.get(sessionId);
+}
+
+function childSessionLiveSummary(sessionId) {
+  const entries = state.childSessionLiveBlocks.get(sessionId) || [];
+  const last = [...entries].reverse().find((entry) => entry && entry.text && String(entry.text).trim());
+  return last ? String(last.text).trim() : null;
+}
+
+function upsertChildSessionLiveBlock(sessionId, block) {
+  if (!sessionId || !block || !block.kind) return;
+  const entries = ensureChildSessionLiveState(sessionId);
+
+  if (block.kind === "message" || block.kind === "reasoning") {
+    const streamKind = block.kind;
+    const streamRole = block.role || null;
+    if (block.phase === "start") {
+      entries.push({ kind: streamKind, role: streamRole, text: "" });
+      return;
+    }
+    if (block.phase === "delta") {
+      const last = entries[entries.length - 1];
+      if (last && last.kind === streamKind && (last.role || null) === streamRole) {
+        last.text = `${last.text || ""}${block.text || ""}`;
+      } else {
+        entries.push({ kind: streamKind, role: streamRole, text: block.text || "" });
+      }
+      return;
+    }
+    if (block.phase === "end") {
+      return;
+    }
+    entries.push({ kind: streamKind, role: streamRole, text: block.text || "" });
+    return;
+  }
+
+  if (block.kind === "tool") {
+    const label = [block.name || "tool", block.phase || "running"].filter(Boolean).join(" · ");
+    const detail = block.output || block.text || block.input || "";
+    entries.push({ kind: "tool", text: detail ? `${label}\n${detail}` : label });
+    return;
+  }
+
+  if (block.kind === "scheduler_stage") {
+    const title = schedulerStageTitle(block);
+    const detail = schedulerStageText(block) || block.activity || block.last_event || "";
+    entries.push({ kind: "stage", text: detail ? `${title}\n${detail}` : title });
+    return;
+  }
+
+  if (block.kind === "status") {
+    entries.push({ kind: "status", text: block.text || "status" });
+  }
+}
+
+function focusedChildTranscriptMarkup(sessionId) {
+  const entries = state.childSessionLiveBlocks.get(sessionId) || [];
+  if (!entries.length) {
+    return `<div class="focused-child-empty">Waiting for live child output…</div>`;
+  }
+
+  return entries
+    .slice(-12)
+    .map((entry) => {
+      const label =
+        entry.kind === "reasoning"
+          ? "thinking"
+          : entry.kind === "message"
+            ? entry.role || "assistant"
+            : entry.kind;
+      return `
+        <article class="focused-child-entry focused-child-entry-${escapeHtml(entry.kind)}">
+          <div class="focused-child-entry-head">${escapeHtml(label)}</div>
+          <div class="focused-child-entry-body">${escapeHtml(entry.text || "")}</div>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function applyFocusedChildOutputBlockEvent(payload) {
+  if (!payload) return false;
+  const sessionId = payload.sessionID || payload.sessionId || null;
+  if (!sessionId || sessionId === state.selectedSession || sessionId !== state.focusedChildSessionId) {
+    return false;
+  }
+  if (!childSessionIdsFromTopology().has(sessionId)) {
+    return false;
+  }
+  const block = payload && payload.block ? payload.block : payload;
+  upsertChildSessionLiveBlock(sessionId, block);
+  renderChildSessionRail(state.executionTopology);
+  return true;
+}
+
+function collectChildSessionEntries(nodes, into = []) {
+  for (const node of nodes || []) {
+    const childSessionId = childSessionIdForNode(node);
+    if (childSessionId) {
+      into.push({
+        childSessionId,
+        label: node.label || humanExecutionKind(node.kind),
+        kind: node.kind || "agent_task",
+        status: node.status || "running",
+        waitingOn: node.waiting_on || null,
+        recentEvent: node.recent_event || null,
+        stageId: node.stage_id || null,
+        updatedAt: node.updated_at || Date.now(),
+      });
+    }
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      collectChildSessionEntries(node.children, into);
+    }
+  }
+  return into;
+}
+
+function uniqueChildSessionEntries(entries) {
+  const byId = new Map();
+  for (const entry of entries) {
+    const existing = byId.get(entry.childSessionId);
+    if (!existing || Number(entry.updatedAt) >= Number(existing.updatedAt)) {
+      byId.set(entry.childSessionId, entry);
+    }
+  }
+  return Array.from(byId.values()).sort((a, b) => Number(b.updatedAt) - Number(a.updatedAt));
+}
+
+function childSessionStatusTone(status) {
+  if (status === "done") return "success";
+  if (status === "waiting" || status === "retry") return "warning";
+  if (status === "cancelling") return "warning";
+  return "running";
+}
+
+function renderChildSessionRail(topology) {
+  const rail = nodes.childSessionRail;
+  const focusPanel = nodes.focusedChildPanel;
+  if (!rail || !focusPanel) return;
+
+  const entries = topology ? uniqueChildSessionEntries(collectChildSessionEntries(topology.roots || [])) : [];
+  if (!entries.length) {
+    state.focusedChildSessionId = null;
+    rail.classList.add("hidden");
+    rail.innerHTML = "";
+    focusPanel.classList.add("hidden");
+    focusPanel.innerHTML = "";
+    return;
+  }
+
+  rail.classList.remove("hidden");
+  if (!state.focusedChildSessionId || !entries.some((entry) => entry.childSessionId === state.focusedChildSessionId)) {
+    state.focusedChildSessionId = entries[0].childSessionId;
+  }
+
+  rail.innerHTML = `
+    <div class="child-session-rail-head">
+      <div>
+        <div class="child-session-rail-kicker">Child Sessions</div>
+        <h5>${entries.length} active branch${entries.length === 1 ? "" : "es"}</h5>
+      </div>
+      <p>Compressed by default. Focus one when you need detail.</p>
+    </div>
+    <div class="child-session-grid">
+      ${entries
+        .map((entry) => {
+          const active = entry.childSessionId === state.focusedChildSessionId ? " active" : "";
+          return `
+            <button class="child-session-card${active}" type="button" data-child-focus="${escapeHtml(entry.childSessionId)}">
+              <div class="child-session-card-head">
+                <span class="child-session-name">${escapeHtml(short(entry.label || entry.childSessionId, 28))}</span>
+                <span class="badge ${childSessionStatusTone(entry.status)}">${escapeHtml(entry.status)}</span>
+              </div>
+              <div class="child-session-card-meta">
+                <span>${escapeHtml(entry.kind)}</span>
+                ${entry.stageId ? `<span>${escapeHtml(short(entry.stageId, 18))}</span>` : ""}
+              </div>
+              <div class="child-session-card-summary">
+                ${escapeHtml(childSessionLiveSummary(entry.childSessionId) || entry.recentEvent || entry.waitingOn || "Live output available")}
+              </div>
+            </button>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+
+  rail.querySelectorAll("[data-child-focus]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.focusedChildSessionId = button.dataset.childFocus || null;
+      renderChildSessionRail(topology);
+    });
+  });
+
+  const focused = entries.find((entry) => entry.childSessionId === state.focusedChildSessionId) || entries[0];
+  focusPanel.classList.remove("hidden");
+  focusPanel.innerHTML = `
+    <div class="focused-child-head">
+      <div>
+        <div class="focused-child-kicker">Focused Child</div>
+        <h5>${escapeHtml(focused.label || focused.childSessionId)}</h5>
+      </div>
+      <div class="focused-child-actions">
+        <span class="badge ${childSessionStatusTone(focused.status)}">${escapeHtml(focused.status)}</span>
+        <button class="btn btn-secondary" type="button" data-open-focused-child>Open Session</button>
+      </div>
+    </div>
+    <div class="focused-child-grid">
+      <div class="focused-child-field">
+        <span class="focused-child-label">Execution</span>
+        <span>${escapeHtml(focused.kind)}</span>
+      </div>
+      <div class="focused-child-field">
+        <span class="focused-child-label">Waiting</span>
+        <span>${escapeHtml(focused.waitingOn || "\u2014")}</span>
+      </div>
+      <div class="focused-child-field">
+        <span class="focused-child-label">Recent</span>
+        <span>${escapeHtml(focused.recentEvent || "Live output available")}</span>
+      </div>
+      <div class="focused-child-field">
+        <span class="focused-child-label">Session ID</span>
+        <span>${escapeHtml(short(focused.childSessionId, 24))}</span>
+      </div>
+    </div>
+    <div class="focused-child-transcript">${focusedChildTranscriptMarkup(focused.childSessionId)}</div>
+  `;
+
+  const openButton = focusPanel.querySelector("[data-open-focused-child]");
+  if (openButton) {
+    openButton.addEventListener("click", () => {
+      if (!focused.childSessionId) return;
+      state.parentSessionId = state.selectedSession;
+      state.selectedSession = focused.childSessionId;
+      void loadMessages();
+      renderProjects();
+      syncInteractionState();
+    });
+  }
+}
+
 async function refreshSessionSnapshot(sessionId = state.selectedSession) {
   if (!sessionId) return null;
   const [sessionResponse, topologyResponse, recoveryResponse] = await Promise.all([
@@ -15,6 +275,7 @@ async function refreshSessionSnapshot(sessionId = state.selectedSession) {
     state.recoveryProtocol = recovery;
     updateSessionMeta(session);
     updateComposerMeta();
+    renderChildSessionRail(topology);
     renderExecutionPanel(topology);
     renderRecoveryPanel(recovery);
     updateRuntimeChrome();
@@ -26,6 +287,7 @@ async function refreshExecutionTopology(sessionId = state.selectedSession) {
   if (!sessionId) {
     state.executionTopology = null;
     state.recoveryProtocol = null;
+    renderChildSessionRail(null);
     renderExecutionPanel(null);
     renderRecoveryPanel(null);
     return null;
@@ -40,6 +302,7 @@ async function refreshExecutionTopology(sessionId = state.selectedSession) {
     state.executionTopology = topology;
     state.recoveryProtocol = recovery;
     updateSessionRuntimeMeta(currentSession());
+    renderChildSessionRail(topology);
     renderExecutionPanel(topology);
     renderRecoveryPanel(recovery);
     updateRuntimeChrome();
@@ -115,6 +378,7 @@ function renderExecutionNode(node) {
 function renderExecutionPanel(topology) {
   if (!nodes.executionPanel) return;
   if (!topology || !topology.active_count) {
+    renderChildSessionRail(topology);
     nodes.executionPanel.classList.add("hidden");
     nodes.executionPanel.innerHTML = "";
     return;

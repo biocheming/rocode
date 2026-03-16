@@ -79,21 +79,16 @@ fn resolve_requested_agent_name(
     "build".to_string()
 }
 
-fn cli_show_thinking_from_config(config: &Config) -> Option<bool> {
-    config
-        .ui_preferences
-        .as_ref()
-        .and_then(|ui| ui.show_thinking)
-}
-
-fn cli_resolve_show_thinking(explicit_flag: bool, config: Option<&Config>, fallback: bool) -> bool {
+fn cli_resolve_show_thinking(
+    explicit_flag: bool,
+    _config: Option<&Config>,
+    fallback: bool,
+) -> bool {
     if explicit_flag {
         return true;
     }
 
-    config
-        .and_then(cli_show_thinking_from_config)
-        .unwrap_or(fallback)
+    fallback
 }
 pub(crate) async fn run_non_interactive(options: RunNonInteractiveOptions) -> anyhow::Result<()> {
     let RunNonInteractiveOptions {
@@ -4646,18 +4641,9 @@ fn cli_prompt_agent_override(
 
 async fn cli_handle_config_updated_from_sse(
     runtime: &CliExecutionRuntime,
-    api_client: &CliApiClient,
+    _api_client: &CliApiClient,
 ) {
-    match api_client.get_config().await {
-        Ok(config) => {
-            if let Some(enabled) = cli_show_thinking_from_config(&config) {
-                runtime.show_thinking.store(enabled, Ordering::SeqCst);
-            }
-        }
-        Err(error) => {
-            tracing::warn!(?error, "failed to refresh CLI config after config.updated");
-        }
-    }
+    let _ = runtime;
 }
 
 /// Handle an incoming SSE event from the server — update topology,
@@ -5729,9 +5715,9 @@ mod tests {
     }
 
     #[test]
-    fn cli_show_thinking_defaults_match_tui_behavior() {
+    fn cli_show_thinking_defaults_to_visible_in_cli() {
         assert!(cli_resolve_show_thinking(false, None, true));
-        assert!(!cli_resolve_show_thinking(
+        assert!(cli_resolve_show_thinking(
             false,
             Some(&Config {
                 ui_preferences: Some(UiPreferencesConfig {

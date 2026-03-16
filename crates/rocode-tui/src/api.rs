@@ -112,6 +112,68 @@ pub struct SessionExecutionTopology {
     pub roots: Vec<SessionExecutionNode>,
 }
 
+// ── Session Runtime State (from GET /session/{id}/runtime) ──────────────
+
+/// Aggregated runtime snapshot for a single session.
+///
+/// This is the client-side mirror of `rocode_server::session_runtime::state::SessionRuntimeState`.
+/// Deserialized from the `GET /session/{id}/runtime` endpoint response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRuntimeState {
+    pub session_id: String,
+    pub run_status: SessionRunStatusKind,
+    #[serde(default)]
+    pub current_message_id: Option<String>,
+    #[serde(default)]
+    pub active_tools: Vec<ActiveToolSummary>,
+    #[serde(default)]
+    pub pending_question: Option<PendingQuestionSummary>,
+    #[serde(default)]
+    pub pending_permission: Option<PendingPermissionSummary>,
+    #[serde(default)]
+    pub child_sessions: Vec<ChildSessionSummary>,
+}
+
+/// Coarse run-status for the session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionRunStatusKind {
+    Idle,
+    Running,
+    WaitingOnTool,
+    WaitingOnUser,
+    Cancelling,
+}
+
+/// Summary of a currently executing tool call.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveToolSummary {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub started_at: i64,
+}
+
+/// Summary of a pending question awaiting user answer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingQuestionSummary {
+    pub request_id: String,
+    pub questions: serde_json::Value,
+}
+
+/// Summary of a pending permission request awaiting user decision.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingPermissionSummary {
+    pub permission_id: String,
+    pub info: serde_json::Value,
+}
+
+/// Summary of an attached child session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChildSessionSummary {
+    pub child_id: String,
+    pub parent_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RecoveryProtocolStatus {
@@ -618,6 +680,20 @@ impl ApiClient {
             anyhow::bail!("Failed to get session executions: {} - {}", status, text);
         }
         Ok(response.json::<SessionExecutionTopology>()?)
+    }
+
+    pub fn get_session_runtime(
+        &self,
+        session_id: &str,
+    ) -> anyhow::Result<SessionRuntimeState> {
+        let url = format!("{}/session/{}/runtime", self.base_url, session_id);
+        let response = self.client.get(&url).send()?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to get session runtime: {} - {}", status, text);
+        }
+        Ok(response.json::<SessionRuntimeState>()?)
     }
 
     pub fn get_session_todos(&self, session_id: &str) -> anyhow::Result<Vec<ApiTodoItem>> {

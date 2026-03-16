@@ -122,6 +122,10 @@ pub struct AppContext {
     pub processes: RwLock<Vec<ProcessInfo>>,
     pub child_sessions: RwLock<Vec<ChildSessionInfo>>,
     pub execution_topology: RwLock<Option<SessionExecutionTopology>>,
+    /// Server-side aggregated runtime state, fetched via `GET /session/{id}/runtime`.
+    /// Replaces local derivation of active_tool_calls, pending_question,
+    /// pending_permission, and child_sessions from individual SSE events.
+    pub session_runtime: RwLock<Option<crate::api::SessionRuntimeState>>,
     pub api_client: RwLock<Option<Arc<ApiClient>>>,
 }
 
@@ -163,6 +167,7 @@ impl AppContext {
             processes: RwLock::new(Vec::new()),
             child_sessions: RwLock::new(Vec::new()),
             execution_topology: RwLock::new(None),
+            session_runtime: RwLock::new(None),
             api_client: RwLock::new(None),
         }
     }
@@ -443,12 +448,89 @@ impl AppContext {
         self.apply_config(&updated);
         Ok(())
     }
+
+    /// Get active tool calls from the server-side session runtime state.
+    /// Returns an empty HashMap if session_runtime is not available.
+    pub fn get_active_tool_calls(&self) -> HashMap<String, ToolCallInfo> {
+        self.session_runtime
+            .read()
+            .as_ref()
+            .map(|runtime| {
+                runtime
+                    .active_tools
+                    .iter()
+                    .map(|tool| {
+                        (
+                            tool.tool_call_id.clone(),
+                            ToolCallInfo {
+                                id: tool.tool_call_id.clone(),
+                                tool_name: tool.tool_name.clone(),
+                            },
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get pending permission from the server-side session runtime state.
+    /// Returns None if session_runtime is not available or no pending permission.
+    pub fn get_pending_permission(&self) -> Option<(String, PermissionRequestInfo)> {
+        self.session_runtime.read().as_ref().and_then(|runtime| {
+            runtime.pending_permission.as_ref().map(|perm| {
+                (
+                    perm.permission_id.clone(),
+                    PermissionRequestInfo {
+                        id: perm.permission_id.clone(),
+                        session_id: runtime.session_id.clone(),
+                        tool: String::new(), // Extract from info if needed
+                        input: perm.info.clone(),
+                        message: String::new(),
+                    },
+                )
+            })
+        })
+    }
+
+    /// Check if there's a pending question from the server-side session runtime state.
+    pub fn has_pending_question(&self) -> bool {
+        self.session_runtime
+            .read()
+            .as_ref()
+            .map(|r| r.pending_question.is_some())
+            .unwrap_or(false)
+    }
+
+    /// Get pending question request_id from the server-side session runtime state.
+    pub fn get_pending_question_id(&self) -> Option<String> {
+        self.session_runtime
+            .read()
+            .as_ref()
+            .and_then(|r| r.pending_question.as_ref().map(|q| q.request_id.clone()))
+    }
 }
 
 impl Default for AppContext {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Information about an active tool call, used for cancel dialog.
+#[derive(Clone, Debug)]
+pub struct ToolCallInfo {
+    pub id: String,
+    pub tool_name: String,
+}
+
+/// Information about a permission request.
+#[derive(Clone, Debug)]
+pub struct PermissionRequestInfo {
+    pub id: String,
+    pub session_id: String,
+    pub tool: String,
+    pub input: serde_json::Value,
+    pub message: String,
 }
 
 fn default_theme_name() -> String {

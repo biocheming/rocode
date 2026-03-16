@@ -76,6 +76,7 @@ use self::mappers::{
 };
 use self::server_events::{
     env_var_enabled, env_var_with_fallback, resolve_tui_base_url, spawn_server_event_listener,
+    SessionFilter,
 };
 use self::support::{
     append_execution_status_node, apply_selected_mode, current_mode_label, default_export_filename,
@@ -112,12 +113,6 @@ fn session_update_requires_sync(source: Option<&str>) -> bool {
     )
 }
 
-#[derive(Clone, Debug)]
-pub struct ToolCallInfo {
-    pub id: String,
-    pub tool_name: String,
-}
-
 pub struct App {
     context: Arc<AppContext>,
     state: AppState,
@@ -128,7 +123,6 @@ pub struct App {
     selection: Selection,
     session_view: Option<SessionView>,
     active_session_id: Option<String>,
-    active_tool_calls: HashMap<String, ToolCallInfo>,
     command_palette: CommandPalette,
     slash_popup: SlashCommandPopup,
     leader_state: LeaderKeyState,
@@ -180,6 +174,10 @@ pub struct App {
     event_caused_change: bool,
     /// Session IDs whose scheduler handoff metadata has been consumed.
     consumed_handoffs: HashSet<String>,
+    /// Shared session filter for the SSE listener thread.
+    /// Updated when navigating to a different session so the listener
+    /// reconnects with `?session={id}`.
+    sse_session_filter: SessionFilter,
 }
 
 #[derive(Clone, Debug)]
@@ -233,7 +231,13 @@ impl App {
         let base_url = resolve_tui_base_url();
         let api_client = Arc::new(ApiClient::new(base_url.clone()));
         context.set_api_client(api_client);
-        spawn_server_event_listener(event_tx.clone(), base_url);
+        let sse_session_filter: SessionFilter =
+            Arc::new(std::sync::Mutex::new(None));
+        spawn_server_event_listener(
+            event_tx.clone(),
+            base_url,
+            sse_session_filter.clone(),
+        );
 
         if let Some(agent) = env_var_with_fallback("ROCODE_TUI_AGENT", "OPENCODE_TUI_AGENT") {
             let agent = agent.trim();
@@ -254,6 +258,11 @@ impl App {
             let session_id = session_id.trim();
             if !session_id.is_empty() {
                 initial_session_id = Some(session_id.to_string());
+                // Set the SSE session filter so the listener subscribes
+                // to this session's events from the start.
+                if let Ok(mut filter) = sse_session_filter.lock() {
+                    *filter = Some(session_id.to_string());
+                }
                 context.navigate(Route::Session {
                     session_id: session_id.to_string(),
                 });
@@ -327,7 +336,6 @@ impl App {
             selection: Selection::new(),
             session_view: None,
             active_session_id: None,
-            active_tool_calls: HashMap::new(),
             command_palette: CommandPalette::new(),
             slash_popup: SlashCommandPopup::new(),
             leader_state: LeaderKeyState::new(),
@@ -377,6 +385,7 @@ impl App {
             perf_log_info: env_var_enabled("ROCODE_PERF_LOG"),
             event_caused_change: true,
             consumed_handoffs: HashSet::new(),
+            sse_session_filter,
         };
 
         let _ = app.sync_config_from_server();
@@ -631,7 +640,8 @@ impl App {
                 if key.code == KeyCode::Char('k') && key.modifiers == KeyModifiers::CONTROL {
                     tracing::info!("Ctrl+K pressed");
                     if let Some(session_id) = &self.active_session_id {
-                        let tool_call_count = self.active_tool_calls.len();
+                        let active_tool_calls = self.context.get_active_tool_calls();
+                        let tool_call_count = active_tool_calls.len();
                         tracing::info!(
                             "Active session: {}, tool call count: {}",
                             session_id,
@@ -640,8 +650,7 @@ impl App {
 
                         if tool_call_count > 1 {
                             // Multiple tool calls - show selection dialog
-                            let items: Vec<ToolCallItem> = self
-                                .active_tool_calls
+                            let items: Vec<ToolCallItem> = active_tool_calls
                                 .values()
                                 .map(|info| ToolCallItem {
                                     id: info.id.clone(),
@@ -653,7 +662,7 @@ impl App {
                             // Single tool call - cancel directly
                             if let Some(api) = self.context.get_api_client() {
                                 let tool_call_id =
-                                    self.active_tool_calls.keys().next().unwrap().clone();
+                                    active_tool_calls.keys().next().unwrap().clone();
                                 if let Err(e) = api.cancel_tool_call(session_id, &tool_call_id) {
                                     self.toast.show(
                                         ToastVariant::Error,
@@ -1213,10 +1222,12 @@ impl App {
                 }
                 CustomEvent::StateChanged(StateChange::SessionStatusBusy(session_id)) => {
                     self.set_session_status(session_id, SessionStatus::Running);
+                    self.refresh_session_runtime(session_id);
                     self.sync_prompt_spinner_state();
                 }
                 CustomEvent::StateChanged(StateChange::SessionStatusIdle(session_id)) => {
                     self.set_session_status(session_id, SessionStatus::Idle);
+                    self.refresh_session_runtime(session_id);
                     let _ = self.dispatch_next_queued_prompt(session_id);
                     self.sync_prompt_spinner_state();
                 }
@@ -1234,6 +1245,7 @@ impl App {
                             next: *next,
                         },
                     );
+                    self.refresh_session_runtime(session_id);
                     self.sync_prompt_spinner_state();
                 }
                 CustomEvent::StateChanged(StateChange::ConfigUpdated) => {
@@ -1286,22 +1298,18 @@ impl App {
                     }
                 }
                 CustomEvent::StateChanged(StateChange::ToolCallStarted {
-                    tool_call_id,
-                    tool_name,
+                    session_id,
                     ..
                 }) => {
-                    self.active_tool_calls.insert(
-                        tool_call_id.clone(),
-                        ToolCallInfo {
-                            id: tool_call_id.clone(),
-                            tool_name: tool_name.clone(),
-                        },
-                    );
+                    // Refresh runtime state to get updated active tools from server
+                    self.refresh_session_runtime(session_id);
                 }
                 CustomEvent::StateChanged(StateChange::ToolCallCompleted {
-                    tool_call_id, ..
+                    session_id,
+                    ..
                 }) => {
-                    self.active_tool_calls.remove(tool_call_id);
+                    // Refresh runtime state to get updated active tools from server
+                    self.refresh_session_runtime(session_id);
                 }
                 CustomEvent::StateChanged(StateChange::TopologyChanged { session_id }) => {
                     self.handle_topology_changed(session_id);

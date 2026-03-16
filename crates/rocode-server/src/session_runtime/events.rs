@@ -175,6 +175,42 @@ impl ServerEvent {
         }
     }
 
+    /// Extract the session ID associated with this event, if any.
+    ///
+    /// Session-scoped events carry a `session_id` or equivalent (`parent_id`).
+    /// Global events like `ConfigUpdated` return `None`.
+    pub(crate) fn session_id(&self) -> Option<&str> {
+        match self {
+            Self::OutputBlock { session_id, .. }
+            | Self::Usage {
+                session_id: Some(session_id),
+                ..
+            }
+            | Self::Error {
+                session_id: Some(session_id),
+                ..
+            }
+            | Self::SessionUpdated { session_id, .. }
+            | Self::SessionStatus { session_id, .. }
+            | Self::QuestionCreated { session_id, .. }
+            | Self::QuestionResolved { session_id, .. }
+            | Self::PermissionRequested { session_id, .. }
+            | Self::PermissionResolved { session_id, .. }
+            | Self::ToolCallLifecycle { session_id, .. }
+            | Self::TopologyChanged { session_id, .. }
+            | Self::DiffUpdated { session_id, .. } => Some(session_id),
+            Self::ChildSessionAttached { parent_id, .. }
+            | Self::ChildSessionDetached { parent_id, .. } => Some(parent_id),
+            Self::Usage {
+                session_id: None, ..
+            }
+            | Self::Error {
+                session_id: None, ..
+            }
+            | Self::ConfigUpdated => None,
+        }
+    }
+
     pub(crate) fn event_name(&self) -> &'static str {
         match self {
             Self::OutputBlock { .. } => "output_block",

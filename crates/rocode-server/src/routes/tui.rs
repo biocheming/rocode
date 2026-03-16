@@ -73,6 +73,17 @@ pub(crate) async fn request_question_answers_with_hook(
             .unwrap_or_else(|_| serde_json::Value::Array(vec![])),
     };
     broadcast_server_event(state.as_ref(), &created_event);
+
+    // Update aggregated runtime state: pending question.
+    state
+        .runtime_state
+        .question_created(
+            &session_id,
+            &question_info.id,
+            serde_json::to_value(&questions)
+                .unwrap_or_else(|_| serde_json::Value::Array(vec![])),
+        )
+        .await;
     if let Some(hook) = event_hook.as_ref() {
         if let Some(payload) = created_event.to_json_value() {
             hook(payload);
@@ -82,6 +93,12 @@ pub(crate) async fn request_question_answers_with_hook(
     let wait_result = tokio::time::timeout(Duration::from_secs(300), rx).await;
 
     state.runtime_control.drop_question(&question_info.id).await;
+
+    // Clear pending question from aggregated runtime state.
+    state
+        .runtime_state
+        .question_resolved(&session_id)
+        .await;
 
     match wait_result {
         Ok(Ok(QuestionReply::Answers(answers))) => {

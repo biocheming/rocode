@@ -74,7 +74,7 @@ pub struct GlobalDiagnosticsResponse {}
 async fn global_event_stream(
     State(state): State<Arc<ServerState>>,
 ) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
-    super::stream_server_events(state.event_bus.subscribe())
+    super::stream_server_events(state.event_bus.subscribe(), None)
 }
 
 async fn get_global_config(State(state): State<Arc<ServerState>>) -> Result<Json<AppConfig>> {

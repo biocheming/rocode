@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="en" data-theme="daylight">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ROCode Fixture Preview</title>
+    <link rel="stylesheet" href="./styles/app.css" />
+    <style>
+      body {
+        min-height: 100vh;
+      }
+
+      .fixture-feed-spacer {
+        height: 32px;
+      }
+
+      .fixture-runtime-card {
+        padding: 14px 16px;
+      }
+
+      .fixture-runtime-card h5 {
+        margin: 0 0 6px;
+        font-size: 15px;
+        color: var(--text-primary);
+      }
+
+      .fixture-runtime-card p {
+        margin: 0;
+        font-size: 12px;
+        line-height: 1.55;
+        color: var(--text-secondary);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <div class="sidebar-brand">
+            <div class="sidebar-brand-mark">R</div>
+            <div class="sidebar-brand-copy">
+              <span class="sidebar-title">ROCode</span>
+              <span class="sidebar-subtitle">Runtime workspace</span>
+            </div>
+          </div>
+          <div class="sidebar-actions">
+            <button class="sidebar-btn" title="Toggle Sidebar">
+              <span class="icon-glyph" aria-hidden="true">≡</span>
+            </button>
+            <button class="sidebar-btn" title="New Chat">
+              <span class="icon-glyph" aria-hidden="true">⊕</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="sidebar-search">
+          <span class="sidebar-search-icon">
+            <span class="icon-glyph" aria-hidden="true">⌕</span>
+          </span>
+          <input type="text" value="scheduler" />
+        </div>
+
+        <section class="session-list">
+          <div class="project-group">
+            <button class="session-item session-item-project active">
+              <span class="session-item-title">rocode</span>
+              <span class="session-item-meta">12 sessions</span>
+            </button>
+            <div class="project-group-body">
+              <button class="session-item session-item-session active">
+                <span class="session-item-title">Unify three-surface governance around OutputBlock</span>
+                <span class="session-item-meta">2 min ago</span>
+              </button>
+              <button class="session-item session-item-session">
+                <span class="session-item-title">Rework scheduler stage cards for live browsing</span>
+                <span class="session-item-meta">18 min ago</span>
+              </button>
+              <button class="session-item session-item-session">
+                <span class="session-item-title">Migrate Web UI preferences to /config</span>
+                <span class="session-item-meta">1 hr ago</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="project-group">
+            <button class="session-item session-item-project">
+              <span class="session-item-title">OpenCodeUI</span>
+              <span class="session-item-meta">4 sessions</span>
+            </button>
+          </div>
+
+          <div class="project-group">
+            <button class="session-item session-item-project">
+              <span class="session-item-title">scheduler-lab</span>
+              <span class="session-item-meta">9 sessions</span>
+            </button>
+          </div>
+        </section>
+
+        <footer class="sidebar-footer">
+          <button class="sidebar-footer-btn">
+            <span class="icon-glyph" aria-hidden="true">⛭</span>
+            <span>Settings</span>
+          </button>
+        </footer>
+      </aside>
+
+      <main class="workspace">
+        <section class="conversation">
+          <header class="conversation-header">
+            <div class="conversation-header-main">
+              <div class="conversation-eyebrow">Runtime Session</div>
+              <h3 class="conversation-title">Unify CLI / TUI / Web event plane around OutputBlock</h3>
+            </div>
+            <div class="conversation-actions">
+              <button id="terminalToggleBtn" class="conversation-header-btn conversation-header-btn-terminal">
+                <span class="icon-glyph" aria-hidden="true">›_</span>
+              </button>
+              <button id="workspaceToggleBtn" class="conversation-header-btn conversation-header-btn-workspace">
+                <span class="icon-glyph" aria-hidden="true">▥</span>
+              </button>
+              <button id="overflowToggle" class="conversation-header-btn conversation-header-btn-overflow">
+                <span class="icon-glyph" aria-hidden="true">⋯</span>
+              </button>
+            </div>
+          </header>
+
+          <div class="runtime-meta-strip">
+            <span class="meta-pill"><span class="meta-label">mode</span><span>preset:three-surface</span></span>
+            <span class="meta-pill"><span class="meta-label">model</span><span>opencode/gpt-5</span></span>
+            <span class="meta-pill"><span class="meta-label">directory</span><span>~/tests/rust/rocode</span></span>
+            <span class="meta-pill"><span class="meta-label">execution</span><span>3 active · 1 waiting</span></span>
+          </div>
+
+          <div class="conversation-body">
+            <section class="conversation-stream">
+              <section class="runtime-rail">
+                <div class="runtime-rail-head">
+                  <div>
+                    <div class="runtime-rail-kicker">Scheduler Surface</div>
+                    <h4 class="runtime-rail-title">Live orchestration</h4>
+                  </div>
+                  <p class="runtime-rail-note">Stage cards stay above the transcript. Child sessions stay compressed until focused.</p>
+                </div>
+
+                <section class="child-session-rail">
+                  <div class="child-session-rail-head">
+                    <div>
+                      <div class="child-session-rail-kicker">Child Sessions</div>
+                      <h5>3 active branches</h5>
+                    </div>
+                    <p>Compressed by default. Focus one when you need detail.</p>
+                  </div>
+                  <div class="child-session-grid">
+                    <button class="child-session-card active">
+                      <div class="child-session-card-head">
+                        <span class="child-session-name">Scheduler Event Audit</span>
+                        <span class="badge ok">running</span>
+                      </div>
+                      <div class="child-session-card-meta">
+                        <span>agent_task</span>
+                        <span>stage-a</span>
+                      </div>
+                      <div class="child-session-card-summary">Verifying remaining ServerEvent producers against the roadmap.</div>
+                    </button>
+                    <button class="child-session-card">
+                      <div class="child-session-card-head">
+                        <span class="child-session-name">Web Theme Review</span>
+                        <span class="badge warning">waiting</span>
+                      </div>
+                      <div class="child-session-card-meta">
+                        <span>agent_task</span>
+                        <span>stage-c</span>
+                      </div>
+                      <div class="child-session-card-summary">Preparing screenshots for sidebar and runtime rail comparison.</div>
+                    </button>
+                    <button class="child-session-card">
+                      <div class="child-session-card-head">
+                        <span class="child-session-name">Permission Flow</span>
+                        <span class="badge error">blocked</span>
+                      </div>
+                      <div class="child-session-card-meta">
+                        <span>agent_task</span>
+                        <span>stage-d</span>
+                      </div>
+                      <div class="child-session-card-summary">Waiting on explicit allow / reject interaction to continue.</div>
+                    </button>
+                  </div>
+                </section>
+
+                <section class="focused-child-panel">
+                  <div class="focused-child-head">
+                    <div>
+                      <div class="focused-child-kicker">Focused Child</div>
+                      <h5>Scheduler Event Audit</h5>
+                    </div>
+                    <div class="focused-child-actions">
+                      <span class="badge ok">running</span>
+                      <button class="btn btn-secondary" type="button">Open Session</button>
+                    </div>
+                  </div>
+                  <div class="focused-child-grid">
+                    <div class="focused-child-field">
+                      <span class="focused-child-label">Execution</span>
+                      <span>agent_task</span>
+                    </div>
+                    <div class="focused-child-field">
+                      <span class="focused-child-label">Waiting</span>
+                      <span>permission.requested</span>
+                    </div>
+                    <div class="focused-child-field">
+                      <span class="focused-child-label">Recent</span>
+                      <span>Hook producer mapped to ServerEvent::PermissionRequested</span>
+                    </div>
+                    <div class="focused-child-field">
+                      <span class="focused-child-label">Session ID</span>
+                      <span>child_01f4d8c7</span>
+                    </div>
+                  </div>
+                  <div class="focused-child-transcript">
+                    <article class="focused-child-entry focused-child-entry-reasoning">
+                      <div class="focused-child-entry-head">thinking</div>
+                      <div class="focused-child-entry-body">Comparing session runtime producers against roadmap §5.4 and narrowing the remaining event gaps.</div>
+                    </article>
+                    <article class="focused-child-entry focused-child-entry-message">
+                      <div class="focused-child-entry-head">assistant</div>
+                      <div class="focused-child-entry-body">PermissionRequested is now produced from the hook path, but ToolCallLifecycle still needs a final producer audit.</div>
+                    </article>
+                    <article class="focused-child-entry focused-child-entry-stage">
+                      <div class="focused-child-entry-head">stage</div>
+                      <div class="focused-child-entry-body">Phase A completion checklist
+events.rs parity pass underway</div>
+                    </article>
+                  </div>
+                </section>
+
+                <section class="runtime-card fixture-runtime-card">
+                  <h5>Execution Summary</h5>
+                  <p>3 active executions across 2 scheduler stages, 1 child branch awaiting permission reply.</p>
+                </section>
+              </section>
+
+              <div class="message-feed">
+                <article class="message scheduler-stage">
+                  <div class="message-meta">
+                    <span>Phase C Orchestration Consolidation</span>
+                    <span>14:32</span>
+                    <button class="stage-nav-btn">→ session</button>
+                  </div>
+                  <div class="stage-divider"></div>
+                  <div class="stage-chips">
+                    <span class="stage-chip primary">scheduler</span>
+                    <span class="stage-chip">running</span>
+                    <span class="stage-chip">step 3/5</span>
+                    <span class="stage-chip">active child 2</span>
+                    <span class="stage-chip">tokens 3.2k</span>
+                  </div>
+                  <div class="stage-grid">
+                    <div class="stage-field">
+                      <div class="stage-field-label">Focus</div>
+                      <div class="stage-field-value">Remove remaining scheduler-specific realtime wrappers.</div>
+                    </div>
+                    <div class="stage-field">
+                      <div class="stage-field-label">Event</div>
+                      <div class="stage-field-value">emit_stage_block now routes through unified OutputBlock entry.</div>
+                    </div>
+                    <div class="stage-field">
+                      <div class="stage-field-label">Waiting</div>
+                      <div class="stage-field-value">Child-session preview validation in Web and CLI.</div>
+                    </div>
+                    <div class="stage-field stage-field-secondary">
+                      <div class="stage-field-label">Usage</div>
+                      <div class="stage-field-value">reasoning 1248 · cache read 602 · cache write 0</div>
+                    </div>
+                    <div class="stage-section">
+                      <div class="stage-section-label">Activity</div>
+                      <pre class="stage-section-body">Replaced the last scheduler-specific broadcast path with the same emit_output_block() hook used by prompt and child-session flows.</pre>
+                    </div>
+                    <div class="stage-field stage-capabilities">
+                      <div class="stage-caps-row">
+                        <span class="stage-field-label">Active Skills</span>
+                        <span class="stage-cap-chip">events.rs</span>
+                        <span class="stage-cap-chip">streaming.js</span>
+                        <span class="stage-cap-chip">scheduler.rs</span>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="message message-user">
+                  <div class="message-content">继续把 CLI 的 child session / scheduler 实时消费也并进来，顺手继续压缩 session.updated 的剩余职责。</div>
+                </article>
+
+                <article class="message message-reasoning">
+                  <div class="message-header">
+                    <span class="message-role">thinking</span>
+                    <span class="message-time">14:33</span>
+                  </div>
+                  <div class="message-content">The remaining UX risk is information explosion. I should keep child sessions compressed in the main transcript and expose focused detail in a dedicated panel instead of interleaving every branch into one scroll stream.</div>
+                </article>
+
+                <article class="message message-ai">
+                  <div class="message-header">
+                    <span class="message-role">ROCode</span>
+                    <span class="message-time">14:33</span>
+                  </div>
+                  <div class="message-content md-root">
+                    <p class="md-paragraph">结构已经收口，但还需要把多 child session 的可见性从“全量刷屏”改成“压缩摘要 + 焦点查看”。</p>
+                    <p class="md-paragraph">这版我会保留同一事件面，同时把展示层改成两级：</p>
+                    <ul class="md-list">
+                      <li>主流只保留 parent transcript 和 scheduler stage card。</li>
+                      <li>child session 默认进上方的 summary rail，用户再挑一个看 live transcript。</li>
+                    </ul>
+                    <pre class="md-code-block"><code>Scheduler output
+  -> OutputBlock(session_id = child)
+  -> compressed rail summary
+  -> focused child transcript panel</code></pre>
+                  </div>
+                </article>
+
+                <article class="message message-system">
+                  <div class="message-header">
+                    <span class="message-role">Tool</span>
+                    <span class="message-time">14:34</span>
+                  </div>
+                  <div class="message-content md-root">
+                    <p class="md-paragraph"><strong>cargo test</strong> completed with runtime-plane checks passing.</p>
+                    <p class="md-paragraph">Verified: child session routing, scheduler stage lifecycle, permission overlay, shared command catalogue.</p>
+                  </div>
+                </article>
+
+                <article class="message scheduler-stage">
+                  <div class="message-meta">
+                    <span>Phase D Visual Alignment Review</span>
+                    <span>14:39</span>
+                  </div>
+                  <div class="stage-divider"></div>
+                  <div class="stage-chips">
+                    <span class="stage-chip primary">web</span>
+                    <span class="stage-chip">review</span>
+                    <span class="stage-chip">workspace rail</span>
+                    <span class="stage-chip">sidebar density</span>
+                  </div>
+                  <div class="stage-grid">
+                    <div class="stage-field">
+                      <div class="stage-field-label">Focus</div>
+                      <div class="stage-field-value">Reduce card weight and tighten vertical rhythm toward OpenCodeUI.</div>
+                    </div>
+                    <div class="stage-field">
+                      <div class="stage-field-label">Event</div>
+                      <div class="stage-field-value">Desktop screenshot review requested.</div>
+                    </div>
+                    <div class="stage-field">
+                      <div class="stage-field-label">Waiting</div>
+                      <div class="stage-field-value">Real browser fixture preview generation.</div>
+                    </div>
+                  </div>
+                </article>
+
+                <div class="fixture-feed-spacer"></div>
+              </div>
+            </section>
+
+            <aside class="workspace-panel">
+              <div class="workspace-panel-header">
+                <div>
+                  <div class="workspace-panel-kicker">Workspace Rail</div>
+                  <h4 class="workspace-panel-title">Artifacts</h4>
+                </div>
+              </div>
+              <div class="workspace-panel-tabs">
+                <button class="workspace-tab active" type="button">Context</button>
+                <button class="workspace-tab" type="button">Diff</button>
+                <button class="workspace-tab" type="button">Canvas</button>
+              </div>
+              <div class="workspace-panel-body">
+                <section class="workspace-card">
+                  <div class="workspace-card-label">Session Context</div>
+                  <div class="workspace-meta">
+                    <span class="meta-pill"><span class="meta-label">agent</span><span>three-surface</span></span>
+                    <span class="meta-pill"><span class="meta-label">scheduler</span><span>phase-c</span></span>
+                    <span class="meta-pill"><span class="meta-label">child</span><span>focused</span></span>
+                  </div>
+                </section>
+                <section class="workspace-card workspace-card-emphasis">
+                  <div class="workspace-card-label">Diff Preview</div>
+                  <h5>stream.rs → OutputBlock-only realtime path</h5>
+                  <p>Delete remaining snapshot diff fallback and keep session.updated as a non-rendering fallback event only.</p>
+                </section>
+                <section class="workspace-card">
+                  <div class="workspace-card-label">Canvas</div>
+                  <p>Reserved for patch review, previews, or future interactive inspection surfaces. Scheduler content intentionally stays out of this rail.</p>
+                </section>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="composer-shell">
+          <form class="composer">
+            <textarea rows="1">Use chrome headless to capture scheduler, child-session, and reasoning screenshot fixtures for final visual review.</textarea>
+            <div class="composer-footer">
+              <div class="composer-meta">
+                <span class="badge ok">ready</span>
+                <span class="composer-meta-item"><span class="composer-meta-label">mode</span><span>preset:three-surface</span></span>
+                <span class="composer-meta-item"><span class="composer-meta-label">model</span><span>opencode/gpt-5</span></span>
+                <span class="composer-meta-item"><span class="composer-meta-label">dir</span><span>~/tests/rust/rocode</span></span>
+              </div>
+              <div class="composer-actions">
+                <button type="button" class="cancel-btn">Cancel</button>
+                <button type="submit" class="send-btn">
+                  <span class="icon-glyph" aria-hidden="true">↗</span>
+                </button>
+              </div>
+            </div>
+          </form>
+        </section>
+
+        <section class="terminal-panel">
+          <header class="terminal-panel-header">
+            <div class="terminal-tab-list">
+              <button class="terminal-tab active" type="button">
+                <span class="terminal-tab-label">bash</span>
+                <span class="terminal-tab-status">running</span>
+                <span class="terminal-tab-close">×</span>
+              </button>
+              <button class="terminal-tab" type="button">
+                <span class="terminal-tab-label">cargo test</span>
+                <span class="terminal-tab-status">idle</span>
+                <span class="terminal-tab-close">×</span>
+              </button>
+            </div>
+            <div class="terminal-panel-actions">
+              <button class="terminal-panel-btn" type="button"><span class="icon-glyph" aria-hidden="true">⊕</span></button>
+              <button class="terminal-panel-btn" type="button"><span class="icon-glyph" aria-hidden="true">⌄</span></button>
+            </div>
+          </header>
+          <div class="terminal-viewport">
+            <pre class="terminal-screen">$ cargo build -p rocode-server
+Finished dev profile [unoptimized + debuginfo] target(s) in 8.42s
+$ node crates/rocode-server/web/app.dom.test.mjs
+36 tests passed</pre>
+          </div>
+          <form class="terminal-input-form">
+            <span class="terminal-input-prompt">$</span>
+            <input class="terminal-input" type="text" value="rg -n \"OutputBlockHook\" crates/rocode-server" />
+          </form>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>
