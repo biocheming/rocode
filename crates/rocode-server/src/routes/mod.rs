@@ -41,10 +41,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use tokio_stream::{wrappers::BroadcastStream, StreamExt};
+use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio_stream::wrappers::ReceiverStream;
 
-use crate::session_runtime::events::broadcast_config_updated;
+use crate::session_runtime::events::{broadcast_config_updated, ServerEvent};
 use crate::web;
 use crate::{ApiError, Result, ServerState};
 use rocode_agent::{AgentMode, AgentRegistry};
@@ -172,11 +172,185 @@ async fn write_log(Json(req): Json<WriteLogRequest>) -> Result<Json<bool>> {
 async fn event_stream(
     State(state): State<Arc<ServerState>>,
 ) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
-    let rx = state.event_bus.subscribe();
-    Sse::new(BroadcastStream::new(rx).filter_map(|result| match result {
-        Ok(event) => Some(Ok(Event::default().data(event))),
-        Err(_) => None,
-    }))
+    stream_server_events(state.event_bus.subscribe())
+}
+
+const EVENT_OUTPUT_BLOCK_BATCH_MS: u64 = 24;
+
+pub(crate) fn stream_server_events(
+    mut rx: broadcast::Receiver<String>,
+) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
+    let (tx, out_rx) = mpsc::channel(128);
+
+    tokio::spawn(async move {
+        let mut pending: Option<ServerEvent> = None;
+        let delay = std::time::Duration::from_millis(EVENT_OUTPUT_BLOCK_BATCH_MS);
+
+        loop {
+            if pending.is_some() {
+                tokio::select! {
+                    recv = rx.recv() => {
+                        match recv {
+                            Ok(raw) => {
+                                if let Some(next) = parse_server_event(&raw) {
+                                    if let Some(current) = pending.as_mut() {
+                                        if merge_output_block_delta(current, &next) {
+                                            continue;
+                                        }
+                                    }
+                                    if let Some(flushed) = pending.take() {
+                                        if send_server_event_json(&tx, &flushed).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                    if is_mergeable_output_delta(&next) {
+                                        pending = Some(next);
+                                    } else if send_server_event_json(&tx, &next).await.is_err() {
+                                        break;
+                                    }
+                                } else {
+                                    if let Some(flushed) = pending.take() {
+                                        if send_server_event_json(&tx, &flushed).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                    if send_raw_server_event(&tx, raw).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(broadcast::error::RecvError::Lagged(_)) => {
+                                if let Some(flushed) = pending.take() {
+                                    if send_server_event_json(&tx, &flushed).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(broadcast::error::RecvError::Closed) => {
+                                if let Some(flushed) = pending.take() {
+                                    let _ = send_server_event_json(&tx, &flushed).await;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    _ = tokio::time::sleep(delay) => {
+                        if let Some(flushed) = pending.take() {
+                            if send_server_event_json(&tx, &flushed).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            } else {
+                match rx.recv().await {
+                    Ok(raw) => {
+                        if let Some(event) = parse_server_event(&raw) {
+                            if is_mergeable_output_delta(&event) {
+                                pending = Some(event);
+                            } else if send_server_event_json(&tx, &event).await.is_err() {
+                                break;
+                            }
+                        } else if send_raw_server_event(&tx, raw).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        }
+    });
+
+    Sse::new(ReceiverStream::new(out_rx))
+}
+
+fn parse_server_event(raw: &str) -> Option<ServerEvent> {
+    serde_json::from_str(raw).ok()
+}
+
+fn is_mergeable_output_delta(event: &ServerEvent) -> bool {
+    let ServerEvent::OutputBlock { id, block, .. } = event else {
+        return false;
+    };
+    if id.as_deref().is_none_or(str::is_empty) {
+        return false;
+    }
+    matches!(
+        (
+            block.get("kind").and_then(|value| value.as_str()),
+            block.get("phase").and_then(|value| value.as_str()),
+        ),
+        (Some("message"), Some("delta")) | (Some("reasoning"), Some("delta"))
+    )
+}
+
+fn merge_output_block_delta(current: &mut ServerEvent, next: &ServerEvent) -> bool {
+    let (
+        ServerEvent::OutputBlock {
+            session_id: current_session,
+            id: current_id,
+            block: current_block,
+        },
+        ServerEvent::OutputBlock {
+            session_id: next_session,
+            id: next_id,
+            block: next_block,
+        },
+    ) = (current, next)
+    else {
+        return false;
+    };
+
+    if current_session != next_session || current_id != next_id {
+        return false;
+    }
+
+    let current_kind = current_block.get("kind").and_then(|value| value.as_str());
+    let next_kind = next_block.get("kind").and_then(|value| value.as_str());
+    let current_phase = current_block.get("phase").and_then(|value| value.as_str());
+    let next_phase = next_block.get("phase").and_then(|value| value.as_str());
+    if current_kind != next_kind || current_phase != Some("delta") || next_phase != Some("delta") {
+        return false;
+    }
+    if current_kind == Some("message")
+        && current_block.get("role").and_then(|value| value.as_str())
+            != next_block.get("role").and_then(|value| value.as_str())
+    {
+        return false;
+    }
+
+    let Some(next_text) = next_block.get("text").and_then(|value| value.as_str()) else {
+        return false;
+    };
+    let Some(current_text) = current_block
+        .get_mut("text")
+        .and_then(|value| value.as_str())
+    else {
+        return false;
+    };
+
+    current_block["text"] = serde_json::Value::String(format!("{current_text}{next_text}"));
+    true
+}
+
+async fn send_raw_server_event(
+    tx: &mpsc::Sender<std::result::Result<Event, Infallible>>,
+    raw: String,
+) -> std::result::Result<(), ()> {
+    tx.send(Ok(Event::default().data(raw)))
+        .await
+        .map_err(|_| ())
+}
+
+async fn send_server_event_json(
+    tx: &mpsc::Sender<std::result::Result<Event, Infallible>>,
+    event: &ServerEvent,
+) -> std::result::Result<(), ()> {
+    let Some(json) = event.to_json_string() else {
+        return Ok(());
+    };
+    send_raw_server_event(tx, json).await
 }
 
 #[derive(Debug, Serialize)]
@@ -721,6 +895,7 @@ pub(crate) fn get_plugin_loader() -> Option<&'static Arc<PluginLoader>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn execution_modes_include_builtin_public_presets_without_scheduler_path() {
@@ -735,5 +910,95 @@ mod tests {
             preset_names,
             vec!["sisyphus", "prometheus", "atlas", "hephaestus",]
         );
+    }
+
+    #[test]
+    fn merge_output_block_delta_coalesces_message_text_for_same_session_and_id() {
+        let mut current = ServerEvent::OutputBlock {
+            session_id: "session-a".to_string(),
+            id: Some("msg-1".to_string()),
+            block: json!({
+                "kind": "message",
+                "phase": "delta",
+                "role": "assistant",
+                "text": "hel",
+            }),
+        };
+        let next = ServerEvent::OutputBlock {
+            session_id: "session-a".to_string(),
+            id: Some("msg-1".to_string()),
+            block: json!({
+                "kind": "message",
+                "phase": "delta",
+                "role": "assistant",
+                "text": "lo",
+            }),
+        };
+
+        assert!(merge_output_block_delta(&mut current, &next));
+        let ServerEvent::OutputBlock { block, .. } = current else {
+            panic!("expected output block");
+        };
+        assert_eq!(
+            block.get("text").and_then(|value| value.as_str()),
+            Some("hello")
+        );
+    }
+
+    #[test]
+    fn merge_output_block_delta_rejects_different_message_ids() {
+        let mut current = ServerEvent::OutputBlock {
+            session_id: "session-a".to_string(),
+            id: Some("msg-1".to_string()),
+            block: json!({
+                "kind": "message",
+                "phase": "delta",
+                "role": "assistant",
+                "text": "hel",
+            }),
+        };
+        let next = ServerEvent::OutputBlock {
+            session_id: "session-a".to_string(),
+            id: Some("msg-2".to_string()),
+            block: json!({
+                "kind": "message",
+                "phase": "delta",
+                "role": "assistant",
+                "text": "lo",
+            }),
+        };
+
+        assert!(!merge_output_block_delta(&mut current, &next));
+    }
+
+    #[test]
+    fn merge_output_block_delta_rejects_non_delta_or_non_output_events() {
+        let mut current = ServerEvent::OutputBlock {
+            session_id: "session-a".to_string(),
+            id: Some("reasoning-1".to_string()),
+            block: json!({
+                "kind": "reasoning",
+                "phase": "delta",
+                "text": "thinking",
+            }),
+        };
+        let full = ServerEvent::OutputBlock {
+            session_id: "session-a".to_string(),
+            id: Some("reasoning-1".to_string()),
+            block: json!({
+                "kind": "reasoning",
+                "phase": "full",
+                "text": "thinking done",
+            }),
+        };
+        let usage = ServerEvent::Usage {
+            session_id: Some("session-a".to_string()),
+            prompt_tokens: 1,
+            completion_tokens: 1,
+            message_id: Some("reasoning-1".to_string()),
+        };
+
+        assert!(!merge_output_block_delta(&mut current, &full));
+        assert!(!merge_output_block_delta(&mut current, &usage));
     }
 }

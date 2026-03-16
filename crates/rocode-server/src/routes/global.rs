@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 
 use crate::worktree::{self, WorktreeInfo as WorktreeInfoStruct};
 use crate::{ApiError, Result, ServerState};
@@ -75,11 +74,7 @@ pub struct GlobalDiagnosticsResponse {}
 async fn global_event_stream(
     State(state): State<Arc<ServerState>>,
 ) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
-    let rx = state.event_bus.subscribe();
-    Sse::new(BroadcastStream::new(rx).filter_map(|result| match result {
-        Ok(event) => Some(Ok(Event::default().data(event))),
-        Err(_) => None,
-    }))
+    super::stream_server_events(state.event_bus.subscribe())
 }
 
 async fn get_global_config(State(state): State<Arc<ServerState>>) -> Result<Json<AppConfig>> {
