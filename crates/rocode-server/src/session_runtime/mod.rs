@@ -5,9 +5,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use self::events::{
-    broadcast_child_session_attached, broadcast_child_session_detached,
-    broadcast_server_event, broadcast_session_updated, emit_output_block_via_hook, DiffEntry,
-    ServerEvent,
+    broadcast_child_session_attached, broadcast_child_session_detached, broadcast_server_event,
+    broadcast_session_updated, emit_output_block_via_hook, DiffEntry, ServerEvent,
 };
 use crate::runtime_control::{ExecutionPatch, ExecutionStatus, FieldUpdate};
 use crate::ServerState;
@@ -204,7 +203,7 @@ impl SessionSchedulerLifecycleHook {
         }
 
         if let Some(message) = message_snapshot.as_ref() {
-            self.emit_stage_block(message);
+            self.emit_stage_block(message).await;
         }
 
         if let (Some(execution_id), Some(patch)) = (execution_id, runtime_patch) {
@@ -215,26 +214,28 @@ impl SessionSchedulerLifecycleHook {
         }
     }
 
-    fn emit_stage_block(&self, message: &SessionMessage) {
+    async fn emit_stage_block(&self, message: &SessionMessage) {
         if let Some(block) = scheduler_stage_block_from_message(message) {
             self.emit_realtime_block(OutputBlockEvent {
                 session_id: self.session_id.clone(),
                 block: OutputBlock::SchedulerStage(Box::new(block)),
                 id: Some(message.id.clone()),
-            });
+            })
+            .await;
         }
     }
 
-    fn emit_realtime_block(&self, event: OutputBlockEvent) {
-        emit_output_block_via_hook(self.output_hook.as_ref(), event);
+    async fn emit_realtime_block(&self, event: OutputBlockEvent) {
+        emit_output_block_via_hook(self.output_hook.as_ref(), event).await;
     }
 
-    fn emit_output_block(&self, session_id: String, block: OutputBlock, id: Option<String>) {
+    async fn emit_output_block(&self, session_id: String, block: OutputBlock, id: Option<String>) {
         self.emit_realtime_block(OutputBlockEvent {
             session_id,
             block,
             id,
-        });
+        })
+        .await;
     }
 
     /// Capture a git worktree snapshot and store its hash in the active stage
@@ -880,7 +881,8 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                 child_sid.clone(),
                 OutputBlock::Message(MessageBlock::start(OutputMessageRole::Assistant)),
                 Some(child_mid.clone()),
-            );
+            )
+            .await;
         }
 
         let message = session.add_assistant_message();
@@ -999,7 +1001,7 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                 .get(&self.session_id)
                 .and_then(|session| session.get_message(&message_id).cloned())
         } {
-            self.emit_stage_block(&snapshot);
+            self.emit_stage_block(&snapshot).await;
         }
 
         self.state
@@ -1077,7 +1079,8 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                     content_delta.to_string(),
                 )),
                 Some(child_mid),
-            );
+            )
+            .await;
             return;
         }
 
@@ -1097,7 +1100,7 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
         drop(sessions);
 
         if let Some(message) = message_snapshot.as_ref() {
-            self.emit_stage_block(message);
+            self.emit_stage_block(message).await;
         }
     }
 
@@ -1174,13 +1177,15 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                     child_sid.clone(),
                     OutputBlock::Reasoning(ReasoningBlock::start()),
                     Some(child_mid.clone()),
-                );
+                )
+                .await;
             }
             self.emit_output_block(
                 child_sid.clone(),
                 OutputBlock::Reasoning(ReasoningBlock::delta(reasoning_delta.to_string())),
                 Some(child_mid),
-            );
+            )
+            .await;
             return;
         }
 
@@ -1200,7 +1205,7 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
         drop(sessions);
 
         if let Some(message) = message_snapshot.as_ref() {
-            self.emit_stage_block(message);
+            self.emit_stage_block(message).await;
         }
     }
 
@@ -1319,7 +1324,7 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                 drop(sessions);
 
                 if let Some(message) = message_snapshot.as_ref() {
-                    self.emit_stage_block(message);
+                    self.emit_stage_block(message).await;
                 }
                 if let (Some(child_sid), Some(child_mid)) = (child_session_id, child_message_id) {
                     if active.child_reasoning_started {
@@ -1327,13 +1332,15 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                             child_sid.clone(),
                             OutputBlock::Reasoning(ReasoningBlock::end()),
                             Some(child_mid.clone()),
-                        );
+                        )
+                        .await;
                     }
                     self.emit_output_block(
                         child_sid.clone(),
                         OutputBlock::Message(MessageBlock::end(OutputMessageRole::Assistant)),
                         Some(child_mid.clone()),
-                    );
+                    )
+                    .await;
                     broadcast_child_session_detached(
                         &self.state,
                         self.session_id.clone(),
@@ -3405,10 +3412,13 @@ mod tests {
             "atlas".to_string(),
         )
         .with_output_hook(Some(Arc::new(move |event| {
-            emitted_hook
-                .lock()
-                .expect("output block lock should not poison")
-                .push(event);
+            let emitted_hook = emitted_hook.clone();
+            Box::pin(async move {
+                emitted_hook
+                    .lock()
+                    .expect("output block lock should not poison")
+                    .push(event);
+            })
         })));
 
         hook.on_scheduler_stage_start(

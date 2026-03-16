@@ -55,15 +55,9 @@ pub enum CliServerEvent {
         tool_call_id: String,
     },
     /// A child session was attached under a parent session in the active tree.
-    ChildSessionAttached {
-        parent_id: String,
-        child_id: String,
-    },
+    ChildSessionAttached { parent_id: String, child_id: String },
     /// A child session was detached from a parent session in the active tree.
-    ChildSessionDetached {
-        parent_id: String,
-        child_id: String,
-    },
+    ChildSessionDetached { parent_id: String, child_id: String },
     /// An output block was emitted (message, tool result, etc.).
     OutputBlock {
         session_id: String,
@@ -331,10 +325,7 @@ fn parse_event(
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let info_json = json
-                .get("info")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
+            let info_json = json.get("info").cloned().unwrap_or(serde_json::Value::Null);
             Some(CliServerEvent::PermissionRequested {
                 session_id: event_session_id.to_string(),
                 permission_id,

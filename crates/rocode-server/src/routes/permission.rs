@@ -43,17 +43,22 @@ fn permission_request_message(request: &rocode_tool::PermissionRequest) -> Strin
         .metadata
         .get("description")
         .and_then(|value| value.as_str())
-        .or_else(|| request.metadata.get("question").and_then(|value| value.as_str()))
-        .or_else(|| request.metadata.get("command").and_then(|value| value.as_str()))
+        .or_else(|| {
+            request
+                .metadata
+                .get("question")
+                .and_then(|value| value.as_str())
+        })
+        .or_else(|| {
+            request
+                .metadata
+                .get("command")
+                .and_then(|value| value.as_str())
+        })
         .map(str::to_string)
         .or_else(|| {
-            (!request.patterns.is_empty()).then(|| {
-                format!(
-                    "{}: {}",
-                    request.permission,
-                    request.patterns.join(", ")
-                )
-            })
+            (!request.patterns.is_empty())
+                .then(|| format!("{}: {}", request.permission, request.patterns.join(", ")))
         })
         .unwrap_or_else(|| format!("Permission required: {}", request.permission))
 }
@@ -90,7 +95,10 @@ pub(crate) async fn request_permission(
         .write()
         .await
         .insert(permission_id.clone(), info.clone());
-    PERMISSION_WAITERS.lock().await.insert(permission_id.clone(), tx);
+    PERMISSION_WAITERS
+        .lock()
+        .await
+        .insert(permission_id.clone(), tx);
 
     broadcast_server_event(
         state.as_ref(),
@@ -108,9 +116,8 @@ pub(crate) async fn request_permission(
         Ok(Ok(PermissionReply { reply, message })) => match reply.as_str() {
             "once" | "always" => Ok(()),
             "reject" => Err(rocode_tool::ToolError::PermissionDenied(
-                message.unwrap_or_else(|| {
-                    format!("Permission rejected for {}", request.permission)
-                }),
+                message
+                    .unwrap_or_else(|| format!("Permission rejected for {}", request.permission)),
             )),
             other => Err(rocode_tool::ToolError::ExecutionError(format!(
                 "Invalid permission reply: {}",

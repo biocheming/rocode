@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
-use rocode_command::output_blocks::{
+use rocode_content::output_blocks::{
     MessageBlock, MessageRole as OutputMessageRole, OutputBlock, ReasoningBlock, ToolBlock,
 };
 use rocode_orchestrator::runtime::events::{
@@ -189,7 +189,9 @@ pub struct OutputBlockEvent {
     pub block: OutputBlock,
     pub id: Option<String>,
 }
-pub type OutputBlockHook = Arc<dyn Fn(OutputBlockEvent) + Send + Sync + 'static>;
+pub type OutputBlockHook = Arc<
+    dyn Fn(OutputBlockEvent) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync + 'static,
+>;
 pub type AgentLookup =
     Arc<dyn Fn(&str) -> Option<rocode_tool::TaskAgentInfo> + Send + Sync + 'static>;
 pub type PublishBusHook = Arc<
@@ -584,53 +586,58 @@ impl<'a> SessionStepSink<'a> {
             .map(|message| message.id.clone())
     }
 
-    fn emit_output_block(&self, block: OutputBlock, id: Option<String>) {
+    async fn emit_output_block(&self, block: OutputBlock, id: Option<String>) {
         if let Some(output_block_hook) = self.output_block_hook {
             output_block_hook(OutputBlockEvent {
                 session_id: self.session.id.clone(),
                 block,
                 id,
-            });
+            })
+            .await;
         }
     }
 
-    fn ensure_assistant_output_started(&mut self) {
+    async fn ensure_assistant_output_started(&mut self) {
         if self.assistant_output_started {
             return;
         }
         self.emit_output_block(
             OutputBlock::Message(MessageBlock::start(OutputMessageRole::Assistant)),
             self.assistant_message_id(),
-        );
+        )
+        .await;
         self.assistant_output_started = true;
     }
 
-    fn ensure_reasoning_output_started(&mut self) {
-        self.ensure_assistant_output_started();
+    async fn ensure_reasoning_output_started(&mut self) {
+        self.ensure_assistant_output_started().await;
         if self.reasoning_output_started {
             return;
         }
         self.emit_output_block(
             OutputBlock::Reasoning(ReasoningBlock::start()),
             self.assistant_message_id(),
-        );
+        )
+        .await;
         self.reasoning_output_started = true;
     }
 
-    fn finish_output_blocks(&mut self) {
+    async fn finish_output_blocks(&mut self) {
         let assistant_message_id = self.assistant_message_id();
         if self.reasoning_output_started {
             self.emit_output_block(
                 OutputBlock::Reasoning(ReasoningBlock::end()),
                 assistant_message_id.clone(),
-            );
+            )
+            .await;
             self.reasoning_output_started = false;
         }
         if self.assistant_output_started {
             self.emit_output_block(
                 OutputBlock::Message(MessageBlock::end(OutputMessageRole::Assistant)),
                 assistant_message_id,
-            );
+            )
+            .await;
             self.assistant_output_started = false;
         }
     }
@@ -641,7 +648,7 @@ impl<'a> LoopSink for SessionStepSink<'a> {
     async fn on_event(&mut self, event: &LoopEvent) -> std::result::Result<(), RuntimeLoopError> {
         match event {
             LoopEvent::TextChunk(text) => {
-                self.ensure_assistant_output_started();
+                self.ensure_assistant_output_started().await;
                 if let Some(assistant) = self.session.messages.get_mut(self.assistant_index) {
                     SessionPrompt::append_delta_part(assistant, false, text);
                 }
@@ -651,7 +658,8 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                         text.clone(),
                     )),
                     self.assistant_message_id(),
-                );
+                )
+                .await;
                 self.session.touch();
                 SessionPrompt::maybe_emit_session_update(
                     self.update_hook,
@@ -661,14 +669,15 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                 );
             }
             LoopEvent::ReasoningChunk { text, .. } => {
-                self.ensure_reasoning_output_started();
+                self.ensure_reasoning_output_started().await;
                 if let Some(assistant) = self.session.messages.get_mut(self.assistant_index) {
                     SessionPrompt::append_delta_part(assistant, true, text);
                 }
                 self.emit_output_block(
                     OutputBlock::Reasoning(ReasoningBlock::delta(text.clone())),
                     self.assistant_message_id(),
-                );
+                )
+                .await;
                 self.session.touch();
                 SessionPrompt::maybe_emit_session_update(
                     self.update_hook,
@@ -735,11 +744,12 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                         )
                     };
                     if should_emit_start {
-                        self.ensure_assistant_output_started();
+                        self.ensure_assistant_output_started().await;
                         self.emit_output_block(
                             OutputBlock::Tool(ToolBlock::start(next_name.clone())),
                             Some(id.clone()),
-                        );
+                        )
+                        .await;
                     }
                     if let Some(assistant) = self.session.messages.get_mut(self.assistant_index) {
                         SessionPrompt::upsert_tool_call_part(
@@ -805,11 +815,12 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                         )
                     };
                     if let Some(detail) = detail {
-                        self.ensure_assistant_output_started();
+                        self.ensure_assistant_output_started().await;
                         self.emit_output_block(
                             OutputBlock::Tool(ToolBlock::running(tool_name, detail)),
                             Some(id.clone()),
-                        );
+                        )
+                        .await;
                     }
                     if let Some(assistant) = self.session.messages.get_mut(self.assistant_index) {
                         SessionPrompt::upsert_tool_call_part(
@@ -892,18 +903,20 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                         if should_emit_detail { detail } else { None },
                     )
                 };
-                self.ensure_assistant_output_started();
+                self.ensure_assistant_output_started().await;
                 if should_emit_start {
                     self.emit_output_block(
                         OutputBlock::Tool(ToolBlock::start(call.name.clone())),
                         Some(call.id.clone()),
-                    );
+                    )
+                    .await;
                 }
                 if let Some(detail) = detail {
                     self.emit_output_block(
                         OutputBlock::Tool(ToolBlock::running(call.name.clone(), detail)),
                         Some(call.id.clone()),
-                    );
+                    )
+                    .await;
                 }
                 if let Some(assistant) = self.session.messages.get_mut(self.assistant_index) {
                     SessionPrompt::upsert_tool_call_part(
@@ -943,10 +956,10 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                     self.cache_read_tokens = self.cache_read_tokens.max(usage.cache_read_tokens);
                     self.cache_write_tokens = self.cache_write_tokens.max(usage.cache_write_tokens);
                 }
-                self.finish_output_blocks();
+                self.finish_output_blocks().await;
             }
             LoopEvent::Error(msg) => {
-                self.finish_output_blocks();
+                self.finish_output_blocks().await;
                 return Err(RuntimeLoopError::ModelError(msg.clone()));
             }
         }
@@ -1063,7 +1076,7 @@ impl<'a> LoopSink for SessionStepSink<'a> {
         } else {
             OutputBlock::Tool(ToolBlock::done(result.tool_name.clone(), detail))
         };
-        self.emit_output_block(block, Some(call.id.clone()));
+        self.emit_output_block(block, Some(call.id.clone())).await;
 
         self.session.touch();
         SessionPrompt::maybe_emit_session_update(
@@ -2906,10 +2919,13 @@ mod tests {
         let emitted = Arc::new(StdMutex::new(Vec::<OutputBlockEvent>::new()));
         let emitted_sink = emitted.clone();
         let hook: OutputBlockHook = Arc::new(move |event| {
-            emitted_sink
-                .lock()
-                .expect("output block lock should not poison")
-                .push(event);
+            let emitted_sink = emitted_sink.clone();
+            Box::pin(async move {
+                emitted_sink
+                    .lock()
+                    .expect("output block lock should not poison")
+                    .push(event);
+            })
         });
 
         let input = PromptInput {
@@ -2947,7 +2963,7 @@ mod tests {
             .await
             .expect("prompt_with_update_hook should succeed");
 
-        use rocode_command::output_blocks::{MessagePhase, OutputBlock};
+        use rocode_content::output_blocks::{MessagePhase, OutputBlock};
 
         let emitted = emitted.lock().expect("output block lock should not poison");
         assert!(emitted.iter().all(|event| event.session_id == session.id));

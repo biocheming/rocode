@@ -468,7 +468,9 @@ mod tests {
         assert_eq!(primary.action_id, UiActionId::ToggleCommandPalette);
         assert_eq!(alias.action_id, UiActionId::ToggleCommandPalette);
 
-        let preset = registry.ui_slash_command("/preset").expect("preset command");
+        let preset = registry
+            .ui_slash_command("/preset")
+            .expect("preset command");
         let agent = registry.ui_slash_command("/agent").expect("agent command");
         let mode = registry.ui_slash_command("/mode").expect("mode command");
         assert_eq!(preset.action_id, UiActionId::OpenPresetList);
@@ -489,13 +491,20 @@ mod tests {
     fn ui_command_argument_kinds_match_shared_semantics() {
         let registry = CommandRegistry::new();
         let model = registry.ui_slash_command("/model").expect("model command");
-        let preset = registry.ui_slash_command("/preset").expect("preset command");
-        let sessions = registry.ui_slash_command("/session").expect("session command");
+        let preset = registry
+            .ui_slash_command("/preset")
+            .expect("preset command");
+        let sessions = registry
+            .ui_slash_command("/session")
+            .expect("session command");
         let copy = registry.ui_slash_command("/copy").expect("copy command");
 
         assert_eq!(model.argument_kind(), UiCommandArgumentKind::ModelRef);
         assert_eq!(preset.argument_kind(), UiCommandArgumentKind::PresetRef);
-        assert_eq!(sessions.argument_kind(), UiCommandArgumentKind::SessionTarget);
+        assert_eq!(
+            sessions.argument_kind(),
+            UiCommandArgumentKind::SessionTarget
+        );
         assert_eq!(copy.argument_kind(), UiCommandArgumentKind::None);
     }
 }

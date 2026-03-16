@@ -17,11 +17,11 @@ use rocode_agent::{AgentInfo, AgentRegistry};
 use rocode_provider::ToolDefinition;
 use rocode_session::{MessageRole as SessionMessageRole, MessageUsage, Session};
 
+use super::permission::request_permission;
 use super::session::{
     resolve_prompt_request_config, resolved_session_directory, to_task_agent_info,
     SendMessageRequest,
 };
-use super::permission::request_permission;
 use super::tui::{request_question_answers_with_hook, QuestionEventHook};
 
 pub(crate) async fn send_stream_error_event(
@@ -334,9 +334,8 @@ pub(crate) async fn stream_message(
                 }
             }))
         };
-        let output_block_hook: Option<rocode_session::prompt::OutputBlockHook> = {
-            Some(sse_output_block_hook(stream_tx.clone()))
-        };
+        let output_block_hook: Option<rocode_session::prompt::OutputBlockHook> =
+            { Some(sse_output_block_hook(stream_tx.clone())) };
 
         if let Err(error) = prompt_runner
             .prompt_with_update_hook(

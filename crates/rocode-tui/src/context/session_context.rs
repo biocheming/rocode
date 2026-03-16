@@ -459,7 +459,10 @@ impl SessionContext {
                 message.role = role;
                 message.content.clear();
                 message.parts.retain(|part| {
-                    !matches!(part, MessagePart::Text { .. } | MessagePart::Reasoning { .. })
+                    !matches!(
+                        part,
+                        MessagePart::Text { .. } | MessagePart::Reasoning { .. }
+                    )
                 });
             }
             "delta" => {
@@ -544,7 +547,9 @@ impl SessionContext {
             "start" | "running" => {
                 let arguments = detail;
                 if let Some(MessagePart::ToolCall {
-                    name, arguments: existing, ..
+                    name,
+                    arguments: existing,
+                    ..
                 }) = message.parts.iter_mut().find(|part| {
                     matches!(
                         part,
@@ -606,8 +611,7 @@ impl SessionContext {
             return;
         };
 
-        let pos =
-            self.ensure_message_for_block(session_id, block_id, MessageRole::Assistant);
+        let pos = self.ensure_message_for_block(session_id, block_id, MessageRole::Assistant);
         let Some(message) = self
             .messages
             .get_mut(session_id)
@@ -617,7 +621,9 @@ impl SessionContext {
         };
 
         message.role = MessageRole::Assistant;
-        message.parts.retain(|part| !matches!(part, MessagePart::Text { .. }));
+        message
+            .parts
+            .retain(|part| !matches!(part, MessagePart::Text { .. }));
         message.parts.push(MessagePart::Text {
             text: block.text.clone(),
         });
@@ -680,7 +686,9 @@ impl SessionContext {
         title: Option<String>,
     ) {
         self.messages.entry(session_id.to_string()).or_default();
-        self.message_index.entry(session_id.to_string()).or_default();
+        self.message_index
+            .entry(session_id.to_string())
+            .or_default();
         self.session_status
             .entry(session_id.to_string())
             .or_insert(SessionStatus::Idle);
@@ -786,28 +794,49 @@ impl SessionContext {
             metadata.insert("scheduler_stage_id".to_string(), serde_json::json!(value));
         }
         if let Some(value) = block.stage_index {
-            metadata.insert("scheduler_stage_index".to_string(), serde_json::json!(value));
+            metadata.insert(
+                "scheduler_stage_index".to_string(),
+                serde_json::json!(value),
+            );
         }
         if let Some(value) = block.stage_total {
-            metadata.insert("scheduler_stage_total".to_string(), serde_json::json!(value));
+            metadata.insert(
+                "scheduler_stage_total".to_string(),
+                serde_json::json!(value),
+            );
         }
         if let Some(value) = block.step {
             metadata.insert("scheduler_stage_step".to_string(), serde_json::json!(value));
         }
         if let Some(value) = block.status.clone() {
-            metadata.insert("scheduler_stage_status".to_string(), serde_json::json!(value));
+            metadata.insert(
+                "scheduler_stage_status".to_string(),
+                serde_json::json!(value),
+            );
         }
         if let Some(value) = block.focus.clone() {
-            metadata.insert("scheduler_stage_focus".to_string(), serde_json::json!(value));
+            metadata.insert(
+                "scheduler_stage_focus".to_string(),
+                serde_json::json!(value),
+            );
         }
         if let Some(value) = block.last_event.clone() {
-            metadata.insert("scheduler_stage_last_event".to_string(), serde_json::json!(value));
+            metadata.insert(
+                "scheduler_stage_last_event".to_string(),
+                serde_json::json!(value),
+            );
         }
         if let Some(value) = block.waiting_on.clone() {
-            metadata.insert("scheduler_stage_waiting_on".to_string(), serde_json::json!(value));
+            metadata.insert(
+                "scheduler_stage_waiting_on".to_string(),
+                serde_json::json!(value),
+            );
         }
         if let Some(value) = block.activity.clone() {
-            metadata.insert("scheduler_stage_activity".to_string(), serde_json::json!(value));
+            metadata.insert(
+                "scheduler_stage_activity".to_string(),
+                serde_json::json!(value),
+            );
         }
         if let Some(value) = block.loop_budget.clone() {
             metadata.insert(
@@ -972,7 +1001,10 @@ mod tests {
             }),
         );
 
-        let child = ctx.sessions.get("child-1").expect("child session placeholder");
+        let child = ctx
+            .sessions
+            .get("child-1")
+            .expect("child session placeholder");
         assert_eq!(child.id, "child-1");
 
         let message = ctx

@@ -398,7 +398,9 @@ mod tests {
         );
         assert_eq!(
             parse_interactive_command("/child focus child-42"),
-            Some(InteractiveCommand::FocusChildSession("child-42".to_string()))
+            Some(InteractiveCommand::FocusChildSession(
+                "child-42".to_string()
+            ))
         );
         assert_eq!(
             parse_interactive_command("/child focus"),

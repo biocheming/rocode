@@ -133,10 +133,7 @@ impl SubtaskExecutor {
         self
     }
 
-    pub fn with_ask_permission_hook(
-        mut self,
-        ask_permission_hook: AskPermissionHook,
-    ) -> Self {
+    pub fn with_ask_permission_hook(mut self, ask_permission_hook: AskPermissionHook) -> Self {
         self.ask_permission_hook = Some(ask_permission_hook);
         self
     }

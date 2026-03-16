@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 rocode-core = { path = "../rocode-core" }
+rocode-content = { path = "../rocode-content" }
 rocode-util = { path = "../rocode-util" }
 rocode-types = { path = "../rocode-types" }
 rocode-storage = { path = "../rocode-storage" }
@@ -16,7 +17,6 @@ rocode-tool = { path = "../rocode-tool" }
 rocode-mcp = { path = "../rocode-mcp" }
 rocode-lsp = { path = "../rocode-lsp" }
 rocode-plugin = { path = "../rocode-plugin" }
-rocode-command = { path = "../rocode-command" }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 serde = { workspace = true }

@@ -229,7 +229,10 @@ impl CliApiClient {
         reply: &str,
         message: Option<String>,
     ) -> anyhow::Result<()> {
-        let url = server_url(&self.base_url, &format!("/permission/{}/reply", permission_id));
+        let url = server_url(
+            &self.base_url,
+            &format!("/permission/{}/reply", permission_id),
+        );
         let body = serde_json::json!({
             "reply": reply,
             "message": message,

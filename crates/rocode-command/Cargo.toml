@@ -4,6 +4,7 @@ version.workspace = true
 edition = "2021"
 
 [dependencies]
+rocode-content = { path = "../rocode-content" }
 rocode-agent = { path = "../rocode-agent" }
 rocode-plugin = { path = "../rocode-plugin" }
 rocode-tool = { path = "../rocode-tool" }

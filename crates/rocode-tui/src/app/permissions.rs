@@ -126,8 +126,11 @@ impl App {
                 self.pending_permission_ids.remove(permission_id);
                 self.pending_permissions.remove(permission_id);
                 self.permission_prompt.remove_request(permission_id);
-                self.toast
-                    .show(crate::components::ToastVariant::Success, "Permission updated", 2000);
+                self.toast.show(
+                    crate::components::ToastVariant::Success,
+                    "Permission updated",
+                    2000,
+                );
             }
             Err(error) => {
                 self.alert_dialog
@@ -145,7 +148,8 @@ impl App {
             self.permission_prompt
                 .add_request(Self::permission_request_to_prompt(&permission));
         }
-        self.pending_permissions.insert(permission.id.clone(), permission);
+        self.pending_permissions
+            .insert(permission.id.clone(), permission);
     }
 
     pub(super) fn clear_permission_request(&mut self, permission_id: &str) {

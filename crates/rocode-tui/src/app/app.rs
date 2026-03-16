@@ -8,10 +8,10 @@ mod dialogs;
 mod mappers;
 #[path = "model_controls.rs"]
 mod model_controls;
-#[path = "prompt_flow.rs"]
-mod prompt_flow;
 #[path = "permissions.rs"]
 mod permissions;
+#[path = "prompt_flow.rs"]
+mod prompt_flow;
 #[path = "questions.rs"]
 mod questions;
 #[path = "server_events.rs"]
@@ -44,8 +44,7 @@ use rocode_core::agent_task_registry::{global_task_registry, AgentTaskStatus};
 
 use crate::api::{
     ApiClient, ExecutionModeInfo, ExecutionStatus as ApiExecutionStatus, McpStatusInfo,
-    MessageInfo, PermissionRequestInfo, QuestionInfo,
-    RecoveryActionKind as ApiRecoveryActionKind,
+    MessageInfo, PermissionRequestInfo, QuestionInfo, RecoveryActionKind as ApiRecoveryActionKind,
     RecoveryProtocolStatus as ApiRecoveryProtocolStatus, SessionExecutionNode, SessionInfo,
     SessionRecoveryProtocol, SessionRevertInfo,
 };
@@ -1011,7 +1010,8 @@ impl App {
                                         }
                                     }
                                     PermissionAction::ApproveAlways => {
-                                        if let Some(request) = self.permission_prompt.approve_always()
+                                        if let Some(request) =
+                                            self.permission_prompt.approve_always()
                                         {
                                             self.resolve_permission_request(
                                                 &request.id,
@@ -1201,8 +1201,7 @@ impl App {
                     self.perf.session_updated_events =
                         self.perf.session_updated_events.saturating_add(1);
                     if let Route::Session { session_id: active } = self.context.current_route() {
-                        if active == *session_id
-                            && session_update_requires_sync(source.as_deref())
+                        if active == *session_id && session_update_requires_sync(source.as_deref())
                         {
                             self.pending_session_sync = Some(session_id.to_string());
                             self.pending_session_sync_due_at = Some(
@@ -1321,19 +1320,23 @@ impl App {
                 }) => {
                     let current_session = self.current_session_id();
                     let is_active_session = current_session.as_deref() == Some(session_id.as_str());
-                    let current_is_parent_of_target = current_session.as_deref().is_some_and(|active| {
-                        let session_ctx = self.context.session.read();
-                        session_ctx
-                            .sessions
-                            .get(session_id)
-                            .and_then(|session| session.parent_id.as_deref())
-                            == Some(active)
-                    });
+                    let current_is_parent_of_target =
+                        current_session.as_deref().is_some_and(|active| {
+                            let session_ctx = self.context.session.read();
+                            session_ctx
+                                .sessions
+                                .get(session_id)
+                                .and_then(|session| session.parent_id.as_deref())
+                                == Some(active)
+                        });
 
                     {
                         let mut session_ctx = self.context.session.write();
-                        session_ctx
-                            .apply_output_block_incremental(session_id, id.as_deref(), payload);
+                        session_ctx.apply_output_block_incremental(
+                            session_id,
+                            id.as_deref(),
+                            payload,
+                        );
                     }
 
                     if let Route::Session { session_id: active } = self.context.current_route() {

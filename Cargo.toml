@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/rocode-core",
+    "crates/rocode-content",
     "crates/rocode-types",
     "crates/rocode-util",
     "crates/rocode-config",

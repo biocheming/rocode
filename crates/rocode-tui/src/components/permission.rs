@@ -120,7 +120,10 @@ impl PermissionPrompt {
     }
 
     pub fn remove_request(&mut self, request_id: &str) -> Option<PermissionRequest> {
-        let index = self.requests.iter().position(|request| request.id == request_id)?;
+        let index = self
+            .requests
+            .iter()
+            .position(|request| request.id == request_id)?;
         let request = self.requests.remove(index);
         if self.current_index >= self.requests.len() {
             self.current_index = self.requests.len().saturating_sub(1);

@@ -237,18 +237,21 @@ pub(crate) fn broadcast_output_block_event(state: &ServerState, event: &OutputBl
 
 pub(crate) fn server_output_block_hook(state: Arc<ServerState>) -> OutputBlockHook {
     Arc::new(move |event| {
-        broadcast_output_block_event(state.as_ref(), &event);
+        let state = state.clone();
+        Box::pin(async move {
+            broadcast_output_block_event(state.as_ref(), &event);
+        })
     })
 }
 
-pub(crate) fn emit_output_block_via_hook(
+pub(crate) async fn emit_output_block_via_hook(
     output_hook: Option<&OutputBlockHook>,
     event: OutputBlockEvent,
 ) {
     let Some(output_hook) = output_hook else {
         return;
     };
-    output_hook(event);
+    output_hook(event).await;
 }
 
 pub(crate) fn sse_output_block_hook(
@@ -256,10 +259,10 @@ pub(crate) fn sse_output_block_hook(
 ) -> OutputBlockHook {
     Arc::new(move |event| {
         let tx = tx.clone();
-        tokio::spawn(async move {
+        Box::pin(async move {
             let server_event = server_output_block_event(&event);
             send_sse_server_event(&tx, &server_event).await;
-        });
+        })
     })
 }
 

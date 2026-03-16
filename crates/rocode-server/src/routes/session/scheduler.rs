@@ -1200,14 +1200,18 @@ pub async fn run_local_scheduler_prompt(
 
     if let Some(output_hook) = output_hook {
         if !assistant_text.trim().is_empty() {
-            emit_output_block_via_hook(Some(&output_hook), OutputBlockEvent {
-                session_id: session_id.clone(),
-                block: OutputBlock::Message(MessageBlock::full(
-                    OutputMessageRole::Assistant,
-                    assistant_text.clone(),
-                )),
-                id: Some(assistant_message_id.clone()),
-            });
+            emit_output_block_via_hook(
+                Some(&output_hook),
+                OutputBlockEvent {
+                    session_id: session_id.clone(),
+                    block: OutputBlock::Message(MessageBlock::full(
+                        OutputMessageRole::Assistant,
+                        assistant_text.clone(),
+                    )),
+                    id: Some(assistant_message_id.clone()),
+                },
+            )
+            .await;
         }
     }
 

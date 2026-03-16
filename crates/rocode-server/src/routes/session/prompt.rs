@@ -13,8 +13,8 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use crate::recovery::RecoveryExecutionContext;
-use crate::runtime_control::SessionRunStatus;
 use crate::routes::permission::request_permission;
+use crate::runtime_control::SessionRunStatus;
 use crate::session_runtime::events::{
     broadcast_session_updated, server_output_block_hook, ServerEvent,
 };
@@ -789,9 +789,8 @@ pub(super) async fn session_prompt(
                 }
             }))
         };
-        let output_block_hook: Option<rocode_session::prompt::OutputBlockHook> = {
-            Some(server_output_block_hook(task_state.clone()))
-        };
+        let output_block_hook: Option<rocode_session::prompt::OutputBlockHook> =
+            { Some(server_output_block_hook(task_state.clone())) };
 
         let publish_bus_hook: Option<rocode_session::prompt::PublishBusHook> = {
             let state = task_state.clone();

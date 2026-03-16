@@ -7,11 +7,11 @@ use std::sync::{Arc, Mutex};
 
 use rocode_agent::{AgentInfo, AgentRegistry};
 use rocode_command::cli_panel::CliPanelFrame;
-use rocode_command::cli_permission::{prompt_permission, PermissionDecision, PermissionMemory};
 #[cfg(test)]
 use rocode_command::cli_panel::{
     display_width, pad_right_display, truncate_display, wrap_display_text,
 };
+use rocode_command::cli_permission::{prompt_permission, PermissionDecision, PermissionMemory};
 use rocode_command::cli_prompt::{
     PromptCompletion, PromptFrame, PromptSession, PromptSessionEvent,
 };
@@ -396,7 +396,10 @@ async fn cli_execute_ui_action(
                 return Ok(CliUiActionOutcome::Continue);
             };
 
-            match api_client.update_session_title(&session_id, next_title.trim()).await {
+            match api_client
+                .update_session_title(&session_id, next_title.trim())
+                .await
+            {
                 Ok(updated) => {
                     let _ = print_block(
                         Some(runtime),
@@ -430,9 +433,7 @@ async fn cli_execute_ui_action(
             let Some(session_id) = runtime.server_session_id.clone() else {
                 let _ = print_block(
                     Some(runtime),
-                    OutputBlock::Status(StatusBlock::warning(
-                        "No active server session to share.",
-                    )),
+                    OutputBlock::Status(StatusBlock::warning("No active server session to share.")),
                     repl_style,
                 );
                 return Ok(CliUiActionOutcome::Continue);
@@ -501,9 +502,7 @@ async fn cli_execute_ui_action(
             let Some(session_id) = runtime.server_session_id.clone() else {
                 let _ = print_block(
                     Some(runtime),
-                    OutputBlock::Status(StatusBlock::warning(
-                        "No active server session to fork.",
-                    )),
+                    OutputBlock::Status(StatusBlock::warning("No active server session to fork.")),
                     repl_style,
                 );
                 return Ok(CliUiActionOutcome::Continue);
@@ -544,9 +543,7 @@ async fn cli_execute_ui_action(
             let Some(session_id) = runtime.server_session_id.clone() else {
                 let _ = print_block(
                     Some(runtime),
-                    OutputBlock::Status(StatusBlock::warning(
-                        "No server session to compact.",
-                    )),
+                    OutputBlock::Status(StatusBlock::warning("No server session to compact.")),
                     repl_style,
                 );
                 return Ok(CliUiActionOutcome::Continue);
@@ -556,9 +553,7 @@ async fn cli_execute_ui_action(
                 Ok(_) => {
                     let _ = print_block(
                         Some(runtime),
-                        OutputBlock::Status(StatusBlock::title(
-                            "Session compacted successfully.",
-                        )),
+                        OutputBlock::Status(StatusBlock::title("Session compacted successfully.")),
                         repl_style,
                     );
                     if let Ok(mut proj) = runtime.frontend_projection.lock() {
@@ -1754,11 +1749,7 @@ impl CliFrontendProjection {
         {
             parts.push(active.to_string());
         }
-        if let Some(view) = self
-            .view_label
-            .as_deref()
-            .filter(|value| !value.is_empty())
-        {
+        if let Some(view) = self.view_label.as_deref().filter(|value| !value.is_empty()) {
             parts.push(view.to_string());
         }
         if self.queue_len > 0 {
@@ -2551,7 +2542,11 @@ fn cli_track_child_session(runtime: &CliExecutionRuntime, parent_id: &str, child
     inserted
 }
 
-fn cli_untrack_child_session(runtime: &CliExecutionRuntime, parent_id: &str, child_id: &str) -> bool {
+fn cli_untrack_child_session(
+    runtime: &CliExecutionRuntime,
+    parent_id: &str,
+    child_id: &str,
+) -> bool {
     if parent_id.is_empty() || child_id.is_empty() {
         return false;
     }
@@ -2577,7 +2572,11 @@ fn cli_cache_child_session_block(
     }
 }
 
-fn cli_cache_root_session_block(runtime: &CliExecutionRuntime, block: &OutputBlock, style: &CliStyle) {
+fn cli_cache_root_session_block(
+    runtime: &CliExecutionRuntime,
+    block: &OutputBlock,
+    style: &CliStyle,
+) {
     let rendered = render_cli_block_rich(block, style);
     if let Ok(mut transcript) = runtime.root_session_transcript.lock() {
         transcript.append_rendered(&rendered);
@@ -4479,9 +4478,11 @@ async fn run_server_prompt(
 fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style: &CliStyle) {
     let root_session_id = runtime.server_session_id.as_deref();
     let focused_session_id = cli_focused_session_id(runtime);
-    let is_root_session =
-        |event_session_id: &str| root_session_id.is_none_or(|sid| event_session_id.is_empty() || sid == event_session_id);
-    let is_related_session = |event_session_id: &str| cli_tracks_related_session(runtime, event_session_id);
+    let is_root_session = |event_session_id: &str| {
+        root_session_id.is_none_or(|sid| event_session_id.is_empty() || sid == event_session_id)
+    };
+    let is_related_session =
+        |event_session_id: &str| cli_tracks_related_session(runtime, event_session_id);
 
     match event {
         CliServerEvent::SessionUpdated { session_id, source } => {
@@ -4894,7 +4895,10 @@ async fn handle_permission_from_sse(
         PermissionDecision::Deny => ("reject", Some("rejected".to_string())),
     };
 
-    if let Err(error) = api_client.reply_permission(permission_id, reply, message).await {
+    if let Err(error) = api_client
+        .reply_permission(permission_id, reply, message)
+        .await
+    {
         tracing::error!(permission_id, %error, "failed to reply permission");
     }
 }
@@ -5499,16 +5503,13 @@ fn format_session_time(timestamp: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        cli_resolve_registry_ui_action,
         cli_cycle_child_session, cli_focus_child_session, cli_focus_root_session,
-        cli_prompt_assist_view,
-        cli_prompt_screen_lines, cli_recent_session_info_for_directory,
-        cli_render_retained_layout, cli_render_startup_banner,
-        cli_session_update_requires_refresh,
-        cli_should_emit_scheduler_stage_block, CliFrontendPhase, CliFrontendProjection,
-        CliObservedExecutionTopology, CliPromptCatalog, CliPromptSelectionState,
-        CliRecentSessionInfo, CliRetainedTranscript, CliSessionTokenStats, CliExecutionRuntime,
-        PermissionMemory,
+        cli_prompt_assist_view, cli_prompt_screen_lines, cli_recent_session_info_for_directory,
+        cli_render_retained_layout, cli_render_startup_banner, cli_resolve_registry_ui_action,
+        cli_session_update_requires_refresh, cli_should_emit_scheduler_stage_block,
+        CliExecutionRuntime, CliFrontendPhase, CliFrontendProjection, CliObservedExecutionTopology,
+        CliPromptCatalog, CliPromptSelectionState, CliRecentSessionInfo, CliRetainedTranscript,
+        CliSessionTokenStats, PermissionMemory,
     };
     use crate::api_client::SessionInfo;
     use chrono::Utc;
@@ -5613,14 +5614,11 @@ mod tests {
             .child_session_transcripts
             .lock()
             .expect("child transcripts")
-            .insert(
-                "child-session-b".to_string(),
-                {
-                    let mut transcript = CliRetainedTranscript::default();
-                    transcript.append_rendered("● second child line\n");
-                    transcript
-                },
-            );
+            .insert("child-session-b".to_string(), {
+                let mut transcript = CliRetainedTranscript::default();
+                transcript.append_rendered("● second child line\n");
+                transcript
+            });
         runtime
     }
 
@@ -5655,7 +5653,10 @@ mod tests {
             cli_resolve_registry_ui_action(&registry, "/copy"),
             Some(UiActionId::CopySession)
         );
-        assert_eq!(cli_resolve_registry_ui_action(&registry, "/rename demo"), None);
+        assert_eq!(
+            cli_resolve_registry_ui_action(&registry, "/rename demo"),
+            None
+        );
     }
 
     #[test]
@@ -5677,8 +5678,7 @@ mod tests {
     fn focus_child_session_switches_visible_transcript_but_keeps_root_session() {
         let runtime = test_runtime_with_child_focus_data();
 
-        assert!(cli_focus_child_session(&runtime, "child-session-a")
-            .expect("focus child session"));
+        assert!(cli_focus_child_session(&runtime, "child-session-a").expect("focus child session"));
 
         let visible = runtime
             .frontend_projection
@@ -6080,8 +6080,12 @@ mod tests {
     fn session_updated_refresh_allowlist_is_explicit() {
         assert!(cli_session_update_requires_refresh(Some("prompt.final")));
         assert!(cli_session_update_requires_refresh(Some("stream.final")));
-        assert!(cli_session_update_requires_refresh(Some("prompt.completed")));
-        assert!(cli_session_update_requires_refresh(Some("session.title.set")));
+        assert!(cli_session_update_requires_refresh(Some(
+            "prompt.completed"
+        )));
+        assert!(cli_session_update_requires_refresh(Some(
+            "session.title.set"
+        )));
         assert!(!cli_session_update_requires_refresh(Some(
             "prompt.scheduler.stage.content"
         )));

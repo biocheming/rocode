@@ -2970,6 +2970,7 @@ dependencies = [
  "pulldown-cmark",
  "regex",
  "rocode-agent",
+ "rocode-content",
  "rocode-plugin",
  "rocode-tool",
  "serde",
@@ -2997,6 +2998,16 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+]
+
+[[package]]
+name = "rocode-content"
+version = "2026.3.15"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -3210,7 +3221,7 @@ dependencies = [
  "glob",
  "regex",
  "reqwest",
- "rocode-command",
+ "rocode-content",
  "rocode-core",
  "rocode-lsp",
  "rocode-mcp",
