@@ -150,6 +150,25 @@ class FakeElement {
     return child;
   }
 
+  insertBefore(child, referenceNode) {
+    if (!(child instanceof FakeElement)) {
+      throw new Error("FakeElement only supports FakeElement children");
+    }
+    if (!referenceNode) {
+      return this.appendChild(child);
+    }
+    const index = this.children.indexOf(referenceNode);
+    if (index === -1) {
+      return this.appendChild(child);
+    }
+    child.parentNode = this;
+    this.children.splice(index, 0, child);
+    this._textContent = null;
+    this._innerHTML = "";
+    this.scrollHeight = this.children.length;
+    return child;
+  }
+
   replaceChildren(...children) {
     this.children = [];
     this._textContent = null;
@@ -566,6 +585,43 @@ test("web reasoning blocks obey showThinking preference", () => {
     text: "visible thought",
   });
   assert.match(api.nodes.messageFeed.textContent, /visible thought/);
+  assert.equal(api.nodes.messageFeed.children[0].classList.contains("message-reasoning"), true);
+});
+
+test("web live reasoning renders before the current assistant message stream", () => {
+  const { api } = createHarness();
+  api.applyWebUiPreferences({
+    uiPreferences: {
+      showThinking: true,
+    },
+  });
+
+  api.applyOutputBlock({
+    kind: "message",
+    phase: "start",
+    role: "assistant",
+  });
+  api.applyOutputBlock({
+    kind: "reasoning",
+    phase: "start",
+  });
+  api.applyOutputBlock({
+    kind: "reasoning",
+    phase: "delta",
+    text: "drafting plan",
+  });
+  api.applyOutputBlock({
+    kind: "message",
+    phase: "delta",
+    role: "assistant",
+    text: "Final answer",
+  });
+
+  assert.equal(api.nodes.messageFeed.children.length, 2);
+  assert.equal(api.nodes.messageFeed.children[0].classList.contains("message-reasoning"), true);
+  assert.equal(api.nodes.messageFeed.children[1].classList.contains("message-ai"), true);
+  assert.match(text(api.nodes.messageFeed.children[0]), /drafting plan/);
+  assert.match(text(api.nodes.messageFeed.children[1]), /Final answer/);
 });
 
 test("web output_block events route by session id and do not leak child content into parent feed", () => {

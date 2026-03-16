@@ -148,7 +148,9 @@ function appendInlineMarkdown(parent, text) {
 
 function clearFeed() {
   nodes.messageFeed.innerHTML = "";
+  state.streamMessageArticle = null;
   state.streamMessageNode = null;
+  state.streamReasoningArticle = null;
   state.streamReasoningNode = null;
   state.streamReasoningText = "";
   state.streamToolBlocks.clear();
@@ -200,7 +202,11 @@ function appendMessage(role, text, ts, options = {}) {
   content.classList.add("md-root");
   renderMarkdownToNode(content, text);
 
-  nodes.messageFeed.appendChild(article);
+  if (options.beforeNode && options.beforeNode.parentNode === nodes.messageFeed) {
+    nodes.messageFeed.insertBefore(article, options.beforeNode);
+  } else {
+    nodes.messageFeed.appendChild(article);
+  }
   nodes.messageFeed.scrollTop = nodes.messageFeed.scrollHeight;
 
   return { article, bodyNode: content };

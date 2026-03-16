@@ -400,6 +400,36 @@
   line-height: var(--leading-relaxed);
 }
 
+/* Thinking / Reasoning */
+.message-reasoning {
+  align-self: flex-start;
+  max-width: 82%;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent-ai) 10%, white) 0%, var(--bg-surface) 100%);
+  border: 1px solid color-mix(in srgb, var(--accent-ai) 28%, var(--border-default));
+  border-left: 4px solid color-mix(in srgb, var(--accent-ai) 58%, var(--text-secondary));
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  box-shadow: var(--shadow-xs);
+}
+
+.message-reasoning .message-header {
+  opacity: 1;
+  color: color-mix(in srgb, var(--accent-ai) 65%, var(--text-secondary));
+}
+
+.message-reasoning .message-role {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.message-reasoning .message-content {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+}
+
 /* System/Message Event */
 .message-system {
   align-self: center;
@@ -1087,4 +1117,3 @@
   font-size: 11px;
   color: var(--accent-secondary, #a78bfa);
 }
-

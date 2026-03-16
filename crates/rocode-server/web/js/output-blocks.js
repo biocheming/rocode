@@ -35,6 +35,7 @@ function applyOutputBlock(block) {
       const result = appendMessage(block.role || "assistant", "", Date.now(), {
         title: block.role || "assistant",
       });
+      state.streamMessageArticle = result.article;
       state.streamMessageNode = result.bodyNode;
       state.streamMessageText = "";
       return;
@@ -44,6 +45,7 @@ function applyOutputBlock(block) {
         const result = appendMessage(block.role || "assistant", "", Date.now(), {
           title: block.role || "assistant",
         });
+        state.streamMessageArticle = result.article;
         state.streamMessageNode = result.bodyNode;
         state.streamMessageText = "";
       }
@@ -55,6 +57,7 @@ function applyOutputBlock(block) {
       return;
     }
     if (block.phase === "end") {
+      state.streamMessageArticle = null;
       state.streamMessageNode = null;
       state.streamMessageText = "";
       return;
@@ -74,9 +77,11 @@ function applyOutputBlock(block) {
 
     if (block.phase === "start") {
       const result = appendMessage("reasoning", "", Date.now(), {
-        title: "reasoning",
+        title: "thinking",
         tone: "muted",
+        beforeNode: state.streamMessageArticle,
       });
+      state.streamReasoningArticle = result.article;
       state.streamReasoningNode = result.bodyNode;
       state.streamReasoningText = "";
       return;
@@ -84,9 +89,11 @@ function applyOutputBlock(block) {
     if (block.phase === "delta") {
       if (!state.streamReasoningNode) {
         const result = appendMessage("reasoning", "", Date.now(), {
-          title: "reasoning",
+          title: "thinking",
           tone: "muted",
+          beforeNode: state.streamMessageArticle,
         });
+        state.streamReasoningArticle = result.article;
         state.streamReasoningNode = result.bodyNode;
         state.streamReasoningText = "";
       }
@@ -96,13 +103,14 @@ function applyOutputBlock(block) {
       return;
     }
     if (block.phase === "end") {
+      state.streamReasoningArticle = null;
       state.streamReasoningNode = null;
       state.streamReasoningText = "";
       return;
     }
     if (block.phase === "full") {
       appendMessage("reasoning", block.text || "", block.ts || Date.now(), {
-        title: "reasoning",
+        title: "thinking",
         tone: "muted",
       });
     }
