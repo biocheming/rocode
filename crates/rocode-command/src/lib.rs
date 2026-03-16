@@ -87,6 +87,13 @@ pub struct CommandRegistry {
     ui_slash_aliases: HashMap<String, UiActionId>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResolvedUiCommand {
+    pub action_id: UiActionId,
+    pub argument_kind: UiCommandArgumentKind,
+    pub argument: Option<String>,
+}
+
 impl CommandRegistry {
     pub fn new() -> Self {
         let mut registry = Self {
@@ -350,6 +357,35 @@ impl CommandRegistry {
             .filter(|command| command.slash.as_ref().is_some_and(|slash| slash.suggested))
             .collect()
     }
+
+    pub fn resolve_ui_slash_input(&self, input: &str) -> Option<ResolvedUiCommand> {
+        let trimmed = input.trim();
+        if !trimmed.starts_with('/') {
+            return None;
+        }
+
+        let body = trimmed[1..].trim();
+        if body.is_empty() {
+            return None;
+        }
+
+        let mut parts = body.split_whitespace();
+        let name = parts.next()?.to_ascii_lowercase();
+        let argument = parts.collect::<Vec<_>>().join(" ");
+        let action_id = self.ui_slash_aliases.get(&format!("/{}", name))?;
+        let command = self.ui_command(*action_id)?;
+        let argument_kind = command.argument_kind();
+        let argument = (!argument.trim().is_empty()).then_some(argument.trim().to_string());
+        if matches!(argument_kind, UiCommandArgumentKind::None) && argument.is_some() {
+            return None;
+        }
+
+        Some(ResolvedUiCommand {
+            action_id: command.action_id,
+            argument_kind,
+            argument,
+        })
+    }
 }
 
 fn command_payload_object(
@@ -461,10 +497,12 @@ mod tests {
     #[test]
     fn ui_command_aliases_resolve_to_same_action() {
         let registry = CommandRegistry::new();
+        let abort = registry.ui_slash_command("/abort").expect("abort command");
         let primary = registry
             .ui_slash_command("/command")
             .expect("primary slash command");
         let alias = registry.ui_slash_command("/palette").expect("alias");
+        assert_eq!(abort.action_id, UiActionId::AbortExecution);
         assert_eq!(primary.action_id, UiActionId::ToggleCommandPalette);
         assert_eq!(alias.action_id, UiActionId::ToggleCommandPalette);
 
@@ -506,5 +544,25 @@ mod tests {
             UiCommandArgumentKind::SessionTarget
         );
         assert_eq!(copy.argument_kind(), UiCommandArgumentKind::None);
+    }
+
+    #[test]
+    fn resolve_ui_slash_input_returns_action_and_argument() {
+        let registry = CommandRegistry::new();
+        let resolved = registry
+            .resolve_ui_slash_input("/model openai/gpt-5")
+            .expect("resolved command");
+
+        assert_eq!(resolved.action_id, UiActionId::OpenModelList);
+        assert_eq!(resolved.argument_kind, UiCommandArgumentKind::ModelRef);
+        assert_eq!(resolved.argument.as_deref(), Some("openai/gpt-5"));
+    }
+
+    #[test]
+    fn resolve_ui_slash_input_rejects_stray_arguments_for_non_parameterized_actions() {
+        let registry = CommandRegistry::new();
+
+        assert_eq!(registry.resolve_ui_slash_input("/rename demo"), None);
+        assert_eq!(registry.resolve_ui_slash_input("/copy extra"), None);
     }
 }

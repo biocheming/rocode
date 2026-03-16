@@ -48,7 +48,7 @@ use crate::session_runtime::events::broadcast_config_updated;
 use crate::web;
 use crate::{ApiError, Result, ServerState};
 use rocode_agent::{AgentMode, AgentRegistry};
-use rocode_command::CommandRegistry;
+use rocode_command::{CommandRegistry, ResolvedUiCommand};
 use rocode_config::Config as AppConfig;
 use rocode_orchestrator::{SchedulerConfig, SchedulerPresetKind};
 use rocode_permission::PermissionRuleset;
@@ -69,6 +69,7 @@ pub fn router() -> Router<Arc<ServerState>> {
         .route("/vcs", get(get_vcs_info))
         .route("/command", get(list_commands))
         .route("/command/ui", get(list_ui_commands))
+        .route("/command/ui/resolve", post(resolve_ui_command))
         .route("/agent", get(list_agents))
         .route("/mode", get(list_execution_modes))
         .route("/skill", get(list_skills))
@@ -269,6 +270,18 @@ async fn list_ui_commands() -> Result<Json<Vec<UiCommandApiSpec>>> {
             })
             .collect(),
     ))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ResolveUiCommandRequest {
+    input: String,
+}
+
+async fn resolve_ui_command(
+    Json(req): Json<ResolveUiCommandRequest>,
+) -> Result<Json<Option<ResolvedUiCommand>>> {
+    let registry = CommandRegistry::new();
+    Ok(Json(registry.resolve_ui_slash_input(&req.input)))
 }
 
 #[derive(Debug, Clone, Serialize)]

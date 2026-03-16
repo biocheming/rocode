@@ -157,11 +157,12 @@ impl SessionSchedulerLifecycleHook {
             stage_total,
             content,
             exec_ctx,
+            output_hook: self.output_hook.as_ref(),
         })
         .await;
     }
 
-    async fn update_active_stage_message<F>(&self, mut update: F, source: &'static str)
+    async fn update_active_stage_message<F>(&self, mut update: F, _source: &'static str)
     where
         F: FnMut(&mut SessionMessage, &mut ActiveStageMessage),
     {
@@ -198,8 +199,6 @@ impl SessionSchedulerLifecycleHook {
                     *last = active;
                 }
             }
-
-            broadcast_session_updated(&self.state, self.session_id.clone(), source);
         }
 
         if let Some(message) = message_snapshot.as_ref() {
@@ -1034,12 +1033,6 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                 child_message_id,
                 child_reasoning_started: false,
             });
-
-        broadcast_session_updated(
-            &self.state,
-            self.session_id.clone(),
-            "prompt.scheduler.stage.start",
-        );
     }
 
     async fn on_scheduler_stage_content(
@@ -1346,18 +1339,7 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                         self.session_id.clone(),
                         child_sid.clone(),
                     );
-                    broadcast_session_updated(
-                        &self.state,
-                        child_sid,
-                        "prompt.scheduler.stage.child.final",
-                    );
                 }
-
-                broadcast_session_updated(
-                    &self.state,
-                    self.session_id.clone(),
-                    "prompt.scheduler.stage",
-                );
                 self.state
                     .runtime_control
                     .finish_scheduler_stage(&active.execution_id)
@@ -2397,6 +2379,7 @@ pub(crate) async fn emit_scheduler_stage_message(input: SchedulerStageMessageInp
         stage_total,
         content,
         exec_ctx,
+        output_hook,
     } = input;
 
     let body = content.trim();
@@ -2482,11 +2465,22 @@ pub(crate) async fn emit_scheduler_stage_message(input: SchedulerStageMessageInp
     }
     message.add_text(body.to_string());
     apply_scheduler_decision_metadata(stage_name, message);
+    let message_snapshot = message.clone();
     session.touch();
     sessions.update(session);
     drop(sessions);
 
-    broadcast_session_updated(state, session_id.to_string(), "prompt.scheduler.stage");
+    if let Some(block) = scheduler_stage_block_from_message(&message_snapshot) {
+        emit_output_block_via_hook(
+            output_hook,
+            OutputBlockEvent {
+                session_id: session_id.to_string(),
+                block: OutputBlock::SchedulerStage(Box::new(block)),
+                id: Some(message_snapshot.id.clone()),
+            },
+        )
+        .await;
+    }
 }
 
 pub(crate) struct SchedulerStageMessageInput<'a> {
@@ -2498,6 +2492,7 @@ pub(crate) struct SchedulerStageMessageInput<'a> {
     pub stage_total: u32,
     pub content: &'a str,
     pub exec_ctx: &'a OrchestratorExecutionContext,
+    pub output_hook: Option<&'a OutputBlockHook>,
 }
 
 pub fn assistant_visible_text(message: &SessionMessage) -> String {
@@ -2905,6 +2900,7 @@ mod tests {
             stage_total: 4,
             content: "## Plan\n- step",
             exec_ctx: &exec_ctx,
+            output_hook: None,
         })
         .await;
 
@@ -2958,6 +2954,7 @@ mod tests {
             stage_total: 3,
             content: "## Coordination Verification\n\nMissing proof for task B.",
             exec_ctx: &exec_ctx,
+            output_hook: None,
         })
         .await;
 

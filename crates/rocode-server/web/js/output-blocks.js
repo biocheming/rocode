@@ -68,8 +68,44 @@ function applyOutputBlock(block) {
   }
 
   if (block.kind === "reasoning") {
-    // Reasoning blocks are suppressed in the main feed for scheduler stages;
-    // they flow into child sessions instead.
+    if (!state.showThinking) {
+      return;
+    }
+
+    if (block.phase === "start") {
+      const result = appendMessage("reasoning", "", Date.now(), {
+        title: "reasoning",
+        tone: "muted",
+      });
+      state.streamReasoningNode = result.bodyNode;
+      state.streamReasoningText = "";
+      return;
+    }
+    if (block.phase === "delta") {
+      if (!state.streamReasoningNode) {
+        const result = appendMessage("reasoning", "", Date.now(), {
+          title: "reasoning",
+          tone: "muted",
+        });
+        state.streamReasoningNode = result.bodyNode;
+        state.streamReasoningText = "";
+      }
+      state.streamReasoningText = (state.streamReasoningText || "") + (block.text || "");
+      state.streamReasoningNode.textContent = state.streamReasoningText;
+      nodes.messageFeed.scrollTop = nodes.messageFeed.scrollHeight;
+      return;
+    }
+    if (block.phase === "end") {
+      state.streamReasoningNode = null;
+      state.streamReasoningText = "";
+      return;
+    }
+    if (block.phase === "full") {
+      appendMessage("reasoning", block.text || "", block.ts || Date.now(), {
+        title: "reasoning",
+        tone: "muted",
+      });
+    }
     return;
   }
 

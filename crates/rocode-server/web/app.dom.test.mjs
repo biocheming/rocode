@@ -530,12 +530,42 @@ test("web ui preferences apply from config without localStorage", () => {
     uiPreferences: {
       webTheme: "graphite",
       webMode: "agent:atlas",
+      showThinking: true,
     },
   });
 
   assert.equal(api.state.selectedTheme, "graphite");
   assert.equal(api.state.selectedModeKey, "agent:atlas");
+  assert.equal(api.state.showThinking, true);
   assert.equal(api.nodes.shell.dataset.theme, "graphite");
+});
+
+test("web reasoning blocks obey showThinking preference", () => {
+  const { api } = createHarness();
+
+  api.applyWebUiPreferences({
+    uiPreferences: {
+      showThinking: false,
+    },
+  });
+  api.applyOutputBlock({
+    kind: "reasoning",
+    phase: "full",
+    text: "hidden thought",
+  });
+  assert.equal(api.nodes.messageFeed.children.length, 0);
+
+  api.applyWebUiPreferences({
+    uiPreferences: {
+      showThinking: true,
+    },
+  });
+  api.applyOutputBlock({
+    kind: "reasoning",
+    phase: "full",
+    text: "visible thought",
+  });
+  assert.match(api.nodes.messageFeed.textContent, /visible thought/);
 });
 
 test("web output_block events route by session id and do not leak child content into parent feed", () => {
@@ -571,6 +601,44 @@ test("web output_block events route by session id and do not leak child content 
   assert.equal(handledWhileChildFocused, true);
   assert.equal(api.nodes.messageFeed.children.length, 1);
   assert.match(api.nodes.messageFeed.textContent, /child content/);
+});
+
+test("global server events forward output_block to the selected child session when idle", () => {
+  const { api } = createHarness();
+  api.state.selectedSession = "child-session";
+  api.state.streaming = false;
+
+  api.handleGlobalServerEvent("output_block", {
+    type: "output_block",
+    sessionID: "child-session",
+    block: {
+      kind: "message",
+      phase: "full",
+      role: "assistant",
+      text: "child live content",
+    },
+  });
+
+  assert.match(api.nodes.messageFeed.textContent, /child live content/);
+});
+
+test("global server events do not double-render output_block while local stream is active", () => {
+  const { api } = createHarness();
+  api.state.selectedSession = "child-session";
+  api.state.streaming = true;
+
+  api.handleGlobalServerEvent("output_block", {
+    type: "output_block",
+    sessionID: "child-session",
+    block: {
+      kind: "message",
+      phase: "full",
+      role: "assistant",
+      text: "duplicate content",
+    },
+  });
+
+  assert.equal(api.nodes.messageFeed.children.length, 0);
 });
 
 test("web stream usage accepts zero values without keeping stale totals", () => {
@@ -942,6 +1010,48 @@ test("web help slash command renders shared ui command catalogue lines", async (
   assert.match(text(article), /\/help   Show help and shortcuts/);
 });
 
+test("web shared action aliases resolve help and status without local name branches", async () => {
+  const { api } = createHarness();
+  api.state.uiCommands = [
+    {
+      action_id: "show_help",
+      title: "Help",
+      description: "Show help and shortcuts",
+      category: "system",
+      keybind: "f1",
+      include_in_palette: true,
+      slash: {
+        name: "/help",
+        aliases: ["/commands"],
+        suggested: true,
+      },
+    },
+    {
+      action_id: "show_status",
+      title: "Status",
+      description: "Show runtime status",
+      category: "system",
+      keybind: null,
+      include_in_palette: true,
+      slash: {
+        name: "/status",
+        aliases: ["/stats"],
+        suggested: false,
+      },
+    },
+  ];
+  api.state.selectedModel = "openai/gpt-4.1";
+
+  let handled = await api.handleSlashCommand("/commands");
+  assert.equal(handled, true);
+  assert.match(api.nodes.messageFeed.textContent, /Show help and shortcuts/);
+
+  handled = await api.handleSlashCommand("/stats");
+  assert.equal(handled, true);
+  assert.match(api.nodes.messageFeed.textContent, /state:/);
+  assert.match(api.nodes.messageFeed.textContent, /model: openai\/gpt-4\.1/);
+});
+
 test("web slash aliases resolve through shared ui command catalogue", async () => {
   const { api } = createHarness();
   api.state.uiCommands = [
@@ -1059,6 +1169,38 @@ test("web shared copy command writes current transcript to clipboard", async () 
   const handled = await api.handleSlashCommand("/copy");
   assert.equal(handled, true);
   assert.equal(clipboardText, "copied transcript");
+});
+
+test("web shared abort command uses shared action semantics", async () => {
+  const routes = new Map([
+    ["/session/session-1/abort", () => ({ target: "session", aborted: true })],
+  ]);
+  const { api } = createHarness(routes);
+  api.state.uiCommands = [
+    {
+      action_id: "abort_execution",
+      title: "Abort Execution",
+      description: "Cancel the active run",
+      category: "session",
+      keybind: null,
+      include_in_palette: false,
+      slash: {
+        name: "/abort",
+        aliases: [],
+        suggested: false,
+      },
+    },
+  ];
+
+  let handled = await api.handleSlashCommand("/abort");
+  assert.equal(handled, true);
+  assert.match(api.nodes.messageFeed.textContent, /No active run to abort/);
+
+  api.state.streaming = true;
+  api.state.selectedSession = "session-1";
+  handled = await api.handleSlashCommand("/abort");
+  assert.equal(handled, true);
+  assert.equal(api.state.abortRequested, true);
 });
 
 test("web command panel renders shared command catalogue", () => {

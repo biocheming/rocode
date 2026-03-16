@@ -133,12 +133,32 @@ function maybeResolveGlobalPermission(payload) {
 function handleGlobalServerEvent(name, payload) {
   const type = globalServerEventType(name, payload);
 
-  if (
-    type === "output_block" ||
-    type === "usage" ||
-    type === "error" ||
-    type === "message"
-  ) {
+  if (type === "message") {
+    return;
+  }
+
+  if (type === "output_block") {
+    if (state.streaming) return;
+    const handled = applyOutputBlockEvent(payload);
+    if (!handled) return;
+    const block = payload && payload.block ? payload.block : payload;
+    if (block && (block.kind === "scheduler_stage" || block.kind === "tool")) {
+      scheduleExecutionTopologyRefresh(60);
+    }
+    return;
+  }
+
+  if (type === "usage") {
+    if (!state.streaming && globalServerEventSessionId(payload) === state.selectedSession) {
+      applyStreamUsage(payload);
+    }
+    return;
+  }
+
+  if (type === "error") {
+    if (!state.streaming && globalServerEventSessionId(payload) === state.selectedSession) {
+      applyOutputBlock({ kind: "status", tone: "error", text: payload.error || payload.message || "Stream error" });
+    }
     return;
   }
 

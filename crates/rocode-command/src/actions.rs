@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UiActionId {
+    AbortExecution,
     NewSession,
     OpenSessionList,
     NavigateParentSession,
@@ -94,7 +95,7 @@ pub struct UiSlashCommandSpec {
     pub suggested: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UiCommandArgumentKind {
     None,
@@ -137,6 +138,19 @@ pub fn ui_command_argument_kind(action_id: UiActionId) -> UiCommandArgumentKind 
 
 pub fn builtin_ui_commands() -> Vec<UiCommandSpec> {
     vec![
+        UiCommandSpec {
+            action_id: UiActionId::AbortExecution,
+            title: "Abort Execution",
+            description: "Cancel the active run or scheduler stage",
+            category: UiCommandCategory::Session,
+            keybind: None,
+            include_in_palette: false,
+            slash: Some(UiSlashCommandSpec {
+                name: "/abort",
+                aliases: &[],
+                suggested: false,
+            }),
+        },
         UiCommandSpec {
             action_id: UiActionId::NewSession,
             title: "New Session",

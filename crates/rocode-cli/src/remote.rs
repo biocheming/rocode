@@ -6,8 +6,12 @@ use rocode_command::output_blocks::{
     SchedulerDecisionRenderSpec, SchedulerDecisionSection, SchedulerStageBlock, SessionEventBlock,
     SessionEventField, StatusBlock, ToolBlock, ToolPhase,
 };
+use rocode_config::schema::ShareMode;
+use rocode_config::Config;
 use serde::Deserialize;
 use std::io::{self, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use crate::cli::RunOutputFormat;
 use crate::util::{parse_bool_env, parse_http_json, server_url};
@@ -17,11 +21,6 @@ struct RemoteSessionInfo {
     id: String,
     #[serde(default)]
     parent_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RemoteConfigInfo {
-    share: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,6 +43,18 @@ pub(crate) struct RemoteAttachOptions {
     pub format: RunOutputFormat,
     pub title: Option<String>,
     pub show_thinking: bool,
+}
+
+fn remote_show_thinking_from_config(config: &Config) -> Option<bool> {
+    config
+        .ui_preferences
+        .as_ref()
+        .and_then(|ui| ui.show_thinking)
+}
+
+async fn fetch_remote_config(client: &reqwest::Client, base_url: &str) -> anyhow::Result<Config> {
+    let config_endpoint = server_url(base_url, "/config");
+    parse_http_json(client.get(config_endpoint).send().await?).await
 }
 
 pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBlock> {
@@ -429,10 +440,8 @@ pub(crate) async fn maybe_share_remote_session(
         .ok()
         .map(|v| parse_bool_env(&v))
         .unwrap_or(false);
-    let config_endpoint = server_url(base_url, "/config");
-    let config: RemoteConfigInfo =
-        parse_http_json(client.get(config_endpoint).send().await?).await?;
-    let config_auto = config.share.as_deref() == Some("auto");
+    let config = fetch_remote_config(client, base_url).await?;
+    let config_auto = matches!(config.share, Some(ShareMode::Auto));
 
     if !(share_requested || auto_share_env || config_auto) {
         return Ok(());
@@ -447,82 +456,16 @@ pub(crate) async fn maybe_share_remote_session(
 
 pub(crate) async fn consume_remote_sse(
     response: reqwest::Response,
+    client: &reqwest::Client,
+    base_url: &str,
     session_id: &str,
     format: RunOutputFormat,
-    show_thinking: bool,
+    show_thinking: Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
     let mut current_event: Option<String> = None;
     let mut current_data: Vec<String> = Vec::new();
-
-    let dispatch_event = |event_name: Option<String>, data: String| -> anyhow::Result<()> {
-        if data.trim().is_empty() {
-            return Ok(());
-        }
-
-        let parsed: serde_json::Value =
-            serde_json::from_str(&data).unwrap_or_else(|_| serde_json::json!({ "raw": data }));
-        let event_type = event_name
-            .or_else(|| {
-                parsed
-                    .get("type")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            })
-            .unwrap_or_else(|| "message".to_string());
-
-        if matches!(format, RunOutputFormat::Json) {
-            let mut output = serde_json::Map::new();
-            output.insert(
-                "type".to_string(),
-                serde_json::Value::String(event_type.clone()),
-            );
-            output.insert(
-                "timestamp".to_string(),
-                serde_json::json!(chrono::Utc::now().timestamp_millis()),
-            );
-            output.insert(
-                "sessionID".to_string(),
-                serde_json::Value::String(session_id.to_string()),
-            );
-            match parsed {
-                serde_json::Value::Object(map) => {
-                    for (k, v) in map {
-                        output.insert(k, v);
-                    }
-                }
-                other => {
-                    output.insert("data".to_string(), other);
-                }
-            }
-            println!("{}", serde_json::Value::Object(output));
-            return Ok(());
-        }
-
-        if event_type == "output_block" {
-            let payload = parsed.get("block").unwrap_or(&parsed);
-            if let Some(block) = parse_output_block(payload) {
-                if matches!(block, OutputBlock::Reasoning(_)) && !show_thinking {
-                    return Ok(());
-                }
-                let style = CliStyle::detect();
-                print!("{}", render_cli_block_rich(&block, &style));
-                io::stdout().flush()?;
-            }
-            return Ok(());
-        }
-
-        if event_type.as_str() == "error" {
-            let message = parsed
-                .get("error")
-                .and_then(|v| v.as_str())
-                .or_else(|| parsed.get("message").and_then(|v| v.as_str()))
-                .unwrap_or("unknown remote stream error");
-            eprintln!("\nError: {}", message);
-        }
-        Ok(())
-    };
 
     loop {
         let Some(chunk) = StreamExt::next(&mut stream).await else {
@@ -539,7 +482,16 @@ pub(crate) async fn consume_remote_sse(
             }
             if line.is_empty() {
                 let data = current_data.join("\n");
-                dispatch_event(current_event.take(), data)?;
+                dispatch_remote_sse_event(
+                    client,
+                    base_url,
+                    &show_thinking,
+                    session_id,
+                    &format,
+                    current_event.take(),
+                    data,
+                )
+                .await?;
                 current_data.clear();
                 continue;
             }
@@ -552,9 +504,102 @@ pub(crate) async fn consume_remote_sse(
     }
 
     if !current_data.is_empty() {
-        dispatch_event(current_event.take(), current_data.join("\n"))?;
+        dispatch_remote_sse_event(
+            client,
+            base_url,
+            &show_thinking,
+            session_id,
+            &format,
+            current_event.take(),
+            current_data.join("\n"),
+        )
+        .await?;
     }
 
+    Ok(())
+}
+
+async fn dispatch_remote_sse_event(
+    client: &reqwest::Client,
+    base_url: &str,
+    show_thinking: &Arc<AtomicBool>,
+    session_id: &str,
+    format: &RunOutputFormat,
+    event_name: Option<String>,
+    data: String,
+) -> anyhow::Result<()> {
+    if data.trim().is_empty() {
+        return Ok(());
+    }
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&data).unwrap_or_else(|_| serde_json::json!({ "raw": data }));
+    let event_type = event_name
+        .or_else(|| {
+            parsed
+                .get("type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| "message".to_string());
+
+    if event_type == "config.updated" {
+        if let Ok(config) = fetch_remote_config(client, base_url).await {
+            if let Some(enabled) = remote_show_thinking_from_config(&config) {
+                show_thinking.store(enabled, Ordering::SeqCst);
+            }
+        }
+    }
+
+    if matches!(format, &RunOutputFormat::Json) {
+        let mut output = serde_json::Map::new();
+        output.insert(
+            "type".to_string(),
+            serde_json::Value::String(event_type.clone()),
+        );
+        output.insert(
+            "timestamp".to_string(),
+            serde_json::json!(chrono::Utc::now().timestamp_millis()),
+        );
+        output.insert(
+            "sessionID".to_string(),
+            serde_json::Value::String(session_id.to_string()),
+        );
+        match parsed {
+            serde_json::Value::Object(map) => {
+                for (k, v) in map {
+                    output.insert(k, v);
+                }
+            }
+            other => {
+                output.insert("data".to_string(), other);
+            }
+        }
+        println!("{}", serde_json::Value::Object(output));
+        return Ok(());
+    }
+
+    if event_type == "output_block" {
+        let payload = parsed.get("block").unwrap_or(&parsed);
+        if let Some(block) = parse_output_block(payload) {
+            if matches!(block, OutputBlock::Reasoning(_)) && !show_thinking.load(Ordering::SeqCst) {
+                return Ok(());
+            }
+            let style = CliStyle::detect();
+            print!("{}", render_cli_block_rich(&block, &style));
+            io::stdout().flush()?;
+        }
+        return Ok(());
+    }
+
+    if event_type.as_str() == "error" {
+        let message = parsed
+            .get("error")
+            .and_then(|v| v.as_str())
+            .or_else(|| parsed.get("message").and_then(|v| v.as_str()))
+            .unwrap_or("unknown remote stream error");
+        eprintln!("\nError: {}", message);
+    }
     Ok(())
 }
 
@@ -576,6 +621,7 @@ pub(crate) async fn run_non_interactive_attach(options: RemoteAttachOptions) -> 
         show_thinking,
     } = options;
     let client = reqwest::Client::new();
+    let show_thinking = Arc::new(AtomicBool::new(show_thinking));
     let session_id =
         resolve_remote_session(&client, &base_url, continue_last, session, fork, title).await?;
     maybe_share_remote_session(&client, &base_url, &session_id, share).await?;
@@ -610,7 +656,15 @@ pub(crate) async fn run_non_interactive_attach(options: RemoteAttachOptions) -> 
         anyhow::bail!("Remote run failed ({}): {}", status, body);
     }
 
-    consume_remote_sse(response, &session_id, format, show_thinking).await
+    consume_remote_sse(
+        response,
+        &client,
+        &base_url,
+        &session_id,
+        format,
+        show_thinking,
+    )
+    .await
 }
 
 #[cfg(test)]

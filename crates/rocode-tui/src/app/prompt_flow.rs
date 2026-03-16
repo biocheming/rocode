@@ -104,6 +104,12 @@ impl App {
             return self.submit_shell_command(input);
         }
 
+        let ui_registry = CommandRegistry::new();
+        if let Some(invocation) = ui_registry.resolve_ui_slash_input(&input) {
+            self.execute_ui_action_invocation(&invocation)?;
+            return Ok(());
+        }
+
         if let Some(command) = parse_interactive_command(&input) {
             if self.execute_typed_interactive_command(command)? {
                 return Ok(());

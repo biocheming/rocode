@@ -12,6 +12,15 @@ use std::path::{Path, PathBuf};
 use super::file_ops::{get_global_config_paths, parse_jsonc};
 use super::ConfigLoader;
 
+fn project_config_write_path(project_dir: &Path) -> PathBuf {
+    super::PROJECT_CONFIG_TARGETS
+        .iter()
+        .rev()
+        .map(|target| project_dir.join(target))
+        .find(|path| path.exists())
+        .unwrap_or_else(|| project_dir.join(".rocode/rocode.json"))
+}
+
 pub(super) fn merge_agent_config(target: &mut AgentConfig, source: AgentConfig) {
     if source.name.is_some() {
         target.name = source.name;
@@ -199,7 +208,11 @@ pub async fn load_config_with_remote<P: AsRef<Path>>(project_dir: P) -> Result<C
 
 /// Update project-level config by merging a patch.
 pub fn update_config(project_dir: &Path, patch: &Config) -> Result<()> {
-    let config_path = project_dir.join("rocode.json");
+    let config_path = project_config_write_path(project_dir);
+
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
 
     let existing = if config_path.exists() {
         let content = fs::read_to_string(&config_path)?;

@@ -6,6 +6,7 @@ use super::markdown_parser::{
     serde_yaml_frontmatter_to_json, split_frontmatter,
 };
 use super::*;
+use crate::{ShareMode, UiPreferencesConfig};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 struct TestDir {
@@ -446,9 +447,33 @@ fn test_update_config() {
 
     update_config(&temp.path, &patch).unwrap();
 
-    let content = fs::read_to_string(temp.path.join("rocode.json")).unwrap();
+    let content = fs::read_to_string(temp.path.join(".rocode/rocode.json")).unwrap();
     let config: Config = serde_json::from_str(&content).unwrap();
     assert_eq!(config.model, Some("claude-3-opus".to_string()));
+}
+
+#[test]
+fn test_update_config_prefers_highest_precedence_existing_project_file() {
+    let temp = TestDir::new("rocode_update_config_precedence");
+    let config_path = temp.path.join(".rocode/rocode.jsonc");
+    fs::create_dir_all(config_path.parent().expect("config dir")).unwrap();
+    fs::write(&config_path, r#"{ "share": "manual" }"#).unwrap();
+
+    let patch = Config {
+        ui_preferences: Some(UiPreferencesConfig {
+            show_thinking: Some(true),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    update_config(&temp.path, &patch).unwrap();
+
+    let content = fs::read_to_string(&config_path).unwrap();
+    let config: Config = serde_json::from_str(&content).unwrap();
+    let ui = config.ui_preferences.expect("ui preferences");
+    assert!(matches!(config.share, Some(ShareMode::Manual)));
+    assert_eq!(ui.show_thinking, Some(true));
 }
 
 // ── YAML frontmatter parsing tests ──────────────────────────────

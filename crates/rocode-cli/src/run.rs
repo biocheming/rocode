@@ -25,7 +25,7 @@ use rocode_command::output_blocks::{
     render_cli_block_rich, MessageBlock, MessagePhase, MessageRole as OutputMessageRole,
     OutputBlock, QueueItemBlock, SchedulerStageBlock, StatusBlock,
 };
-use rocode_command::{CommandRegistry, UiActionId};
+use rocode_command::{CommandRegistry, ResolvedUiCommand, UiActionId};
 use rocode_config::loader::load_config;
 use rocode_config::Config;
 use rocode_core::agent_task_registry::{global_task_registry, AgentTaskStatus};
@@ -78,6 +78,23 @@ fn resolve_requested_agent_name(
 
     "build".to_string()
 }
+
+fn cli_show_thinking_from_config(config: &Config) -> Option<bool> {
+    config
+        .ui_preferences
+        .as_ref()
+        .and_then(|ui| ui.show_thinking)
+}
+
+fn cli_resolve_show_thinking(explicit_flag: bool, config: Option<&Config>, fallback: bool) -> bool {
+    if explicit_flag {
+        return true;
+    }
+
+    config
+        .and_then(cli_show_thinking_from_config)
+        .unwrap_or(fallback)
+}
 pub(crate) async fn run_non_interactive(options: RunNonInteractiveOptions) -> anyhow::Result<()> {
     let RunNonInteractiveOptions {
         message,
@@ -111,8 +128,6 @@ pub(crate) async fn run_non_interactive(options: RunNonInteractiveOptions) -> an
 
     let mut input = collect_run_input(message)?;
     append_cli_file_attachments(&mut input, &files)?;
-    let show_thinking = thinking || input.trim().is_empty();
-
     if input.trim().is_empty() {
         let (provider, model_id) = parse_model_and_provider(model);
         return run_chat_session(
@@ -120,7 +135,7 @@ pub(crate) async fn run_non_interactive(options: RunNonInteractiveOptions) -> an
             provider,
             requested_agent,
             requested_scheduler_profile,
-            show_thinking,
+            thinking,
         )
         .await;
     }
@@ -130,6 +145,9 @@ pub(crate) async fn run_non_interactive(options: RunNonInteractiveOptions) -> an
     } else {
         discover_or_start_server(None).await?
     };
+    let api_client = CliApiClient::new(base_url.clone());
+    let remote_config = api_client.get_config().await.ok();
+    let show_thinking = cli_resolve_show_thinking(thinking, remote_config.as_ref(), false);
 
     run_non_interactive_attach(RemoteAttachOptions {
         base_url,
@@ -214,7 +232,7 @@ struct CliExecutionRuntime {
     /// Local CLI-only focus target. `None` means the root session remains visible.
     focused_session_id: Arc<Mutex<Option<String>>>,
     permission_memory: Arc<AsyncMutex<PermissionMemory>>,
-    show_thinking: bool,
+    show_thinking: Arc<AtomicBool>,
 }
 
 struct CliRuntimeBuildInput<'a> {
@@ -239,22 +257,11 @@ enum CliUiActionOutcome {
     Break,
 }
 
-fn cli_resolve_registry_ui_action(registry: &CommandRegistry, input: &str) -> Option<UiActionId> {
-    let trimmed = input.trim();
-    if !trimmed.starts_with('/') {
-        return None;
-    }
-
-    let body = trimmed[1..].trim();
-    let mut parts = body.split_whitespace();
-    let name = parts.next()?;
-    if parts.next().is_some() {
-        return None;
-    }
-
-    registry
-        .ui_slash_command(&format!("/{}", name.to_ascii_lowercase()))
-        .map(|command| command.action_id)
+fn cli_resolve_registry_ui_action(
+    registry: &CommandRegistry,
+    input: &str,
+) -> Option<ResolvedUiCommand> {
+    registry.resolve_ui_slash_input(input)
 }
 
 async fn cli_prompt_action_text(
@@ -303,6 +310,7 @@ async fn cli_prompt_action_text(
 
 async fn cli_execute_ui_action(
     action_id: UiActionId,
+    argument: Option<&str>,
     runtime: &mut CliExecutionRuntime,
     api_client: &CliApiClient,
     provider_registry: &ProviderRegistry,
@@ -311,6 +319,34 @@ async fn cli_execute_ui_action(
     repl_style: &CliStyle,
 ) -> anyhow::Result<CliUiActionOutcome> {
     match action_id {
+        UiActionId::AbortExecution => {
+            let handle = { runtime.active_abort.lock().await.clone() };
+            let Some(handle) = handle else {
+                let _ = print_block(
+                    Some(runtime),
+                    OutputBlock::Status(StatusBlock::warning(
+                        "No active run to abort. Use /abort while a response is running.",
+                    )),
+                    repl_style,
+                );
+                return Ok(CliUiActionOutcome::Continue);
+            };
+
+            if cli_trigger_abort(handle).await {
+                let _ = print_block(
+                    Some(runtime),
+                    OutputBlock::Status(StatusBlock::warning("Cancellation requested.")),
+                    repl_style,
+                );
+            } else {
+                let _ = print_block(
+                    Some(runtime),
+                    OutputBlock::Status(StatusBlock::error("Failed to request cancellation.")),
+                    repl_style,
+                );
+            }
+            Ok(CliUiActionOutcome::Continue)
+        }
         UiActionId::Exit => Ok(CliUiActionOutcome::Break),
         UiActionId::ShowHelp => {
             let style = CliStyle::detect();
@@ -328,48 +364,16 @@ async fn cli_execute_ui_action(
             Ok(CliUiActionOutcome::Continue)
         }
         UiActionId::NewSession => {
-            match api_client
-                .create_session(None, runtime.resolved_scheduler_profile_name.clone())
-                .await
-            {
-                Ok(new_session) => {
-                    let new_sid = new_session.id.clone();
-                    cli_set_root_server_session(runtime, new_sid.clone());
-
-                    if let Ok(mut proj) = runtime.frontend_projection.lock() {
-                        proj.token_stats = CliSessionTokenStats::default();
-                    }
-
-                    let _ = print_block(
-                        Some(runtime),
-                        OutputBlock::Status(StatusBlock::title(format!(
-                            "New session created: {}",
-                            &new_sid[..new_sid.len().min(8)]
-                        ))),
-                        repl_style,
-                    );
-
-                    cli_refresh_server_info(
-                        api_client,
-                        &runtime.frontend_projection,
-                        Some(&new_sid),
-                    )
-                    .await;
-                }
-                Err(e) => {
-                    let _ = print_block(
-                        Some(runtime),
-                        OutputBlock::Status(StatusBlock::error(format!(
-                            "Failed to create new session: {}",
-                            e
-                        ))),
-                        repl_style,
-                    );
-                }
+            if argument.is_some() {
+                return Ok(CliUiActionOutcome::Continue);
             }
+            cli_execute_new_session_action(runtime, api_client, repl_style).await;
             Ok(CliUiActionOutcome::Continue)
         }
         UiActionId::RenameSession => {
+            if argument.is_some() {
+                return Ok(CliUiActionOutcome::Continue);
+            }
             let Some(session_id) = runtime.server_session_id.clone() else {
                 let _ = print_block(
                     Some(runtime),
@@ -430,6 +434,9 @@ async fn cli_execute_ui_action(
             Ok(CliUiActionOutcome::Continue)
         }
         UiActionId::ShareSession => {
+            if argument.is_some() {
+                return Ok(CliUiActionOutcome::Continue);
+            }
             let Some(session_id) = runtime.server_session_id.clone() else {
                 let _ = print_block(
                     Some(runtime),
@@ -466,6 +473,9 @@ async fn cli_execute_ui_action(
             Ok(CliUiActionOutcome::Continue)
         }
         UiActionId::UnshareSession => {
+            if argument.is_some() {
+                return Ok(CliUiActionOutcome::Continue);
+            }
             let Some(session_id) = runtime.server_session_id.clone() else {
                 let _ = print_block(
                     Some(runtime),
@@ -499,87 +509,23 @@ async fn cli_execute_ui_action(
             Ok(CliUiActionOutcome::Continue)
         }
         UiActionId::ForkSession => {
-            let Some(session_id) = runtime.server_session_id.clone() else {
-                let _ = print_block(
-                    Some(runtime),
-                    OutputBlock::Status(StatusBlock::warning("No active server session to fork.")),
-                    repl_style,
-                );
+            if argument.is_some() {
                 return Ok(CliUiActionOutcome::Continue);
-            };
-
-            match api_client.fork_session(&session_id, None).await {
-                Ok(forked) => {
-                    cli_set_root_server_session(runtime, forked.id.clone());
-                    let _ = print_block(
-                        Some(runtime),
-                        OutputBlock::Status(StatusBlock::title(format!(
-                            "Forked session: {}",
-                            forked.id
-                        ))),
-                        repl_style,
-                    );
-                    cli_refresh_server_info(
-                        api_client,
-                        &runtime.frontend_projection,
-                        Some(&forked.id),
-                    )
-                    .await;
-                }
-                Err(error) => {
-                    let _ = print_block(
-                        Some(runtime),
-                        OutputBlock::Status(StatusBlock::error(format!(
-                            "Failed to fork session: {}",
-                            error
-                        ))),
-                        repl_style,
-                    );
-                }
             }
+            cli_execute_fork_session_action(runtime, api_client, repl_style).await;
             Ok(CliUiActionOutcome::Continue)
         }
         UiActionId::CompactSession => {
-            let Some(session_id) = runtime.server_session_id.clone() else {
-                let _ = print_block(
-                    Some(runtime),
-                    OutputBlock::Status(StatusBlock::warning("No server session to compact.")),
-                    repl_style,
-                );
+            if argument.is_some() {
                 return Ok(CliUiActionOutcome::Continue);
-            };
-
-            match api_client.compact_session(&session_id).await {
-                Ok(_) => {
-                    let _ = print_block(
-                        Some(runtime),
-                        OutputBlock::Status(StatusBlock::title("Session compacted successfully.")),
-                        repl_style,
-                    );
-                    if let Ok(mut proj) = runtime.frontend_projection.lock() {
-                        proj.token_stats = CliSessionTokenStats::default();
-                    }
-                    cli_refresh_server_info(
-                        api_client,
-                        &runtime.frontend_projection,
-                        Some(&session_id),
-                    )
-                    .await;
-                }
-                Err(error) => {
-                    let _ = print_block(
-                        Some(runtime),
-                        OutputBlock::Status(StatusBlock::error(format!(
-                            "Failed to compact session: {}",
-                            error
-                        ))),
-                        repl_style,
-                    );
-                }
             }
+            cli_execute_compact_session_action(runtime, api_client, repl_style).await;
             Ok(CliUiActionOutcome::Continue)
         }
         UiActionId::ShowStatus => {
+            if argument.is_some() {
+                return Ok(CliUiActionOutcome::Continue);
+            }
             let style = CliStyle::detect();
 
             cli_refresh_server_info(
@@ -704,6 +650,41 @@ async fn cli_execute_ui_action(
             Ok(CliUiActionOutcome::Continue)
         }
         UiActionId::OpenModelList => {
+            if let Some(model_ref) = argument.map(str::trim).filter(|value| !value.is_empty()) {
+                let mut exists = false;
+                for provider in provider_registry.list() {
+                    for model in provider.models() {
+                        if format!("{}/{}", provider.id(), model.id) == model_ref {
+                            exists = true;
+                            break;
+                        }
+                    }
+                    if exists {
+                        break;
+                    }
+                }
+                if exists {
+                    runtime.resolved_model_label = model_ref.to_string();
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::title(format!(
+                            "Model set to {}",
+                            model_ref
+                        ))),
+                        repl_style,
+                    );
+                } else {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::warning(format!(
+                            "Unknown model: {}",
+                            model_ref
+                        ))),
+                        repl_style,
+                    );
+                }
+                return Ok(CliUiActionOutcome::Continue);
+            }
             let style = CliStyle::detect();
             let mut lines = Vec::new();
             for p in provider_registry.list() {
@@ -716,6 +697,60 @@ async fn cli_execute_ui_action(
             Ok(CliUiActionOutcome::Continue)
         }
         UiActionId::OpenModeList => {
+            if let Some(mode_ref) = argument.map(str::trim).filter(|value| !value.is_empty()) {
+                match api_client.list_execution_modes().await {
+                    Ok(modes) => {
+                        let normalized = mode_ref.to_ascii_lowercase();
+                        let found = modes.into_iter().find(|mode| {
+                            let key = format!("{}:{}", mode.kind, mode.id).to_ascii_lowercase();
+                            key == normalized
+                                || mode.id.to_ascii_lowercase() == normalized
+                                || mode.name.to_ascii_lowercase() == normalized
+                                || format!("{}:{}", mode.kind, mode.name).to_ascii_lowercase()
+                                    == normalized
+                        });
+                        if let Some(mode) = found {
+                            runtime.resolved_scheduler_profile_name = match mode.kind.as_str() {
+                                "preset" | "profile" => Some(mode.id.clone()),
+                                _ => None,
+                            };
+                            runtime.resolved_agent_name = if mode.kind == "agent" {
+                                mode.id.clone()
+                            } else {
+                                runtime.resolved_agent_name.clone()
+                            };
+                            let _ = print_block(
+                                Some(runtime),
+                                OutputBlock::Status(StatusBlock::title(format!(
+                                    "Mode set to {}:{}",
+                                    mode.kind, mode.id
+                                ))),
+                                repl_style,
+                            );
+                        } else {
+                            let _ = print_block(
+                                Some(runtime),
+                                OutputBlock::Status(StatusBlock::warning(format!(
+                                    "Unknown mode: {}",
+                                    mode_ref
+                                ))),
+                                repl_style,
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        let _ = print_block(
+                            Some(runtime),
+                            OutputBlock::Status(StatusBlock::error(format!(
+                                "Failed to load modes: {}",
+                                error
+                            ))),
+                            repl_style,
+                        );
+                    }
+                }
+                return Ok(CliUiActionOutcome::Continue);
+            }
             let style = CliStyle::detect();
             match api_client.list_execution_modes().await {
                 Ok(modes) => {
@@ -773,6 +808,16 @@ async fn cli_execute_ui_action(
             Ok(CliUiActionOutcome::Continue)
         }
         UiActionId::OpenThemeList => {
+            if argument.is_some() {
+                let _ = print_block(
+                    Some(runtime),
+                    OutputBlock::Status(StatusBlock::warning(
+                        "Theme switching is not yet supported in CLI mode.",
+                    )),
+                    repl_style,
+                );
+                return Ok(CliUiActionOutcome::Continue);
+            }
             let _ = print_block(
                 Some(runtime),
                 OutputBlock::Status(StatusBlock::warning(
@@ -783,6 +828,32 @@ async fn cli_execute_ui_action(
             Ok(CliUiActionOutcome::Continue)
         }
         UiActionId::OpenAgentList => {
+            if let Some(agent_name) = argument.map(str::trim).filter(|value| !value.is_empty()) {
+                let agents = agent_registry.list();
+                let found = agents.iter().find(|info| info.name == agent_name);
+                if let Some(info) = found {
+                    runtime.resolved_agent_name = info.name.clone();
+                    runtime.resolved_scheduler_profile_name = None;
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::title(format!(
+                            "Agent set to {}",
+                            info.name
+                        ))),
+                        repl_style,
+                    );
+                } else {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::warning(format!(
+                            "Unknown agent: {}",
+                            agent_name
+                        ))),
+                        repl_style,
+                    );
+                }
+                return Ok(CliUiActionOutcome::Continue);
+            }
             let style = CliStyle::detect();
             let mut lines = Vec::new();
             for info in agent_registry.list() {
@@ -803,6 +874,30 @@ async fn cli_execute_ui_action(
             Ok(CliUiActionOutcome::Continue)
         }
         UiActionId::OpenPresetList => {
+            if let Some(preset_name) = argument.map(str::trim).filter(|value| !value.is_empty()) {
+                let presets = cli_available_presets(&load_config(current_dir)?);
+                if presets.iter().any(|preset| preset == preset_name) {
+                    runtime.resolved_scheduler_profile_name = Some(preset_name.to_string());
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::title(format!(
+                            "Preset set to {}",
+                            preset_name
+                        ))),
+                        repl_style,
+                    );
+                } else {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::warning(format!(
+                            "Unknown preset: {}",
+                            preset_name
+                        ))),
+                        repl_style,
+                    );
+                }
+                return Ok(CliUiActionOutcome::Continue);
+            }
             cli_list_presets(
                 &load_config(current_dir)?,
                 runtime.resolved_scheduler_profile_name.as_deref(),
@@ -811,6 +906,72 @@ async fn cli_execute_ui_action(
             Ok(CliUiActionOutcome::Continue)
         }
         UiActionId::OpenSessionList => {
+            if let Some(target) = argument.map(str::trim).filter(|value| !value.is_empty()) {
+                match target {
+                    "list" => {}
+                    "new" => {
+                        cli_execute_new_session_action(runtime, api_client, repl_style).await;
+                        return Ok(CliUiActionOutcome::Continue);
+                    }
+                    "fork" => {
+                        cli_execute_fork_session_action(runtime, api_client, repl_style).await;
+                        return Ok(CliUiActionOutcome::Continue);
+                    }
+                    "compact" => {
+                        cli_execute_compact_session_action(runtime, api_client, repl_style).await;
+                        return Ok(CliUiActionOutcome::Continue);
+                    }
+                    _ => match api_client.list_sessions(Some(target), Some(20)).await {
+                        Ok(sessions) => {
+                            if let Some(session) = sessions.into_iter().find(|session| {
+                                session.id == target
+                                    || session.id.starts_with(target)
+                                    || session
+                                        .title
+                                        .to_ascii_lowercase()
+                                        .contains(&target.to_ascii_lowercase())
+                            }) {
+                                cli_set_root_server_session(runtime, session.id.clone());
+                                let _ = print_block(
+                                    Some(runtime),
+                                    OutputBlock::Status(StatusBlock::title(format!(
+                                        "Session switched: {}",
+                                        session.id
+                                    ))),
+                                    repl_style,
+                                );
+                                cli_refresh_server_info(
+                                    api_client,
+                                    &runtime.frontend_projection,
+                                    Some(&session.id),
+                                )
+                                .await;
+                                return Ok(CliUiActionOutcome::Continue);
+                            }
+                            let _ = print_block(
+                                Some(runtime),
+                                OutputBlock::Status(StatusBlock::warning(format!(
+                                    "Session not found: {}",
+                                    target
+                                ))),
+                                repl_style,
+                            );
+                            return Ok(CliUiActionOutcome::Continue);
+                        }
+                        Err(error) => {
+                            let _ = print_block(
+                                Some(runtime),
+                                OutputBlock::Status(StatusBlock::error(format!(
+                                    "Failed to load sessions: {}",
+                                    error
+                                ))),
+                                repl_style,
+                            );
+                            return Ok(CliUiActionOutcome::Continue);
+                        }
+                    },
+                }
+            }
             cli_list_sessions(Some(runtime)).await;
             Ok(CliUiActionOutcome::Continue)
         }
@@ -2233,7 +2394,7 @@ async fn build_cli_execution_runtime(
         child_session_transcripts: Arc::new(Mutex::new(HashMap::new())),
         focused_session_id: Arc::new(Mutex::new(None)),
         permission_memory: Arc::new(AsyncMutex::new(PermissionMemory::new())),
-        show_thinking: selection.show_thinking,
+        show_thinking: Arc::new(AtomicBool::new(selection.show_thinking)),
     })
 }
 
@@ -2277,24 +2438,6 @@ fn cli_list_presets(
         })
         .collect::<Vec<_>>();
     let _ = print_cli_list_on_surface(runtime, "Available Presets", None, &lines, &style);
-}
-
-fn cli_has_preset(config: &Config, name: &str) -> bool {
-    cli_available_presets(config)
-        .iter()
-        .any(|preset| preset.eq_ignore_ascii_case(name))
-}
-
-fn cli_switch_message(runtime: Option<&CliExecutionRuntime>, kind: &str, value: &str) {
-    let style = CliStyle::detect();
-    let _ = print_block(
-        runtime,
-        OutputBlock::Status(StatusBlock::title(format!(
-            "Switched {} to {}.",
-            kind, value
-        ))),
-        &style,
-    );
 }
 
 fn cli_copy_target_transcript(runtime: &CliExecutionRuntime) -> Option<String> {
@@ -2938,6 +3081,125 @@ async fn cli_trigger_abort(handle: CliActiveAbortHandle) -> bool {
     }
 }
 
+async fn cli_execute_new_session_action(
+    runtime: &mut CliExecutionRuntime,
+    api_client: &CliApiClient,
+    repl_style: &CliStyle,
+) {
+    match api_client
+        .create_session(None, runtime.resolved_scheduler_profile_name.clone())
+        .await
+    {
+        Ok(new_session) => {
+            let new_sid = new_session.id.clone();
+            cli_set_root_server_session(runtime, new_sid.clone());
+
+            if let Ok(mut proj) = runtime.frontend_projection.lock() {
+                proj.token_stats = CliSessionTokenStats::default();
+            }
+
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::title(format!(
+                    "New session created: {}",
+                    &new_sid[..new_sid.len().min(8)]
+                ))),
+                repl_style,
+            );
+
+            cli_refresh_server_info(api_client, &runtime.frontend_projection, Some(&new_sid)).await;
+        }
+        Err(error) => {
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::error(format!(
+                    "Failed to create new session: {}",
+                    error
+                ))),
+                repl_style,
+            );
+        }
+    }
+}
+
+async fn cli_execute_fork_session_action(
+    runtime: &mut CliExecutionRuntime,
+    api_client: &CliApiClient,
+    repl_style: &CliStyle,
+) {
+    let Some(session_id) = runtime.server_session_id.clone() else {
+        let _ = print_block(
+            Some(runtime),
+            OutputBlock::Status(StatusBlock::warning("No active server session to fork.")),
+            repl_style,
+        );
+        return;
+    };
+
+    match api_client.fork_session(&session_id, None).await {
+        Ok(forked) => {
+            cli_set_root_server_session(runtime, forked.id.clone());
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::title(format!("Forked session: {}", forked.id))),
+                repl_style,
+            );
+            cli_refresh_server_info(api_client, &runtime.frontend_projection, Some(&forked.id))
+                .await;
+        }
+        Err(error) => {
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::error(format!(
+                    "Failed to fork session: {}",
+                    error
+                ))),
+                repl_style,
+            );
+        }
+    }
+}
+
+async fn cli_execute_compact_session_action(
+    runtime: &mut CliExecutionRuntime,
+    api_client: &CliApiClient,
+    repl_style: &CliStyle,
+) {
+    let Some(session_id) = runtime.server_session_id.clone() else {
+        let _ = print_block(
+            Some(runtime),
+            OutputBlock::Status(StatusBlock::warning("No server session to compact.")),
+            repl_style,
+        );
+        return;
+    };
+
+    match api_client.compact_session(&session_id).await {
+        Ok(_) => {
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::title("Session compacted successfully.")),
+                repl_style,
+            );
+            if let Ok(mut proj) = runtime.frontend_projection.lock() {
+                proj.token_stats = CliSessionTokenStats::default();
+            }
+            cli_refresh_server_info(api_client, &runtime.frontend_projection, Some(&session_id))
+                .await;
+        }
+        Err(error) => {
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::error(format!(
+                    "Failed to compact session: {}",
+                    error
+                ))),
+                repl_style,
+            );
+        }
+    }
+}
+
 fn cli_frontend_set_phase(
     frontend_projection: &Arc<Mutex<CliFrontendProjection>>,
     phase: CliFrontendPhase,
@@ -3536,7 +3798,7 @@ async fn run_chat_session(
     provider: Option<String>,
     requested_agent: Option<String>,
     requested_scheduler_profile: Option<String>,
-    show_thinking: bool,
+    thinking_requested: bool,
 ) -> anyhow::Result<()> {
     let current_dir = std::env::current_dir()?;
     let config = load_config(&current_dir)?;
@@ -3574,6 +3836,7 @@ async fn run_chat_session(
     // when the user hasn't explicitly overridden them via CLI flags.
     let server_url = discover_or_start_server(None).await?;
     let api_client = Arc::new(CliApiClient::new(server_url.clone()));
+    let server_config = api_client.get_config().await.ok();
     let recent_session_info = cli_load_recent_session_info(&api_client, &current_dir).await;
 
     // ── Selection: CLI flags → recent session fallback ───────────────
@@ -3599,12 +3862,12 @@ async fn run_chat_session(
             }
         });
 
-    let mut selection = CliRunSelection {
+    let selection = CliRunSelection {
         model: model.or(carry_model),
         provider: provider.or(carry_provider),
         requested_agent,
         requested_scheduler_profile: requested_scheduler_profile.or(carry_preset),
-        show_thinking,
+        show_thinking: cli_resolve_show_thinking(thinking_requested, server_config.as_ref(), true),
     };
 
     let mut runtime = build_cli_execution_runtime(CliRuntimeBuildInput {
@@ -3793,6 +4056,9 @@ async fn run_chat_session(
                         sse_event = sse_rx.recv() => {
                             if let Some(event) = sse_event {
                                 match event {
+                                    CliServerEvent::ConfigUpdated => {
+                                        cli_handle_config_updated_from_sse(&runtime, &api_client).await;
+                                    }
                                     CliServerEvent::QuestionCreated {
                                         request_id,
                                         session_id: _,
@@ -3836,26 +4102,29 @@ async fn run_chat_session(
             continue;
         }
 
-        if let Some(cmd) = parse_interactive_command(&trimmed) {
-            if let Some(action_id) = cmd.ui_action_id() {
-                match cli_execute_ui_action(
-                    action_id,
-                    &mut runtime,
-                    &api_client,
-                    &provider_registry,
-                    &agent_registry_arc,
-                    &current_dir,
-                    &repl_style,
-                )
-                .await?
-                {
-                    CliUiActionOutcome::Break => break,
-                    CliUiActionOutcome::Continue => continue,
-                }
+        if let Some(resolved) = cli_resolve_registry_ui_action(&command_registry, &trimmed) {
+            match cli_execute_ui_action(
+                resolved.action_id,
+                resolved.argument.as_deref(),
+                &mut runtime,
+                &api_client,
+                &provider_registry,
+                &agent_registry_arc,
+                &current_dir,
+                &repl_style,
+            )
+            .await?
+            {
+                CliUiActionOutcome::Break => break,
+                CliUiActionOutcome::Continue => continue,
             }
-            if let Some(action_id) = cli_resolve_registry_ui_action(&command_registry, &trimmed) {
+        }
+
+        if let Some(cmd) = parse_interactive_command(&trimmed) {
+            if let Some(invocation) = cmd.ui_action_invocation() {
                 match cli_execute_ui_action(
-                    action_id,
+                    invocation.action_id,
+                    invocation.argument.as_deref(),
                     &mut runtime,
                     &api_client,
                     &provider_registry,
@@ -3914,126 +4183,6 @@ async fn run_chat_session(
                         print!("\x1B[2J\x1B[1;1H");
                         io::stdout().flush()?;
                     }
-                }
-                InteractiveCommand::SelectModel(model_id) => {
-                    let (provider, model) = parse_model_and_provider(Some(model_id.clone()));
-                    if model.is_none() {
-                        let _ = print_block(
-                            Some(&runtime),
-                            OutputBlock::Status(StatusBlock::warning(format!(
-                                "Invalid model selector: {}",
-                                model_id
-                            ))),
-                            &repl_style,
-                        );
-                        continue;
-                    }
-                    selection.provider = provider;
-                    selection.model = model;
-                    runtime = build_cli_execution_runtime(CliRuntimeBuildInput {
-                        config: &config,
-                        agent_registry: agent_registry_arc.clone(),
-                        selection: &selection,
-                    })
-                    .await?;
-                    runtime.frontend_projection = shared_frontend_projection.clone();
-                    cli_attach_interactive_handles(
-                        &mut runtime,
-                        CliInteractiveHandles {
-                            terminal_surface: terminal_surface.clone(),
-                            prompt_chrome: prompt_chrome.clone(),
-                            prompt_session: prompt_session.clone(),
-                            queued_inputs: queued_inputs.clone(),
-                            busy_flag: busy_flag.clone(),
-                            exit_requested: exit_requested.clone(),
-                            active_abort: active_abort.clone(),
-                        },
-                    );
-                    cli_switch_message(Some(&runtime), "model", &runtime.resolved_model_label);
-                }
-                InteractiveCommand::SelectPreset(name) => {
-                    if !cli_has_preset(&config, &name) {
-                        let _ = print_block(
-                            Some(&runtime),
-                            OutputBlock::Status(StatusBlock::warning(format!(
-                                "Unknown preset: {}",
-                                name
-                            ))),
-                            &repl_style,
-                        );
-                        cli_list_presets(
-                            &config,
-                            runtime.resolved_scheduler_profile_name.as_deref(),
-                            Some(&runtime),
-                        );
-                        continue;
-                    }
-                    selection.requested_scheduler_profile = Some(name.clone());
-                    selection.requested_agent = None;
-                    selection.model = None;
-                    selection.provider = None;
-                    runtime = build_cli_execution_runtime(CliRuntimeBuildInput {
-                        config: &config,
-                        agent_registry: agent_registry_arc.clone(),
-                        selection: &selection,
-                    })
-                    .await?;
-                    runtime.frontend_projection = shared_frontend_projection.clone();
-                    cli_attach_interactive_handles(
-                        &mut runtime,
-                        CliInteractiveHandles {
-                            terminal_surface: terminal_surface.clone(),
-                            prompt_chrome: prompt_chrome.clone(),
-                            prompt_session: prompt_session.clone(),
-                            queued_inputs: queued_inputs.clone(),
-                            busy_flag: busy_flag.clone(),
-                            exit_requested: exit_requested.clone(),
-                            active_abort: active_abort.clone(),
-                        },
-                    );
-                    cli_switch_message(
-                        Some(&runtime),
-                        "preset",
-                        runtime
-                            .resolved_scheduler_profile_name
-                            .as_deref()
-                            .unwrap_or(name.as_str()),
-                    );
-                }
-                InteractiveCommand::SelectAgent(name) => {
-                    if agent_registry_arc.get(&name).is_none() {
-                        let _ = print_block(
-                            Some(&runtime),
-                            OutputBlock::Status(StatusBlock::warning(format!(
-                                "Unknown agent: {}",
-                                name
-                            ))),
-                            &repl_style,
-                        );
-                        continue;
-                    }
-                    selection.requested_agent = Some(name.clone());
-                    selection.requested_scheduler_profile = None;
-                    runtime = build_cli_execution_runtime(CliRuntimeBuildInput {
-                        config: &config,
-                        agent_registry: agent_registry_arc.clone(),
-                        selection: &selection,
-                    })
-                    .await?;
-                    runtime.frontend_projection = shared_frontend_projection.clone();
-                    cli_attach_interactive_handles(
-                        &mut runtime,
-                        CliInteractiveHandles {
-                            terminal_surface: terminal_surface.clone(),
-                            prompt_chrome: prompt_chrome.clone(),
-                            prompt_session: prompt_session.clone(),
-                            queued_inputs: queued_inputs.clone(),
-                            busy_flag: busy_flag.clone(),
-                            exit_requested: exit_requested.clone(),
-                            active_abort: active_abort.clone(),
-                        },
-                    );
-                    cli_switch_message(Some(&runtime), "agent", &runtime.resolved_agent_name);
                 }
                 InteractiveCommand::ListChildSessions => {
                     cli_list_child_sessions(&runtime);
@@ -4248,7 +4397,10 @@ async fn run_chat_session(
                 | InteractiveCommand::ListTasks
                 | InteractiveCommand::ListAgents
                 | InteractiveCommand::Copy
-                | InteractiveCommand::ToggleSidebar => {}
+                | InteractiveCommand::ToggleSidebar
+                | InteractiveCommand::SelectModel(_)
+                | InteractiveCommand::SelectPreset(_)
+                | InteractiveCommand::SelectAgent(_) => {}
             }
             continue;
         }
@@ -4413,6 +4565,9 @@ async fn run_server_prompt(
                         .await;
                 }
             }
+            Some(CliServerEvent::ConfigUpdated) => {
+                cli_handle_config_updated_from_sse(runtime, api_client).await;
+            }
             Some(CliServerEvent::SessionUpdated { session_id, source }) => {
                 handle_session_updated_from_sse(
                     runtime,
@@ -4473,6 +4628,22 @@ async fn run_server_prompt(
     Ok(())
 }
 
+async fn cli_handle_config_updated_from_sse(
+    runtime: &CliExecutionRuntime,
+    api_client: &CliApiClient,
+) {
+    match api_client.get_config().await {
+        Ok(config) => {
+            if let Some(enabled) = cli_show_thinking_from_config(&config) {
+                runtime.show_thinking.store(enabled, Ordering::SeqCst);
+            }
+        }
+        Err(error) => {
+            tracing::warn!(?error, "failed to refresh CLI config after config.updated");
+        }
+    }
+}
+
 /// Handle an incoming SSE event from the server — update topology,
 /// frontend projection, and render output blocks.
 fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style: &CliStyle) {
@@ -4485,6 +4656,9 @@ fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style:
         |event_session_id: &str| cli_tracks_related_session(runtime, event_session_id);
 
     match event {
+        CliServerEvent::ConfigUpdated => {
+            tracing::debug!("config.updated reached sync handler");
+        }
         CliServerEvent::SessionUpdated { session_id, source } => {
             if !is_root_session(&session_id) {
                 return;
@@ -4608,7 +4782,9 @@ fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style:
                 tracing::debug!(?id, payload = %block_payload, "failed to parse output_block");
                 return;
             };
-            if matches!(block, OutputBlock::Reasoning(_)) && !runtime.show_thinking {
+            if matches!(block, OutputBlock::Reasoning(_))
+                && !runtime.show_thinking.load(Ordering::SeqCst)
+            {
                 return;
             }
             if let Ok(mut topology) = runtime.observed_topology.lock() {
@@ -5515,7 +5691,7 @@ mod tests {
     use chrono::Utc;
     use rocode_command::cli_style::CliStyle;
     use rocode_command::output_blocks::SchedulerStageBlock;
-    use rocode_command::{CommandRegistry, UiActionId};
+    use rocode_command::{CommandRegistry, ResolvedUiCommand, UiActionId, UiCommandArgumentKind};
     use rocode_tui::api::SessionTimeInfo;
     use std::collections::{BTreeSet, HashMap, VecDeque};
     use std::path::Path;
@@ -5599,7 +5775,7 @@ mod tests {
             )]))),
             focused_session_id: Arc::new(Mutex::new(None)),
             permission_memory: Arc::new(AsyncMutex::new(PermissionMemory::new())),
-            show_thinking: true,
+            show_thinking: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -5639,23 +5815,77 @@ mod tests {
 
         assert_eq!(
             cli_resolve_registry_ui_action(&registry, "/share"),
-            Some(UiActionId::ShareSession)
+            Some(ResolvedUiCommand {
+                action_id: UiActionId::ShareSession,
+                argument_kind: UiCommandArgumentKind::None,
+                argument: None,
+            })
         );
         assert_eq!(
             cli_resolve_registry_ui_action(&registry, "/unshare"),
-            Some(UiActionId::UnshareSession)
+            Some(ResolvedUiCommand {
+                action_id: UiActionId::UnshareSession,
+                argument_kind: UiCommandArgumentKind::None,
+                argument: None,
+            })
         );
         assert_eq!(
             cli_resolve_registry_ui_action(&registry, "/palette"),
-            Some(UiActionId::ToggleCommandPalette)
+            Some(ResolvedUiCommand {
+                action_id: UiActionId::ToggleCommandPalette,
+                argument_kind: UiCommandArgumentKind::None,
+                argument: None,
+            })
         );
         assert_eq!(
             cli_resolve_registry_ui_action(&registry, "/copy"),
-            Some(UiActionId::CopySession)
+            Some(ResolvedUiCommand {
+                action_id: UiActionId::CopySession,
+                argument_kind: UiCommandArgumentKind::None,
+                argument: None,
+            })
         );
         assert_eq!(
             cli_resolve_registry_ui_action(&registry, "/rename demo"),
             None
+        );
+    }
+
+    #[test]
+    fn registry_ui_action_resolves_parameterized_shared_cli_commands() {
+        let registry = CommandRegistry::new();
+
+        assert_eq!(
+            cli_resolve_registry_ui_action(&registry, "/model openai/gpt-5"),
+            Some(ResolvedUiCommand {
+                action_id: UiActionId::OpenModelList,
+                argument_kind: UiCommandArgumentKind::ModelRef,
+                argument: Some("openai/gpt-5".to_string()),
+            })
+        );
+        assert_eq!(
+            cli_resolve_registry_ui_action(&registry, "/agent build"),
+            Some(ResolvedUiCommand {
+                action_id: UiActionId::OpenAgentList,
+                argument_kind: UiCommandArgumentKind::AgentRef,
+                argument: Some("build".to_string()),
+            })
+        );
+        assert_eq!(
+            cli_resolve_registry_ui_action(&registry, "/preset atlas"),
+            Some(ResolvedUiCommand {
+                action_id: UiActionId::OpenPresetList,
+                argument_kind: UiCommandArgumentKind::PresetRef,
+                argument: Some("atlas".to_string()),
+            })
+        );
+        assert_eq!(
+            cli_resolve_registry_ui_action(&registry, "/session abc123"),
+            Some(ResolvedUiCommand {
+                action_id: UiActionId::OpenSessionList,
+                argument_kind: UiCommandArgumentKind::SessionTarget,
+                argument: Some("abc123".to_string()),
+            })
         );
     }
 

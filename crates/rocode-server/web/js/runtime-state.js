@@ -66,6 +66,7 @@ function currentWebUiPreferencesPatch() {
   return {
     webTheme: state.selectedTheme || "midnight",
     webMode: state.selectedModeKey || null,
+    showThinking: Boolean(state.showThinking),
   };
 }
 
@@ -82,6 +83,7 @@ function applyWebUiPreferences(config = {}) {
   const ui = config && (config.uiPreferences || config.ui_preferences) ? (config.uiPreferences || config.ui_preferences) : {};
   const webTheme = ui.webTheme || ui.web_theme || null;
   const webMode = ui.webMode || ui.web_mode || null;
+  const showThinking = ui.showThinking ?? ui.show_thinking ?? state.showThinking;
 
   if (webTheme) {
     applyTheme(webTheme, { persist: false, announce: false });
@@ -89,6 +91,7 @@ function applyWebUiPreferences(config = {}) {
     applyTheme(state.selectedTheme || "midnight", { persist: false, announce: false });
   }
 
+  state.showThinking = Boolean(showThinking);
   setSelectedMode(webMode || null, { persist: false });
 }
 

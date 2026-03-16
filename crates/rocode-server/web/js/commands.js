@@ -26,6 +26,30 @@ function findUiSlashCommand(name) {
   }) || null;
 }
 
+async function resolveUiCommandInvocation(input) {
+  try {
+    const response = await api("/command/ui/resolve", {
+      method: "POST",
+      body: JSON.stringify({ input }),
+    });
+    return await response.json();
+  } catch (_) {
+    const trimmed = String(input || "").trim();
+    if (!trimmed.startsWith("/")) return null;
+    const body = trimmed.slice(1).trim();
+    if (!body) return null;
+    const [nameRaw, ...rest] = body.split(/\s+/);
+    const command = findUiSlashCommand(nameRaw);
+    if (!command) return null;
+    const argument = rest.join(" ").trim();
+    return {
+      action_id: commandActionId(command),
+      argument_kind: commandArgumentKind(command),
+      argument: argument || null,
+    };
+  }
+}
+
 function commandActionId(command) {
   return command && command.action_id ? String(command.action_id) : "";
 }
@@ -100,19 +124,18 @@ function modelOptionList() {
       : []);
 }
 
-function resolveModeScope(actionId, invokedSlash) {
-  const normalized = normalizeSlashName(invokedSlash);
-  if (actionId === "open_preset_list" || normalized === "/preset" || normalized === "/presets") {
+function resolveModeScope(actionId) {
+  if (actionId === "open_preset_list") {
     return "preset";
   }
-  if (actionId === "open_agent_list" || normalized === "/agent" || normalized === "/agents") {
+  if (actionId === "open_agent_list") {
     return "agent";
   }
   return "mode";
 }
 
-function resolveModePanelSection(actionId, invokedSlash) {
-  return resolveModeScope(actionId, invokedSlash) === "preset" ? "mode" : "mode";
+function resolveModePanelSection(actionId) {
+  return resolveModeScope(actionId) === "preset" ? "mode" : "mode";
 }
 
 function resolveModeFromArg(arg, scope) {
@@ -246,9 +269,8 @@ async function copyCurrentSessionTranscript() {
   return true;
 }
 
-async function executeParameterizedUiCommand(command, arg = "", invokedSlash = "") {
-  const actionId = commandActionId(command);
-  switch (commandArgumentKind(command)) {
+async function executeParameterizedUiCommand(actionId, argumentKind, arg = "") {
+  switch (argumentKind) {
     case "model_ref":
       if (!arg) {
         openCommandPanel("model");
@@ -266,10 +288,10 @@ async function executeParameterizedUiCommand(command, arg = "", invokedSlash = "
     case "agent_ref":
     case "preset_ref":
       if (!arg) {
-        openCommandPanel(resolveModePanelSection(actionId, invokedSlash));
+        openCommandPanel(resolveModePanelSection(actionId));
         return true;
       }
-      return setSelectedModeByArg(arg, resolveModeScope(actionId, invokedSlash));
+      return setSelectedModeByArg(arg, resolveModeScope(actionId));
     case "session_target":
       if (!arg) {
         openCommandPanel("session");
@@ -322,8 +344,28 @@ async function executeParameterizedUiCommand(command, arg = "", invokedSlash = "
   }
 }
 
-async function executeSharedUiAction(actionId, arg = "", invokedSlash = "") {
+async function executeSharedUiAction(actionId, arg = "") {
   switch (actionId) {
+    case "abort_execution":
+      if (arg) return false;
+      if (!state.streaming) {
+        applyOutputBlock({
+          kind: "status",
+          tone: "warning",
+          text: "No active run to abort. Use /abort while a response is running.",
+        });
+        return true;
+      }
+      if (state.abortRequested) {
+        applyOutputBlock({
+          kind: "status",
+          tone: "warning",
+          text: "Cancellation already requested.",
+        });
+        return true;
+      }
+      await abortCurrentExecution();
+      return true;
     case "show_help":
       applyOutputBlock({
         kind: "message",
@@ -412,19 +454,15 @@ async function handleSlashCommand(input) {
   const trimmed = input.trim();
   if (!trimmed.startsWith("/")) return false;
 
-  const body = trimmed.slice(1).trim();
-  if (!body) return false;
-  const [nameRaw, ...rest] = body.split(/\s+/);
-  const name = nameRaw.toLowerCase();
-  const arg = rest.join(" ").trim();
-  const sharedCommand = findUiSlashCommand(nameRaw);
+  const resolved = await resolveUiCommandInvocation(trimmed);
+  const sharedActionId = resolved && resolved.action_id ? String(resolved.action_id) : "";
+  const arg = resolved && resolved.argument ? String(resolved.argument) : "";
 
   if (
     interactionLocked() &&
-    name !== "help" &&
-    name !== "commands" &&
-    name !== "abort" &&
-    name !== "status"
+    sharedActionId !== "abort_execution" &&
+    sharedActionId !== "show_help" &&
+    sharedActionId !== "show_status"
   ) {
     applyOutputBlock({
       kind: "status",
@@ -436,42 +474,11 @@ async function handleSlashCommand(input) {
     return true;
   }
 
-  if (name === "help" || name === "commands") {
-    await executeSharedUiAction("show_help");
-    return true;
-  }
-
-  if (name === "abort") {
-    if (!state.streaming) {
-      applyOutputBlock({
-        kind: "status",
-        tone: "warning",
-        text: "No active run to abort. Use /abort while a response is running.",
-      });
+  if (resolved) {
+    if (await executeParameterizedUiCommand(sharedActionId, resolved.argument_kind, arg)) {
       return true;
     }
-    if (state.abortRequested) {
-      applyOutputBlock({
-        kind: "status",
-        tone: "warning",
-        text: "Cancellation already requested.",
-      });
-      return true;
-    }
-    await abortCurrentExecution();
-    return true;
-  }
-
-  if (name === "status" || name === "stats") {
-    await executeSharedUiAction("show_status");
-    return true;
-  }
-
-  if (sharedCommand) {
-    if (await executeParameterizedUiCommand(sharedCommand, arg, nameRaw)) {
-      return true;
-    }
-    if (await executeSharedUiAction(commandActionId(sharedCommand), arg, nameRaw)) {
+    if (await executeSharedUiAction(sharedActionId, arg)) {
       return true;
     }
   }

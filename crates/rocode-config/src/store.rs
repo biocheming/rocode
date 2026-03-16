@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::loader::resolve_configured_path;
+use crate::loader::{resolve_configured_path, update_config};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -51,6 +51,11 @@ impl ConfigStore {
         let mut updated = (*current).clone();
 
         let patch_config: Config = serde_json::from_value(patch)?;
+        if let Ok(project_dir) = self.project_dir.try_read() {
+            if let Some(project_dir) = project_dir.as_deref() {
+                update_config(project_dir, &patch_config)?;
+            }
+        }
         updated.merge(patch_config);
 
         let new_arc = Arc::new(updated);
@@ -130,6 +135,35 @@ impl ConfigStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TestDir {
+        path: PathBuf,
+    }
+
+    impl TestDir {
+        fn new(prefix: &str) -> Self {
+            let unique = format!(
+                "{}_{}_{}",
+                prefix,
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("clock error")
+                    .as_nanos()
+            );
+            let path = std::env::temp_dir().join(unique);
+            fs::create_dir_all(&path).expect("failed to create test temp dir");
+            Self { path }
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
 
     #[tokio::test]
     async fn config_returns_arc_without_clone() {
@@ -178,5 +212,23 @@ mod tests {
                 "/tmp/rocode-project/.rocode/scheduler/sisyphus.jsonc"
             ))
         );
+    }
+
+    #[tokio::test]
+    async fn patch_persists_to_disk_when_project_dir_is_known() {
+        let temp = TestDir::new("rocode_config_store_patch");
+        fs::write(temp.path.join("rocode.json"), r#"{ "model": "before" }"#).expect("seed config");
+
+        let store = ConfigStore::from_project_dir(&temp.path).expect("store");
+        store
+            .patch(serde_json::json!({
+                "uiPreferences": { "showThinking": true }
+            }))
+            .expect("patch");
+
+        let reloaded = store.reload().await.expect("reload");
+        let ui = reloaded.ui_preferences.as_ref().expect("ui preferences");
+        assert_eq!(reloaded.model.as_deref(), Some("before"));
+        assert_eq!(ui.show_thinking, Some(true));
     }
 }

@@ -1,4 +1,4 @@
-use crate::UiActionId;
+use crate::{ui_command_argument_kind, ResolvedUiCommand, UiActionId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InteractiveCommand {
@@ -42,26 +42,41 @@ pub enum InteractiveCommand {
 }
 
 impl InteractiveCommand {
+    pub fn ui_action_invocation(&self) -> Option<ResolvedUiCommand> {
+        let (action_id, argument) = match self {
+            Self::Exit => (UiActionId::Exit, None),
+            Self::ShowHelp => (UiActionId::ShowHelp, None),
+            Self::Abort => (UiActionId::AbortExecution, None),
+            Self::ShowRecovery => (UiActionId::OpenRecoveryList, None),
+            Self::NewSession => (UiActionId::NewSession, None),
+            Self::ShowStatus => (UiActionId::ShowStatus, None),
+            Self::ListModels => (UiActionId::OpenModelList, None),
+            Self::SelectModel(model_ref) => (UiActionId::OpenModelList, Some(model_ref.clone())),
+            Self::ListProviders => (UiActionId::ConnectProvider, None),
+            Self::ListThemes => (UiActionId::OpenThemeList, None),
+            Self::ListPresets => (UiActionId::OpenPresetList, None),
+            Self::SelectPreset(name) => (UiActionId::OpenPresetList, Some(name.clone())),
+            Self::ListSessions => (UiActionId::OpenSessionList, None),
+            Self::ParentSession => (UiActionId::NavigateParentSession, None),
+            Self::ListTasks => (UiActionId::ListTasks, None),
+            Self::Compact => (UiActionId::CompactSession, None),
+            Self::Copy => (UiActionId::CopySession, None),
+            Self::ListAgents => (UiActionId::OpenAgentList, None),
+            Self::SelectAgent(name) => (UiActionId::OpenAgentList, Some(name.clone())),
+            Self::ToggleSidebar => (UiActionId::ToggleSidebar, None),
+            _ => return None,
+        };
+
+        Some(ResolvedUiCommand {
+            action_id,
+            argument_kind: ui_command_argument_kind(action_id),
+            argument,
+        })
+    }
+
     pub fn ui_action_id(&self) -> Option<UiActionId> {
-        match self {
-            Self::Exit => Some(UiActionId::Exit),
-            Self::ShowHelp => Some(UiActionId::ShowHelp),
-            Self::ShowRecovery => Some(UiActionId::OpenRecoveryList),
-            Self::NewSession => Some(UiActionId::NewSession),
-            Self::ShowStatus => Some(UiActionId::ShowStatus),
-            Self::ListModels => Some(UiActionId::OpenModelList),
-            Self::ListProviders => Some(UiActionId::ConnectProvider),
-            Self::ListThemes => Some(UiActionId::OpenThemeList),
-            Self::ListPresets => Some(UiActionId::OpenPresetList),
-            Self::ListSessions => Some(UiActionId::OpenSessionList),
-            Self::ParentSession => Some(UiActionId::NavigateParentSession),
-            Self::ListTasks => Some(UiActionId::ListTasks),
-            Self::Compact => Some(UiActionId::CompactSession),
-            Self::Copy => Some(UiActionId::CopySession),
-            Self::ListAgents => Some(UiActionId::OpenAgentList),
-            Self::ToggleSidebar => Some(UiActionId::ToggleSidebar),
-            _ => None,
-        }
+        self.ui_action_invocation()
+            .map(|invocation| invocation.action_id)
     }
 }
 
@@ -192,7 +207,7 @@ pub fn parse_interactive_command(input: &str) -> Option<InteractiveCommand> {
 #[cfg(test)]
 mod tests {
     use super::{parse_interactive_command, InteractiveCommand};
-    use crate::UiActionId;
+    use crate::{ResolvedUiCommand, UiActionId, UiCommandArgumentKind};
 
     #[test]
     fn parses_plain_commands() {
@@ -477,10 +492,41 @@ mod tests {
             Some(UiActionId::CopySession)
         );
         assert_eq!(InteractiveCommand::ListChildSessions.ui_action_id(), None);
-        assert_eq!(InteractiveCommand::Abort.ui_action_id(), None);
+        assert_eq!(
+            InteractiveCommand::Abort.ui_action_id(),
+            Some(UiActionId::AbortExecution)
+        );
         assert_eq!(
             InteractiveCommand::SelectModel("foo".to_string()).ui_action_id(),
-            None
+            Some(UiActionId::OpenModelList)
+        );
+    }
+
+    #[test]
+    fn maps_parameterized_commands_to_ui_action_invocations() {
+        assert_eq!(
+            InteractiveCommand::SelectModel("openai/gpt-5".to_string()).ui_action_invocation(),
+            Some(ResolvedUiCommand {
+                action_id: UiActionId::OpenModelList,
+                argument_kind: UiCommandArgumentKind::ModelRef,
+                argument: Some("openai/gpt-5".to_string()),
+            })
+        );
+        assert_eq!(
+            InteractiveCommand::SelectAgent("build".to_string()).ui_action_invocation(),
+            Some(ResolvedUiCommand {
+                action_id: UiActionId::OpenAgentList,
+                argument_kind: UiCommandArgumentKind::AgentRef,
+                argument: Some("build".to_string()),
+            })
+        );
+        assert_eq!(
+            InteractiveCommand::SelectPreset("atlas".to_string()).ui_action_invocation(),
+            Some(ResolvedUiCommand {
+                action_id: UiActionId::OpenPresetList,
+                argument_kind: UiCommandArgumentKind::PresetRef,
+                argument: Some("atlas".to_string()),
+            })
         );
     }
 }

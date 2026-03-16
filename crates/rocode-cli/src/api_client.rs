@@ -10,6 +10,7 @@
 use std::time::Duration;
 
 use crate::util::server_url;
+use rocode_config::Config;
 
 // Re-export shared types from TUI api module so callers don't need to
 // depend on rocode_tui directly.
@@ -294,6 +295,12 @@ impl CliApiClient {
     }
 
     // ── Providers ────────────────────────────────────────────────────
+
+    pub async fn get_config(&self) -> anyhow::Result<Config> {
+        let url = server_url(&self.base_url, "/config");
+        let resp = self.client.get(&url).send().await?;
+        Self::json_ok(resp, "get config").await
+    }
 
     pub async fn get_config_providers(&self) -> anyhow::Result<ProviderListResponse> {
         let url = server_url(&self.base_url, "/config/providers");

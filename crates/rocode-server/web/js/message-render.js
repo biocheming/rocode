@@ -149,6 +149,8 @@ function appendInlineMarkdown(parent, text) {
 function clearFeed() {
   nodes.messageFeed.innerHTML = "";
   state.streamMessageNode = null;
+  state.streamReasoningNode = null;
+  state.streamReasoningText = "";
   state.streamToolBlocks.clear();
   state.streamEventBlocks.clear();
   state.streamStageBlocks.clear();

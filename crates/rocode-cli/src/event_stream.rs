@@ -15,6 +15,8 @@ use crate::util::server_url;
 /// Events the CLI cares about, parsed from the SSE stream.
 #[derive(Debug, Clone)]
 pub enum CliServerEvent {
+    /// Global config changed — refetch `/config` for updated preferences.
+    ConfigUpdated,
     /// Session state changed — fetch latest session to diff messages.
     SessionUpdated {
         session_id: String,
@@ -245,8 +247,7 @@ fn parse_event(
 
     // Global events (no session filter).
     if event_type.as_str() == "config.updated" {
-        // Could handle config reload, but for now skip.
-        return None;
+        return Some(CliServerEvent::ConfigUpdated);
     }
 
     // Session-scoped events — filter by session_id.
@@ -538,6 +539,17 @@ mod tests {
             other_event,
             Some(CliServerEvent::OutputBlock { session_id, .. }) if session_id == "session-2"
         ));
+    }
+
+    #[test]
+    fn config_updated_is_parsed_as_global_event() {
+        let payload = serde_json::json!({
+            "type": "config.updated"
+        });
+
+        let event = parse_event("", &payload, "session-1");
+
+        assert!(matches!(event, Some(CliServerEvent::ConfigUpdated)));
     }
 
     #[test]
