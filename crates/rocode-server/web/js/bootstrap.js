@@ -127,6 +127,55 @@ function wireEvents() {
     }
   });
 
+  nodes.permissionClose.addEventListener("click", closePermissionPanel);
+  nodes.permissionPanel.addEventListener("click", (event) => {
+    if (event.target === nodes.permissionPanel) {
+      closePermissionPanel();
+    }
+  });
+  nodes.permissionRejectBtn.addEventListener("click", async () => {
+    try {
+      await submitPermissionInteractionReply("reject");
+      closePermissionPanel();
+      await loadMessages();
+    } catch (error) {
+      applyOutputBlock({
+        kind: "status",
+        tone: "error",
+        text: `Failed to reject permission: ${String(error)}`,
+      });
+      renderPermissionPanel();
+    }
+  });
+  nodes.permissionAllowBtn.addEventListener("click", async () => {
+    try {
+      await submitPermissionInteractionReply("once");
+      closePermissionPanel();
+      await loadMessages();
+    } catch (error) {
+      applyOutputBlock({
+        kind: "status",
+        tone: "error",
+        text: `Failed to allow permission: ${String(error)}`,
+      });
+      renderPermissionPanel();
+    }
+  });
+  nodes.permissionAlwaysBtn.addEventListener("click", async () => {
+    try {
+      await submitPermissionInteractionReply("always");
+      closePermissionPanel();
+      await loadMessages();
+    } catch (error) {
+      applyOutputBlock({
+        kind: "status",
+        tone: "error",
+        text: `Failed to allow permission: ${String(error)}`,
+      });
+      renderPermissionPanel();
+    }
+  });
+
   nodes.modelSelect.addEventListener("change", () => {
     state.selectedModel = nodes.modelSelect.value;
     updateComposerMeta();
@@ -221,6 +270,10 @@ function wireEvents() {
       closeQuestionPanel();
       return;
     }
+    if (event.key === "Escape" && !nodes.permissionPanel.classList.contains("hidden")) {
+      closePermissionPanel();
+      return;
+    }
     if (event.key === "Escape" && !nodes.commandPanel.classList.contains("hidden")) {
       closeCommandPanel();
       return;
@@ -238,6 +291,10 @@ function wireEvents() {
     }
     if (event.key === "Escape" && !nodes.questionPanel.classList.contains("hidden")) {
       closeQuestionPanel();
+      return;
+    }
+    if (event.key === "Escape" && !nodes.permissionPanel.classList.contains("hidden")) {
+      closePermissionPanel();
       return;
     }
     if (event.key === "Escape" && !nodes.commandPanel.classList.contains("hidden")) {
@@ -272,7 +329,7 @@ function wireEvents() {
 
 async function bootstrap() {
   nodes.heroGreeting.textContent = timeGreeting();
-  applyTheme(state.selectedTheme);
+  applyTheme(state.selectedTheme, { persist: false, announce: false });
   updateTokenUsage();
   setBadge("loading", "warn");
   wireEvents();
@@ -281,7 +338,9 @@ async function bootstrap() {
   updateComposerMeta();
   syncInteractionState();
 
-  await Promise.all([loadProviders(), loadModes(), loadSessions()]);
+  await Promise.all([loadProviders(), loadModes(), loadSessions(), loadUiCommands()]);
+  await loadWebUiPreferences();
+  startGlobalServerEventStream();
 
   if (!state.streaming) {
     setBadge("ready", "ok");
@@ -305,6 +364,15 @@ function installTestApi() {
     interactionFromLiveQuestionEvent,
     renderDecisionBlock,
     clearFeed,
+    applyOutputBlockEvent,
+    applyWebUiPreferences,
+    loadWebUiPreferences,
+    handleSlashCommand,
+    openCommandPanel,
+    loadUiCommands,
+    refreshSessionsIndex,
+    handleGlobalServerEvent,
+    startGlobalServerEventStream,
   });
 }
 

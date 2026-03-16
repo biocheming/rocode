@@ -4,7 +4,11 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use self::events::broadcast_session_updated;
+use self::events::{
+    broadcast_child_session_attached, broadcast_child_session_detached,
+    broadcast_server_event, broadcast_session_updated, emit_output_block_via_hook, DiffEntry,
+    ServerEvent,
+};
 use crate::runtime_control::{ExecutionPatch, ExecutionStatus, FieldUpdate};
 use crate::ServerState;
 use rocode_command::output_blocks::{
@@ -22,8 +26,6 @@ use rocode_provider::Provider;
 use rocode_session::prompt::{OutputBlockEvent, OutputBlockHook};
 use rocode_session::snapshot::Snapshot;
 use rocode_session::{MessageRole, MessageUsage, PartType, Session, SessionMessage};
-
-pub type SessionOutputBlockHook = OutputBlockHook;
 
 #[derive(Clone)]
 struct ActiveStageMessage {
@@ -106,7 +108,7 @@ pub(crate) struct SessionSchedulerLifecycleHook {
     state: Arc<ServerState>,
     session_id: String,
     scheduler_profile: String,
-    output_hook: Option<SessionOutputBlockHook>,
+    output_hook: Option<OutputBlockHook>,
     /// Tracks the currently streaming stage messages as a stack.
     active_stage_messages: Arc<Mutex<Vec<ActiveStageMessage>>>,
     /// Model pricing info for cost calculation.
@@ -134,7 +136,7 @@ impl SessionSchedulerLifecycleHook {
         self
     }
 
-    pub(crate) fn with_output_hook(mut self, output_hook: Option<SessionOutputBlockHook>) -> Self {
+    pub(crate) fn with_output_hook(mut self, output_hook: Option<OutputBlockHook>) -> Self {
         self.output_hook = output_hook;
         self
     }
@@ -214,11 +216,8 @@ impl SessionSchedulerLifecycleHook {
     }
 
     fn emit_stage_block(&self, message: &SessionMessage) {
-        let Some(output_hook) = self.output_hook.as_ref() else {
-            return;
-        };
         if let Some(block) = scheduler_stage_block_from_message(message) {
-            output_hook(OutputBlockEvent {
+            self.emit_realtime_block(OutputBlockEvent {
                 session_id: self.session_id.clone(),
                 block: OutputBlock::SchedulerStage(Box::new(block)),
                 id: Some(message.id.clone()),
@@ -226,11 +225,12 @@ impl SessionSchedulerLifecycleHook {
         }
     }
 
+    fn emit_realtime_block(&self, event: OutputBlockEvent) {
+        emit_output_block_via_hook(self.output_hook.as_ref(), event);
+    }
+
     fn emit_output_block(&self, session_id: String, block: OutputBlock, id: Option<String>) {
-        let Some(output_hook) = self.output_hook.as_ref() else {
-            return;
-        };
-        output_hook(OutputBlockEvent {
+        self.emit_realtime_block(OutputBlockEvent {
             session_id,
             block,
             id,
@@ -807,18 +807,20 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
             sessions_guard.update(session);
             drop(sessions_guard);
 
-            // Broadcast diff event for SSE consumers.
-            state.broadcast(
-                &serde_json::json!({
-                    "type": "session.diff",
-                    "sessionID": &session_id,
-                    "diff": summary_diffs.iter().map(|d| serde_json::json!({
-                        "path": d.file,
-                        "additions": d.additions,
-                        "deletions": d.deletions,
-                    })).collect::<Vec<_>>(),
-                })
-                .to_string(),
+            // Broadcast canonical diff-updated event for SSE consumers.
+            broadcast_server_event(
+                state.as_ref(),
+                &ServerEvent::DiffUpdated {
+                    session_id: session_id.clone(),
+                    diff: summary_diffs
+                        .iter()
+                        .map(|d| DiffEntry {
+                            path: d.file.clone(),
+                            additions: d.additions,
+                            deletions: d.deletions,
+                        })
+                        .collect(),
+                },
             );
 
             Some(())
@@ -869,6 +871,11 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
         if let (Some(child_sid), Some(child_mid)) =
             (child_session_id.as_ref(), child_message_id.as_ref())
         {
+            broadcast_child_session_attached(
+                &self.state,
+                self.session_id.clone(),
+                child_sid.clone(),
+            );
             self.emit_output_block(
                 child_sid.clone(),
                 OutputBlock::Message(MessageBlock::start(OutputMessageRole::Assistant)),
@@ -1064,14 +1071,13 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
             }
             drop(sessions);
             self.emit_output_block(
-                child_sid.clone(),
+                child_sid,
                 OutputBlock::Message(MessageBlock::delta(
                     OutputMessageRole::Assistant,
                     content_delta.to_string(),
                 )),
                 Some(child_mid),
             );
-            broadcast_session_updated(&self.state, child_sid, "prompt.scheduler.stage.content");
             return;
         }
 
@@ -1093,12 +1099,6 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
         if let Some(message) = message_snapshot.as_ref() {
             self.emit_stage_block(message);
         }
-
-        broadcast_session_updated(
-            &self.state,
-            self.session_id.clone(),
-            "prompt.scheduler.stage.content",
-        );
     }
 
     async fn on_scheduler_stage_reasoning(
@@ -1181,7 +1181,6 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                 OutputBlock::Reasoning(ReasoningBlock::delta(reasoning_delta.to_string())),
                 Some(child_mid),
             );
-            broadcast_session_updated(&self.state, child_sid, "prompt.scheduler.stage.reasoning");
             return;
         }
 
@@ -1203,12 +1202,6 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
         if let Some(message) = message_snapshot.as_ref() {
             self.emit_stage_block(message);
         }
-
-        broadcast_session_updated(
-            &self.state,
-            self.session_id.clone(),
-            "prompt.scheduler.stage.reasoning",
-        );
     }
 
     async fn on_scheduler_stage_usage(
@@ -1340,6 +1333,11 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                         child_sid.clone(),
                         OutputBlock::Message(MessageBlock::end(OutputMessageRole::Assistant)),
                         Some(child_mid.clone()),
+                    );
+                    broadcast_child_session_detached(
+                        &self.state,
+                        self.session_id.clone(),
+                        child_sid.clone(),
                     );
                     broadcast_session_updated(
                         &self.state,

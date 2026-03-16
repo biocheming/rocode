@@ -6,20 +6,17 @@ const THEMES = [
   { id: "daylight", label: "Daylight" },
 ];
 
-const storedMode = localStorage.getItem("rocode_web_mode");
-const storedAgent = localStorage.getItem("rocode_web_agent");
-const initialMode = storedMode && storedMode !== "auto" ? storedMode : storedAgent && storedAgent !== "auto" ? `agent:${storedAgent}` : null;
-
 const state = {
   sessions: [],
   projects: [],
   providers: [],
   modes: [],
+  uiCommands: [],
   selectedProject: null,
   selectedSession: null,
   selectedModel: null,
-  selectedModeKey: initialMode,
-  selectedTheme: localStorage.getItem("rocode_web_theme") || "midnight",
+  selectedModeKey: null,
+  selectedTheme: "midnight",
   streaming: false,
   abortRequested: false,
   busyAction: null,
@@ -34,6 +31,8 @@ const state = {
   streamStageBlocks: new Map(),
   activeQuestionInteraction: null,
   questionSubmitting: false,
+  activePermissionInteraction: null,
+  permissionSubmitting: false,
   parentSessionId: null,
 };
 
@@ -75,6 +74,7 @@ const nodes = {
   commandSessionShareBtn: document.getElementById("commandSessionShareBtn"),
   commandSessionDeleteBtn: document.getElementById("commandSessionDeleteBtn"),
   commandSessionList: document.getElementById("commandSessionList"),
+  commandCatalog: document.getElementById("commandCatalog"),
   questionPanel: document.getElementById("questionPanel"),
   questionPanelTitle: document.getElementById("questionPanelTitle"),
   questionPanelStatus: document.getElementById("questionPanelStatus"),
@@ -84,6 +84,15 @@ const nodes = {
   questionForm: document.getElementById("questionForm"),
   questionList: document.getElementById("questionList"),
   questionSubmitBtn: document.getElementById("questionSubmitBtn"),
+  permissionPanel: document.getElementById("permissionPanel"),
+  permissionPanelTitle: document.getElementById("permissionPanelTitle"),
+  permissionPanelStatus: document.getElementById("permissionPanelStatus"),
+  permissionPanelMeta: document.getElementById("permissionPanelMeta"),
+  permissionClose: document.getElementById("permissionClose"),
+  permissionRejectBtn: document.getElementById("permissionRejectBtn"),
+  permissionAllowBtn: document.getElementById("permissionAllowBtn"),
+  permissionAlwaysBtn: document.getElementById("permissionAlwaysBtn"),
+  permissionBody: document.getElementById("permissionBody"),
   composerForm: document.getElementById("composerForm"),
   composerInput: document.getElementById("composerInput"),
   cancelRunBtn: document.getElementById("cancelRunBtn"),

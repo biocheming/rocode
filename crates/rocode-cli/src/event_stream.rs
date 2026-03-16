@@ -33,15 +33,36 @@ pub enum CliServerEvent {
         /// Raw question definitions from the server (Vec<QuestionDef> JSON).
         questions_json: serde_json::Value,
     },
-    /// A question was replied (by another client).
-    QuestionReplied { request_id: String },
-    /// A question was rejected (by another client).
-    QuestionRejected { request_id: String },
+    /// A question was resolved (answered, rejected, or cancelled).
+    QuestionResolved { request_id: String },
+    /// A permission request was created and needs user interaction.
+    PermissionRequested {
+        session_id: String,
+        permission_id: String,
+        info_json: serde_json::Value,
+    },
+    /// A permission request was resolved.
+    PermissionResolved { permission_id: String },
     /// A tool call started.
     ToolCallStarted {
         session_id: String,
         tool_call_id: String,
         tool_name: String,
+    },
+    /// A tool call completed.
+    ToolCallCompleted {
+        session_id: String,
+        tool_call_id: String,
+    },
+    /// A child session was attached under a parent session in the active tree.
+    ChildSessionAttached {
+        parent_id: String,
+        child_id: String,
+    },
+    /// A child session was detached from a parent session in the active tree.
+    ChildSessionDetached {
+        parent_id: String,
+        child_id: String,
     },
     /// An output block was emitted (message, tool result, etc.).
     OutputBlock {
@@ -290,7 +311,7 @@ fn parse_event(
                 questions_json,
             })
         }
-        "question.replied" => {
+        "question.resolved" | "question.replied" | "question.rejected" => {
             let request_id = json
                 .get("requestID")
                 .or_else(|| json.get("requestId"))
@@ -298,22 +319,69 @@ fn parse_event(
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            Some(CliServerEvent::QuestionReplied { request_id })
+            Some(CliServerEvent::QuestionResolved { request_id })
         }
-        "question.rejected" => {
-            let request_id = json
-                .get("requestID")
+        "permission.requested" => {
+            let permission_id = json
+                .get("permissionID")
+                .or_else(|| json.get("permissionId"))
+                .or_else(|| json.get("requestID"))
                 .or_else(|| json.get("requestId"))
                 .or_else(|| json.get("id"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            Some(CliServerEvent::QuestionRejected { request_id })
+            let info_json = json
+                .get("info")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            Some(CliServerEvent::PermissionRequested {
+                session_id: event_session_id.to_string(),
+                permission_id,
+                info_json,
+            })
+        }
+        "permission.resolved" | "permission.replied" => {
+            let permission_id = json
+                .get("permissionID")
+                .or_else(|| json.get("permissionId"))
+                .or_else(|| json.get("requestID"))
+                .or_else(|| json.get("requestId"))
+                .or_else(|| json.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            Some(CliServerEvent::PermissionResolved { permission_id })
+        }
+        "tool_call.lifecycle" => {
+            let tool_call_id = json
+                .get("toolCallId")
+                .or_else(|| json.get("tool_call_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            match json.get("phase").and_then(|v| v.as_str()).unwrap_or("") {
+                "start" => {
+                    let tool_name = json
+                        .get("toolName")
+                        .or_else(|| json.get("tool_name"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    Some(CliServerEvent::ToolCallStarted {
+                        session_id: event_session_id.to_string(),
+                        tool_call_id,
+                        tool_name,
+                    })
+                }
+                "complete" => Some(CliServerEvent::ToolCallCompleted {
+                    session_id: event_session_id.to_string(),
+                    tool_call_id,
+                }),
+                _ => None,
+            }
         }
         "tool_call.start" => {
-            if !is_my_session {
-                return None;
-            }
             let tool_call_id = json
                 .get("toolCallId")
                 .or_else(|| json.get("tool_call_id"))
@@ -332,10 +400,59 @@ fn parse_event(
                 tool_name,
             })
         }
+        "tool_call.complete" => {
+            let tool_call_id = json
+                .get("toolCallId")
+                .or_else(|| json.get("tool_call_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            Some(CliServerEvent::ToolCallCompleted {
+                session_id: event_session_id.to_string(),
+                tool_call_id,
+            })
+        }
+        "child_session.attached" => {
+            let parent_id = json
+                .get("parentID")
+                .or_else(|| json.get("parentId"))
+                .or_else(|| json.get("parent_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let child_id = json
+                .get("childID")
+                .or_else(|| json.get("childId"))
+                .or_else(|| json.get("child_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            Some(CliServerEvent::ChildSessionAttached {
+                parent_id,
+                child_id,
+            })
+        }
+        "child_session.detached" => {
+            let parent_id = json
+                .get("parentID")
+                .or_else(|| json.get("parentId"))
+                .or_else(|| json.get("parent_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let child_id = json
+                .get("childID")
+                .or_else(|| json.get("childId"))
+                .or_else(|| json.get("child_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            Some(CliServerEvent::ChildSessionDetached {
+                parent_id,
+                child_id,
+            })
+        }
         "output_block" => {
-            if !is_my_session {
-                return None;
-            }
             // Output blocks may or may not carry a session_id.
             let id = json.get("id").and_then(|v| v.as_str()).map(String::from);
             Some(CliServerEvent::OutputBlock {
@@ -345,9 +462,6 @@ fn parse_event(
             })
         }
         "error" => {
-            if !is_my_session {
-                return None;
-            }
             let error = json
                 .get("error")
                 .and_then(|v| v.as_str())
@@ -366,9 +480,6 @@ fn parse_event(
             })
         }
         "usage" => {
-            if !is_my_session {
-                return None;
-            }
             let prompt_tokens = json
                 .get("prompt_tokens")
                 .and_then(|v| v.as_u64())
@@ -432,7 +543,10 @@ mod tests {
             mine_event,
             Some(CliServerEvent::OutputBlock { session_id, .. }) if session_id == "session-1"
         ));
-        assert!(other_event.is_none());
+        assert!(matches!(
+            other_event,
+            Some(CliServerEvent::OutputBlock { session_id, .. }) if session_id == "session-2"
+        ));
     }
 
     #[test]
@@ -454,6 +568,82 @@ mod tests {
             event,
             Some(CliServerEvent::QuestionCreated { session_id, request_id, .. })
                 if session_id == "child-session-1" && request_id == "question-1"
+        ));
+    }
+
+    #[test]
+    fn child_session_attach_event_is_parsed() {
+        let payload = serde_json::json!({
+            "type": "child_session.attached",
+            "parentID": "parent-session-1",
+            "childID": "child-session-1"
+        });
+
+        let event = parse_event("", &payload, "parent-session-1");
+
+        assert!(matches!(
+            event,
+            Some(CliServerEvent::ChildSessionAttached { parent_id, child_id })
+                if parent_id == "parent-session-1" && child_id == "child-session-1"
+        ));
+    }
+
+    #[test]
+    fn canonical_question_resolved_event_is_parsed() {
+        let payload = serde_json::json!({
+            "type": "question.resolved",
+            "sessionID": "session-1",
+            "requestID": "question-1",
+            "resolution": "answered",
+        });
+
+        let event = parse_event("", &payload, "session-1");
+
+        assert!(matches!(
+            event,
+            Some(CliServerEvent::QuestionResolved { request_id }) if request_id == "question-1"
+        ));
+    }
+
+    #[test]
+    fn canonical_tool_call_lifecycle_complete_event_is_parsed() {
+        let payload = serde_json::json!({
+            "type": "tool_call.lifecycle",
+            "sessionID": "session-1",
+            "toolCallId": "tool-1",
+            "phase": "complete",
+        });
+
+        let event = parse_event("", &payload, "session-1");
+
+        assert!(matches!(
+            event,
+            Some(CliServerEvent::ToolCallCompleted { session_id, tool_call_id })
+                if session_id == "session-1" && tool_call_id == "tool-1"
+        ));
+    }
+
+    #[test]
+    fn canonical_permission_requested_event_is_parsed() {
+        let payload = serde_json::json!({
+            "type": "permission.requested",
+            "sessionID": "session-1",
+            "permissionID": "permission-1",
+            "info": {
+                "id": "permission-1",
+                "session_id": "session-1",
+                "tool": "bash",
+                "input": {"permission": "bash", "patterns": ["cargo test"]},
+                "message": "Permission required"
+            }
+        });
+
+        let event = parse_event("", &payload, "session-1");
+
+        assert!(matches!(
+            event,
+            Some(CliServerEvent::PermissionRequested { session_id, permission_id, .. })
+                if session_id == "session-1" && permission_id == "permission-1"
         ));
     }
 }

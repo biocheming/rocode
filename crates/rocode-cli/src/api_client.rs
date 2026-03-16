@@ -16,9 +16,10 @@ use crate::util::server_url;
 pub use rocode_tui::api::{
     AgentInfo, CompactResponse, CreateSessionRequest, ExecuteRecoveryRequest, ExecuteShellRequest,
     ExecutionModeInfo, FullProviderListResponse, KnownProvidersResponse, McpAuthStartInfo,
-    McpStatusInfo, MessageInfo, MessageTokensInfo, PromptRequest, ProviderListResponse,
-    QuestionInfo, RecoveryActionKind, RevertRequest, RevertResponse, SessionExecutionTopology,
-    SessionInfo, SessionRecoveryProtocol, SessionStatusInfo, ShareResponse, UpdateSessionRequest,
+    McpStatusInfo, MessageInfo, MessageTokensInfo, PermissionRequestInfo, PromptRequest,
+    ProviderListResponse, QuestionInfo, RecoveryActionKind, RevertRequest, RevertResponse,
+    SessionExecutionTopology, SessionInfo, SessionRecoveryProtocol, SessionStatusInfo,
+    ShareResponse, UpdateSessionRequest,
 };
 
 /// Async HTTP client for communicating with the ROCode server.
@@ -213,6 +214,28 @@ impl CliApiClient {
         let url = server_url(&self.base_url, &format!("/question/{}/reject", question_id));
         let resp = self.client.post(&url).send().await?;
         Self::expect_success(resp, &format!("reject question `{}`", question_id)).await?;
+        Ok(())
+    }
+
+    pub async fn list_permissions(&self) -> anyhow::Result<Vec<PermissionRequestInfo>> {
+        let url = server_url(&self.base_url, "/permission");
+        let resp = self.client.get(&url).send().await?;
+        Self::json_ok(resp, "list permissions").await
+    }
+
+    pub async fn reply_permission(
+        &self,
+        permission_id: &str,
+        reply: &str,
+        message: Option<String>,
+    ) -> anyhow::Result<()> {
+        let url = server_url(&self.base_url, &format!("/permission/{}/reply", permission_id));
+        let body = serde_json::json!({
+            "reply": reply,
+            "message": message,
+        });
+        let resp = self.client.post(&url).json(&body).send().await?;
+        Self::expect_success(resp, &format!("reply permission `{}`", permission_id)).await?;
         Ok(())
     }
 

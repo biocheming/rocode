@@ -20,15 +20,18 @@ use tokio_util::sync::CancellationToken;
 
 use crate::request_options::{resolve_compiled_execution_request, ExecutionResolutionContext};
 use crate::runtime_control::SessionRunStatus;
-use crate::session_runtime::events::broadcast_session_updated;
+use crate::session_runtime::events::{
+    broadcast_session_updated, emit_output_block_via_hook, server_output_block_hook,
+};
 use crate::session_runtime::{
     assistant_visible_text, ensure_default_session_title,
     finalize_active_scheduler_stage_cancelled, first_user_message_text, ModelPricing,
-    SessionOutputBlockHook, SessionSchedulerLifecycleHook,
+    SessionSchedulerLifecycleHook,
 };
 use crate::{Result, ServerState};
-use rocode_session::prompt::OutputBlockEvent;
+use rocode_session::prompt::{OutputBlockEvent, OutputBlockHook};
 
+use super::super::permission::request_permission;
 use super::super::tui::request_question_answers;
 use super::cancel::is_scheduler_cancellation_error;
 use super::messages::resolve_provider_and_model;
@@ -347,6 +350,15 @@ impl SessionSchedulerToolExecutor {
                 let state = state.clone();
                 let session_id = session_id.clone();
                 async move { request_question_answers(state, session_id, questions).await }
+            }
+        })
+        .with_ask({
+            let state = self.state.clone();
+            let session_id = self.session_id.clone();
+            move |request| {
+                let state = state.clone();
+                let session_id = session_id.clone();
+                async move { request_permission(state, session_id, request).await }
             }
         })
         .with_resolve_category({
@@ -805,8 +817,9 @@ pub struct LocalSchedulerPromptOutcome {
 pub async fn run_local_scheduler_prompt(
     state: Arc<ServerState>,
     req: LocalSchedulerPromptRequest,
-    output_hook: Option<SessionOutputBlockHook>,
+    output_hook: Option<OutputBlockHook>,
 ) -> anyhow::Result<LocalSchedulerPromptOutcome> {
+    let output_hook = output_hook.or_else(|| Some(server_output_block_hook(state.clone())));
     let config = state.config_store.config();
     let session_id = {
         let mut sessions = state.sessions.lock().await;
@@ -1187,7 +1200,7 @@ pub async fn run_local_scheduler_prompt(
 
     if let Some(output_hook) = output_hook {
         if !assistant_text.trim().is_empty() {
-            output_hook(OutputBlockEvent {
+            emit_output_block_via_hook(Some(&output_hook), OutputBlockEvent {
                 session_id: session_id.clone(),
                 block: OutputBlock::Message(MessageBlock::full(
                     OutputMessageRole::Assistant,

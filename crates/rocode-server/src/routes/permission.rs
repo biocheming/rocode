@@ -7,7 +7,7 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{oneshot, Mutex, RwLock};
 
 use crate::session_runtime::events::{broadcast_server_event, ServerEvent};
 use crate::{ApiError, Result, ServerState};
@@ -29,6 +29,108 @@ pub struct PermissionRequestInfo {
 
 pub(crate) static PERMISSION_REQUESTS: Lazy<RwLock<HashMap<String, PermissionRequestInfo>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
+static PERMISSION_WAITERS: Lazy<Mutex<HashMap<String, oneshot::Sender<PermissionReply>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Debug)]
+struct PermissionReply {
+    reply: String,
+    message: Option<String>,
+}
+
+fn permission_request_message(request: &rocode_tool::PermissionRequest) -> String {
+    request
+        .metadata
+        .get("description")
+        .and_then(|value| value.as_str())
+        .or_else(|| request.metadata.get("question").and_then(|value| value.as_str()))
+        .or_else(|| request.metadata.get("command").and_then(|value| value.as_str()))
+        .map(str::to_string)
+        .or_else(|| {
+            (!request.patterns.is_empty()).then(|| {
+                format!(
+                    "{}: {}",
+                    request.permission,
+                    request.patterns.join(", ")
+                )
+            })
+        })
+        .unwrap_or_else(|| format!("Permission required: {}", request.permission))
+}
+
+fn permission_request_info(
+    permission_id: String,
+    session_id: String,
+    request: &rocode_tool::PermissionRequest,
+) -> PermissionRequestInfo {
+    PermissionRequestInfo {
+        id: permission_id,
+        session_id,
+        tool: request.permission.clone(),
+        input: serde_json::json!({
+            "permission": request.permission,
+            "patterns": request.patterns,
+            "metadata": request.metadata,
+            "always": request.always,
+        }),
+        message: permission_request_message(request),
+    }
+}
+
+pub(crate) async fn request_permission(
+    state: Arc<ServerState>,
+    session_id: String,
+    request: rocode_tool::PermissionRequest,
+) -> std::result::Result<(), rocode_tool::ToolError> {
+    let permission_id = format!("permission_{}", uuid::Uuid::new_v4().simple());
+    let info = permission_request_info(permission_id.clone(), session_id.clone(), &request);
+    let (tx, rx) = oneshot::channel();
+
+    PERMISSION_REQUESTS
+        .write()
+        .await
+        .insert(permission_id.clone(), info.clone());
+    PERMISSION_WAITERS.lock().await.insert(permission_id.clone(), tx);
+
+    broadcast_server_event(
+        state.as_ref(),
+        &ServerEvent::PermissionRequested {
+            session_id,
+            permission_id: permission_id.clone(),
+            info: serde_json::to_value(&info).unwrap_or(serde_json::Value::Null),
+        },
+    );
+
+    let wait_result = tokio::time::timeout(std::time::Duration::from_secs(300), rx).await;
+    PERMISSION_WAITERS.lock().await.remove(&permission_id);
+
+    match wait_result {
+        Ok(Ok(PermissionReply { reply, message })) => match reply.as_str() {
+            "once" | "always" => Ok(()),
+            "reject" => Err(rocode_tool::ToolError::PermissionDenied(
+                message.unwrap_or_else(|| {
+                    format!("Permission rejected for {}", request.permission)
+                }),
+            )),
+            other => Err(rocode_tool::ToolError::ExecutionError(format!(
+                "Invalid permission reply: {}",
+                other
+            ))),
+        },
+        Ok(Err(_)) => {
+            PERMISSION_REQUESTS.write().await.remove(&permission_id);
+            Err(rocode_tool::ToolError::ExecutionError(
+                "Permission response channel closed".to_string(),
+            ))
+        }
+        Err(_) => {
+            PERMISSION_REQUESTS.write().await.remove(&permission_id);
+            Err(rocode_tool::ToolError::PermissionDenied(
+                "Permission request timed out".to_string(),
+            ))
+        }
+    }
+}
 
 async fn list_permissions() -> Json<Vec<PermissionRequestInfo>> {
     let pending = PERMISSION_REQUESTS.read().await;
@@ -61,19 +163,89 @@ async fn reply_permission(
     let permission = pending
         .remove(&id)
         .ok_or_else(|| ApiError::NotFound(format!("Permission request not found: {}", id)))?;
+    drop(pending);
 
-    if req.reply == "reject" {
-        pending.retain(|_, item| item.session_id != permission.session_id);
+    if let Some(waiter) = PERMISSION_WAITERS.lock().await.remove(&id) {
+        let _ = waiter.send(PermissionReply {
+            reply: req.reply.clone(),
+            message: req.message.clone(),
+        });
     }
 
     broadcast_server_event(
         state.as_ref(),
-        &ServerEvent::PermissionReplied {
+        &ServerEvent::PermissionResolved {
             session_id: permission.session_id,
-            request_id: id,
+            permission_id: id,
             reply: req.reply,
             message: req.message,
         },
     );
     Ok(Json(true))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::Path;
+    use axum::extract::State;
+    use axum::Json;
+
+    #[tokio::test]
+    async fn request_permission_emits_requested_and_resolved_events() {
+        let state = Arc::new(ServerState::new());
+        let mut rx = state.event_bus.subscribe();
+
+        let state_for_request = state.clone();
+        let request_task = tokio::spawn(async move {
+            request_permission(
+                state_for_request,
+                "session-1".to_string(),
+                rocode_tool::PermissionRequest::new("bash")
+                    .with_pattern("cargo test")
+                    .with_metadata("command", serde_json::json!("cargo test")),
+            )
+            .await
+        });
+
+        let permission_id = loop {
+            let pending = PERMISSION_REQUESTS.read().await;
+            if let Some(id) = pending.keys().next().cloned() {
+                break id;
+            }
+            drop(pending);
+            tokio::task::yield_now().await;
+        };
+
+        let requested = rx.recv().await.expect("requested event");
+        let requested_json: serde_json::Value =
+            serde_json::from_str(&requested).expect("requested json");
+        assert_eq!(requested_json["type"], "permission.requested");
+        assert_eq!(requested_json["permissionID"], permission_id);
+        assert_eq!(requested_json["sessionID"], "session-1");
+
+        let reply = ReplyPermissionRequest {
+            reply: "once".to_string(),
+            message: Some("approved".to_string()),
+        };
+        let _ = reply_permission(
+            State(state.clone()),
+            Path(permission_id.clone()),
+            Json(reply),
+        )
+        .await
+        .expect("reply should succeed");
+
+        let resolved = rx.recv().await.expect("resolved event");
+        let resolved_json: serde_json::Value =
+            serde_json::from_str(&resolved).expect("resolved json");
+        assert_eq!(resolved_json["type"], "permission.resolved");
+        assert_eq!(resolved_json["permissionID"], permission_id);
+        assert_eq!(resolved_json["reply"], "once");
+
+        request_task
+            .await
+            .expect("request task join")
+            .expect("permission allowed");
+    }
 }

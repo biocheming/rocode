@@ -208,6 +208,15 @@ pub type AskQuestionHook = Arc<
         + Sync
         + 'static,
 >;
+pub type AskPermissionHook = Arc<
+    dyn Fn(
+            String,
+            rocode_tool::PermissionRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<(), rocode_tool::ToolError>> + Send>>
+        + Send
+        + Sync
+        + 'static,
+>;
 
 #[derive(Clone, Default)]
 pub struct PromptHooks {
@@ -216,6 +225,7 @@ pub struct PromptHooks {
     pub output_block_hook: Option<OutputBlockHook>,
     pub agent_lookup: Option<AgentLookup>,
     pub ask_question_hook: Option<AskQuestionHook>,
+    pub ask_permission_hook: Option<AskPermissionHook>,
     pub publish_bus_hook: Option<PublishBusHook>,
 }
 
@@ -392,6 +402,7 @@ struct SessionStepToolDispatcher {
     subsessions: Arc<Mutex<HashMap<String, PersistedSubsession>>>,
     agent_lookup: Option<AgentLookup>,
     ask_question_hook: Option<AskQuestionHook>,
+    ask_permission_hook: Option<AskPermissionHook>,
     publish_bus_hook: Option<PublishBusHook>,
     tool_runtime_config: rocode_tool::ToolRuntimeConfig,
 }
@@ -417,6 +428,7 @@ impl ToolDispatcher for SessionStepToolDispatcher {
         let tool_registry = self.tool_registry.clone();
         let agent_lookup = self.agent_lookup.clone();
         let ask_question_hook = self.ask_question_hook.clone();
+        let ask_permission_hook = self.ask_permission_hook.clone();
         let publish_bus_hook = self.publish_bus_hook.clone();
         let call_id = call.id.clone();
         let tool_runtime_config = self.tool_runtime_config.clone();
@@ -439,6 +451,7 @@ impl ToolDispatcher for SessionStepToolDispatcher {
                 default_model.clone(),
                 agent_lookup.clone(),
                 ask_question_hook.clone(),
+                ask_permission_hook.clone(),
             )
             .with_registry(tool_registry.clone());
             // Wire publish_bus so TaskTool agent_task events reach the server.
@@ -674,12 +687,13 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                         return Ok(());
                     }
 
-                    // Broadcast tool_call.start event
+                    // Broadcast canonical tool lifecycle event.
                     if let Some(broadcast) = &self.event_broadcast {
                         let event = serde_json::json!({
-                            "type": "tool_call.start",
+                            "type": "tool_call.lifecycle",
                             "sessionID": self.session.id,
                             "toolCallId": id,
+                            "phase": "start",
                             "toolName": next_name,
                         });
                         broadcast(event);
@@ -815,12 +829,14 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                     return Ok(());
                 }
 
-                // Broadcast tool_call.complete event
+                // Broadcast canonical tool lifecycle event.
                 if let Some(broadcast) = &self.event_broadcast {
                     let event = serde_json::json!({
-                        "type": "tool_call.complete",
+                        "type": "tool_call.lifecycle",
                         "sessionID": self.session.id,
                         "toolCallId": &call.id,
+                        "phase": "complete",
+                        "toolName": &call.name,
                     });
                     broadcast(event);
                 }
@@ -1622,6 +1638,7 @@ impl SessionPrompt {
             subsessions: subsessions.clone(),
             agent_lookup: input.step_ctx.hooks.agent_lookup.clone(),
             ask_question_hook: input.step_ctx.hooks.ask_question_hook.clone(),
+            ask_permission_hook: input.step_ctx.hooks.ask_permission_hook.clone(),
             publish_bus_hook: input.step_ctx.hooks.publish_bus_hook.clone(),
             tool_runtime_config: self.tool_runtime_config.clone(),
         };
@@ -2296,6 +2313,7 @@ impl SessionPrompt {
                     hooks: PromptHooks {
                         agent_lookup: hooks.agent_lookup.clone(),
                         ask_question_hook: hooks.ask_question_hook.clone(),
+                        ask_permission_hook: hooks.ask_permission_hook.clone(),
                         ..Default::default()
                     },
                     question_session_id: Some(session.id.clone()),

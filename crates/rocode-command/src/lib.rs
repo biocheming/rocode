@@ -4,6 +4,7 @@
 //! - `.opencode/commands/*.md` files
 //! - MCP prompts
 //! - Built-in commands
+pub mod actions;
 pub mod agent_presenter;
 pub mod branding;
 pub mod cli_markdown;
@@ -19,6 +20,10 @@ mod governance_tests;
 pub mod interactive;
 pub mod output_blocks;
 pub mod stage_protocol;
+pub use actions::{
+    ui_command_argument_kind, UiActionId, UiCommandArgumentKind, UiCommandCategory, UiCommandSpec,
+    UiSlashCommandSpec,
+};
 pub use stage_protocol::*;
 mod start_work;
 
@@ -77,14 +82,21 @@ impl CommandContext {
 /// Command registry for loading and executing commands
 pub struct CommandRegistry {
     commands: HashMap<String, Command>,
+    ui_commands: Vec<UiCommandSpec>,
+    ui_command_by_action: HashMap<UiActionId, usize>,
+    ui_slash_aliases: HashMap<String, UiActionId>,
 }
 
 impl CommandRegistry {
     pub fn new() -> Self {
         let mut registry = Self {
             commands: HashMap::new(),
+            ui_commands: Vec::new(),
+            ui_command_by_action: HashMap::new(),
+            ui_slash_aliases: HashMap::new(),
         };
         registry.register_builtin_commands();
+        registry.register_builtin_ui_commands();
         registry
     }
 
@@ -129,6 +141,27 @@ impl CommandRegistry {
             scheduler_profile: Some("atlas".to_string()),
             source: CommandSource::Builtin,
         });
+    }
+
+    fn register_builtin_ui_commands(&mut self) {
+        for command in actions::builtin_ui_commands() {
+            self.register_ui_command(command);
+        }
+    }
+
+    fn register_ui_command(&mut self, command: UiCommandSpec) {
+        let action_id = command.action_id;
+        let idx = self.ui_commands.len();
+        if let Some(slash) = &command.slash {
+            self.ui_slash_aliases
+                .insert(slash.name.to_string(), action_id);
+            for alias in slash.aliases {
+                self.ui_slash_aliases
+                    .insert((*alias).to_string(), action_id);
+            }
+        }
+        self.ui_command_by_action.insert(action_id, idx);
+        self.ui_commands.push(command);
     }
 
     /// Register a new command
@@ -280,6 +313,43 @@ impl CommandRegistry {
 
         result
     }
+
+    pub fn ui_command(&self, action_id: UiActionId) -> Option<&UiCommandSpec> {
+        self.ui_command_by_action
+            .get(&action_id)
+            .and_then(|idx| self.ui_commands.get(*idx))
+    }
+
+    pub fn ui_commands(&self) -> &[UiCommandSpec] {
+        &self.ui_commands
+    }
+
+    pub fn ui_palette_commands(&self) -> Vec<&UiCommandSpec> {
+        self.ui_commands
+            .iter()
+            .filter(|command| command.include_in_palette)
+            .collect()
+    }
+
+    pub fn ui_slash_command(&self, name: &str) -> Option<&UiCommandSpec> {
+        self.ui_slash_aliases
+            .get(name)
+            .and_then(|action_id| self.ui_command(*action_id))
+    }
+
+    pub fn ui_all_slash_commands(&self) -> Vec<&UiCommandSpec> {
+        self.ui_commands
+            .iter()
+            .filter(|command| command.slash.is_some())
+            .collect()
+    }
+
+    pub fn ui_suggested_slash_commands(&self) -> Vec<&UiCommandSpec> {
+        self.ui_commands
+            .iter()
+            .filter(|command| command.slash.as_ref().is_some_and(|slash| slash.suggested))
+            .collect()
+    }
 }
 
 fn command_payload_object(
@@ -386,5 +456,46 @@ mod tests {
         let registry = CommandRegistry::new();
         let command = registry.get("start-work").unwrap();
         assert_eq!(command.scheduler_profile.as_deref(), Some("atlas"));
+    }
+
+    #[test]
+    fn ui_command_aliases_resolve_to_same_action() {
+        let registry = CommandRegistry::new();
+        let primary = registry
+            .ui_slash_command("/command")
+            .expect("primary slash command");
+        let alias = registry.ui_slash_command("/palette").expect("alias");
+        assert_eq!(primary.action_id, UiActionId::ToggleCommandPalette);
+        assert_eq!(alias.action_id, UiActionId::ToggleCommandPalette);
+
+        let preset = registry.ui_slash_command("/preset").expect("preset command");
+        let agent = registry.ui_slash_command("/agent").expect("agent command");
+        let mode = registry.ui_slash_command("/mode").expect("mode command");
+        assert_eq!(preset.action_id, UiActionId::OpenPresetList);
+        assert_eq!(agent.action_id, UiActionId::OpenAgentList);
+        assert_eq!(mode.action_id, UiActionId::OpenModeList);
+    }
+
+    #[test]
+    fn ui_palette_commands_include_prompt_submission() {
+        let registry = CommandRegistry::new();
+        assert!(registry
+            .ui_palette_commands()
+            .iter()
+            .any(|command| command.action_id == UiActionId::SubmitPrompt));
+    }
+
+    #[test]
+    fn ui_command_argument_kinds_match_shared_semantics() {
+        let registry = CommandRegistry::new();
+        let model = registry.ui_slash_command("/model").expect("model command");
+        let preset = registry.ui_slash_command("/preset").expect("preset command");
+        let sessions = registry.ui_slash_command("/session").expect("session command");
+        let copy = registry.ui_slash_command("/copy").expect("copy command");
+
+        assert_eq!(model.argument_kind(), UiCommandArgumentKind::ModelRef);
+        assert_eq!(preset.argument_kind(), UiCommandArgumentKind::PresetRef);
+        assert_eq!(sessions.argument_kind(), UiCommandArgumentKind::SessionTarget);
+        assert_eq!(copy.argument_kind(), UiCommandArgumentKind::None);
     }
 }

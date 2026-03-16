@@ -68,6 +68,8 @@ const APP_JS: &str = concat!(
     "\n",
     include_str!("../web/js/question-panel.js"),
     "\n",
+    include_str!("../web/js/permission-panel.js"),
+    "\n",
     include_str!("../web/js/output-blocks.js"),
     "\n",
     include_str!("../web/js/sidebar.js"),
@@ -79,6 +81,8 @@ const APP_JS: &str = concat!(
     include_str!("../web/js/commands.js"),
     "\n",
     include_str!("../web/js/streaming.js"),
+    "\n",
+    include_str!("../web/js/global-events.js"),
     "\n",
     include_str!("../web/js/bootstrap.js"),
 );

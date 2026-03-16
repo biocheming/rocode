@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use rocode_agent::{AgentInfo, AgentRegistry};
 use rocode_command::cli_panel::CliPanelFrame;
+use rocode_command::cli_permission::{prompt_permission, PermissionDecision, PermissionMemory};
 #[cfg(test)]
 use rocode_command::cli_panel::{
     display_width, pad_right_display, truncate_display, wrap_display_text,
@@ -24,6 +25,7 @@ use rocode_command::output_blocks::{
     render_cli_block_rich, MessageBlock, MessagePhase, MessageRole as OutputMessageRole,
     OutputBlock, QueueItemBlock, SchedulerStageBlock, StatusBlock,
 };
+use rocode_command::{CommandRegistry, UiActionId};
 use rocode_config::loader::load_config;
 use rocode_config::Config;
 use rocode_core::agent_task_registry::{global_task_registry, AgentTaskStatus};
@@ -47,6 +49,7 @@ use crate::util::{
 };
 use rocode_command::branding::logo_lines;
 use rocode_tui::branding::{APP_SHORT_NAME, APP_TAGLINE, APP_VERSION_DATE};
+use rocode_tui::ui::Clipboard;
 
 fn resolve_requested_agent_name(
     config: &Config,
@@ -199,6 +202,18 @@ struct CliExecutionRuntime {
     api_client: Option<Arc<CliApiClient>>,
     /// Server-side session ID (created via HTTP POST /session).
     server_session_id: Option<String>,
+    /// Root session plus any explicitly attached child sessions for the active execution tree.
+    related_session_ids: Arc<Mutex<BTreeSet<String>>>,
+    /// Canonical retained transcript for the root session even when the operator
+    /// temporarily focuses a child session view.
+    root_session_transcript: Arc<Mutex<CliRetainedTranscript>>,
+    /// Background transcripts for non-root child sessions. These are populated
+    /// from the unified event surface but not rendered into the main transcript
+    /// until the operator explicitly focuses one.
+    child_session_transcripts: Arc<Mutex<HashMap<String, CliRetainedTranscript>>>,
+    /// Local CLI-only focus target. `None` means the root session remains visible.
+    focused_session_id: Arc<Mutex<Option<String>>>,
+    permission_memory: Arc<AsyncMutex<PermissionMemory>>,
     show_thinking: bool,
 }
 
@@ -217,6 +232,715 @@ struct CliInteractiveHandles {
     busy_flag: Arc<AtomicBool>,
     exit_requested: Arc<AtomicBool>,
     active_abort: Arc<AsyncMutex<Option<CliActiveAbortHandle>>>,
+}
+
+enum CliUiActionOutcome {
+    Continue,
+    Break,
+}
+
+fn cli_resolve_registry_ui_action(registry: &CommandRegistry, input: &str) -> Option<UiActionId> {
+    let trimmed = input.trim();
+    if !trimmed.starts_with('/') {
+        return None;
+    }
+
+    let body = trimmed[1..].trim();
+    let mut parts = body.split_whitespace();
+    let name = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+
+    registry
+        .ui_slash_command(&format!("/{}", name.to_ascii_lowercase()))
+        .map(|command| command.action_id)
+}
+
+async fn cli_prompt_action_text(
+    runtime: &CliExecutionRuntime,
+    header: Option<&str>,
+    question: &str,
+) -> anyhow::Result<Option<String>> {
+    let prompt_session = runtime
+        .prompt_session_slot
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().cloned());
+    if let Some(prompt_session) = prompt_session.as_ref() {
+        let _ = prompt_session.suspend();
+    }
+
+    {
+        let _ = crossterm::terminal::disable_raw_mode();
+        let mut stdout = io::stdout();
+        let _ = crossterm::execute!(
+            stdout,
+            crossterm::cursor::Show,
+            crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
+        );
+        let _ = stdout.flush();
+    }
+
+    let header = header.map(str::to_string);
+    let question = question.to_string();
+    let style = CliStyle::detect();
+    let result =
+        tokio::task::spawn_blocking(move || prompt_free_text(&question, header.as_deref(), &style))
+            .await
+            .map_err(|error| anyhow::anyhow!("prompt task failed: {}", error))?;
+
+    if let Some(prompt_session) = prompt_session.as_ref() {
+        let _ = prompt_session.resume();
+    }
+
+    match result {
+        Ok(SelectResult::Other(text)) => Ok(Some(text)),
+        Ok(SelectResult::Cancelled) | Ok(SelectResult::Selected(_)) => Ok(None),
+        Err(error) => Err(anyhow::anyhow!("prompt failed: {}", error)),
+    }
+}
+
+async fn cli_execute_ui_action(
+    action_id: UiActionId,
+    runtime: &mut CliExecutionRuntime,
+    api_client: &CliApiClient,
+    provider_registry: &ProviderRegistry,
+    agent_registry: &AgentRegistry,
+    current_dir: &Path,
+    repl_style: &CliStyle,
+) -> anyhow::Result<CliUiActionOutcome> {
+    match action_id {
+        UiActionId::Exit => Ok(CliUiActionOutcome::Break),
+        UiActionId::ShowHelp => {
+            let style = CliStyle::detect();
+            let rendered = render_help(&style);
+            if let Some(surface) = runtime.terminal_surface.as_ref() {
+                let _ = surface.print_text(&rendered);
+            } else {
+                print!("{}", rendered);
+                let _ = io::stdout().flush();
+            }
+            Ok(CliUiActionOutcome::Continue)
+        }
+        UiActionId::OpenRecoveryList => {
+            cli_print_recovery_actions(runtime);
+            Ok(CliUiActionOutcome::Continue)
+        }
+        UiActionId::NewSession => {
+            match api_client
+                .create_session(None, runtime.resolved_scheduler_profile_name.clone())
+                .await
+            {
+                Ok(new_session) => {
+                    let new_sid = new_session.id.clone();
+                    cli_set_root_server_session(runtime, new_sid.clone());
+
+                    if let Ok(mut proj) = runtime.frontend_projection.lock() {
+                        proj.token_stats = CliSessionTokenStats::default();
+                    }
+
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::title(format!(
+                            "New session created: {}",
+                            &new_sid[..new_sid.len().min(8)]
+                        ))),
+                        repl_style,
+                    );
+
+                    cli_refresh_server_info(
+                        api_client,
+                        &runtime.frontend_projection,
+                        Some(&new_sid),
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::error(format!(
+                            "Failed to create new session: {}",
+                            e
+                        ))),
+                        repl_style,
+                    );
+                }
+            }
+            Ok(CliUiActionOutcome::Continue)
+        }
+        UiActionId::RenameSession => {
+            let Some(session_id) = runtime.server_session_id.clone() else {
+                let _ = print_block(
+                    Some(runtime),
+                    OutputBlock::Status(StatusBlock::warning(
+                        "No active server session to rename.",
+                    )),
+                    repl_style,
+                );
+                return Ok(CliUiActionOutcome::Continue);
+            };
+
+            let Some(next_title) = cli_prompt_action_text(
+                runtime,
+                Some("rename session"),
+                "Enter a new title for the current session:",
+            )
+            .await?
+            else {
+                let _ = print_block(
+                    Some(runtime),
+                    OutputBlock::Status(StatusBlock::warning("Session rename cancelled.")),
+                    repl_style,
+                );
+                return Ok(CliUiActionOutcome::Continue);
+            };
+
+            match api_client.update_session_title(&session_id, next_title.trim()).await {
+                Ok(updated) => {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::title(format!(
+                            "Session renamed: {}",
+                            updated.title
+                        ))),
+                        repl_style,
+                    );
+                    cli_refresh_server_info(
+                        api_client,
+                        &runtime.frontend_projection,
+                        Some(&session_id),
+                    )
+                    .await;
+                }
+                Err(error) => {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::error(format!(
+                            "Failed to rename session: {}",
+                            error
+                        ))),
+                        repl_style,
+                    );
+                }
+            }
+            Ok(CliUiActionOutcome::Continue)
+        }
+        UiActionId::ShareSession => {
+            let Some(session_id) = runtime.server_session_id.clone() else {
+                let _ = print_block(
+                    Some(runtime),
+                    OutputBlock::Status(StatusBlock::warning(
+                        "No active server session to share.",
+                    )),
+                    repl_style,
+                );
+                return Ok(CliUiActionOutcome::Continue);
+            };
+
+            match api_client.share_session(&session_id).await {
+                Ok(shared) => {
+                    let label = if shared.url.trim().is_empty() {
+                        "Session shared.".to_string()
+                    } else {
+                        format!("Share link: {}", shared.url)
+                    };
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::title(label)),
+                        repl_style,
+                    );
+                }
+                Err(error) => {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::error(format!(
+                            "Failed to share session: {}",
+                            error
+                        ))),
+                        repl_style,
+                    );
+                }
+            }
+            Ok(CliUiActionOutcome::Continue)
+        }
+        UiActionId::UnshareSession => {
+            let Some(session_id) = runtime.server_session_id.clone() else {
+                let _ = print_block(
+                    Some(runtime),
+                    OutputBlock::Status(StatusBlock::warning(
+                        "No active server session to unshare.",
+                    )),
+                    repl_style,
+                );
+                return Ok(CliUiActionOutcome::Continue);
+            };
+
+            match api_client.unshare_session(&session_id).await {
+                Ok(_) => {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::title("Session unshared.")),
+                        repl_style,
+                    );
+                }
+                Err(error) => {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::error(format!(
+                            "Failed to unshare session: {}",
+                            error
+                        ))),
+                        repl_style,
+                    );
+                }
+            }
+            Ok(CliUiActionOutcome::Continue)
+        }
+        UiActionId::ForkSession => {
+            let Some(session_id) = runtime.server_session_id.clone() else {
+                let _ = print_block(
+                    Some(runtime),
+                    OutputBlock::Status(StatusBlock::warning(
+                        "No active server session to fork.",
+                    )),
+                    repl_style,
+                );
+                return Ok(CliUiActionOutcome::Continue);
+            };
+
+            match api_client.fork_session(&session_id, None).await {
+                Ok(forked) => {
+                    cli_set_root_server_session(runtime, forked.id.clone());
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::title(format!(
+                            "Forked session: {}",
+                            forked.id
+                        ))),
+                        repl_style,
+                    );
+                    cli_refresh_server_info(
+                        api_client,
+                        &runtime.frontend_projection,
+                        Some(&forked.id),
+                    )
+                    .await;
+                }
+                Err(error) => {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::error(format!(
+                            "Failed to fork session: {}",
+                            error
+                        ))),
+                        repl_style,
+                    );
+                }
+            }
+            Ok(CliUiActionOutcome::Continue)
+        }
+        UiActionId::CompactSession => {
+            let Some(session_id) = runtime.server_session_id.clone() else {
+                let _ = print_block(
+                    Some(runtime),
+                    OutputBlock::Status(StatusBlock::warning(
+                        "No server session to compact.",
+                    )),
+                    repl_style,
+                );
+                return Ok(CliUiActionOutcome::Continue);
+            };
+
+            match api_client.compact_session(&session_id).await {
+                Ok(_) => {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::title(
+                            "Session compacted successfully.",
+                        )),
+                        repl_style,
+                    );
+                    if let Ok(mut proj) = runtime.frontend_projection.lock() {
+                        proj.token_stats = CliSessionTokenStats::default();
+                    }
+                    cli_refresh_server_info(
+                        api_client,
+                        &runtime.frontend_projection,
+                        Some(&session_id),
+                    )
+                    .await;
+                }
+                Err(error) => {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::error(format!(
+                            "Failed to compact session: {}",
+                            error
+                        ))),
+                        repl_style,
+                    );
+                }
+            }
+            Ok(CliUiActionOutcome::Continue)
+        }
+        UiActionId::ShowStatus => {
+            let style = CliStyle::detect();
+
+            cli_refresh_server_info(
+                api_client,
+                &runtime.frontend_projection,
+                runtime.server_session_id.as_deref(),
+            )
+            .await;
+
+            let (phase, active_label, queue_len, token_stats, mcp_servers, lsp_servers) = runtime
+                .frontend_projection
+                .lock()
+                .map(|projection| {
+                    (
+                        match projection.phase {
+                            CliFrontendPhase::Idle => "idle",
+                            CliFrontendPhase::Busy => "busy",
+                            CliFrontendPhase::Waiting => "waiting",
+                            CliFrontendPhase::Cancelling => "cancelling",
+                            CliFrontendPhase::Failed => "failed",
+                        }
+                        .to_string(),
+                        projection.active_label.clone(),
+                        projection.queue_len,
+                        projection.token_stats.clone(),
+                        projection.mcp_servers.clone(),
+                        projection.lsp_servers.clone(),
+                    )
+                })
+                .unwrap_or_else(|_| {
+                    (
+                        "unknown".to_string(),
+                        None,
+                        0,
+                        CliSessionTokenStats::default(),
+                        Vec::new(),
+                        Vec::new(),
+                    )
+                });
+            let mut lines = vec![
+                format!("Agent: {}", runtime.resolved_agent_name),
+                format!("Model: {}", runtime.resolved_model_label),
+                format!("Directory: {}", current_dir.display()),
+                format!("Runtime: {}", phase),
+            ];
+            if let Some(ref profile) = runtime.resolved_scheduler_profile_name {
+                lines.push(format!("Scheduler: {}", profile));
+            }
+            if let Some(active_label) = active_label.filter(|value| !value.trim().is_empty()) {
+                lines.push(format!("Active: {}", active_label));
+            }
+            lines.push(format!("Queue: {}", queue_len));
+
+            if token_stats.total_tokens > 0 {
+                lines.push(String::new());
+                lines.push(format!(
+                    "Tokens: {} total",
+                    format_token_count(token_stats.total_tokens)
+                ));
+                lines.push(format!(
+                    "  Input:     {}",
+                    format_token_count(token_stats.input_tokens)
+                ));
+                lines.push(format!(
+                    "  Output:    {}",
+                    format_token_count(token_stats.output_tokens)
+                ));
+                if token_stats.reasoning_tokens > 0 {
+                    lines.push(format!(
+                        "  Reasoning: {}",
+                        format_token_count(token_stats.reasoning_tokens)
+                    ));
+                }
+                if token_stats.cache_read_tokens > 0 {
+                    lines.push(format!(
+                        "  Cache R:   {}",
+                        format_token_count(token_stats.cache_read_tokens)
+                    ));
+                }
+                if token_stats.cache_write_tokens > 0 {
+                    lines.push(format!(
+                        "  Cache W:   {}",
+                        format_token_count(token_stats.cache_write_tokens)
+                    ));
+                }
+                lines.push(format!("Cost: ${:.4}", token_stats.total_cost));
+            }
+
+            if !mcp_servers.is_empty() {
+                lines.push(String::new());
+                lines.push("MCP Servers:".to_string());
+                for server in &mcp_servers {
+                    let detail = if server.tools > 0 {
+                        format!(" ({} tools)", server.tools)
+                    } else {
+                        String::new()
+                    };
+                    lines.push(format!("  {} [{}]{}", server.name, server.status, detail));
+                    if let Some(ref err) = server.error {
+                        lines.push(format!("    ↳ {}", err));
+                    }
+                }
+            }
+
+            if !lsp_servers.is_empty() {
+                lines.push(String::new());
+                lines.push("LSP Servers:".to_string());
+                for server in &lsp_servers {
+                    lines.push(format!("  {}", server));
+                }
+            }
+
+            if let Some(ref sid) = runtime.server_session_id {
+                lines.push(String::new());
+                lines.push(format!("Server: {}", api_client.base_url()));
+                lines.push(format!("Session: {}", sid));
+            }
+
+            let _ =
+                print_cli_list_on_surface(Some(runtime), "Session Status", None, &lines, &style);
+            cli_print_execution_topology(&runtime.observed_topology, Some(runtime), &style);
+            Ok(CliUiActionOutcome::Continue)
+        }
+        UiActionId::OpenModelList => {
+            let style = CliStyle::detect();
+            let mut lines = Vec::new();
+            for p in provider_registry.list() {
+                for m in p.models() {
+                    lines.push(format!("{}:{}", p.id(), m.id));
+                }
+            }
+            let _ =
+                print_cli_list_on_surface(Some(runtime), "Available Models", None, &lines, &style);
+            Ok(CliUiActionOutcome::Continue)
+        }
+        UiActionId::OpenModeList => {
+            let style = CliStyle::detect();
+            match api_client.list_execution_modes().await {
+                Ok(modes) => {
+                    let lines = modes
+                        .into_iter()
+                        .filter(|mode| !mode.hidden.unwrap_or(false))
+                        .map(|mode| {
+                            let detail = mode
+                                .description
+                                .filter(|value| !value.trim().is_empty())
+                                .unwrap_or_else(|| mode.kind.clone());
+                            format!("{} [{}] — {}", mode.id, mode.kind, detail)
+                        })
+                        .collect::<Vec<_>>();
+                    let _ = print_cli_list_on_surface(
+                        Some(runtime),
+                        "Available Modes",
+                        None,
+                        &lines,
+                        &style,
+                    );
+                }
+                Err(error) => {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::error(format!(
+                            "Failed to load modes: {}",
+                            error
+                        ))),
+                        repl_style,
+                    );
+                }
+            }
+            Ok(CliUiActionOutcome::Continue)
+        }
+        UiActionId::ConnectProvider => {
+            let style = CliStyle::detect();
+            let mut lines = Vec::new();
+            for p in provider_registry.list() {
+                let model_count = p.models().len();
+                lines.push(format!(
+                    "{} ({} model{})",
+                    p.id(),
+                    model_count,
+                    if model_count != 1 { "s" } else { "" }
+                ));
+            }
+            let _ = print_cli_list_on_surface(
+                Some(runtime),
+                "Configured Providers",
+                None,
+                &lines,
+                &style,
+            );
+            Ok(CliUiActionOutcome::Continue)
+        }
+        UiActionId::OpenThemeList => {
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::warning(
+                    "Theme switching is not yet supported in CLI mode.",
+                )),
+                repl_style,
+            );
+            Ok(CliUiActionOutcome::Continue)
+        }
+        UiActionId::OpenAgentList => {
+            let style = CliStyle::detect();
+            let mut lines = Vec::new();
+            for info in agent_registry.list() {
+                let active = if info.name == runtime.resolved_agent_name {
+                    " ← active".to_string()
+                } else {
+                    String::new()
+                };
+                let model_info = info
+                    .model
+                    .as_ref()
+                    .map(|m| format!(" ({}/{})", m.provider_id, m.model_id))
+                    .unwrap_or_default();
+                lines.push(format!("{}{}{}", info.name, model_info, active));
+            }
+            let _ =
+                print_cli_list_on_surface(Some(runtime), "Available Agents", None, &lines, &style);
+            Ok(CliUiActionOutcome::Continue)
+        }
+        UiActionId::OpenPresetList => {
+            cli_list_presets(
+                &load_config(current_dir)?,
+                runtime.resolved_scheduler_profile_name.as_deref(),
+                Some(runtime),
+            );
+            Ok(CliUiActionOutcome::Continue)
+        }
+        UiActionId::OpenSessionList => {
+            cli_list_sessions(Some(runtime)).await;
+            Ok(CliUiActionOutcome::Continue)
+        }
+        UiActionId::NavigateParentSession => {
+            let Some(current_session_id) = runtime.server_session_id.clone() else {
+                let _ = print_block(
+                    Some(runtime),
+                    OutputBlock::Status(StatusBlock::warning(
+                        "No active server session to navigate from.",
+                    )),
+                    repl_style,
+                );
+                return Ok(CliUiActionOutcome::Continue);
+            };
+
+            match api_client.get_session(&current_session_id).await {
+                Ok(session) => {
+                    let Some(parent_id) = session.parent_id else {
+                        let _ = print_block(
+                            Some(runtime),
+                            OutputBlock::Status(StatusBlock::warning(
+                                "Current session has no parent.",
+                            )),
+                            repl_style,
+                        );
+                        return Ok(CliUiActionOutcome::Continue);
+                    };
+
+                    match api_client.get_session(&parent_id).await {
+                        Ok(parent) => {
+                            cli_set_root_server_session(runtime, parent.id.clone());
+                            let _ = print_block(
+                                Some(runtime),
+                                OutputBlock::Status(StatusBlock::title(format!(
+                                    "Switched to parent session: {}",
+                                    &parent.id[..parent.id.len().min(8)]
+                                ))),
+                                repl_style,
+                            );
+                            cli_refresh_server_info(
+                                api_client,
+                                &runtime.frontend_projection,
+                                Some(&parent.id),
+                            )
+                            .await;
+                        }
+                        Err(error) => {
+                            let _ = print_block(
+                                Some(runtime),
+                                OutputBlock::Status(StatusBlock::error(format!(
+                                    "Failed to load parent session: {}",
+                                    error
+                                ))),
+                                repl_style,
+                            );
+                        }
+                    }
+                }
+                Err(error) => {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::error(format!(
+                            "Failed to load current session: {}",
+                            error
+                        ))),
+                        repl_style,
+                    );
+                }
+            }
+            Ok(CliUiActionOutcome::Continue)
+        }
+        UiActionId::ListTasks => {
+            cli_list_tasks(Some(runtime));
+            Ok(CliUiActionOutcome::Continue)
+        }
+        UiActionId::CopySession => {
+            match cli_copy_target_transcript(runtime).filter(|text| !text.trim().is_empty()) {
+                Some(text) => match Clipboard::write_text(&text) {
+                    Ok(()) => {
+                        let label = if cli_focused_session_id(runtime).is_some() {
+                            "Focused session transcript copied to clipboard."
+                        } else {
+                            "Session transcript copied to clipboard."
+                        };
+                        let _ = print_block(
+                            Some(runtime),
+                            OutputBlock::Status(StatusBlock::title(label)),
+                            repl_style,
+                        );
+                    }
+                    Err(error) => {
+                        let _ = print_block(
+                            Some(runtime),
+                            OutputBlock::Status(StatusBlock::error(format!(
+                                "Failed to copy transcript to clipboard: {}",
+                                error
+                            ))),
+                            repl_style,
+                        );
+                    }
+                },
+                None => {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::warning(
+                            "No transcript available for the current session view.",
+                        )),
+                        repl_style,
+                    );
+                }
+            }
+            Ok(CliUiActionOutcome::Continue)
+        }
+        UiActionId::ToggleSidebar => {
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::warning(
+                    "CLI mode no longer keeps a persistent sidebar; use terminal scrollback and /status.",
+                )),
+                repl_style,
+            );
+            Ok(CliUiActionOutcome::Continue)
+        }
+        _ => Ok(CliUiActionOutcome::Continue),
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -336,6 +1060,11 @@ const CLI_PROMPT_COMMANDS: &[CliPromptCommandSpec] = &[
         name: "parent",
         takes_value: None,
         description: "return to parent session",
+    },
+    CliPromptCommandSpec {
+        name: "child",
+        takes_value: None,
+        description: "list or focus child sessions",
     },
     CliPromptCommandSpec {
         name: "tasks",
@@ -742,6 +1471,34 @@ impl CliTerminalSurface {
         self.refresh_prompt()
     }
 
+    fn replace_transcript(&self, transcript: CliRetainedTranscript) -> io::Result<()> {
+        if let Ok(mut projection) = self.frontend_projection.lock() {
+            projection.transcript = transcript.clone();
+            projection.scroll_offset = 0;
+        }
+
+        let prompt = self
+            .prompt_session
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().cloned());
+
+        if let Some(prompt_session) = prompt {
+            let _ = prompt_session.suspend();
+            let write_result: io::Result<()> = {
+                print!("\x1B[2J\x1B[1;1H{}", transcript.rendered_text());
+                io::stdout().flush()
+            };
+            let _ = prompt_session.resume();
+            write_result?;
+        } else {
+            print!("\x1B[2J\x1B[1;1H{}", transcript.rendered_text());
+            io::stdout().flush()?;
+        }
+
+        self.refresh_prompt()
+    }
+
     fn append_rendered(&self, rendered: &str) -> io::Result<()> {
         if let Ok(mut projection) = self.frontend_projection.lock() {
             projection.transcript.append_rendered(rendered);
@@ -821,6 +1578,28 @@ impl CliRetainedTranscript {
     fn clear(&mut self) {
         self.committed_lines.clear();
         self.open_line.clear();
+    }
+
+    fn rendered_text(&self) -> String {
+        let mut out = String::new();
+        for line in &self.committed_lines {
+            out.push_str(line);
+            out.push('\n');
+        }
+        out.push_str(&self.open_line);
+        out
+    }
+
+    fn line_count(&self) -> usize {
+        self.committed_lines.len() + usize::from(!self.open_line.is_empty())
+    }
+
+    fn last_line(&self) -> Option<&str> {
+        if !self.open_line.is_empty() {
+            Some(self.open_line.as_str())
+        } else {
+            self.committed_lines.last().map(String::as_str)
+        }
     }
 
     #[cfg(test)]
@@ -920,6 +1699,7 @@ impl From<McpStatusInfo> for CliMcpServerStatus {
 struct CliFrontendProjection {
     phase: CliFrontendPhase,
     active_label: Option<String>,
+    view_label: Option<String>,
     queue_len: usize,
     active_stage: Option<SchedulerStageBlock>,
     transcript: CliRetainedTranscript,
@@ -942,6 +1722,7 @@ impl Default for CliFrontendProjection {
         Self {
             phase: CliFrontendPhase::default(),
             active_label: None,
+            view_label: None,
             queue_len: 0,
             active_stage: None,
             transcript: CliRetainedTranscript::default(),
@@ -973,11 +1754,19 @@ impl CliFrontendProjection {
         {
             parts.push(active.to_string());
         }
+        if let Some(view) = self
+            .view_label
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            parts.push(view.to_string());
+        }
         if self.queue_len > 0 {
             parts.push(format!("queue {}", self.queue_len));
         }
         parts.push("Alt+Enter/Ctrl+J newline".to_string());
         parts.push("/help".to_string());
+        parts.push("/child".to_string());
         if !matches!(self.phase, CliFrontendPhase::Idle) {
             parts.push("/abort".to_string());
         }
@@ -1448,6 +2237,11 @@ async fn build_cli_execution_runtime(
         spinner_guard,
         api_client: None,
         server_session_id: None,
+        related_session_ids: Arc::new(Mutex::new(BTreeSet::new())),
+        root_session_transcript: Arc::new(Mutex::new(CliRetainedTranscript::default())),
+        child_session_transcripts: Arc::new(Mutex::new(HashMap::new())),
+        focused_session_id: Arc::new(Mutex::new(None)),
+        permission_memory: Arc::new(AsyncMutex::new(PermissionMemory::new())),
         show_thinking: selection.show_thinking,
     })
 }
@@ -1510,6 +2304,26 @@ fn cli_switch_message(runtime: Option<&CliExecutionRuntime>, kind: &str, value: 
         ))),
         &style,
     );
+}
+
+fn cli_copy_target_transcript(runtime: &CliExecutionRuntime) -> Option<String> {
+    if let Some(focused_session_id) = cli_focused_session_id(runtime) {
+        return runtime
+            .child_session_transcripts
+            .lock()
+            .ok()
+            .and_then(|transcripts| {
+                transcripts
+                    .get(&focused_session_id)
+                    .map(CliRetainedTranscript::rendered_text)
+            });
+    }
+
+    runtime
+        .root_session_transcript
+        .lock()
+        .ok()
+        .map(|transcript| transcript.rendered_text())
 }
 
 #[allow(dead_code)]
@@ -1688,6 +2502,343 @@ fn cli_render_startup_banner(style: &CliStyle, recent: Option<&CliRecentSessionI
 
 fn cli_is_terminal_stage_status(status: Option<&str>) -> bool {
     matches!(status, Some("done" | "blocked" | "cancelled"))
+}
+
+fn cli_set_root_server_session(runtime: &mut CliExecutionRuntime, session_id: String) {
+    runtime.server_session_id = Some(session_id.clone());
+    if let Ok(mut related) = runtime.related_session_ids.lock() {
+        related.clear();
+        related.insert(session_id);
+    }
+    if let Ok(mut root) = runtime.root_session_transcript.lock() {
+        root.clear();
+    }
+    if let Ok(mut transcripts) = runtime.child_session_transcripts.lock() {
+        transcripts.clear();
+    }
+    if let Ok(mut focused) = runtime.focused_session_id.lock() {
+        *focused = None;
+    }
+    cli_set_view_label(runtime, None);
+}
+
+fn cli_tracks_related_session(runtime: &CliExecutionRuntime, session_id: &str) -> bool {
+    if session_id.is_empty() {
+        return true;
+    }
+    runtime
+        .related_session_ids
+        .lock()
+        .map(|related| related.contains(session_id))
+        .unwrap_or(false)
+}
+
+fn cli_track_child_session(runtime: &CliExecutionRuntime, parent_id: &str, child_id: &str) -> bool {
+    if parent_id.is_empty() || child_id.is_empty() {
+        return false;
+    }
+    let mut inserted = false;
+    if let Ok(mut related) = runtime.related_session_ids.lock() {
+        if related.contains(parent_id) {
+            inserted = related.insert(child_id.to_string());
+        }
+    }
+    if inserted {
+        if let Ok(mut transcripts) = runtime.child_session_transcripts.lock() {
+            transcripts.entry(child_id.to_string()).or_default();
+        }
+    }
+    inserted
+}
+
+fn cli_untrack_child_session(runtime: &CliExecutionRuntime, parent_id: &str, child_id: &str) -> bool {
+    if parent_id.is_empty() || child_id.is_empty() {
+        return false;
+    }
+    runtime
+        .related_session_ids
+        .lock()
+        .map(|mut related| related.contains(parent_id) && related.remove(child_id))
+        .unwrap_or(false)
+}
+
+fn cli_cache_child_session_block(
+    runtime: &CliExecutionRuntime,
+    session_id: &str,
+    block: &OutputBlock,
+    style: &CliStyle,
+) {
+    let rendered = render_cli_block_rich(block, style);
+    if let Ok(mut transcripts) = runtime.child_session_transcripts.lock() {
+        transcripts
+            .entry(session_id.to_string())
+            .or_default()
+            .append_rendered(&rendered);
+    }
+}
+
+fn cli_cache_root_session_block(runtime: &CliExecutionRuntime, block: &OutputBlock, style: &CliStyle) {
+    let rendered = render_cli_block_rich(block, style);
+    if let Ok(mut transcript) = runtime.root_session_transcript.lock() {
+        transcript.append_rendered(&rendered);
+    }
+}
+
+fn cli_capture_visible_root_transcript(runtime: &CliExecutionRuntime) {
+    let snapshot = runtime
+        .frontend_projection
+        .lock()
+        .ok()
+        .map(|projection| projection.transcript.clone());
+    if let Some(snapshot) = snapshot {
+        if let Ok(mut root) = runtime.root_session_transcript.lock() {
+            *root = snapshot;
+        }
+    }
+}
+
+fn cli_focused_session_id(runtime: &CliExecutionRuntime) -> Option<String> {
+    runtime
+        .focused_session_id
+        .lock()
+        .ok()
+        .and_then(|focused| focused.clone())
+}
+
+fn cli_is_root_focused(runtime: &CliExecutionRuntime) -> bool {
+    cli_focused_session_id(runtime).is_none()
+}
+
+fn cli_replace_visible_transcript(
+    runtime: &CliExecutionRuntime,
+    transcript: CliRetainedTranscript,
+) -> io::Result<()> {
+    if let Some(surface) = runtime.terminal_surface.as_ref() {
+        surface.replace_transcript(transcript)
+    } else {
+        if let Ok(mut projection) = runtime.frontend_projection.lock() {
+            projection.transcript = transcript;
+            projection.scroll_offset = 0;
+        }
+        Ok(())
+    }
+}
+
+fn cli_short_session_id(session_id: &str) -> &str {
+    &session_id[..session_id.len().min(8)]
+}
+
+fn cli_set_view_label(runtime: &CliExecutionRuntime, label: Option<String>) {
+    if let Ok(mut projection) = runtime.frontend_projection.lock() {
+        projection.view_label = label;
+    }
+    cli_refresh_prompt(runtime);
+}
+
+fn cli_ordered_child_session_ids(runtime: &CliExecutionRuntime) -> Vec<String> {
+    let root_session_id = runtime.server_session_id.as_deref();
+    let attached_ids = runtime
+        .related_session_ids
+        .lock()
+        .map(|ids| ids.clone())
+        .unwrap_or_default();
+    let transcripts = runtime
+        .child_session_transcripts
+        .lock()
+        .map(|map| map.clone())
+        .unwrap_or_default();
+
+    let mut child_ids = BTreeSet::new();
+    for session_id in &attached_ids {
+        if root_session_id != Some(session_id.as_str()) {
+            child_ids.insert(session_id.clone());
+        }
+    }
+    for session_id in transcripts.keys() {
+        child_ids.insert(session_id.clone());
+    }
+
+    child_ids.into_iter().collect()
+}
+
+fn cli_list_child_sessions(runtime: &CliExecutionRuntime) {
+    let style = CliStyle::detect();
+    let attached_ids = runtime
+        .related_session_ids
+        .lock()
+        .map(|ids| ids.clone())
+        .unwrap_or_default();
+    let transcripts = runtime
+        .child_session_transcripts
+        .lock()
+        .map(|map| map.clone())
+        .unwrap_or_default();
+    let focused = cli_focused_session_id(runtime);
+
+    let mut lines = Vec::new();
+    let child_ids = cli_ordered_child_session_ids(runtime);
+    if child_ids.is_empty() {
+        lines.push("No child sessions have been observed for this run yet.".to_string());
+        lines.push("When scheduler agents fork, they will appear here.".to_string());
+    } else {
+        for session_id in child_ids {
+            let transcript = transcripts.get(&session_id);
+            let attached = attached_ids.contains(&session_id);
+            let focus_marker = if focused.as_deref() == Some(session_id.as_str()) {
+                "● focused"
+            } else {
+                "○ cached"
+            };
+            let status = if attached { "attached" } else { "detached" };
+            let line_count = transcript.map(|item| item.line_count()).unwrap_or(0);
+            lines.push(format!(
+                "{}  {}  [{} · {} lines]",
+                focus_marker, session_id, status, line_count
+            ));
+            if let Some(summary) = transcript
+                .and_then(|item| item.last_line())
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+            {
+                lines.push(format!("    {}", truncate_text(summary, 88)));
+            }
+        }
+    }
+
+    let footer = match focused {
+        Some(child_id) => format!(
+            "/child next · /child prev · /child focus <id> · /child back · now viewing {}",
+            child_id
+        ),
+        None => "/child next · /child prev · /child focus <id> · /child back".to_string(),
+    };
+    let _ = print_cli_list_on_surface(
+        Some(runtime),
+        "Child Sessions",
+        Some(&footer),
+        &lines,
+        &style,
+    );
+}
+
+fn cli_focus_child_session(runtime: &CliExecutionRuntime, requested_id: &str) -> io::Result<bool> {
+    let requested_id = requested_id.trim();
+    if requested_id.is_empty() {
+        return Ok(false);
+    }
+
+    let transcripts = runtime
+        .child_session_transcripts
+        .lock()
+        .map(|map| map.clone())
+        .unwrap_or_default();
+    let related = runtime
+        .related_session_ids
+        .lock()
+        .map(|ids| ids.clone())
+        .unwrap_or_default();
+    let root_session_id = runtime.server_session_id.as_deref();
+
+    let mut candidates = BTreeSet::new();
+    for session_id in related {
+        if root_session_id != Some(session_id.as_str()) {
+            candidates.insert(session_id);
+        }
+    }
+    for session_id in transcripts.keys() {
+        candidates.insert(session_id.clone());
+    }
+
+    let target = if candidates.contains(requested_id) {
+        Some(requested_id.to_string())
+    } else {
+        let mut prefix_matches = candidates
+            .into_iter()
+            .filter(|candidate| candidate.starts_with(requested_id))
+            .collect::<Vec<_>>();
+        if prefix_matches.len() == 1 {
+            prefix_matches.pop()
+        } else {
+            None
+        }
+    };
+
+    let Some(target_id) = target else {
+        return Ok(false);
+    };
+
+    let Some(transcript) = transcripts.get(&target_id).cloned() else {
+        return Ok(false);
+    };
+
+    if cli_is_root_focused(runtime) {
+        cli_capture_visible_root_transcript(runtime);
+    }
+    if let Ok(mut focused) = runtime.focused_session_id.lock() {
+        *focused = Some(target_id.clone());
+    }
+    cli_set_view_label(
+        runtime,
+        Some(format!("view child {}", cli_short_session_id(&target_id))),
+    );
+    cli_replace_visible_transcript(runtime, transcript)?;
+    Ok(true)
+}
+
+fn cli_cycle_child_session(
+    runtime: &CliExecutionRuntime,
+    forward: bool,
+) -> io::Result<Option<(String, usize, usize)>> {
+    let child_ids = cli_ordered_child_session_ids(runtime);
+    if child_ids.is_empty() {
+        return Ok(None);
+    }
+
+    let focused = cli_focused_session_id(runtime);
+    let next_index = match focused
+        .as_deref()
+        .and_then(|current| child_ids.iter().position(|id| id == current))
+    {
+        Some(index) if forward => (index + 1) % child_ids.len(),
+        Some(index) => (index + child_ids.len() - 1) % child_ids.len(),
+        None if forward => 0,
+        None => child_ids.len() - 1,
+    };
+    let target_id = child_ids[next_index].clone();
+    if !cli_focus_child_session(runtime, &target_id)? {
+        return Ok(None);
+    }
+    Ok(Some((target_id, next_index + 1, child_ids.len())))
+}
+
+fn cli_focus_root_session(runtime: &CliExecutionRuntime) -> io::Result<bool> {
+    if cli_is_root_focused(runtime) {
+        return Ok(false);
+    }
+    let transcript = runtime
+        .root_session_transcript
+        .lock()
+        .map(|item| item.clone())
+        .unwrap_or_default();
+    if let Ok(mut focused) = runtime.focused_session_id.lock() {
+        *focused = None;
+    }
+    cli_set_view_label(runtime, None);
+    cli_replace_visible_transcript(runtime, transcript)?;
+    Ok(true)
+}
+
+fn cli_session_update_requires_refresh(source: Option<&str>) -> bool {
+    matches!(
+        source,
+        Some(
+            "prompt.final"
+                | "stream.final"
+                | "prompt.completed"
+                | "session.title.set"
+                | "prompt.done"
+        )
+    )
 }
 
 #[cfg(test)]
@@ -2131,7 +3282,7 @@ fn cli_sidebar_lines(
 
     lines.push(String::new());
     lines.push("/help · /model · /preset".to_string());
-    lines.push("/abort · /sidebar · /active".to_string());
+    lines.push("/child · /abort · /sidebar".to_string());
     lines.push("/status · /compact · /new".to_string());
     lines
 }
@@ -2234,13 +3385,20 @@ fn cli_render_retained_layout(
         .as_deref()
         .filter(|s| !s.is_empty())
         .unwrap_or("(untitled)");
-    let header_lines = vec![format!(
-        "> {} · {} · {} · {}",
+    let mut header_parts = vec![
         truncate_display(session_title, 32),
-        mode,
-        model,
-        truncate_display(directory, 24),
-    )];
+        mode.to_string(),
+        model.to_string(),
+    ];
+    if let Some(view_label) = projection
+        .view_label
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        header_parts.push(view_label.to_string());
+    }
+    header_parts.push(truncate_display(directory, 24));
+    let header_lines = vec![format!("> {}", header_parts.join(" · "))];
     let header_box = cli_render_box("ROCode", None, &header_lines, total_width, style);
 
     // ── Adaptive layout: compute actual content sizes, then allocate rows ──
@@ -2383,6 +3541,7 @@ async fn run_chat_session(
 ) -> anyhow::Result<()> {
     let current_dir = std::env::current_dir()?;
     let config = load_config(&current_dir)?;
+    let command_registry = CommandRegistry::new();
     let provider_registry = Arc::new(setup_providers(&config).await?);
 
     if provider_registry.list().is_empty() {
@@ -2463,7 +3622,7 @@ async fn run_chat_session(
         .await?;
     let server_session_id = session_info.id.clone();
     runtime.api_client = Some(api_client.clone());
-    runtime.server_session_id = Some(server_session_id.clone());
+    cli_set_root_server_session(&mut runtime, server_session_id.clone());
 
     tracing::info!(
         server_url = %server_url,
@@ -2648,6 +3807,20 @@ async fn run_chat_session(
                                             &questions_json,
                                         ).await;
                                     }
+                                    CliServerEvent::PermissionRequested {
+                                        session_id,
+                                        permission_id,
+                                        info_json,
+                                    } => {
+                                        if cli_tracks_related_session(&runtime, &session_id) {
+                                            handle_permission_from_sse(
+                                                &runtime,
+                                                &api_client,
+                                                &permission_id,
+                                                &info_json,
+                                            ).await;
+                                        }
+                                    }
                                     other => {
                                         handle_sse_event(&runtime, other, &repl_style);
                                     }
@@ -2665,18 +3838,39 @@ async fn run_chat_session(
         }
 
         if let Some(cmd) = parse_interactive_command(&trimmed) {
-            match cmd {
-                InteractiveCommand::Exit => break,
-                InteractiveCommand::ShowHelp => {
-                    let style = CliStyle::detect();
-                    let rendered = render_help(&style);
-                    if let Some(surface) = runtime.terminal_surface.as_ref() {
-                        let _ = surface.print_text(&rendered);
-                    } else {
-                        print!("{}", rendered);
-                        let _ = io::stdout().flush();
-                    }
+            if let Some(action_id) = cmd.ui_action_id() {
+                match cli_execute_ui_action(
+                    action_id,
+                    &mut runtime,
+                    &api_client,
+                    &provider_registry,
+                    &agent_registry_arc,
+                    &current_dir,
+                    &repl_style,
+                )
+                .await?
+                {
+                    CliUiActionOutcome::Break => break,
+                    CliUiActionOutcome::Continue => continue,
                 }
+            }
+            if let Some(action_id) = cli_resolve_registry_ui_action(&command_registry, &trimmed) {
+                match cli_execute_ui_action(
+                    action_id,
+                    &mut runtime,
+                    &api_client,
+                    &provider_registry,
+                    &agent_registry_arc,
+                    &current_dir,
+                    &repl_style,
+                )
+                .await?
+                {
+                    CliUiActionOutcome::Break => break,
+                    CliUiActionOutcome::Continue => continue,
+                }
+            }
+            match cmd {
                 InteractiveCommand::Abort => {
                     let _ = print_block(
                         Some(&runtime),
@@ -2685,9 +3879,6 @@ async fn run_chat_session(
                         )),
                         &repl_style,
                     );
-                }
-                InteractiveCommand::ShowRecovery => {
-                    cli_print_recovery_actions(&runtime);
                 }
                 InteractiveCommand::ExecuteRecovery(selector) => {
                     let Some(action) = cli_select_recovery_action(&runtime, &selector) else {
@@ -2725,204 +3916,6 @@ async fn run_chat_session(
                         io::stdout().flush()?;
                     }
                 }
-                InteractiveCommand::NewSession => {
-                    match api_client
-                        .create_session(None, runtime.resolved_scheduler_profile_name.clone())
-                        .await
-                    {
-                        Ok(new_session) => {
-                            let new_sid = new_session.id.clone();
-                            runtime.server_session_id = Some(new_sid.clone());
-
-                            // Reset token stats for the new session.
-                            if let Ok(mut proj) = runtime.frontend_projection.lock() {
-                                proj.token_stats = CliSessionTokenStats::default();
-                            }
-
-                            let _ = print_block(
-                                Some(&runtime),
-                                OutputBlock::Status(StatusBlock::title(format!(
-                                    "New session created: {}",
-                                    &new_sid[..new_sid.len().min(8)]
-                                ))),
-                                &repl_style,
-                            );
-
-                            // Refresh sidebar data for the new session.
-                            cli_refresh_server_info(
-                                &api_client,
-                                &runtime.frontend_projection,
-                                Some(&new_sid),
-                            )
-                            .await;
-                        }
-                        Err(e) => {
-                            let _ = print_block(
-                                Some(&runtime),
-                                OutputBlock::Status(StatusBlock::error(format!(
-                                    "Failed to create new session: {}",
-                                    e
-                                ))),
-                                &repl_style,
-                            );
-                        }
-                    }
-                }
-                InteractiveCommand::ShowStatus => {
-                    let style = CliStyle::detect();
-
-                    // Refresh server info before showing status.
-                    cli_refresh_server_info(
-                        &api_client,
-                        &runtime.frontend_projection,
-                        runtime.server_session_id.as_deref(),
-                    )
-                    .await;
-
-                    let (phase, active_label, queue_len, token_stats, mcp_servers, lsp_servers) =
-                        runtime
-                            .frontend_projection
-                            .lock()
-                            .map(|projection| {
-                                (
-                                    match projection.phase {
-                                        CliFrontendPhase::Idle => "idle",
-                                        CliFrontendPhase::Busy => "busy",
-                                        CliFrontendPhase::Waiting => "waiting",
-                                        CliFrontendPhase::Cancelling => "cancelling",
-                                        CliFrontendPhase::Failed => "failed",
-                                    }
-                                    .to_string(),
-                                    projection.active_label.clone(),
-                                    projection.queue_len,
-                                    projection.token_stats.clone(),
-                                    projection.mcp_servers.clone(),
-                                    projection.lsp_servers.clone(),
-                                )
-                            })
-                            .unwrap_or_else(|_| {
-                                (
-                                    "unknown".to_string(),
-                                    None,
-                                    0,
-                                    CliSessionTokenStats::default(),
-                                    Vec::new(),
-                                    Vec::new(),
-                                )
-                            });
-                    let mut lines = vec![
-                        format!("Agent: {}", runtime.resolved_agent_name),
-                        format!("Model: {}", runtime.resolved_model_label),
-                        format!("Directory: {}", current_dir.display()),
-                        format!("Runtime: {}", phase),
-                    ];
-                    if let Some(ref profile) = runtime.resolved_scheduler_profile_name {
-                        lines.push(format!("Scheduler: {}", profile));
-                    }
-                    if let Some(active_label) =
-                        active_label.filter(|value| !value.trim().is_empty())
-                    {
-                        lines.push(format!("Active: {}", active_label));
-                    }
-                    lines.push(format!("Queue: {}", queue_len));
-
-                    // ── Context (tokens + cost) ─────────────────────
-                    if token_stats.total_tokens > 0 {
-                        lines.push(String::new());
-                        lines.push(format!(
-                            "Tokens: {} total",
-                            format_token_count(token_stats.total_tokens)
-                        ));
-                        lines.push(format!(
-                            "  Input:     {}",
-                            format_token_count(token_stats.input_tokens)
-                        ));
-                        lines.push(format!(
-                            "  Output:    {}",
-                            format_token_count(token_stats.output_tokens)
-                        ));
-                        if token_stats.reasoning_tokens > 0 {
-                            lines.push(format!(
-                                "  Reasoning: {}",
-                                format_token_count(token_stats.reasoning_tokens)
-                            ));
-                        }
-                        if token_stats.cache_read_tokens > 0 {
-                            lines.push(format!(
-                                "  Cache R:   {}",
-                                format_token_count(token_stats.cache_read_tokens)
-                            ));
-                        }
-                        if token_stats.cache_write_tokens > 0 {
-                            lines.push(format!(
-                                "  Cache W:   {}",
-                                format_token_count(token_stats.cache_write_tokens)
-                            ));
-                        }
-                        lines.push(format!("Cost: ${:.4}", token_stats.total_cost));
-                    }
-
-                    // ── MCP servers ──────────────────────────────────
-                    if !mcp_servers.is_empty() {
-                        lines.push(String::new());
-                        lines.push("MCP Servers:".to_string());
-                        for server in &mcp_servers {
-                            let detail = if server.tools > 0 {
-                                format!(" ({} tools)", server.tools)
-                            } else {
-                                String::new()
-                            };
-                            lines.push(format!("  {} [{}]{}", server.name, server.status, detail));
-                            if let Some(ref err) = server.error {
-                                lines.push(format!("    ↳ {}", err));
-                            }
-                        }
-                    }
-
-                    // ── LSP servers ──────────────────────────────────
-                    if !lsp_servers.is_empty() {
-                        lines.push(String::new());
-                        lines.push("LSP Servers:".to_string());
-                        for server in &lsp_servers {
-                            lines.push(format!("  {}", server));
-                        }
-                    }
-
-                    if let Some(ref sid) = runtime.server_session_id {
-                        lines.push(String::new());
-                        lines.push(format!("Server: {}", api_client.base_url()));
-                        lines.push(format!("Session: {}", sid));
-                    }
-
-                    let _ = print_cli_list_on_surface(
-                        Some(&runtime),
-                        "Session Status",
-                        None,
-                        &lines,
-                        &style,
-                    );
-                    cli_print_execution_topology(
-                        &runtime.observed_topology,
-                        Some(&runtime),
-                        &style,
-                    );
-                }
-                InteractiveCommand::ListModels => {
-                    let style = CliStyle::detect();
-                    let mut lines = Vec::new();
-                    for p in provider_registry.list() {
-                        for m in p.models() {
-                            lines.push(format!("{}:{}", p.id(), m.id));
-                        }
-                    }
-                    let _ = print_cli_list_on_surface(
-                        Some(&runtime),
-                        "Available Models",
-                        None,
-                        &lines,
-                        &style,
-                    );
-                }
                 InteractiveCommand::SelectModel(model_id) => {
                     let (provider, model) = parse_model_and_provider(Some(model_id.clone()));
                     if model.is_none() {
@@ -2958,42 +3951,6 @@ async fn run_chat_session(
                         },
                     );
                     cli_switch_message(Some(&runtime), "model", &runtime.resolved_model_label);
-                }
-                InteractiveCommand::ListProviders => {
-                    let style = CliStyle::detect();
-                    let mut lines = Vec::new();
-                    for p in provider_registry.list() {
-                        let model_count = p.models().len();
-                        lines.push(format!(
-                            "{} ({} model{})",
-                            p.id(),
-                            model_count,
-                            if model_count != 1 { "s" } else { "" }
-                        ));
-                    }
-                    let _ = print_cli_list_on_surface(
-                        Some(&runtime),
-                        "Configured Providers",
-                        None,
-                        &lines,
-                        &style,
-                    );
-                }
-                InteractiveCommand::ListThemes => {
-                    let _ = print_block(
-                        Some(&runtime),
-                        OutputBlock::Status(StatusBlock::warning(
-                            "Theme switching is not yet supported in CLI mode.",
-                        )),
-                        &repl_style,
-                    );
-                }
-                InteractiveCommand::ListPresets => {
-                    cli_list_presets(
-                        &config,
-                        runtime.resolved_scheduler_profile_name.as_deref(),
-                        Some(&runtime),
-                    );
                 }
                 InteractiveCommand::SelectPreset(name) => {
                     if !cli_has_preset(&config, &name) {
@@ -3044,100 +4001,6 @@ async fn run_chat_session(
                             .unwrap_or(name.as_str()),
                     );
                 }
-                InteractiveCommand::ListSessions => {
-                    cli_list_sessions(Some(&runtime)).await;
-                }
-                InteractiveCommand::ParentSession => {
-                    let Some(current_session_id) = runtime.server_session_id.clone() else {
-                        let _ = print_block(
-                            Some(&runtime),
-                            OutputBlock::Status(StatusBlock::warning(
-                                "No active server session to navigate from.",
-                            )),
-                            &repl_style,
-                        );
-                        continue;
-                    };
-
-                    match api_client.get_session(&current_session_id).await {
-                        Ok(session) => {
-                            let Some(parent_id) = session.parent_id else {
-                                let _ = print_block(
-                                    Some(&runtime),
-                                    OutputBlock::Status(StatusBlock::warning(
-                                        "Current session has no parent.",
-                                    )),
-                                    &repl_style,
-                                );
-                                continue;
-                            };
-
-                            match api_client.get_session(&parent_id).await {
-                                Ok(parent) => {
-                                    runtime.server_session_id = Some(parent.id.clone());
-                                    let _ = print_block(
-                                        Some(&runtime),
-                                        OutputBlock::Status(StatusBlock::title(format!(
-                                            "Switched to parent session: {}",
-                                            &parent.id[..parent.id.len().min(8)]
-                                        ))),
-                                        &repl_style,
-                                    );
-                                    cli_refresh_server_info(
-                                        &api_client,
-                                        &runtime.frontend_projection,
-                                        Some(&parent.id),
-                                    )
-                                    .await;
-                                }
-                                Err(error) => {
-                                    let _ = print_block(
-                                        Some(&runtime),
-                                        OutputBlock::Status(StatusBlock::error(format!(
-                                            "Failed to load parent session: {}",
-                                            error
-                                        ))),
-                                        &repl_style,
-                                    );
-                                }
-                            }
-                        }
-                        Err(error) => {
-                            let _ = print_block(
-                                Some(&runtime),
-                                OutputBlock::Status(StatusBlock::error(format!(
-                                    "Failed to load current session: {}",
-                                    error
-                                ))),
-                                &repl_style,
-                            );
-                        }
-                    }
-                }
-                InteractiveCommand::ListAgents => {
-                    let style = CliStyle::detect();
-                    let mut lines = Vec::new();
-                    for info in agent_registry_arc.list() {
-                        let active = if info.name == runtime.resolved_agent_name {
-                            " ← active".to_string()
-                        } else {
-                            String::new()
-                        };
-                        let model_info = info
-                            .model
-                            .as_ref()
-                            .map(|m| format!(" ({}/{})", m.provider_id, m.model_id))
-                            .unwrap_or_default();
-                        lines.push(format!("{}{}{}", info.name, model_info, active));
-                    }
-                    let _ = print_cli_list_on_surface(
-                        Some(&runtime),
-                        "Available Agents",
-                        None,
-                        &lines,
-                        &style,
-                    );
-                }
                 InteractiveCommand::SelectAgent(name) => {
                     if agent_registry_arc.get(&name).is_none() {
                         let _ = print_block(
@@ -3173,76 +4036,145 @@ async fn run_chat_session(
                     );
                     cli_switch_message(Some(&runtime), "agent", &runtime.resolved_agent_name);
                 }
-                InteractiveCommand::Compact => {
-                    let Some(ref sid) = runtime.server_session_id else {
-                        let _ = print_block(
-                            Some(&runtime),
-                            OutputBlock::Status(StatusBlock::warning(
-                                "No server session to compact.",
-                            )),
-                            &repl_style,
-                        );
-                        continue;
-                    };
-                    let sid = sid.clone();
-                    match api_client.compact_session(&sid).await {
-                        Ok(_result) => {
+                InteractiveCommand::ListChildSessions => {
+                    cli_list_child_sessions(&runtime);
+                }
+                InteractiveCommand::FocusChildSession(session_id) => {
+                    match cli_focus_child_session(&runtime, &session_id) {
+                        Ok(true) => {
                             let _ = print_block(
                                 Some(&runtime),
-                                OutputBlock::Status(StatusBlock::title(
-                                    "Session compacted successfully.",
-                                )),
+                                OutputBlock::Status(StatusBlock::title(format!(
+                                    "Focused child session: {}",
+                                    session_id
+                                ))),
                                 &repl_style,
                             );
-                            // Reset token stats and re-fetch from compacted session.
-                            if let Ok(mut proj) = runtime.frontend_projection.lock() {
-                                proj.token_stats = CliSessionTokenStats::default();
-                            }
-                            cli_refresh_server_info(
-                                &api_client,
-                                &runtime.frontend_projection,
-                                Some(&sid),
-                            )
-                            .await;
                         }
-                        Err(e) => {
+                        Ok(false) => {
+                            let _ = print_block(
+                                Some(&runtime),
+                                OutputBlock::Status(StatusBlock::warning(format!(
+                                    "Unknown child session: {}. Use /child list first.",
+                                    session_id
+                                ))),
+                                &repl_style,
+                            );
+                        }
+                        Err(error) => {
                             let _ = print_block(
                                 Some(&runtime),
                                 OutputBlock::Status(StatusBlock::error(format!(
-                                    "Failed to compact session: {}",
-                                    e
+                                    "Failed to focus child session: {}",
+                                    error
                                 ))),
                                 &repl_style,
                             );
                         }
                     }
                 }
-                InteractiveCommand::Copy => {
-                    let _ = print_block(
-                        Some(&runtime),
-                        OutputBlock::Status(StatusBlock::warning(
-                            "/copy is not yet supported in CLI mode.",
-                        )),
-                        &repl_style,
-                    );
+                InteractiveCommand::FocusNextChildSession => {
+                    match cli_cycle_child_session(&runtime, true) {
+                        Ok(Some((session_id, index, total))) => {
+                            let _ = print_block(
+                                Some(&runtime),
+                                OutputBlock::Status(StatusBlock::title(format!(
+                                    "Focused child session [{}/{}]: {}",
+                                    index, total, session_id
+                                ))),
+                                &repl_style,
+                            );
+                        }
+                        Ok(None) => {
+                            let _ = print_block(
+                                Some(&runtime),
+                                OutputBlock::Status(StatusBlock::warning(
+                                    "No child sessions available. Use /child list to inspect the cache.",
+                                )),
+                                &repl_style,
+                            );
+                        }
+                        Err(error) => {
+                            let _ = print_block(
+                                Some(&runtime),
+                                OutputBlock::Status(StatusBlock::error(format!(
+                                    "Failed to switch to next child session: {}",
+                                    error
+                                ))),
+                                &repl_style,
+                            );
+                        }
+                    }
                 }
-                InteractiveCommand::ListTasks => {
-                    cli_list_tasks(Some(&runtime));
+                InteractiveCommand::FocusPreviousChildSession => {
+                    match cli_cycle_child_session(&runtime, false) {
+                        Ok(Some((session_id, index, total))) => {
+                            let _ = print_block(
+                                Some(&runtime),
+                                OutputBlock::Status(StatusBlock::title(format!(
+                                    "Focused child session [{}/{}]: {}",
+                                    index, total, session_id
+                                ))),
+                                &repl_style,
+                            );
+                        }
+                        Ok(None) => {
+                            let _ = print_block(
+                                Some(&runtime),
+                                OutputBlock::Status(StatusBlock::warning(
+                                    "No child sessions available. Use /child list to inspect the cache.",
+                                )),
+                                &repl_style,
+                            );
+                        }
+                        Err(error) => {
+                            let _ = print_block(
+                                Some(&runtime),
+                                OutputBlock::Status(StatusBlock::error(format!(
+                                    "Failed to switch to previous child session: {}",
+                                    error
+                                ))),
+                                &repl_style,
+                            );
+                        }
+                    }
                 }
+                InteractiveCommand::BackToRootSession => match cli_focus_root_session(&runtime) {
+                    Ok(true) => {
+                        let _ = print_block(
+                            Some(&runtime),
+                            OutputBlock::Status(StatusBlock::title(
+                                "Returned to root session view.",
+                            )),
+                            &repl_style,
+                        );
+                    }
+                    Ok(false) => {
+                        let _ = print_block(
+                            Some(&runtime),
+                            OutputBlock::Status(StatusBlock::warning(
+                                "Already viewing the root session.",
+                            )),
+                            &repl_style,
+                        );
+                    }
+                    Err(error) => {
+                        let _ = print_block(
+                            Some(&runtime),
+                            OutputBlock::Status(StatusBlock::error(format!(
+                                "Failed to restore root session view: {}",
+                                error
+                            ))),
+                            &repl_style,
+                        );
+                    }
+                },
+                InteractiveCommand::Compact => {}
                 InteractiveCommand::ShowTask(id) => {
                     cli_show_task(&id, Some(&runtime));
                 }
                 InteractiveCommand::KillTask(id) => {
                     cli_kill_task(&id, Some(&runtime));
-                }
-                InteractiveCommand::ToggleSidebar => {
-                    let _ = print_block(
-                        Some(&runtime),
-                        OutputBlock::Status(StatusBlock::warning(
-                            "CLI mode no longer keeps a persistent sidebar; use terminal scrollback and /status.",
-                        )),
-                        &repl_style,
-                    );
                 }
                 InteractiveCommand::ToggleActive => {
                     let _ = print_block(
@@ -3303,6 +4235,21 @@ async fn run_chat_session(
                         &repl_style,
                     );
                 }
+                InteractiveCommand::Exit
+                | InteractiveCommand::ShowHelp
+                | InteractiveCommand::ShowRecovery
+                | InteractiveCommand::NewSession
+                | InteractiveCommand::ShowStatus
+                | InteractiveCommand::ListModels
+                | InteractiveCommand::ListProviders
+                | InteractiveCommand::ListThemes
+                | InteractiveCommand::ListPresets
+                | InteractiveCommand::ListSessions
+                | InteractiveCommand::ParentSession
+                | InteractiveCommand::ListTasks
+                | InteractiveCommand::ListAgents
+                | InteractiveCommand::Copy
+                | InteractiveCommand::ToggleSidebar => {}
             }
             continue;
         }
@@ -3329,6 +4276,21 @@ async fn run_chat_session(
                 } => {
                     handle_question_from_sse(&runtime, &api_client, &request_id, &questions_json)
                         .await;
+                }
+                CliServerEvent::PermissionRequested {
+                    session_id,
+                    permission_id,
+                    info_json,
+                } => {
+                    if cli_tracks_related_session(&runtime, &session_id) {
+                        handle_permission_from_sse(
+                            &runtime,
+                            &api_client,
+                            &permission_id,
+                            &info_json,
+                        )
+                        .await;
+                    }
                 }
                 other => {
                     handle_sse_event(&runtime, other, &repl_style);
@@ -3434,10 +4396,23 @@ async fn run_server_prompt(
         match sse_rx.recv().await {
             Some(CliServerEvent::QuestionCreated {
                 request_id,
-                session_id: _,
+                session_id,
                 questions_json,
             }) => {
-                handle_question_from_sse(runtime, api_client, &request_id, &questions_json).await;
+                if cli_tracks_related_session(runtime, &session_id) {
+                    handle_question_from_sse(runtime, api_client, &request_id, &questions_json)
+                        .await;
+                }
+            }
+            Some(CliServerEvent::PermissionRequested {
+                session_id,
+                permission_id,
+                info_json,
+            }) => {
+                if cli_tracks_related_session(runtime, &session_id) {
+                    handle_permission_from_sse(runtime, api_client, &permission_id, &info_json)
+                        .await;
+                }
             }
             Some(CliServerEvent::SessionUpdated { session_id, source }) => {
                 handle_session_updated_from_sse(
@@ -3502,23 +4477,21 @@ async fn run_server_prompt(
 /// Handle an incoming SSE event from the server — update topology,
 /// frontend projection, and render output blocks.
 fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style: &CliStyle) {
-    // Helper to check if the event belongs to our session.
-    let is_my_session = |event_session_id: &str| -> bool {
-        runtime
-            .server_session_id
-            .as_deref()
-            .is_none_or(|my_sid| event_session_id.is_empty() || event_session_id == my_sid)
-    };
+    let root_session_id = runtime.server_session_id.as_deref();
+    let focused_session_id = cli_focused_session_id(runtime);
+    let is_root_session =
+        |event_session_id: &str| root_session_id.is_none_or(|sid| event_session_id.is_empty() || sid == event_session_id);
+    let is_related_session = |event_session_id: &str| cli_tracks_related_session(runtime, event_session_id);
 
     match event {
         CliServerEvent::SessionUpdated { session_id, source } => {
-            if !is_my_session(&session_id) {
+            if !is_root_session(&session_id) {
                 return;
             }
             tracing::debug!(session_id, ?source, "session updated");
         }
         CliServerEvent::SessionBusy { session_id } => {
-            if !is_my_session(&session_id) {
+            if !is_root_session(&session_id) {
                 return;
             }
             cli_frontend_set_phase(
@@ -3529,14 +4502,14 @@ fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style:
             cli_refresh_prompt(runtime);
         }
         CliServerEvent::SessionIdle { session_id } => {
-            if !is_my_session(&session_id) {
+            if !is_root_session(&session_id) {
                 return;
             }
             cli_frontend_set_phase(&runtime.frontend_projection, CliFrontendPhase::Idle, None);
             cli_refresh_prompt(runtime);
         }
         CliServerEvent::SessionRetrying { session_id } => {
-            if !is_my_session(&session_id) {
+            if !is_root_session(&session_id) {
                 return;
             }
             let _ = print_block(
@@ -3557,36 +4530,76 @@ fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style:
                 "question.created reached sync handler — skipping"
             );
         }
-        CliServerEvent::QuestionReplied { request_id } => {
-            tracing::debug!(request_id, "question replied");
+        CliServerEvent::QuestionResolved { request_id } => {
+            tracing::debug!(request_id, "question resolved");
         }
-        CliServerEvent::QuestionRejected { request_id } => {
-            tracing::debug!(request_id, "question rejected");
+        CliServerEvent::PermissionRequested {
+            session_id,
+            permission_id,
+            ..
+        } => {
+            tracing::warn!(
+                session_id,
+                permission_id,
+                "permission.requested reached sync handler — skipping"
+            );
+        }
+        CliServerEvent::PermissionResolved { permission_id } => {
+            tracing::debug!(permission_id, "permission resolved");
         }
         CliServerEvent::ToolCallStarted {
             session_id,
             tool_call_id,
             tool_name,
         } => {
-            if !is_my_session(&session_id) {
+            if !is_related_session(&session_id) {
                 return;
             }
             if let Ok(mut topology) = runtime.observed_topology.lock() {
                 topology.active = true;
             }
             tracing::debug!(tool_call_id, tool_name, "tool call started");
-            let _ = print_block(
-                Some(runtime),
-                OutputBlock::Status(StatusBlock::title(format!("⚙ {}", tool_name))),
-                style,
-            );
+            if !is_root_session(&session_id) {
+                return;
+            }
+            let status = OutputBlock::Status(StatusBlock::title(format!("⚙ {}", tool_name)));
+            if cli_is_root_focused(runtime) {
+                let _ = print_block(Some(runtime), status, style);
+            } else {
+                cli_cache_root_session_block(runtime, &status, style);
+            }
+        }
+        CliServerEvent::ToolCallCompleted {
+            session_id,
+            tool_call_id,
+        } => {
+            if !is_related_session(&session_id) {
+                return;
+            }
+            tracing::debug!(tool_call_id, "tool call completed");
+        }
+        CliServerEvent::ChildSessionAttached {
+            parent_id,
+            child_id,
+        } => {
+            if cli_track_child_session(runtime, &parent_id, &child_id) {
+                tracing::debug!(parent_id, child_id, "tracked child session");
+            }
+        }
+        CliServerEvent::ChildSessionDetached {
+            parent_id,
+            child_id,
+        } => {
+            if cli_untrack_child_session(runtime, &parent_id, &child_id) {
+                tracing::debug!(parent_id, child_id, "untracked child session");
+            }
         }
         CliServerEvent::OutputBlock {
             session_id,
             id,
             payload,
         } => {
-            if !is_my_session(&session_id) {
+            if !is_related_session(&session_id) {
                 return;
             }
             let block_payload = payload.get("block").unwrap_or(&payload);
@@ -3600,7 +4613,19 @@ fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style:
             if let Ok(mut topology) = runtime.observed_topology.lock() {
                 topology.observe_block(&block);
             }
+            if let OutputBlock::SchedulerStage(stage) = &block {
+                if let Some(child_id) = stage.child_session_id.as_deref() {
+                    let _ = cli_track_child_session(runtime, &session_id, child_id);
+                }
+            }
             cli_frontend_observe_block(&runtime.frontend_projection, &block);
+            if !is_root_session(&session_id) {
+                cli_cache_child_session_block(runtime, &session_id, &block, style);
+                if focused_session_id.as_deref() == Some(session_id.as_str()) {
+                    let _ = print_block(Some(runtime), block, style);
+                }
+                return;
+            }
             match &block {
                 OutputBlock::SchedulerStage(stage)
                     if !cli_should_emit_scheduler_stage_block(
@@ -3622,10 +4647,16 @@ fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style:
                         projection.active_collapsed = true;
                     }
                     cli_refresh_prompt(runtime);
-                    let _ = print_block(Some(runtime), block, style);
+                    cli_cache_root_session_block(runtime, &block, style);
+                    if cli_is_root_focused(runtime) {
+                        let _ = print_block(Some(runtime), block, style);
+                    }
                 }
                 _ => {
-                    let _ = print_block(Some(runtime), block, style);
+                    cli_cache_root_session_block(runtime, &block, style);
+                    if cli_is_root_focused(runtime) {
+                        let _ = print_block(Some(runtime), block, style);
+                    }
                 }
             }
         }
@@ -3635,15 +4666,20 @@ fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style:
             message_id,
             done,
         } => {
-            if !is_my_session(&session_id) {
+            if !is_related_session(&session_id) {
+                return;
+            }
+            if !is_root_session(&session_id) {
+                tracing::error!(session_id, error, ?message_id, ?done, "child session error");
                 return;
             }
             tracing::error!(error, ?message_id, ?done, "server error");
-            let _ = print_block(
-                Some(runtime),
-                OutputBlock::Status(StatusBlock::error(error)),
-                style,
-            );
+            let status = OutputBlock::Status(StatusBlock::error(error));
+            if cli_is_root_focused(runtime) {
+                let _ = print_block(Some(runtime), status, style);
+            } else {
+                cli_cache_root_session_block(runtime, &status, style);
+            }
         }
         CliServerEvent::Usage {
             session_id,
@@ -3651,7 +4687,7 @@ fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style:
             completion_tokens,
             message_id,
         } => {
-            if !is_my_session(&session_id) {
+            if !is_related_session(&session_id) {
                 return;
             }
             tracing::debug!(prompt_tokens, completion_tokens, ?message_id, "token usage");
@@ -3665,15 +4701,19 @@ fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style:
                     .output_tokens
                     .saturating_add(completion_tokens);
             }
+            if !is_root_session(&session_id) {
+                return;
+            }
             if prompt_tokens > 0 || completion_tokens > 0 {
-                let _ = print_block(
-                    Some(runtime),
-                    OutputBlock::Status(StatusBlock::success(format!(
-                        "tokens: prompt={} completion={}",
-                        prompt_tokens, completion_tokens
-                    ))),
-                    style,
-                );
+                let status = OutputBlock::Status(StatusBlock::success(format!(
+                    "tokens: prompt={} completion={}",
+                    prompt_tokens, completion_tokens
+                )));
+                if cli_is_root_focused(runtime) {
+                    let _ = print_block(Some(runtime), status, style);
+                } else {
+                    cli_cache_root_session_block(runtime, &status, style);
+                }
             }
         }
         CliServerEvent::Unknown { event, data } => {
@@ -3737,6 +4777,125 @@ async fn handle_question_from_sse(
                 tracing::error!("Failed to reject question `{}`: {}", request_id, e);
             }
         }
+    }
+}
+
+async fn handle_permission_from_sse(
+    runtime: &CliExecutionRuntime,
+    api_client: &Arc<CliApiClient>,
+    permission_id: &str,
+    info_json: &serde_json::Value,
+) {
+    let info: crate::api_client::PermissionRequestInfo =
+        match serde_json::from_value(info_json.clone()) {
+            Ok(info) => info,
+            Err(error) => {
+                tracing::warn!(permission_id, %error, "failed to parse permission info from SSE");
+                let _ = api_client
+                    .reply_permission(
+                        permission_id,
+                        "reject",
+                        Some("Invalid permission request payload".to_string()),
+                    )
+                    .await;
+                return;
+            }
+        };
+
+    let input = info.input.as_object().cloned().unwrap_or_default();
+    let permission = input
+        .get("permission")
+        .and_then(|value| value.as_str())
+        .unwrap_or(info.tool.as_str())
+        .to_string();
+    let patterns = input
+        .get("patterns")
+        .and_then(|value| value.as_array())
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let metadata = input
+        .get("metadata")
+        .and_then(|value| value.as_object())
+        .map(|map| {
+            map.iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+
+    {
+        let memory = runtime.permission_memory.lock().await;
+        if memory.is_granted(&permission, &patterns) {
+            let _ = api_client
+                .reply_permission(permission_id, "once", Some("auto-approved".to_string()))
+                .await;
+            return;
+        }
+    }
+
+    let guard = runtime
+        .spinner_guard
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_else(|_| SpinnerGuard::noop());
+    guard.pause();
+
+    let decision = {
+        let permission = permission.clone();
+        let patterns = patterns.clone();
+        let metadata = metadata.clone();
+        tokio::task::spawn_blocking(move || {
+            let style = CliStyle::detect();
+            prompt_permission(&permission, &patterns, &metadata, &style)
+        })
+        .await
+    };
+
+    guard.resume();
+
+    let decision = match decision {
+        Ok(Ok(decision)) => decision,
+        Ok(Err(error)) => {
+            tracing::error!(permission_id, %error, "permission prompt IO error");
+            let _ = api_client
+                .reply_permission(
+                    permission_id,
+                    "reject",
+                    Some(format!("Permission prompt IO error: {}", error)),
+                )
+                .await;
+            return;
+        }
+        Err(error) => {
+            tracing::error!(permission_id, %error, "permission prompt task failed");
+            let _ = api_client
+                .reply_permission(
+                    permission_id,
+                    "reject",
+                    Some(format!("Permission prompt failed: {}", error)),
+                )
+                .await;
+            return;
+        }
+    };
+
+    let (reply, message) = match decision {
+        PermissionDecision::Allow => ("once", Some("approved".to_string())),
+        PermissionDecision::AllowAlways => {
+            let mut memory = runtime.permission_memory.lock().await;
+            memory.grant_always(&permission, &patterns);
+            ("always", Some("approved always".to_string()))
+        }
+        PermissionDecision::Deny => ("reject", Some("rejected".to_string())),
+    };
+
+    if let Err(error) = api_client.reply_permission(permission_id, reply, message).await {
+        tracing::error!(permission_id, %error, "failed to reply permission");
     }
 }
 
@@ -3807,10 +4966,7 @@ async fn handle_session_updated_from_sse(
         Some(sid) if sid == session_id => sid,
         _ => return, // Not our session.
     };
-    let should_refresh = matches!(
-        source,
-        Some("prompt.done") | Some("stream.final") | Some("session.title")
-    );
+    let should_refresh = cli_session_update_requires_refresh(source);
     if !should_refresh {
         return;
     }
@@ -4343,20 +5499,30 @@ fn format_session_time(timestamp: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        cli_prompt_assist_view, cli_prompt_screen_lines, cli_recent_session_info_for_directory,
+        cli_resolve_registry_ui_action,
+        cli_cycle_child_session, cli_focus_child_session, cli_focus_root_session,
+        cli_prompt_assist_view,
+        cli_prompt_screen_lines, cli_recent_session_info_for_directory,
         cli_render_retained_layout, cli_render_startup_banner,
+        cli_session_update_requires_refresh,
         cli_should_emit_scheduler_stage_block, CliFrontendPhase, CliFrontendProjection,
         CliObservedExecutionTopology, CliPromptCatalog, CliPromptSelectionState,
-        CliRecentSessionInfo, CliRetainedTranscript, CliSessionTokenStats,
+        CliRecentSessionInfo, CliRetainedTranscript, CliSessionTokenStats, CliExecutionRuntime,
+        PermissionMemory,
     };
     use crate::api_client::SessionInfo;
     use chrono::Utc;
     use rocode_command::cli_style::CliStyle;
     use rocode_command::output_blocks::SchedulerStageBlock;
+    use rocode_command::{CommandRegistry, UiActionId};
     use rocode_tui::api::SessionTimeInfo;
-    use std::collections::HashMap;
+    use std::collections::{BTreeSet, HashMap, VecDeque};
     use std::path::Path;
+    use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
+    use tokio::sync::Mutex as AsyncMutex;
+
+    use rocode_command::cli_spinner::SpinnerGuard;
 
     fn stage_with_status(status: &str) -> SchedulerStageBlock {
         SchedulerStageBlock {
@@ -4392,6 +5558,72 @@ mod tests {
         }
     }
 
+    fn test_runtime_with_child_focus_data() -> CliExecutionRuntime {
+        let mut root_transcript = CliRetainedTranscript::default();
+        root_transcript.append_rendered("● root line\n");
+
+        let mut child_transcript = CliRetainedTranscript::default();
+        child_transcript.append_rendered("● child line\n");
+
+        CliExecutionRuntime {
+            resolved_agent_name: "build".to_string(),
+            resolved_scheduler_profile_name: None,
+            resolved_model_label: "openai/gpt-4.1".to_string(),
+            observed_topology: Arc::new(Mutex::new(CliObservedExecutionTopology::default())),
+            frontend_projection: Arc::new(Mutex::new(CliFrontendProjection {
+                transcript: root_transcript.clone(),
+                ..Default::default()
+            })),
+            scheduler_stage_snapshots: Arc::new(Mutex::new(HashMap::new())),
+            terminal_surface: None,
+            prompt_chrome: None,
+            prompt_session: None,
+            prompt_session_slot: Arc::new(std::sync::Mutex::new(None)),
+            queued_inputs: Arc::new(AsyncMutex::new(VecDeque::new())),
+            busy_flag: Arc::new(AtomicBool::new(false)),
+            exit_requested: Arc::new(AtomicBool::new(false)),
+            active_abort: Arc::new(AsyncMutex::new(None)),
+            recovery_base_prompt: None,
+            spinner_guard: Arc::new(std::sync::Mutex::new(SpinnerGuard::noop())),
+            api_client: None,
+            server_session_id: Some("root-session".to_string()),
+            related_session_ids: Arc::new(Mutex::new(BTreeSet::from([
+                "root-session".to_string(),
+                "child-session-a".to_string(),
+            ]))),
+            root_session_transcript: Arc::new(Mutex::new(root_transcript)),
+            child_session_transcripts: Arc::new(Mutex::new(HashMap::from([(
+                "child-session-a".to_string(),
+                child_transcript,
+            )]))),
+            focused_session_id: Arc::new(Mutex::new(None)),
+            permission_memory: Arc::new(AsyncMutex::new(PermissionMemory::new())),
+            show_thinking: true,
+        }
+    }
+
+    fn test_runtime_with_multiple_child_sessions() -> CliExecutionRuntime {
+        let runtime = test_runtime_with_child_focus_data();
+        runtime
+            .related_session_ids
+            .lock()
+            .expect("related session ids")
+            .insert("child-session-b".to_string());
+        runtime
+            .child_session_transcripts
+            .lock()
+            .expect("child transcripts")
+            .insert(
+                "child-session-b".to_string(),
+                {
+                    let mut transcript = CliRetainedTranscript::default();
+                    transcript.append_rendered("● second child line\n");
+                    transcript
+                },
+            );
+        runtime
+    }
+
     #[test]
     fn cli_prints_scheduler_stage_snapshots_only_on_change() {
         let snapshots = Arc::new(Mutex::new(HashMap::new()));
@@ -4401,6 +5633,29 @@ mod tests {
         assert!(cli_should_emit_scheduler_stage_block(&snapshots, &running));
         assert!(!cli_should_emit_scheduler_stage_block(&snapshots, &running));
         assert!(cli_should_emit_scheduler_stage_block(&snapshots, &done));
+    }
+
+    #[test]
+    fn registry_ui_action_resolves_shared_cli_slash_aliases() {
+        let registry = CommandRegistry::new();
+
+        assert_eq!(
+            cli_resolve_registry_ui_action(&registry, "/share"),
+            Some(UiActionId::ShareSession)
+        );
+        assert_eq!(
+            cli_resolve_registry_ui_action(&registry, "/unshare"),
+            Some(UiActionId::UnshareSession)
+        );
+        assert_eq!(
+            cli_resolve_registry_ui_action(&registry, "/palette"),
+            Some(UiActionId::ToggleCommandPalette)
+        );
+        assert_eq!(
+            cli_resolve_registry_ui_action(&registry, "/copy"),
+            Some(UiActionId::CopySession)
+        );
+        assert_eq!(cli_resolve_registry_ui_action(&registry, "/rename demo"), None);
     }
 
     #[test]
@@ -4415,6 +5670,89 @@ mod tests {
             vec!["● hello world", "next line"]
         );
         assert!(transcript.open_line.is_empty());
+        assert_eq!(transcript.rendered_text(), "● hello world\nnext line\n");
+    }
+
+    #[test]
+    fn focus_child_session_switches_visible_transcript_but_keeps_root_session() {
+        let runtime = test_runtime_with_child_focus_data();
+
+        assert!(cli_focus_child_session(&runtime, "child-session-a")
+            .expect("focus child session"));
+
+        let visible = runtime
+            .frontend_projection
+            .lock()
+            .expect("frontend projection")
+            .transcript
+            .rendered_text();
+        assert_eq!(visible, "● child line\n");
+        assert_eq!(runtime.server_session_id.as_deref(), Some("root-session"));
+        assert_eq!(
+            runtime
+                .focused_session_id
+                .lock()
+                .expect("focused session")
+                .as_deref(),
+            Some("child-session-a")
+        );
+        assert_eq!(
+            runtime
+                .frontend_projection
+                .lock()
+                .expect("frontend projection")
+                .view_label
+                .as_deref(),
+            Some("view child child-se")
+        );
+
+        assert!(cli_focus_root_session(&runtime).expect("back to root session"));
+        let visible = runtime
+            .frontend_projection
+            .lock()
+            .expect("frontend projection")
+            .transcript
+            .rendered_text();
+        assert_eq!(visible, "● root line\n");
+        assert_eq!(
+            runtime
+                .focused_session_id
+                .lock()
+                .expect("focused session")
+                .as_deref(),
+            None
+        );
+        assert_eq!(
+            runtime
+                .frontend_projection
+                .lock()
+                .expect("frontend projection")
+                .view_label,
+            None
+        );
+    }
+
+    #[test]
+    fn cycle_child_session_moves_forward_and_backward() {
+        let runtime = test_runtime_with_multiple_child_sessions();
+
+        let first = cli_cycle_child_session(&runtime, true)
+            .expect("cycle next from root")
+            .expect("first child");
+        assert_eq!(first.0, "child-session-a");
+        assert_eq!((first.1, first.2), (1, 2));
+
+        let second = cli_cycle_child_session(&runtime, true)
+            .expect("cycle next from first")
+            .expect("second child");
+        assert_eq!(second.0, "child-session-b");
+        assert_eq!((second.1, second.2), (2, 2));
+
+        let previous = cli_cycle_child_session(&runtime, false)
+            .expect("cycle prev from second")
+            .expect("previous child");
+        assert_eq!(previous.0, "child-session-a");
+        assert_eq!((previous.1, previous.2), (1, 2));
     }
 
     #[test]
@@ -4565,6 +5903,7 @@ mod tests {
         let mut projection = CliFrontendProjection {
             phase: CliFrontendPhase::Busy,
             active_label: Some("assistant response".to_string()),
+            view_label: Some("view child child-abc".to_string()),
             queue_len: 2,
             active_stage: Some(stage_with_status("running")),
             transcript: CliRetainedTranscript::default(),
@@ -4600,6 +5939,7 @@ mod tests {
         assert!(joined.contains("Active"));
         assert!(joined.contains("assistant reply"));
         assert!(joined.contains("Test Session"));
+        assert!(joined.contains("view child child-abc"));
     }
 
     #[test]
@@ -4628,6 +5968,21 @@ mod tests {
         assert!(joined.contains("Messages"));
         assert!(!joined.contains("╭ Sidebar"));
         assert!(joined.contains("Active"));
+    }
+
+    #[test]
+    fn footer_text_surfaces_child_focus_state() {
+        let projection = CliFrontendProjection {
+            phase: CliFrontendPhase::Busy,
+            view_label: Some("view child abcd1234".to_string()),
+            ..Default::default()
+        };
+
+        let footer = projection.footer_text();
+
+        assert!(footer.contains("Busy"));
+        assert!(footer.contains("view child abcd1234"));
+        assert!(footer.contains("/child"));
     }
 
     #[test]
@@ -4719,5 +6074,18 @@ mod tests {
         assert!(joined_rich.contains("Active"));
         assert!(joined_rich.contains("child-abc"));
         assert!(joined_rich.contains("planner"));
+    }
+
+    #[test]
+    fn session_updated_refresh_allowlist_is_explicit() {
+        assert!(cli_session_update_requires_refresh(Some("prompt.final")));
+        assert!(cli_session_update_requires_refresh(Some("stream.final")));
+        assert!(cli_session_update_requires_refresh(Some("prompt.completed")));
+        assert!(cli_session_update_requires_refresh(Some("session.title.set")));
+        assert!(!cli_session_update_requires_refresh(Some(
+            "prompt.scheduler.stage.content"
+        )));
+        assert!(!cli_session_update_requires_refresh(Some("prompt.stream")));
+        assert!(!cli_session_update_requires_refresh(None));
     }
 }

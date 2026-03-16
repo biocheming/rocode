@@ -8,7 +8,7 @@ use rocode_provider::{
 use rocode_tool::{ToolContext, ToolError};
 use tokio_util::sync::CancellationToken;
 
-use super::{AgentParams, AskQuestionHook, ModelRef};
+use super::{AgentParams, AskPermissionHook, AskQuestionHook, ModelRef};
 use rocode_orchestrator::{
     inline_subtask_request_defaults, session_runtime_request_defaults, CompiledExecutionRequest,
     ExecutionRequestContext,
@@ -71,6 +71,7 @@ pub struct SubtaskExecutor {
     pub agent_params: AgentParams,
     pub max_steps: Option<u32>,
     pub ask_question_hook: Option<AskQuestionHook>,
+    pub ask_permission_hook: Option<AskPermissionHook>,
     pub question_session_id: Option<String>,
     pub tool_runtime_config: rocode_tool::ToolRuntimeConfig,
     /// Cancellation token — checked at the top of each loop iteration.
@@ -90,6 +91,7 @@ impl SubtaskExecutor {
             agent_params: AgentParams::default(),
             max_steps: None,
             ask_question_hook: None,
+            ask_permission_hook: None,
             question_session_id: None,
             tool_runtime_config: rocode_tool::ToolRuntimeConfig::default(),
             abort: None,
@@ -128,6 +130,14 @@ impl SubtaskExecutor {
     ) -> Self {
         self.ask_question_hook = Some(ask_question_hook);
         self.question_session_id = Some(session_id);
+        self
+    }
+
+    pub fn with_ask_permission_hook(
+        mut self,
+        ask_permission_hook: AskPermissionHook,
+    ) -> Self {
+        self.ask_permission_hook = Some(ask_permission_hook);
         self
     }
 
@@ -304,6 +314,17 @@ impl SubtaskExecutor {
                         let question_hook = question_hook.clone();
                         let question_session_id = question_session_id.clone();
                         async move { question_hook(question_session_id, questions).await }
+                    });
+                }
+                if let Some(permission_hook) = self.ask_permission_hook.clone() {
+                    let permission_session_id = self
+                        .question_session_id
+                        .clone()
+                        .unwrap_or_else(|| "subtask".to_string());
+                    ctx = ctx.with_ask(move |request| {
+                        let permission_hook = permission_hook.clone();
+                        let permission_session_id = permission_session_id.clone();
+                        async move { permission_hook(permission_session_id, request).await }
                     });
                 }
                 ctx.call_id = Some(tool_call.id.clone());

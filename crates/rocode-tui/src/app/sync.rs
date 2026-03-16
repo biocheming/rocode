@@ -1,6 +1,16 @@
 use super::*;
 
 impl App {
+    pub(super) fn sync_config_from_server(&mut self) -> anyhow::Result<()> {
+        self.context.sync_ui_preferences_from_server()?;
+        self.refresh_theme_list_dialog();
+        self.refresh_model_dialog();
+        self.refresh_agent_dialog();
+        self.sync_command_palette_labels();
+        self.sync_prompt_spinner_style();
+        Ok(())
+    }
+
     pub(super) fn ensure_session_view(&mut self, session_id: &str) {
         if self.active_session_id.as_deref() == Some(session_id) {
             return;

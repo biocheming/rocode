@@ -546,6 +546,25 @@ impl DeepMerge for WebSearchConfig {
     }
 }
 
+impl DeepMerge for UiPreferencesConfig {
+    fn deep_merge(&mut self, other: Self) {
+        merge_option_replace(&mut self.theme, other.theme);
+        merge_option_replace(&mut self.web_theme, other.web_theme);
+        merge_option_replace(&mut self.web_mode, other.web_mode);
+        merge_option_replace(&mut self.show_header, other.show_header);
+        merge_option_replace(&mut self.show_scrollbar, other.show_scrollbar);
+        merge_option_replace(&mut self.tips_hidden, other.tips_hidden);
+        merge_option_replace(&mut self.show_timestamps, other.show_timestamps);
+        merge_option_replace(&mut self.show_thinking, other.show_thinking);
+        merge_option_replace(&mut self.show_tool_details, other.show_tool_details);
+        merge_option_replace(&mut self.message_density, other.message_density);
+        merge_option_replace(&mut self.semantic_highlight, other.semantic_highlight);
+        if !other.recent_models.is_empty() {
+            self.recent_models = other.recent_models;
+        }
+    }
+}
+
 impl Config {
     pub fn merge(&mut self, other: Config) {
         merge_option_replace(&mut self.schema, other.schema);
@@ -577,6 +596,7 @@ impl Config {
         merge_option_deep(&mut self.formatter, other.formatter);
         merge_option_deep(&mut self.lsp, other.lsp);
         merge_option_replace(&mut self.layout, other.layout);
+        merge_option_deep(&mut self.ui_preferences, other.ui_preferences);
         merge_option_deep(&mut self.permission, other.permission);
         merge_option_map_overwrite_values(&mut self.tools, other.tools);
         merge_option_deep(&mut self.web_search, other.web_search);
@@ -598,5 +618,85 @@ impl Config {
         if !other.enabled_providers.is_empty() {
             self.enabled_providers = other.enabled_providers;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_merge_deep_merges_ui_preferences() {
+        let mut config = Config {
+            ui_preferences: Some(UiPreferencesConfig {
+                theme: Some("opencode@dark".to_string()),
+                web_theme: Some("midnight".to_string()),
+                show_header: Some(true),
+                recent_models: vec![UiRecentModelConfig {
+                    provider: "openai".to_string(),
+                    model: "gpt-5".to_string(),
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        config.merge(Config {
+            ui_preferences: Some(UiPreferencesConfig {
+                web_mode: Some("agent:atlas".to_string()),
+                show_header: Some(false),
+                show_thinking: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        let ui = config.ui_preferences.expect("ui preferences");
+        assert_eq!(ui.theme.as_deref(), Some("opencode@dark"));
+        assert_eq!(ui.web_theme.as_deref(), Some("midnight"));
+        assert_eq!(ui.web_mode.as_deref(), Some("agent:atlas"));
+        assert_eq!(ui.show_header, Some(false));
+        assert_eq!(ui.show_thinking, Some(true));
+        assert_eq!(
+            ui.recent_models,
+            vec![UiRecentModelConfig {
+                provider: "openai".to_string(),
+                model: "gpt-5".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn config_merge_replaces_recent_models_when_supplied() {
+        let mut config = Config {
+            ui_preferences: Some(UiPreferencesConfig {
+                recent_models: vec![UiRecentModelConfig {
+                    provider: "openai".to_string(),
+                    model: "gpt-5".to_string(),
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        config.merge(Config {
+            ui_preferences: Some(UiPreferencesConfig {
+                recent_models: vec![UiRecentModelConfig {
+                    provider: "anthropic".to_string(),
+                    model: "claude-sonnet-4".to_string(),
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        let ui = config.ui_preferences.expect("ui preferences");
+        assert_eq!(
+            ui.recent_models,
+            vec![UiRecentModelConfig {
+                provider: "anthropic".to_string(),
+                model: "claude-sonnet-4".to_string(),
+            }]
+        );
     }
 }

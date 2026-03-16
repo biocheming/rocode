@@ -158,6 +158,10 @@
                 </div>
                 <div id="commandSessionList" style="margin-top: var(--space-3); display: grid; gap: var(--space-2); max-height: 200px; overflow-y: auto;"></div>
               </div>
+              <div class="form-group">
+                <label class="form-label">Commands</label>
+                <div id="commandCatalog" style="display: grid; gap: var(--space-2); max-height: 220px; overflow-y: auto;"></div>
+              </div>
             </div>
           </div>
         </section>
@@ -187,6 +191,31 @@
                 <button id="questionSubmitBtn" class="btn btn-primary" type="submit">Submit Answers</button>
               </div>
             </form>
+          </div>
+        </section>
+
+        <section id="permissionPanel" class="overlay hidden" role="dialog" aria-modal="true">
+          <div class="modal" style="max-width: 560px;">
+            <header class="modal-header">
+              <div>
+                <h4 id="permissionPanelTitle" class="modal-title">Permission Request</h4>
+                <div style="display: flex; gap: var(--space-2); margin-top: var(--space-2);">
+                  <span id="permissionPanelStatus" class="badge">Pending</span>
+                  <span id="permissionPanelMeta" class="text-tertiary">Permission</span>
+                </div>
+              </div>
+              <div style="display: flex; gap: var(--space-2);">
+                <button id="permissionRejectBtn" class="btn btn-danger" type="button">Reject</button>
+                <button id="permissionClose" class="btn btn-secondary" type="button">Close</button>
+              </div>
+            </header>
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: var(--space-4);">
+              <div id="permissionBody" style="display: flex; flex-direction: column; gap: var(--space-3);"></div>
+              <div style="display: flex; justify-content: flex-end; gap: var(--space-2);">
+                <button id="permissionAllowBtn" class="btn btn-secondary" type="button">Allow Once</button>
+                <button id="permissionAlwaysBtn" class="btn btn-primary" type="button">Allow Always</button>
+              </div>
+            </div>
           </div>
         </section>
 

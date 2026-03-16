@@ -6,7 +6,9 @@ use ratatui::{
     Frame,
 };
 
-use crate::command::{fuzzy_match, CommandAction};
+use rocode_command::{CommandRegistry, UiActionId};
+
+use crate::command::fuzzy_match;
 use crate::context::MessageDensity;
 use crate::theme::Theme;
 
@@ -22,7 +24,7 @@ pub struct VisibilityLabels {
 
 #[derive(Clone, Debug)]
 pub struct Command {
-    pub action: CommandAction,
+    pub action_id: UiActionId,
     pub title: String,
     pub keybind: Option<String>,
     pub category: String,
@@ -38,200 +40,17 @@ pub struct CommandPalette {
 
 impl CommandPalette {
     pub fn new() -> Self {
-        let commands = vec![
-            Command {
-                action: CommandAction::SubmitPrompt,
-                title: "Submit prompt".to_string(),
-                keybind: Some("enter".to_string()),
-                category: "Prompt".to_string(),
-            },
-            Command {
-                action: CommandAction::ClearPrompt,
-                title: "Clear prompt".to_string(),
-                keybind: Some("ctrl+u".to_string()),
-                category: "Prompt".to_string(),
-            },
-            Command {
-                action: CommandAction::PasteClipboard,
-                title: "Paste from clipboard".to_string(),
-                keybind: Some("ctrl+v".to_string()),
-                category: "Prompt".to_string(),
-            },
-            Command {
-                action: CommandAction::CopyPrompt,
-                title: "Copy prompt to clipboard".to_string(),
-                keybind: Some("ctrl+shift+c".to_string()),
-                category: "Prompt".to_string(),
-            },
-            Command {
-                action: CommandAction::CutPrompt,
-                title: "Cut prompt to clipboard".to_string(),
-                keybind: Some("ctrl+shift+x".to_string()),
-                category: "Prompt".to_string(),
-            },
-            Command {
-                action: CommandAction::HistoryPrevious,
-                title: "Prompt history previous".to_string(),
-                keybind: Some("alt+up".to_string()),
-                category: "Prompt".to_string(),
-            },
-            Command {
-                action: CommandAction::HistoryNext,
-                title: "Prompt history next".to_string(),
-                keybind: Some("alt+down".to_string()),
-                category: "Prompt".to_string(),
-            },
-            Command {
-                action: CommandAction::PromptStashPush,
-                title: "Stash prompt".to_string(),
-                keybind: None,
-                category: "Prompt".to_string(),
-            },
-            Command {
-                action: CommandAction::PromptStashList,
-                title: "Open prompt stash".to_string(),
-                keybind: None,
-                category: "Prompt".to_string(),
-            },
-            Command {
-                action: CommandAction::PromptSkillList,
-                title: "Insert skill command".to_string(),
-                keybind: None,
-                category: "Prompt".to_string(),
-            },
-            Command {
-                action: CommandAction::ToggleSidebar,
-                title: "Toggle sidebar".to_string(),
-                keybind: Some("ctrl+s".to_string()),
-                category: "View".to_string(),
-            },
-            Command {
-                action: CommandAction::ToggleHeader,
-                title: "Hide header".to_string(),
-                keybind: None,
-                category: "View".to_string(),
-            },
-            Command {
-                action: CommandAction::ToggleScrollbar,
-                title: "Show scrollbar".to_string(),
-                keybind: None,
-                category: "View".to_string(),
-            },
-            Command {
-                action: CommandAction::ToggleTips,
-                title: "Hide tips".to_string(),
-                keybind: None,
-                category: "View".to_string(),
-            },
-            Command {
-                action: CommandAction::ToggleThinking,
-                title: "Toggle thinking".to_string(),
-                keybind: None,
-                category: "View".to_string(),
-            },
-            Command {
-                action: CommandAction::ToggleToolDetails,
-                title: "Toggle tool details".to_string(),
-                keybind: Some("ctrl+o".to_string()),
-                category: "View".to_string(),
-            },
-            Command {
-                action: CommandAction::ToggleDensity,
-                title: "Switch to cozy density".to_string(),
-                keybind: None,
-                category: "View".to_string(),
-            },
-            Command {
-                action: CommandAction::ToggleSemanticHighlight,
-                title: "Disable semantic highlight".to_string(),
-                keybind: None,
-                category: "View".to_string(),
-            },
-            Command {
-                action: CommandAction::SwitchSession,
-                title: "Switch session".to_string(),
-                keybind: None,
-                category: "Session".to_string(),
-            },
-            Command {
-                action: CommandAction::NavigateParentSession,
-                title: "Go to parent session".to_string(),
-                keybind: Some("alt+left".to_string()),
-                category: "Session".to_string(),
-            },
-            Command {
-                action: CommandAction::RenameSession,
-                title: "Rename current session".to_string(),
-                keybind: None,
-                category: "Session".to_string(),
-            },
-            Command {
-                action: CommandAction::ExportSession,
-                title: "Export current session".to_string(),
-                keybind: None,
-                category: "Session".to_string(),
-            },
-            Command {
-                action: CommandAction::SwitchModel,
-                title: "Switch model".to_string(),
-                keybind: Some("ctrl+m".to_string()),
-                category: "Session".to_string(),
-            },
-            Command {
-                action: CommandAction::SwitchAgent,
-                title: "Open agent list".to_string(),
-                keybind: None,
-                category: "Session".to_string(),
-            },
-            Command {
-                action: CommandAction::CycleVariant,
-                title: "Cycle model variant".to_string(),
-                keybind: Some("ctrl+v".to_string()),
-                category: "Session".to_string(),
-            },
-            Command {
-                action: CommandAction::NewSession,
-                title: "New session".to_string(),
-                keybind: Some("ctrl+n".to_string()),
-                category: "Session".to_string(),
-            },
-            Command {
-                action: CommandAction::SwitchTheme,
-                title: "Switch theme".to_string(),
-                keybind: None,
-                category: "System".to_string(),
-            },
-            Command {
-                action: CommandAction::ToggleAppearance,
-                title: "Toggle appearance".to_string(),
-                keybind: None,
-                category: "System".to_string(),
-            },
-            Command {
-                action: CommandAction::ViewStatus,
-                title: "View status".to_string(),
-                keybind: None,
-                category: "System".to_string(),
-            },
-            Command {
-                action: CommandAction::ToggleMcp,
-                title: "Manage MCP servers".to_string(),
-                keybind: None,
-                category: "System".to_string(),
-            },
-            Command {
-                action: CommandAction::ShowHelp,
-                title: "Show help".to_string(),
-                keybind: Some("f1".to_string()),
-                category: "Help".to_string(),
-            },
-            Command {
-                action: CommandAction::Exit,
-                title: "Exit".to_string(),
-                keybind: Some("ctrl+c".to_string()),
-                category: "App".to_string(),
-            },
-        ];
+        let registry = CommandRegistry::new();
+        let commands = registry
+            .ui_palette_commands()
+            .into_iter()
+            .map(|spec| Command {
+                action_id: spec.action_id,
+                title: spec.title.to_string(),
+                keybind: spec.keybind.map(str::to_string),
+                category: spec.category.label().to_string(),
+            })
+            .collect::<Vec<_>>();
 
         let filtered = (0..commands.len()).collect();
         let mut state = ListState::default();
@@ -294,8 +113,8 @@ impl CommandPalette {
             .and_then(|&idx| self.commands.get(idx))
     }
 
-    pub fn selected_action(&self) -> Option<CommandAction> {
-        self.selected_command().map(|cmd| cmd.action.clone())
+    pub fn selected_action(&self) -> Option<UiActionId> {
+        self.selected_command().map(|cmd| cmd.action_id)
     }
 
     pub fn sync_visibility_labels(&mut self, state: VisibilityLabels) {
@@ -310,48 +129,48 @@ impl CommandPalette {
         } = state;
 
         for command in &mut self.commands {
-            if matches!(&command.action, CommandAction::ToggleHeader) {
+            if matches!(command.action_id, UiActionId::ToggleHeader) {
                 command.title = if show_header {
                     "Hide header".to_string()
                 } else {
                     "Show header".to_string()
                 };
             }
-            if matches!(&command.action, CommandAction::ToggleScrollbar) {
+            if matches!(command.action_id, UiActionId::ToggleScrollbar) {
                 command.title = if show_scrollbar {
                     "Hide scrollbar".to_string()
                 } else {
                     "Show scrollbar".to_string()
                 };
             }
-            if matches!(&command.action, CommandAction::ToggleTips) {
+            if matches!(command.action_id, UiActionId::ToggleTips) {
                 command.title = if tips_hidden {
                     "Show tips".to_string()
                 } else {
                     "Hide tips".to_string()
                 };
             }
-            if matches!(&command.action, CommandAction::ToggleThinking) {
+            if matches!(command.action_id, UiActionId::ToggleThinking) {
                 command.title = if show_thinking {
                     "Hide thinking".to_string()
                 } else {
                     "Show thinking".to_string()
                 };
             }
-            if matches!(&command.action, CommandAction::ToggleToolDetails) {
+            if matches!(command.action_id, UiActionId::ToggleToolDetails) {
                 command.title = if show_tool_details {
                     "Hide tool details".to_string()
                 } else {
                     "Show tool details".to_string()
                 };
             }
-            if matches!(&command.action, CommandAction::ToggleDensity) {
+            if matches!(command.action_id, UiActionId::ToggleDensity) {
                 command.title = match density {
                     MessageDensity::Compact => "Switch to cozy density".to_string(),
                     MessageDensity::Cozy => "Switch to compact density".to_string(),
                 };
             }
-            if matches!(&command.action, CommandAction::ToggleSemanticHighlight) {
+            if matches!(command.action_id, UiActionId::ToggleSemanticHighlight) {
                 command.title = if semantic_highlight {
                     "Disable semantic highlight".to_string()
                 } else {

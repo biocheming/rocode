@@ -92,7 +92,7 @@ async function loadModes() {
     if (state.selectedModeKey) {
       const found = state.modes.some((mode) => mode.key === state.selectedModeKey);
       if (!found) {
-        setSelectedMode(null);
+        setSelectedMode(null, { persist: false });
       }
     }
 
@@ -168,27 +168,45 @@ async function loadMessages() {
   }
 }
 
+async function refreshSessionsIndex() {
+  const response = await api("/session?roots=true&limit=120");
+  const selectedSession = state.selectedSession;
+  const selectedProject = state.selectedProject;
+
+  state.sessions = normalizeSessions(await response.json());
+  buildProjects();
+
+  if (selectedProject && state.projects.some((project) => project.key === selectedProject)) {
+    state.selectedProject = selectedProject;
+  } else if (state.projects.length > 0) {
+    state.selectedProject = state.projects[0].key;
+  } else {
+    state.selectedProject = null;
+  }
+
+  if (selectedSession && state.sessions.some((session) => session.id === selectedSession)) {
+    state.selectedSession = selectedSession;
+  } else {
+    const currentProject = state.projects.find((project) => project.key === state.selectedProject);
+    state.selectedSession = currentProject && currentProject.sessions.length > 0
+      ? currentProject.sessions[0].id
+      : null;
+  }
+
+  if (state.parentSessionId && !state.sessions.some((session) => session.id === state.parentSessionId)) {
+    state.parentSessionId = null;
+  }
+
+  renderProjects();
+  updateSessionMeta(currentSession());
+  updateComposerMeta();
+  updatePanels();
+  syncInteractionState();
+}
+
 async function loadSessions() {
   try {
-    const response = await api("/session?roots=true&limit=120");
-    state.sessions = normalizeSessions(await response.json());
-    buildProjects();
-
-    if (!state.selectedProject && state.projects.length > 0) {
-      state.selectedProject = state.projects[0].key;
-    }
-
-    if (!state.selectedSession) {
-      const currentProject = state.projects.find((p) => p.key === state.selectedProject);
-      if (currentProject && currentProject.sessions.length > 0) {
-        state.selectedSession = currentProject.sessions[0].id;
-      }
-    }
-
-    renderProjects();
-    updateSessionMeta(currentSession());
-    updateComposerMeta();
-    syncInteractionState();
+    await refreshSessionsIndex();
     await loadMessages();
   } catch (error) {
     setBadge("offline", "error");

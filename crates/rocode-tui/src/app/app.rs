@@ -10,6 +10,8 @@ mod mappers;
 mod model_controls;
 #[path = "prompt_flow.rs"]
 mod prompt_flow;
+#[path = "permissions.rs"]
+mod permissions;
 #[path = "questions.rs"]
 mod questions;
 #[path = "server_events.rs"]
@@ -37,18 +39,18 @@ use chrono::{TimeZone, Utc};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use rocode_command::interactive::{parse_interactive_command, InteractiveCommand};
 use rocode_command::output_blocks::{BlockTone, StatusBlock};
-use rocode_command::CommandRegistry;
+use rocode_command::{CommandRegistry, UiActionId};
 use rocode_core::agent_task_registry::{global_task_registry, AgentTaskStatus};
 
 use crate::api::{
     ApiClient, ExecutionModeInfo, ExecutionStatus as ApiExecutionStatus, McpStatusInfo,
-    MessageInfo, QuestionInfo, RecoveryActionKind as ApiRecoveryActionKind,
+    MessageInfo, PermissionRequestInfo, QuestionInfo,
+    RecoveryActionKind as ApiRecoveryActionKind,
     RecoveryProtocolStatus as ApiRecoveryProtocolStatus, SessionExecutionNode, SessionInfo,
     SessionRecoveryProtocol, SessionRevertInfo,
 };
 use crate::app::state::AppState;
 use crate::app::terminal;
-use crate::command::CommandAction;
 use crate::components::{
     exit_logo_lines, Agent, AgentSelectDialog, AlertDialog, CommandPalette, ForkDialog, ForkEntry,
     HelpDialog, HomeView, McpDialog, McpItem, ModeKind, Model, ModelSelectDialog, PermissionAction,
@@ -89,10 +91,27 @@ const MAX_EVENTS_PER_FRAME: usize = 256;
 const SESSION_SYNC_DEBOUNCE_MS: u64 = 180;
 const SESSION_FULL_SYNC_INTERVAL_SECS: u64 = 10;
 const QUESTION_SYNC_FALLBACK_SECS: u64 = 5;
+const PERMISSION_SYNC_FALLBACK_SECS: u64 = 5;
 const PERF_LOG_INTERVAL_SECS: u64 = 10;
 const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_DIM: &str = "\x1b[90m";
 const ANSI_BOLD: &str = "\x1b[1m";
+
+fn session_update_requires_sync(source: Option<&str>) -> bool {
+    !matches!(
+        source,
+        Some(
+            "prompt.stream"
+                | "stream.prompt"
+                | "prompt.scheduler.stage.start"
+                | "prompt.scheduler.stage.content"
+                | "prompt.scheduler.stage.reasoning"
+                | "prompt.scheduler.stage.usage"
+                | "prompt.scheduler.stage"
+                | "prompt.scheduler.stage.child.final"
+        )
+    )
+}
 
 #[derive(Clone, Debug)]
 pub struct ToolCallInfo {
@@ -142,6 +161,8 @@ pub struct App {
     model_variants: HashMap<String, Vec<String>>,
     model_variant_selection: HashMap<String, Option<String>>,
     pending_prompt_queue: HashMap<String, VecDeque<QueuedPrompt>>,
+    pending_permission_ids: HashSet<String>,
+    pending_permissions: HashMap<String, PermissionRequestInfo>,
     pending_question_ids: HashSet<String>,
     pending_question_queue: VecDeque<String>,
     pending_questions: HashMap<String, QuestionInfo>,
@@ -151,6 +172,7 @@ pub struct App {
     last_session_sync: Instant,
     last_full_session_sync: Instant,
     last_question_sync: Instant,
+    last_permission_sync: Instant,
     last_aux_sync: Instant,
     last_process_refresh: Instant,
     last_perf_log: Instant,
@@ -337,6 +359,8 @@ impl App {
             model_variants: HashMap::new(),
             model_variant_selection: HashMap::new(),
             pending_prompt_queue: HashMap::new(),
+            pending_permission_ids: HashSet::new(),
+            pending_permissions: HashMap::new(),
             pending_question_ids: HashSet::new(),
             pending_question_queue: VecDeque::new(),
             pending_questions: HashMap::new(),
@@ -346,6 +370,7 @@ impl App {
             last_session_sync: Instant::now(),
             last_full_session_sync: Instant::now(),
             last_question_sync: Instant::now(),
+            last_permission_sync: Instant::now(),
             last_aux_sync: Instant::now(),
             last_process_refresh: Instant::now(),
             last_perf_log: Instant::now(),
@@ -355,6 +380,7 @@ impl App {
             consumed_handoffs: HashSet::new(),
         };
 
+        let _ = app.sync_config_from_server();
         app.refresh_model_dialog();
         app.refresh_agent_dialog();
         let _ = app.refresh_skill_list_dialog();
@@ -363,6 +389,7 @@ impl App {
         let _ = app.refresh_lsp_status();
         let _ = app.refresh_mcp_dialog();
         let _ = app.sync_question_requests();
+        let _ = app.sync_permission_requests();
 
         if let Some(session_id) = initial_session_id {
             let _ = app.sync_session_from_server(&session_id);
@@ -482,19 +509,40 @@ impl App {
                 if self.permission_prompt.is_open {
                     match key.code {
                         KeyCode::Char('y') | KeyCode::Enter => {
-                            if let Some(_request) = self.permission_prompt.approve() {
-                                // TODO: Call API when available
-                                // self.api_client.reply_permission(&request.id, "once");
+                            if let Some(request) = self.permission_prompt.approve() {
+                                self.resolve_permission_request(
+                                    &request.id,
+                                    "once",
+                                    Some("approved".to_string()),
+                                );
                             }
                         }
                         KeyCode::Char('n') => {
-                            let _ = self.permission_prompt.deny();
+                            if let Some(request) = self.permission_prompt.deny() {
+                                self.resolve_permission_request(
+                                    &request.id,
+                                    "reject",
+                                    Some("rejected".to_string()),
+                                );
+                            }
                         }
                         KeyCode::Char('a') => {
-                            let _ = self.permission_prompt.approve_always();
+                            if let Some(request) = self.permission_prompt.approve_always() {
+                                self.resolve_permission_request(
+                                    &request.id,
+                                    "always",
+                                    Some("approved always".to_string()),
+                                );
+                            }
                         }
                         KeyCode::Esc => {
-                            self.permission_prompt.deny();
+                            if let Some(request) = self.permission_prompt.deny() {
+                                self.resolve_permission_request(
+                                    &request.id,
+                                    "reject",
+                                    Some("rejected".to_string()),
+                                );
+                            }
                         }
                         _ => {}
                     }
@@ -535,21 +583,21 @@ impl App {
                         // Leader timed out, fall through to normal handling
                     } else {
                         let action = match key.code {
-                            KeyCode::Char('n') => Some(CommandAction::NewSession),
-                            KeyCode::Char('l') => Some(CommandAction::SwitchSession),
-                            KeyCode::Char('m') => Some(CommandAction::SwitchModel),
-                            KeyCode::Char('a') => Some(CommandAction::SwitchAgent),
-                            KeyCode::Char('t') => Some(CommandAction::SwitchTheme),
-                            KeyCode::Char('b') => Some(CommandAction::ToggleSidebar),
-                            KeyCode::Char('s') => Some(CommandAction::ViewStatus),
-                            KeyCode::Char('q') => Some(CommandAction::Exit),
-                            KeyCode::Char('u') => Some(CommandAction::Undo),
-                            KeyCode::Char('r') => Some(CommandAction::Redo),
+                            KeyCode::Char('n') => Some(UiActionId::NewSession),
+                            KeyCode::Char('l') => Some(UiActionId::OpenSessionList),
+                            KeyCode::Char('m') => Some(UiActionId::OpenModelList),
+                            KeyCode::Char('a') => Some(UiActionId::OpenAgentList),
+                            KeyCode::Char('t') => Some(UiActionId::OpenThemeList),
+                            KeyCode::Char('b') => Some(UiActionId::ToggleSidebar),
+                            KeyCode::Char('s') => Some(UiActionId::ViewStatus),
+                            KeyCode::Char('q') => Some(UiActionId::Exit),
+                            KeyCode::Char('u') => Some(UiActionId::Undo),
+                            KeyCode::Char('r') => Some(UiActionId::Redo),
                             _ => None,
                         };
                         self.leader_state.reset();
                         if let Some(action) = action {
-                            self.execute_command_action(action)?;
+                            self.execute_ui_action(action)?;
                         }
                         return Ok(());
                     }
@@ -945,13 +993,32 @@ impl App {
                             if let Some(action) = self.permission_prompt.take_pending_action() {
                                 match action {
                                     PermissionAction::Approve => {
-                                        let _ = self.permission_prompt.approve();
+                                        if let Some(request) = self.permission_prompt.approve() {
+                                            self.resolve_permission_request(
+                                                &request.id,
+                                                "once",
+                                                Some("approved".to_string()),
+                                            );
+                                        }
                                     }
                                     PermissionAction::Deny => {
-                                        let _ = self.permission_prompt.deny();
+                                        if let Some(request) = self.permission_prompt.deny() {
+                                            self.resolve_permission_request(
+                                                &request.id,
+                                                "reject",
+                                                Some("rejected".to_string()),
+                                            );
+                                        }
                                     }
                                     PermissionAction::ApproveAlways => {
-                                        let _ = self.permission_prompt.approve_always();
+                                        if let Some(request) = self.permission_prompt.approve_always()
+                                        {
+                                            self.resolve_permission_request(
+                                                &request.id,
+                                                "always",
+                                                Some("approved always".to_string()),
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -1130,11 +1197,13 @@ impl App {
                     }
                     self.event_caused_change = true;
                 }
-                CustomEvent::StateChanged(StateChange::SessionUpdated(session_id)) => {
+                CustomEvent::StateChanged(StateChange::SessionUpdated { session_id, source }) => {
                     self.perf.session_updated_events =
                         self.perf.session_updated_events.saturating_add(1);
                     if let Route::Session { session_id: active } = self.context.current_route() {
-                        if active == *session_id {
+                        if active == *session_id
+                            && session_update_requires_sync(source.as_deref())
+                        {
                             self.pending_session_sync = Some(session_id.to_string());
                             self.pending_session_sync_due_at = Some(
                                 Instant::now() + Duration::from_millis(SESSION_SYNC_DEBOUNCE_MS),
@@ -1168,6 +1237,10 @@ impl App {
                     );
                     self.sync_prompt_spinner_state();
                 }
+                CustomEvent::StateChanged(StateChange::ConfigUpdated) => {
+                    let _ = self.sync_config_from_server();
+                    self.event_caused_change = true;
+                }
                 CustomEvent::StateChanged(StateChange::QuestionCreated { session_id, .. })
                 | CustomEvent::StateChanged(StateChange::QuestionResolved { session_id, .. }) => {
                     let should_sync = match self.context.current_route() {
@@ -1179,6 +1252,38 @@ impl App {
                     if should_sync {
                         self.event_caused_change = self.sync_question_requests();
                         self.last_question_sync = Instant::now();
+                    }
+                }
+                CustomEvent::StateChanged(StateChange::PermissionRequested {
+                    session_id,
+                    permission,
+                }) => {
+                    let should_surface = match self.context.current_route() {
+                        Route::Session {
+                            session_id: active_session_id,
+                        } => active_session_id == *session_id,
+                        _ => true,
+                    };
+                    if should_surface {
+                        self.enqueue_permission_request(permission.clone());
+                        self.last_permission_sync = Instant::now();
+                        self.event_caused_change = true;
+                    }
+                }
+                CustomEvent::StateChanged(StateChange::PermissionResolved {
+                    session_id,
+                    permission_id,
+                }) => {
+                    let should_surface = match self.context.current_route() {
+                        Route::Session {
+                            session_id: active_session_id,
+                        } => active_session_id == *session_id,
+                        _ => true,
+                    };
+                    if should_surface {
+                        self.clear_permission_request(permission_id);
+                        self.last_permission_sync = Instant::now();
+                        self.event_caused_change = true;
                     }
                 }
                 CustomEvent::StateChanged(StateChange::ToolCallStarted {
@@ -1209,20 +1314,46 @@ impl App {
                         .insert(session_id.clone(), diffs.clone());
                     drop(session_ctx);
                 }
-                CustomEvent::StateChanged(StateChange::ReasoningUpdated {
+                CustomEvent::StateChanged(StateChange::OutputBlock {
                     session_id,
-                    message_id,
-                    phase,
-                    text,
+                    id,
+                    payload,
                 }) => {
-                    // Only process if this is the current session
+                    let current_session = self.current_session_id();
+                    let is_active_session = current_session.as_deref() == Some(session_id.as_str());
+                    let current_is_parent_of_target = current_session.as_deref().is_some_and(|active| {
+                        let session_ctx = self.context.session.read();
+                        session_ctx
+                            .sessions
+                            .get(session_id)
+                            .and_then(|session| session.parent_id.as_deref())
+                            == Some(active)
+                    });
+
+                    {
+                        let mut session_ctx = self.context.session.write();
+                        session_ctx
+                            .apply_output_block_incremental(session_id, id.as_deref(), payload);
+                    }
+
                     if let Route::Session { session_id: active } = self.context.current_route() {
                         if active == *session_id {
-                            let mut session_ctx = self.context.session.write();
-                            session_ctx
-                                .update_reasoning_incremental(session_id, message_id, phase, text);
+                            if payload.get("kind").and_then(|value| value.as_str())
+                                == Some("scheduler_stage")
+                            {
+                                self.refresh_child_sessions();
+                            }
                             self.event_caused_change = true;
                         }
+                    }
+
+                    if current_is_parent_of_target {
+                        self.refresh_child_sessions();
+                        self.event_caused_change = true;
+                    }
+
+                    if is_active_session && self.status_dialog.is_open() {
+                        self.refresh_status_dialog();
                     }
                 }
                 _ => {}
@@ -1288,6 +1419,12 @@ impl App {
                 {
                     tick_changed |= self.sync_question_requests();
                     self.last_question_sync = Instant::now();
+                }
+                if self.last_permission_sync.elapsed()
+                    >= Duration::from_secs(PERMISSION_SYNC_FALLBACK_SECS)
+                {
+                    tick_changed |= self.sync_permission_requests();
+                    self.last_permission_sync = Instant::now();
                 }
                 if self.last_aux_sync.elapsed() >= Duration::from_secs(5) {
                     self.refresh_session_list_dialog();

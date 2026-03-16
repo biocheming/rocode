@@ -14,8 +14,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::recovery::RecoveryExecutionContext;
 use crate::runtime_control::SessionRunStatus;
+use crate::routes::permission::request_permission;
 use crate::session_runtime::events::{
-    broadcast_server_event, broadcast_session_updated, ServerEvent,
+    broadcast_session_updated, server_output_block_hook, ServerEvent,
 };
 use crate::session_runtime::{
     ensure_default_session_title, finalize_active_scheduler_stage_cancelled,
@@ -715,12 +716,10 @@ pub(super) async fn session_prompt(
 
         let mut update_task = tokio::spawn(async move {
             while let Some(snapshot) = update_rx.recv().await {
-                let snapshot_id = snapshot.id.clone();
                 {
                     let mut sessions = update_state.sessions.lock().await;
                     sessions.update(snapshot.clone());
                 }
-                broadcast_session_updated(update_state.as_ref(), snapshot_id, "prompt.stream");
 
                 *persist_latest.lock().await = Some(snapshot);
                 persist_notify.notify_one();
@@ -766,6 +765,13 @@ pub(super) async fn session_prompt(
                 )
             }))
         };
+        let ask_permission_hook: Option<rocode_session::prompt::AskPermissionHook> = {
+            let state = task_state.clone();
+            Some(Arc::new(move |session_id, request| {
+                let state = state.clone();
+                Box::pin(async move { request_permission(state, session_id, request).await })
+            }))
+        };
 
         let event_broadcast: Option<rocode_session::prompt::EventBroadcastHook> = {
             let state = task_state.clone();
@@ -784,12 +790,7 @@ pub(super) async fn session_prompt(
             }))
         };
         let output_block_hook: Option<rocode_session::prompt::OutputBlockHook> = {
-            let state = task_state.clone();
-            Some(Arc::new(move |event| {
-                let server_event =
-                    ServerEvent::output_block(event.session_id, &event.block, event.id.as_deref());
-                broadcast_server_event(state.as_ref(), &server_event);
-            }))
+            Some(server_output_block_hook(task_state.clone()))
         };
 
         let publish_bus_hook: Option<rocode_session::prompt::PublishBusHook> = {
@@ -852,6 +853,7 @@ pub(super) async fn session_prompt(
                         output_block_hook,
                         agent_lookup,
                         ask_question_hook,
+                        ask_permission_hook,
                         publish_bus_hook,
                     },
                 },

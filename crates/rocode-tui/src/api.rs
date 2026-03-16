@@ -1,4 +1,5 @@
 use reqwest::blocking::Client;
+use rocode_config::Config as AppConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -214,6 +215,16 @@ pub struct QuestionInfo {
     /// Full-fidelity question items with descriptions, headers, multi-select.
     #[serde(default)]
     pub items: Vec<QuestionItemInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionRequestInfo {
+    pub id: String,
+    #[serde(alias = "sessionID", alias = "sessionId")]
+    pub session_id: String,
+    pub tool: String,
+    pub input: serde_json::Value,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -706,6 +717,42 @@ impl ApiClient {
         Ok(())
     }
 
+    pub fn list_permissions(&self) -> anyhow::Result<Vec<PermissionRequestInfo>> {
+        let url = format!("{}/permission", self.base_url);
+        let response = self.client.get(&url).send()?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to list permissions: {} - {}", status, text);
+        }
+        Ok(response.json::<Vec<PermissionRequestInfo>>()?)
+    }
+
+    pub fn reply_permission(
+        &self,
+        permission_id: &str,
+        reply: &str,
+        message: Option<String>,
+    ) -> anyhow::Result<()> {
+        let url = format!("{}/permission/{}/reply", self.base_url, permission_id);
+        let body = serde_json::json!({
+            "reply": reply,
+            "message": message,
+        });
+        let response = self.client.post(&url).json(&body).send()?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to reply permission `{}`: {} - {}",
+                permission_id,
+                status,
+                text
+            );
+        }
+        Ok(())
+    }
+
     pub fn update_session_title(
         &self,
         session_id: &str,
@@ -847,6 +894,32 @@ impl ApiClient {
 
         let providers: ProviderListResponse = response.json()?;
         Ok(providers)
+    }
+
+    pub fn get_config(&self) -> anyhow::Result<AppConfig> {
+        let url = format!("{}/config", self.base_url);
+        let response = self.client.get(&url).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to get config: {} - {}", status, text);
+        }
+
+        Ok(response.json()?)
+    }
+
+    pub fn patch_config(&self, patch: &serde_json::Value) -> anyhow::Result<AppConfig> {
+        let url = format!("{}/config", self.base_url);
+        let response = self.client.patch(&url).json(patch).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to patch config: {} - {}", status, text);
+        }
+
+        Ok(response.json()?)
     }
 
     /// Fetch the full provider catalogue from `GET /provider/`.

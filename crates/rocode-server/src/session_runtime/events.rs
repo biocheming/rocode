@@ -1,12 +1,36 @@
 use std::convert::Infallible;
+use std::sync::Arc;
 
 use axum::response::sse::Event;
 use rocode_command::agent_presenter::output_block_to_web;
 use rocode_command::output_blocks::OutputBlock;
+use rocode_session::prompt::{OutputBlockEvent, OutputBlockHook};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::ServerState;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestionResolutionKind {
+    Answered,
+    Rejected,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCallPhase {
+    Start,
+    Complete,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiffEntry {
+    pub path: String,
+    pub additions: u64,
+    pub deletions: u64,
+}
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,51 +83,52 @@ pub enum ServerEvent {
         request_id: String,
         questions: serde_json::Value,
     },
-    #[serde(rename = "question.replied")]
-    QuestionReplied {
+    #[serde(
+        rename = "question.resolved",
+        alias = "question.replied",
+        alias = "question.rejected"
+    )]
+    QuestionResolved {
         #[serde(rename = "sessionID")]
         session_id: String,
         #[serde(rename = "requestID")]
         request_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
+        resolution: Option<QuestionResolutionKind>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         answers: Option<serde_json::Value>,
-    },
-    #[serde(rename = "question.rejected")]
-    QuestionRejected {
-        #[serde(rename = "sessionID")]
-        session_id: String,
-        #[serde(rename = "requestID")]
-        request_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
-    #[serde(rename = "permission.replied")]
-    PermissionReplied {
+    #[serde(rename = "permission.requested")]
+    PermissionRequested {
         #[serde(rename = "sessionID")]
         session_id: String,
-        #[serde(rename = "requestID")]
-        request_id: String,
+        #[serde(rename = "permissionID")]
+        permission_id: String,
+        info: serde_json::Value,
+    },
+    #[serde(rename = "permission.resolved", alias = "permission.replied")]
+    PermissionResolved {
+        #[serde(rename = "sessionID")]
+        session_id: String,
+        #[serde(rename = "permissionID", alias = "requestID")]
+        permission_id: String,
         reply: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
     },
     #[serde(rename = "config.updated")]
     ConfigUpdated,
-    #[serde(rename = "tool_call.start")]
-    ToolCallStarted {
+    #[serde(rename = "tool_call.lifecycle")]
+    ToolCallLifecycle {
         #[serde(rename = "sessionID")]
         session_id: String,
         #[serde(rename = "toolCallId")]
         tool_call_id: String,
-        #[serde(rename = "toolName")]
-        tool_name: String,
-    },
-    #[serde(rename = "tool_call.complete")]
-    ToolCallCompleted {
-        #[serde(rename = "sessionID")]
-        session_id: String,
-        #[serde(rename = "toolCallId")]
-        tool_call_id: String,
+        phase: ToolCallPhase,
+        #[serde(rename = "toolName", skip_serializing_if = "Option::is_none")]
+        tool_name: Option<String>,
     },
     #[serde(rename = "execution.topology.changed")]
     TopologyChanged {
@@ -113,6 +138,27 @@ pub enum ServerEvent {
         execution_id: Option<String>,
         #[serde(rename = "stageID", skip_serializing_if = "Option::is_none")]
         stage_id: Option<String>,
+    },
+    #[serde(rename = "child_session.attached")]
+    ChildSessionAttached {
+        #[serde(rename = "parentID")]
+        parent_id: String,
+        #[serde(rename = "childID")]
+        child_id: String,
+    },
+    #[serde(rename = "child_session.detached")]
+    ChildSessionDetached {
+        #[serde(rename = "parentID")]
+        parent_id: String,
+        #[serde(rename = "childID")]
+        child_id: String,
+    },
+    #[serde(rename = "diff.updated", alias = "session.diff")]
+    DiffUpdated {
+        #[serde(rename = "sessionID")]
+        session_id: String,
+        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        diff: Vec<DiffEntry>,
     },
 }
 
@@ -137,13 +183,15 @@ impl ServerEvent {
             Self::SessionUpdated { .. } => "session.updated",
             Self::SessionStatus { .. } => "session.status",
             Self::QuestionCreated { .. } => "question.created",
-            Self::QuestionReplied { .. } => "question.replied",
-            Self::QuestionRejected { .. } => "question.rejected",
-            Self::PermissionReplied { .. } => "permission.replied",
+            Self::QuestionResolved { .. } => "question.resolved",
+            Self::PermissionRequested { .. } => "permission.requested",
+            Self::PermissionResolved { .. } => "permission.resolved",
             Self::ConfigUpdated => "config.updated",
-            Self::ToolCallStarted { .. } => "tool_call.start",
-            Self::ToolCallCompleted { .. } => "tool_call.complete",
+            Self::ToolCallLifecycle { .. } => "tool_call.lifecycle",
             Self::TopologyChanged { .. } => "execution.topology.changed",
+            Self::ChildSessionAttached { .. } => "child_session.attached",
+            Self::ChildSessionDetached { .. } => "child_session.detached",
+            Self::DiffUpdated { .. } => "diff.updated",
         }
     }
 
@@ -163,6 +211,10 @@ impl ServerEvent {
     }
 }
 
+pub(crate) fn server_output_block_event(event: &OutputBlockEvent) -> ServerEvent {
+    ServerEvent::output_block(event.session_id.clone(), &event.block, event.id.as_deref())
+}
+
 pub(crate) async fn send_sse_server_event(
     tx: &mpsc::Sender<std::result::Result<Event, Infallible>>,
     event: &ServerEvent,
@@ -176,6 +228,39 @@ pub(crate) fn broadcast_server_event(state: &ServerState, event: &ServerEvent) {
     if let Some(payload) = event.to_json_string() {
         state.broadcast(&payload);
     }
+}
+
+pub(crate) fn broadcast_output_block_event(state: &ServerState, event: &OutputBlockEvent) {
+    let server_event = server_output_block_event(event);
+    broadcast_server_event(state, &server_event);
+}
+
+pub(crate) fn server_output_block_hook(state: Arc<ServerState>) -> OutputBlockHook {
+    Arc::new(move |event| {
+        broadcast_output_block_event(state.as_ref(), &event);
+    })
+}
+
+pub(crate) fn emit_output_block_via_hook(
+    output_hook: Option<&OutputBlockHook>,
+    event: OutputBlockEvent,
+) {
+    let Some(output_hook) = output_hook else {
+        return;
+    };
+    output_hook(event);
+}
+
+pub(crate) fn sse_output_block_hook(
+    tx: mpsc::Sender<std::result::Result<Event, Infallible>>,
+) -> OutputBlockHook {
+    Arc::new(move |event| {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let server_event = server_output_block_event(&event);
+            send_sse_server_event(&tx, &server_event).await;
+        });
+    })
 }
 
 pub(crate) fn broadcast_session_updated(
@@ -196,9 +281,37 @@ pub(crate) fn broadcast_config_updated(state: &ServerState) {
     broadcast_server_event(state, &ServerEvent::ConfigUpdated);
 }
 
+pub(crate) fn broadcast_child_session_attached(
+    state: &ServerState,
+    parent_id: impl Into<String>,
+    child_id: impl Into<String>,
+) {
+    broadcast_server_event(
+        state,
+        &ServerEvent::ChildSessionAttached {
+            parent_id: parent_id.into(),
+            child_id: child_id.into(),
+        },
+    );
+}
+
+pub(crate) fn broadcast_child_session_detached(
+    state: &ServerState,
+    parent_id: impl Into<String>,
+    child_id: impl Into<String>,
+) {
+    broadcast_server_event(
+        state,
+        &ServerEvent::ChildSessionDetached {
+            parent_id: parent_id.into(),
+            child_id: child_id.into(),
+        },
+    );
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ServerEvent;
+    use super::{DiffEntry, QuestionResolutionKind, ServerEvent, ToolCallPhase};
     use rocode_command::output_blocks::{OutputBlock, StatusBlock};
 
     #[test]
@@ -224,5 +337,122 @@ mod tests {
             .to_json_value()
             .expect("event json");
         assert_eq!(value, serde_json::json!({ "type": "config.updated" }));
+    }
+
+    #[test]
+    fn child_session_attached_serializes_with_parent_and_child_ids() {
+        let value = ServerEvent::ChildSessionAttached {
+            parent_id: "parent-1".to_string(),
+            child_id: "child-1".to_string(),
+        }
+        .to_json_value()
+        .expect("event json");
+        assert_eq!(value["type"], "child_session.attached");
+        assert_eq!(value["parentID"], "parent-1");
+        assert_eq!(value["childID"], "child-1");
+    }
+
+    #[test]
+    fn question_resolved_serializes_with_canonical_type() {
+        let value = ServerEvent::QuestionResolved {
+            session_id: "session-1".to_string(),
+            request_id: "question-1".to_string(),
+            resolution: Some(QuestionResolutionKind::Answered),
+            answers: Some(serde_json::json!([["Yes"]])),
+            reason: None,
+        }
+        .to_json_value()
+        .expect("event json");
+
+        assert_eq!(value["type"], "question.resolved");
+        assert_eq!(value["resolution"], "answered");
+        assert_eq!(value["requestID"], "question-1");
+    }
+
+    #[test]
+    fn tool_call_lifecycle_serializes_with_phase() {
+        let value = ServerEvent::ToolCallLifecycle {
+            session_id: "session-1".to_string(),
+            tool_call_id: "tool-1".to_string(),
+            phase: ToolCallPhase::Start,
+            tool_name: Some("shell".to_string()),
+        }
+        .to_json_value()
+        .expect("event json");
+
+        assert_eq!(value["type"], "tool_call.lifecycle");
+        assert_eq!(value["phase"], "start");
+        assert_eq!(value["toolName"], "shell");
+    }
+
+    #[test]
+    fn diff_updated_serializes_with_canonical_type() {
+        let value = ServerEvent::DiffUpdated {
+            session_id: "session-1".to_string(),
+            diff: vec![DiffEntry {
+                path: "src/main.rs".to_string(),
+                additions: 12,
+                deletions: 3,
+            }],
+        }
+        .to_json_value()
+        .expect("event json");
+
+        assert_eq!(value["type"], "diff.updated");
+        assert_eq!(value["sessionID"], "session-1");
+        assert_eq!(value["diff"][0]["path"], "src/main.rs");
+    }
+
+    #[test]
+    fn legacy_question_replied_deserializes_as_question_resolved() {
+        let event: ServerEvent = serde_json::from_value(serde_json::json!({
+            "type": "question.replied",
+            "sessionID": "session-1",
+            "requestID": "question-1",
+            "answers": [["Yes"]],
+        }))
+        .expect("legacy event");
+
+        assert!(matches!(
+            event,
+            ServerEvent::QuestionResolved { request_id, .. } if request_id == "question-1"
+        ));
+    }
+
+    #[test]
+    fn legacy_permission_replied_deserializes_as_permission_resolved() {
+        let event: ServerEvent = serde_json::from_value(serde_json::json!({
+            "type": "permission.replied",
+            "sessionID": "session-1",
+            "requestID": "permission-1",
+            "reply": "once",
+        }))
+        .expect("legacy event");
+
+        assert!(matches!(
+            event,
+            ServerEvent::PermissionResolved { permission_id, .. }
+                if permission_id == "permission-1"
+        ));
+    }
+
+    #[test]
+    fn legacy_session_diff_deserializes_as_diff_updated() {
+        let event: ServerEvent = serde_json::from_value(serde_json::json!({
+            "type": "session.diff",
+            "sessionID": "session-1",
+            "diff": [{
+                "path": "src/main.rs",
+                "additions": 1,
+                "deletions": 0,
+            }],
+        }))
+        .expect("legacy event");
+
+        assert!(matches!(
+            event,
+            ServerEvent::DiffUpdated { session_id, diff }
+                if session_id == "session-1" && diff.len() == 1
+        ));
     }
 }

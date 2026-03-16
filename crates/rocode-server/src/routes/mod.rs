@@ -48,6 +48,7 @@ use crate::session_runtime::events::broadcast_config_updated;
 use crate::web;
 use crate::{ApiError, Result, ServerState};
 use rocode_agent::{AgentMode, AgentRegistry};
+use rocode_command::CommandRegistry;
 use rocode_config::Config as AppConfig;
 use rocode_orchestrator::{SchedulerConfig, SchedulerPresetKind};
 use rocode_permission::PermissionRuleset;
@@ -67,6 +68,7 @@ pub fn router() -> Router<Arc<ServerState>> {
         .route("/path", get(get_paths))
         .route("/vcs", get(get_vcs_info))
         .route("/command", get(list_commands))
+        .route("/command/ui", get(list_ui_commands))
         .route("/agent", get(list_agents))
         .route("/mode", get(list_execution_modes))
         .route("/skill", get(list_skills))
@@ -227,6 +229,13 @@ struct CommandInfo {
     description: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct UiCommandApiSpec {
+    #[serde(flatten)]
+    command: rocode_command::UiCommandSpec,
+    argument_kind: rocode_command::UiCommandArgumentKind,
+}
+
 async fn list_commands() -> Result<Json<Vec<CommandInfo>>> {
     Ok(Json(vec![
         CommandInfo {
@@ -245,6 +254,21 @@ async fn list_commands() -> Result<Json<Vec<CommandInfo>>> {
             description: Some("Run linter".to_string()),
         },
     ]))
+}
+
+async fn list_ui_commands() -> Result<Json<Vec<UiCommandApiSpec>>> {
+    let registry = CommandRegistry::new();
+    Ok(Json(
+        registry
+            .ui_commands()
+            .iter()
+            .cloned()
+            .map(|command| UiCommandApiSpec {
+                argument_kind: command.argument_kind(),
+                command,
+            })
+            .collect(),
+    ))
 }
 
 #[derive(Debug, Clone, Serialize)]

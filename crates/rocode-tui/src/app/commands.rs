@@ -1,36 +1,33 @@
 use super::*;
 
 impl App {
-    pub(super) fn execute_command_action(&mut self, action: CommandAction) -> anyhow::Result<()> {
+    pub(super) fn execute_ui_action(&mut self, action: UiActionId) -> anyhow::Result<()> {
         match action {
-            CommandAction::SubmitPrompt => self.submit_prompt()?,
-            CommandAction::ClearPrompt => self.prompt.clear(),
-            CommandAction::PasteClipboard => self.paste_clipboard_to_prompt(),
-            CommandAction::CopyPrompt => self.copy_prompt_to_clipboard(),
-            CommandAction::CutPrompt => self.cut_prompt_to_clipboard(),
-            CommandAction::HistoryPrevious => self.prompt.history_previous_entry(),
-            CommandAction::HistoryNext => self.prompt.history_next_entry(),
-            CommandAction::ToggleSidebar => self.context.toggle_sidebar(),
-            CommandAction::ToggleHeader => self.context.toggle_header(),
-            CommandAction::ToggleScrollbar => self.context.toggle_scrollbar(),
-            CommandAction::SwitchSession => {
+            UiActionId::SubmitPrompt => self.submit_prompt()?,
+            UiActionId::ClearPrompt => self.prompt.clear(),
+            UiActionId::PasteClipboard => self.paste_clipboard_to_prompt(),
+            UiActionId::CopyPrompt => self.copy_prompt_to_clipboard(),
+            UiActionId::CutPrompt => self.cut_prompt_to_clipboard(),
+            UiActionId::HistoryPrevious => self.prompt.history_previous_entry(),
+            UiActionId::HistoryNext => self.prompt.history_next_entry(),
+            UiActionId::ToggleSidebar => self.context.toggle_sidebar(),
+            UiActionId::ToggleHeader => self.context.toggle_header(),
+            UiActionId::ToggleScrollbar => self.context.toggle_scrollbar(),
+            UiActionId::OpenSessionList => {
                 self.refresh_session_list_dialog();
                 self.session_list_dialog
                     .open(self.active_session_id.as_deref());
             }
-            CommandAction::NavigateChildSession => {
-                self.navigate_to_child_session();
-            }
-            CommandAction::NavigateParentSession => {
+            UiActionId::NavigateParentSession => {
                 self.navigate_to_parent_session();
             }
-            CommandAction::RenameSession => {
+            UiActionId::RenameSession => {
                 self.open_session_rename_dialog();
             }
-            CommandAction::ExportSession => {
+            UiActionId::ExportSession => {
                 self.open_session_export_dialog();
             }
-            CommandAction::PromptStashPush => {
+            UiActionId::PromptStashPush => {
                 if self.prompt.stash_current() {
                     self.alert_dialog.set_message("Prompt stashed.");
                     self.alert_dialog.open();
@@ -40,135 +37,125 @@ impl App {
                     self.alert_dialog.open();
                 }
             }
-            CommandAction::PromptStashList => {
+            UiActionId::PromptStashList => {
                 self.open_prompt_stash_dialog();
             }
-            CommandAction::PromptSkillList => {
+            UiActionId::PromptSkillList => {
                 self.open_skill_list_dialog();
             }
-            CommandAction::SwitchTheme => {
+            UiActionId::OpenThemeList => {
                 self.refresh_theme_list_dialog();
                 let current_theme = self.context.current_theme_name();
                 self.theme_list_dialog.open(&current_theme);
             }
-            CommandAction::CycleVariant => {
+            UiActionId::CycleVariant => {
                 self.cycle_model_variant();
             }
-            CommandAction::ToggleAppearance => {
+            UiActionId::ToggleAppearance => {
                 let _ = self.context.toggle_theme_mode();
             }
-            CommandAction::ViewStatus => {
+            UiActionId::ViewStatus => {
                 self.refresh_status_dialog();
                 self.status_dialog.open();
             }
-            CommandAction::ToggleMcp => {
+            UiActionId::ToggleMcp => {
                 let _ = self.refresh_mcp_dialog();
                 self.mcp_dialog.open();
             }
-            CommandAction::ToggleTips => {
+            UiActionId::ToggleTips => {
                 self.context.toggle_tips_hidden();
             }
-            CommandAction::SwitchModel => {
+            UiActionId::OpenModelList => {
                 self.refresh_model_dialog();
                 self.model_select.open();
             }
-            CommandAction::SwitchAgent => {
+            UiActionId::OpenModeList => {
                 self.refresh_agent_dialog();
                 self.agent_select.open();
             }
-            CommandAction::NewSession => {
+            UiActionId::OpenAgentList => {
+                self.refresh_agent_dialog();
+                self.agent_select.open();
+            }
+            UiActionId::OpenPresetList => {
+                self.refresh_agent_dialog();
+                self.agent_select.open();
+            }
+            UiActionId::NewSession => {
                 self.context.navigate(Route::Home);
                 self.active_session_id = None;
                 self.session_view = None;
             }
-            CommandAction::ShowHelp => {
+            UiActionId::ShowHelp => {
                 self.help_dialog.open();
             }
-            CommandAction::ToggleCommandPalette => {
+            UiActionId::ToggleCommandPalette => {
                 self.sync_command_palette_labels();
                 self.command_palette.open();
             }
-            CommandAction::ToggleTimestamps => {
+            UiActionId::ToggleTimestamps => {
                 self.context.toggle_timestamps();
             }
-            CommandAction::ToggleThinking => {
+            UiActionId::ToggleThinking => {
                 self.context.toggle_thinking();
             }
-            CommandAction::ToggleToolDetails => {
+            UiActionId::ToggleToolDetails => {
                 self.context.toggle_tool_details();
             }
-            CommandAction::ToggleDensity => {
+            UiActionId::ToggleDensity => {
                 self.context.toggle_message_density();
             }
-            CommandAction::ToggleSemanticHighlight => {
+            UiActionId::ToggleSemanticHighlight => {
                 self.context.toggle_semantic_highlight();
             }
-            CommandAction::ExternalEditor => {}
-            CommandAction::ConnectProvider => {
+            UiActionId::ExternalEditor => {}
+            UiActionId::ConnectProvider => {
                 self.populate_provider_dialog();
                 self.provider_dialog.open();
             }
-            CommandAction::ShareSession => {
+            UiActionId::ShareSession => {
                 self.handle_share_session();
             }
-            CommandAction::UnshareSession => {
+            UiActionId::UnshareSession => {
                 self.handle_unshare_session();
             }
-            CommandAction::ForkSession => {
+            UiActionId::ForkSession => {
                 self.handle_fork_session();
             }
-            CommandAction::CompactSession => {
+            UiActionId::CompactSession => {
                 self.handle_compact_session();
             }
-            CommandAction::Timeline => {
+            UiActionId::Timeline => {
                 self.handle_open_timeline();
             }
-            CommandAction::Undo => {
+            UiActionId::Undo => {
                 self.handle_undo();
             }
-            CommandAction::Redo => {
+            UiActionId::Redo => {
                 self.handle_redo();
             }
-            CommandAction::ListSessions | CommandAction::OpenSessionList => {
-                self.refresh_session_list_dialog();
-                self.session_list_dialog
-                    .open(self.active_session_id.as_deref());
-            }
-            CommandAction::CopySession => {
+            UiActionId::CopySession => {
                 self.handle_copy_session();
             }
-            CommandAction::OpenStash => {
+            UiActionId::OpenStash => {
                 self.open_prompt_stash_dialog();
             }
-            CommandAction::OpenRecoveryList => {
+            UiActionId::OpenRecoveryList => {
                 self.handle_show_recovery_actions();
             }
-            CommandAction::OpenSkills => {
+            UiActionId::OpenSkills => {
                 self.open_skill_list_dialog();
             }
-            CommandAction::OpenThemeList => {
-                self.refresh_theme_list_dialog();
-                let current_theme = self.context.current_theme_name();
-                self.theme_list_dialog.open(&current_theme);
-            }
-            CommandAction::ShowStatus => {
+            UiActionId::ShowStatus => {
                 self.refresh_status_dialog();
                 self.status_dialog.open();
             }
-            CommandAction::ManageMcp | CommandAction::OpenMcpList => {
+            UiActionId::OpenMcpList => {
                 let _ = self.refresh_mcp_dialog();
                 self.mcp_dialog.open();
             }
-            CommandAction::OpenModelList => {
-                self.refresh_model_dialog();
-                self.model_select.open();
-            }
-            CommandAction::OpenAgentList => {
-                self.refresh_agent_dialog();
-                self.agent_select.open();
-            }
-            CommandAction::Exit => self.state = AppState::Exiting,
-            CommandAction::ListTasks => {
+            UiActionId::Exit => self.state = AppState::Exiting,
+            UiActionId::ListTasks => {
                 self.handle_list_tasks();
             }
         }
@@ -181,11 +168,10 @@ impl App {
         command: InteractiveCommand,
     ) -> anyhow::Result<bool> {
         match command {
-            InteractiveCommand::Exit => {
-                self.execute_command_action(CommandAction::Exit)?;
-            }
-            InteractiveCommand::ShowHelp => {
-                self.execute_command_action(CommandAction::ShowHelp)?;
+            InteractiveCommand::Exit | InteractiveCommand::ShowHelp => {
+                if let Some(action_id) = command.ui_action_id() {
+                    self.execute_ui_action(action_id)?;
+                }
             }
             InteractiveCommand::Abort => {
                 if let Some(session_id) = &self.active_session_id {
@@ -220,19 +206,40 @@ impl App {
                 }
             }
             InteractiveCommand::ShowRecovery => {
-                self.handle_show_recovery_actions();
+                if let Some(action_id) = command.ui_action_id() {
+                    self.execute_ui_action(action_id)?;
+                }
             }
             InteractiveCommand::ExecuteRecovery(selector) => {
                 self.handle_execute_recovery_action(&selector);
             }
-            InteractiveCommand::NewSession => {
-                self.execute_command_action(CommandAction::NewSession)?;
+            InteractiveCommand::NewSession
+            | InteractiveCommand::ShowStatus
+            | InteractiveCommand::ListModels
+            | InteractiveCommand::ListProviders
+            | InteractiveCommand::ListThemes
+            | InteractiveCommand::ListPresets
+            | InteractiveCommand::ListSessions
+            | InteractiveCommand::ParentSession
+            | InteractiveCommand::ListTasks
+            | InteractiveCommand::Compact
+            | InteractiveCommand::Copy
+            | InteractiveCommand::ListAgents
+            | InteractiveCommand::ToggleSidebar => {
+                if let Some(action_id) = command.ui_action_id() {
+                    self.execute_ui_action(action_id)?;
+                }
             }
-            InteractiveCommand::ShowStatus => {
-                self.execute_command_action(CommandAction::ShowStatus)?;
-            }
-            InteractiveCommand::ListModels => {
-                self.execute_command_action(CommandAction::OpenModelList)?;
+            InteractiveCommand::ListChildSessions
+            | InteractiveCommand::FocusChildSession(_)
+            | InteractiveCommand::FocusNextChildSession
+            | InteractiveCommand::FocusPreviousChildSession
+            | InteractiveCommand::BackToRootSession => {
+                self.toast.show(
+                    ToastVariant::Info,
+                    "Child-session focus commands are currently CLI-only.",
+                    2400,
+                );
             }
             InteractiveCommand::SelectModel(model_ref) => {
                 self.set_active_model_selection(model_ref.clone(), provider_from_model(&model_ref));
@@ -242,24 +249,6 @@ impl App {
                     1800,
                 );
             }
-            InteractiveCommand::ListProviders => {
-                self.execute_command_action(CommandAction::ConnectProvider)?;
-            }
-            InteractiveCommand::ListThemes => {
-                self.execute_command_action(CommandAction::OpenThemeList)?;
-            }
-            InteractiveCommand::ListPresets => {
-                self.execute_command_action(CommandAction::OpenAgentList)?;
-            }
-            InteractiveCommand::ListSessions => {
-                self.execute_command_action(CommandAction::OpenSessionList)?;
-            }
-            InteractiveCommand::ParentSession => {
-                self.execute_command_action(CommandAction::NavigateParentSession)?;
-            }
-            InteractiveCommand::ListTasks => {
-                self.handle_list_tasks();
-            }
             InteractiveCommand::ShowTask(id) => {
                 self.handle_show_task(&id);
             }
@@ -268,15 +257,6 @@ impl App {
             }
             InteractiveCommand::ClearScreen => {
                 // TUI doesn't need clear-screen — no-op
-            }
-            InteractiveCommand::Compact => {
-                // TODO: compact conversation
-            }
-            InteractiveCommand::Copy => {
-                self.paste_clipboard_to_prompt();
-            }
-            InteractiveCommand::ListAgents => {
-                self.execute_command_action(CommandAction::OpenAgentList)?;
             }
             InteractiveCommand::SelectAgent(name) => {
                 if let Some(mode) = self
@@ -305,8 +285,7 @@ impl App {
                     );
                 }
             }
-            InteractiveCommand::ToggleSidebar
-            | InteractiveCommand::ToggleActive
+            InteractiveCommand::ToggleActive
             | InteractiveCommand::ScrollUp
             | InteractiveCommand::ScrollDown
             | InteractiveCommand::ScrollBottom => {

@@ -86,12 +86,16 @@ pub(crate) async fn request_question_answers_with_hook(
     match wait_result {
         Ok(Ok(QuestionReply::Answers(answers))) => {
             if let Some(hook) = event_hook.as_ref() {
-                let event = ServerEvent::QuestionReplied {
+                let event = ServerEvent::QuestionResolved {
                     session_id: question_info.session_id,
                     request_id: question_info.id,
+                    resolution: Some(
+                        crate::session_runtime::events::QuestionResolutionKind::Answered,
+                    ),
                     answers: Some(
                         serde_json::to_value(&answers).unwrap_or(serde_json::Value::Null),
                     ),
+                    reason: None,
                 };
                 if let Some(payload) = event.to_json_value() {
                     hook(payload);
@@ -101,9 +105,13 @@ pub(crate) async fn request_question_answers_with_hook(
         }
         Ok(Ok(QuestionReply::Rejected)) => {
             if let Some(hook) = event_hook.as_ref() {
-                let event = ServerEvent::QuestionRejected {
+                let event = ServerEvent::QuestionResolved {
                     session_id: question_info.session_id,
                     request_id: question_info.id,
+                    resolution: Some(
+                        crate::session_runtime::events::QuestionResolutionKind::Rejected,
+                    ),
+                    answers: None,
                     reason: None,
                 };
                 if let Some(payload) = event.to_json_value() {
@@ -116,9 +124,13 @@ pub(crate) async fn request_question_answers_with_hook(
         }
         Ok(Ok(QuestionReply::Cancelled)) => {
             if let Some(hook) = event_hook.as_ref() {
-                let event = ServerEvent::QuestionRejected {
+                let event = ServerEvent::QuestionResolved {
                     session_id: question_info.session_id,
                     request_id: question_info.id,
+                    resolution: Some(
+                        crate::session_runtime::events::QuestionResolutionKind::Cancelled,
+                    ),
+                    answers: None,
                     reason: Some("cancelled".to_string()),
                 };
                 if let Some(payload) = event.to_json_value() {
@@ -151,9 +163,11 @@ pub(crate) async fn cancel_questions_for_session(
     for question in &cancelled {
         broadcast_server_event(
             state.as_ref(),
-            &ServerEvent::QuestionRejected {
+            &ServerEvent::QuestionResolved {
                 session_id: question.session_id.clone(),
                 request_id: question.id.clone(),
+                resolution: Some(crate::session_runtime::events::QuestionResolutionKind::Cancelled),
+                answers: None,
                 reason: Some("cancelled".to_string()),
             },
         );
@@ -194,10 +208,12 @@ async fn reply_question(
 
     broadcast_server_event(
         state.as_ref(),
-        &ServerEvent::QuestionReplied {
+        &ServerEvent::QuestionResolved {
             session_id: question.session_id,
             request_id: id,
+            resolution: Some(crate::session_runtime::events::QuestionResolutionKind::Answered),
             answers: Some(serde_json::to_value(&req.answers).unwrap_or(serde_json::Value::Null)),
+            reason: None,
         },
     );
     Ok(Json(true))
@@ -215,9 +231,11 @@ async fn reject_question(
 
     broadcast_server_event(
         state.as_ref(),
-        &ServerEvent::QuestionRejected {
+        &ServerEvent::QuestionResolved {
             session_id: question.session_id,
             request_id: id,
+            resolution: Some(crate::session_runtime::events::QuestionResolutionKind::Rejected),
+            answers: None,
             reason: None,
         },
     );
@@ -563,7 +581,8 @@ mod tests {
                     == Some(session_id.as_str())
         }));
         assert!(events.iter().any(|event| {
-            event.get("type").and_then(|value| value.as_str()) == Some("question.replied")
+            event.get("type").and_then(|value| value.as_str()) == Some("question.resolved")
+                && event.get("resolution").and_then(|value| value.as_str()) == Some("answered")
         }));
     }
 
@@ -621,7 +640,8 @@ mod tests {
 
         let events = captured.lock().expect("capture lock");
         assert!(events.iter().any(|event| {
-            event.get("type").and_then(|value| value.as_str()) == Some("question.rejected")
+            event.get("type").and_then(|value| value.as_str()) == Some("question.resolved")
+                && event.get("resolution").and_then(|value| value.as_str()) == Some("rejected")
         }));
     }
 }

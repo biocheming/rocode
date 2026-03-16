@@ -18,12 +18,14 @@ const jsModules = [
   "message-render.js",
   "scheduler-stage.js",
   "question-panel.js",
+  "permission-panel.js",
   "output-blocks.js",
   "sidebar.js",
   "settings.js",
   "session-actions.js",
   "commands.js",
   "streaming.js",
+  "global-events.js",
   "bootstrap.js",
 ];
 const appSource = jsModules
@@ -494,6 +496,83 @@ test("web live question event opens the same question overlay with options and o
   );
 });
 
+test("web global permission event opens the shared permission overlay", () => {
+  const { api } = createHarness();
+  api.state.selectedSession = "session-1";
+
+  api.handleGlobalServerEvent("message", {
+    type: "permission.requested",
+    sessionID: "session-1",
+    permissionID: "perm-1",
+    info: {
+      message: "Tool wants to write a file",
+      input: {
+        permission: "write",
+        patterns: ["/tmp/demo.txt"],
+        metadata: {
+          filepath: "/tmp/demo.txt",
+        },
+      },
+    },
+  });
+
+  assert.equal(api.nodes.permissionPanel.classList.contains("hidden"), false);
+  assert.match(api.nodes.permissionPanelMeta.textContent, /perm-1/);
+  assert.match(api.nodes.permissionBody.textContent, /Tool wants to write a file/);
+  assert.match(api.nodes.permissionBody.textContent, /\/tmp\/demo\.txt/);
+});
+
+test("web ui preferences apply from config without localStorage", () => {
+  const { api } = createHarness();
+  api.state.modes = [{ key: "agent:atlas", id: "atlas", name: "Atlas", kind: "agent" }];
+
+  api.applyWebUiPreferences({
+    uiPreferences: {
+      webTheme: "graphite",
+      webMode: "agent:atlas",
+    },
+  });
+
+  assert.equal(api.state.selectedTheme, "graphite");
+  assert.equal(api.state.selectedModeKey, "agent:atlas");
+  assert.equal(api.nodes.shell.dataset.theme, "graphite");
+});
+
+test("web output_block events route by session id and do not leak child content into parent feed", () => {
+  const { api } = createHarness();
+  api.state.selectedSession = "root-session";
+
+  const handledWhileRootFocused = api.applyOutputBlockEvent({
+    type: "output_block",
+    sessionID: "child-session",
+    block: {
+      kind: "message",
+      phase: "full",
+      role: "assistant",
+      text: "child content",
+    },
+  });
+
+  assert.equal(handledWhileRootFocused, false);
+  assert.equal(api.nodes.messageFeed.children.length, 0);
+
+  api.state.selectedSession = "child-session";
+  const handledWhileChildFocused = api.applyOutputBlockEvent({
+    type: "output_block",
+    sessionID: "child-session",
+    block: {
+      kind: "message",
+      phase: "full",
+      role: "assistant",
+      text: "child content",
+    },
+  });
+
+  assert.equal(handledWhileChildFocused, true);
+  assert.equal(api.nodes.messageFeed.children.length, 1);
+  assert.match(api.nodes.messageFeed.textContent, /child content/);
+});
+
 test("web stream usage accepts zero values without keeping stale totals", () => {
   const { api } = createHarness();
   api.state.promptTokens = 9;
@@ -821,4 +900,190 @@ test("web multi-stage live output block applies concurrent stage blocks correctl
   // Verify status displays
   assert.match(text(articles[0]), /running/i);
   assert.match(text(articles[2]), /waiting/i);
+});
+
+test("web help slash command renders shared ui command catalogue lines", async () => {
+  const { api } = createHarness();
+  api.state.uiCommands = [
+    {
+      action_id: "open_model_list",
+      title: "Switch Model",
+      description: "Choose a different model",
+      category: "model_agent",
+      keybind: "ctrl+m",
+      include_in_palette: true,
+      slash: {
+        name: "/models",
+        aliases: ["/model"],
+        suggested: true,
+      },
+    },
+    {
+      action_id: "show_help",
+      title: "Help",
+      description: "Show help and shortcuts",
+      category: "system",
+      keybind: "f1",
+      include_in_palette: true,
+      slash: {
+        name: "/help",
+        aliases: ["/commands"],
+        suggested: true,
+      },
+    },
+  ];
+
+  const handled = await api.handleSlashCommand("/help");
+  assert.equal(handled, true);
+
+  const article = api.nodes.messageFeed.children[0];
+  assert.ok(article, "help output should be appended");
+  assert.match(text(article), /\/models   Choose a different model/);
+  assert.match(text(article), /\/help   Show help and shortcuts/);
+});
+
+test("web slash aliases resolve through shared ui command catalogue", async () => {
+  const { api } = createHarness();
+  api.state.uiCommands = [
+    {
+      action_id: "open_theme_list",
+      title: "Themes",
+      description: "Open theme picker",
+      category: "display",
+      keybind: null,
+      include_in_palette: true,
+      slash: {
+        name: "/theme",
+        aliases: ["/themes"],
+        suggested: true,
+      },
+    },
+    {
+      action_id: "open_session_list",
+      title: "Switch Session",
+      description: "Open session switcher",
+      category: "session",
+      keybind: null,
+      include_in_palette: true,
+      slash: {
+        name: "/sessions",
+        aliases: ["/session", "/resume"],
+        suggested: true,
+      },
+    },
+  ];
+
+  let handled = await api.handleSlashCommand("/themes");
+  assert.equal(handled, true);
+  assert.equal(api.nodes.commandPanel.classList.contains("hidden"), false);
+
+  api.nodes.commandPanel.classList.add("hidden");
+  handled = await api.handleSlashCommand("/resume");
+  assert.equal(handled, true);
+  assert.equal(api.nodes.commandPanel.classList.contains("hidden"), false);
+});
+
+test("web shared parameter commands apply model and preset selections", async () => {
+  const { api } = createHarness();
+  api.state.uiCommands = [
+    {
+      action_id: "open_model_list",
+      title: "Switch Model",
+      description: "Choose a different model",
+      category: "model_agent",
+      keybind: null,
+      include_in_palette: true,
+      slash: {
+        name: "/models",
+        aliases: ["/model"],
+        suggested: true,
+      },
+    },
+    {
+      action_id: "open_preset_list",
+      title: "Switch Preset",
+      description: "Choose a preset",
+      category: "model_agent",
+      keybind: null,
+      include_in_palette: true,
+      slash: {
+        name: "/preset",
+        aliases: ["/presets"],
+        suggested: true,
+      },
+    },
+  ];
+  api.state.modes = [
+    { key: "preset:atlas", id: "atlas", name: "atlas", kind: "preset" },
+    { key: "agent:build", id: "build", name: "build", kind: "agent" },
+  ];
+
+  const option = api.nodes.modelSelect.ownerDocument.createElement("option");
+  option.value = "openai/gpt-4.1";
+  option.textContent = "openai/gpt-4.1";
+  api.nodes.modelSelect.appendChild(option);
+
+  let handled = await api.handleSlashCommand("/model openai/gpt-4.1");
+  assert.equal(handled, true);
+  assert.equal(api.state.selectedModel, "openai/gpt-4.1");
+
+  handled = await api.handleSlashCommand("/preset atlas");
+  assert.equal(handled, true);
+  assert.equal(api.state.selectedModeKey, "preset:atlas");
+});
+
+test("web shared copy command writes current transcript to clipboard", async () => {
+  const { api, context } = createHarness();
+  api.state.uiCommands = [
+    {
+      action_id: "copy_session",
+      title: "Copy Session",
+      description: "Copy session transcript",
+      category: "session",
+      keybind: null,
+      include_in_palette: true,
+      slash: {
+        name: "/copy",
+        aliases: [],
+        suggested: false,
+      },
+    },
+  ];
+  api.state.selectedSession = "session-1";
+  api.nodes.messageFeed.textContent = "copied transcript";
+  let clipboardText = "";
+  context.navigator.clipboard.writeText = async (value) => {
+    clipboardText = String(value);
+  };
+
+  const handled = await api.handleSlashCommand("/copy");
+  assert.equal(handled, true);
+  assert.equal(clipboardText, "copied transcript");
+});
+
+test("web command panel renders shared command catalogue", () => {
+  const { api } = createHarness();
+  api.state.uiCommands = [
+    {
+      action_id: "toggle_command_palette",
+      title: "Command Palette",
+      description: "Open command palette",
+      category: "navigation",
+      keybind: "ctrl+p",
+      include_in_palette: false,
+      slash: {
+        name: "/command",
+        aliases: ["/cmd", "/palette"],
+        suggested: true,
+      },
+    },
+  ];
+
+  api.openCommandPanel("model");
+
+  const entry = api.nodes.commandCatalog.children[0];
+  assert.ok(entry, "command catalog entry should render");
+  assert.match(text(entry), /\/command/);
+  assert.match(text(entry), /Command Palette/);
+  assert.match(text(entry), /Navigation/);
 });

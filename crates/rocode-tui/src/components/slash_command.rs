@@ -6,16 +6,18 @@ use ratatui::{
     Frame,
 };
 
-use crate::command::{CommandAction, CommandRegistry};
+use rocode_command::{CommandRegistry, UiActionId};
+
+use crate::command::fuzzy_match;
 use crate::theme::Theme;
 
 pub struct SlashCommandPopup {
     pub registry: CommandRegistry,
     pub query: String,
-    pub filtered: Vec<String>,
+    pub filtered: Vec<UiActionId>,
     pub state: ListState,
     pub open: bool,
-    pub selected_action: Option<CommandAction>,
+    pub selected_action: Option<UiActionId>,
 }
 
 impl SlashCommandPopup {
@@ -48,7 +50,7 @@ impl SlashCommandPopup {
         self.open
     }
 
-    pub fn take_action(&mut self) -> Option<CommandAction> {
+    pub fn take_action(&mut self) -> Option<UiActionId> {
         self.selected_action.take()
     }
 
@@ -60,17 +62,34 @@ impl SlashCommandPopup {
         if self.query.is_empty() {
             self.filtered = self
                 .registry
-                .suggested_commands()
+                .ui_suggested_slash_commands()
                 .iter()
-                .map(|cmd| cmd.name.clone())
+                .map(|cmd| cmd.action_id)
                 .collect();
         } else {
-            self.filtered = self
+            let mut scored: Vec<(UiActionId, i32)> = self
                 .registry
-                .search(&self.query)
-                .iter()
-                .map(|cmd| cmd.name.clone())
+                .ui_all_slash_commands()
+                .into_iter()
+                .filter_map(|cmd| {
+                    let slash = cmd.slash.as_ref()?;
+                    let name_score = fuzzy_match(&self.query, slash.name);
+                    let alias_score = slash
+                        .aliases
+                        .iter()
+                        .filter_map(|alias| fuzzy_match(&self.query, alias))
+                        .max();
+                    let title_score = fuzzy_match(&self.query, cmd.title);
+                    let best = name_score
+                        .into_iter()
+                        .chain(alias_score)
+                        .chain(title_score)
+                        .max()?;
+                    Some((cmd.action_id, best))
+                })
                 .collect();
+            scored.sort_by(|a, b| b.1.cmp(&a.1));
+            self.filtered = scored.into_iter().map(|(action_id, _)| action_id).collect();
         }
         self.state.select(Some(0));
     }
@@ -105,9 +124,9 @@ impl SlashCommandPopup {
 
     pub fn select_current(&mut self) {
         if let Some(idx) = self.state.selected() {
-            if let Some(name) = self.filtered.get(idx) {
-                if let Some(cmd) = self.registry.get(name) {
-                    self.selected_action = Some(cmd.action.clone());
+            if let Some(action_id) = self.filtered.get(idx) {
+                if self.registry.ui_command(*action_id).is_some() {
+                    self.selected_action = Some(*action_id);
                     self.close();
                 }
             }
@@ -136,11 +155,11 @@ impl SlashCommandPopup {
             .filtered
             .iter()
             .enumerate()
-            .map(|(idx, name)| {
-                let cmd = self.registry.get(name);
-                let title = cmd.map(|c| c.title.as_str()).unwrap_or(name);
-                let _desc = cmd.map(|c| c.description.as_str()).unwrap_or("");
-                let keybind = cmd.and_then(|c| c.keybind.clone());
+            .filter_map(|(idx, action_id)| {
+                let cmd = self.registry.ui_command(*action_id)?;
+                let slash = cmd.slash.as_ref()?;
+                let title = slash.name;
+                let keybind = cmd.keybind;
 
                 let is_selected = self.state.selected() == Some(idx);
                 let style = if is_selected {
@@ -160,7 +179,7 @@ impl SlashCommandPopup {
                     Line::from(Span::styled(title, style))
                 };
 
-                ListItem::new(content)
+                Some(ListItem::new(content))
             })
             .collect();
 

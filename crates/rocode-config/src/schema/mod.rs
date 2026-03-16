@@ -129,6 +129,13 @@ pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub layout: Option<LayoutMode>,
 
+    #[serde(
+        rename = "uiPreferences",
+        alias = "ui_preferences",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub ui_preferences: Option<UiPreferencesConfig>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission: Option<PermissionConfig>,
 
@@ -153,6 +160,96 @@ pub struct Config {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env: Option<HashMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UiPreferencesConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+
+    #[serde(
+        rename = "webTheme",
+        alias = "web_theme",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub web_theme: Option<String>,
+
+    #[serde(
+        rename = "webMode",
+        alias = "web_mode",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub web_mode: Option<String>,
+
+    #[serde(
+        rename = "showHeader",
+        alias = "show_header",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub show_header: Option<bool>,
+
+    #[serde(
+        rename = "showScrollbar",
+        alias = "show_scrollbar",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub show_scrollbar: Option<bool>,
+
+    #[serde(
+        rename = "tipsHidden",
+        alias = "tips_hidden",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tips_hidden: Option<bool>,
+
+    #[serde(
+        rename = "showTimestamps",
+        alias = "show_timestamps",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub show_timestamps: Option<bool>,
+
+    #[serde(
+        rename = "showThinking",
+        alias = "show_thinking",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub show_thinking: Option<bool>,
+
+    #[serde(
+        rename = "showToolDetails",
+        alias = "show_tool_details",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub show_tool_details: Option<bool>,
+
+    #[serde(
+        rename = "messageDensity",
+        alias = "message_density",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub message_density: Option<String>,
+
+    #[serde(
+        rename = "semanticHighlight",
+        alias = "semantic_highlight",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub semantic_highlight: Option<bool>,
+
+    #[serde(
+        rename = "recentModels",
+        alias = "recent_models",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub recent_models: Vec<UiRecentModelConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct UiRecentModelConfig {
+    pub provider: String,
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -93,9 +93,9 @@ async function sendPrompt(content) {
 
     await parseSSE(response, (name, payload) => {
       if (name === "output_block") {
+        const handled = applyOutputBlockEvent(payload);
         const block = payload && payload.block ? payload.block : payload;
-        applyOutputBlock(block);
-        if (block && (block.kind === "scheduler_stage" || block.kind === "tool")) {
+        if (handled && block && (block.kind === "scheduler_stage" || block.kind === "tool")) {
           scheduleExecutionTopologyRefresh();
         }
         return;
@@ -110,7 +110,20 @@ async function sendPrompt(content) {
         return;
       }
 
-      if (name === "question.replied" || name === "question.rejected") {
+      if (name === "permission.requested") {
+        const sessionId = payload.sessionID || payload.sessionId;
+        if (!sessionId || sessionId === state.selectedSession) {
+          openPermissionPanel(permissionInteractionFromLiveEvent(payload));
+          scheduleExecutionTopologyRefresh();
+        }
+        return;
+      }
+
+      if (
+        name === "question.resolved" ||
+        name === "question.replied" ||
+        name === "question.rejected"
+      ) {
         const requestId = payload.requestID || payload.requestId;
         if (
           state.activeQuestionInteraction &&
@@ -119,6 +132,19 @@ async function sendPrompt(content) {
         ) {
           closeQuestionPanel();
           void loadMessages();
+        }
+        scheduleExecutionTopologyRefresh();
+        return;
+      }
+
+      if (name === "permission.resolved" || name === "permission.replied") {
+        const permissionId = payload.permissionID || payload.permissionId || payload.requestID || payload.requestId;
+        if (
+          state.activePermissionInteraction &&
+          state.activePermissionInteraction.permission_id &&
+          state.activePermissionInteraction.permission_id === permissionId
+        ) {
+          closePermissionPanel();
         }
         scheduleExecutionTopologyRefresh();
         return;

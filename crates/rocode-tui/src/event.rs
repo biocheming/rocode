@@ -43,7 +43,10 @@ pub enum CustomEvent {
 #[derive(Clone, Debug)]
 pub enum StateChange {
     SessionCreated(String),
-    SessionUpdated(String),
+    SessionUpdated {
+        session_id: String,
+        source: Option<String>,
+    },
     SessionStatusBusy(String),
     SessionStatusIdle(String),
     SessionStatusRetrying {
@@ -57,6 +60,7 @@ pub enum StateChange {
     AgentChanged(String),
     ProviderConnected(String),
     ProviderDisconnected(String),
+    ConfigUpdated,
     McpServerStatusChanged {
         name: String,
         status: String,
@@ -75,6 +79,14 @@ pub enum StateChange {
         session_id: String,
         request_id: String,
     },
+    PermissionRequested {
+        session_id: String,
+        permission: crate::api::PermissionRequestInfo,
+    },
+    PermissionResolved {
+        session_id: String,
+        permission_id: String,
+    },
     ToolCallStarted {
         session_id: String,
         tool_call_id: String,
@@ -87,12 +99,10 @@ pub enum StateChange {
     TopologyChanged {
         session_id: String,
     },
-    /// Real-time reasoning (thinking) content update from extended thinking
-    ReasoningUpdated {
+    OutputBlock {
         session_id: String,
-        message_id: String,
-        phase: String,
-        text: String,
+        id: Option<String>,
+        payload: serde_json::Value,
     },
 }
 

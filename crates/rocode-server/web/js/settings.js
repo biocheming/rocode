@@ -57,6 +57,42 @@ function renderThemeOptions() {
   nodes.themeSelect.value = state.selectedTheme;
 }
 
+function renderCommandCatalog() {
+  if (!nodes.commandCatalog) return;
+  nodes.commandCatalog.innerHTML = "";
+
+  const commands = Array.isArray(state.uiCommands) ? state.uiCommands : [];
+  if (commands.length === 0) {
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = "No shared commands loaded";
+    nodes.commandCatalog.appendChild(p);
+    return;
+  }
+
+  for (const command of commands) {
+    if (!command || !command.slash) continue;
+    const item = document.createElement("div");
+    item.className = "command-session-btn";
+    const category = String(command.category || "")
+      .split("_")
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ");
+    const aliases = Array.isArray(command.slash.aliases) && command.slash.aliases.length > 0
+      ? ` · ${command.slash.aliases.join(", ")}`
+      : "";
+    const keybind = command.keybind ? ` · ${command.keybind}` : "";
+    const title = document.createElement("div");
+    title.textContent = command.slash.name;
+    const meta = document.createElement("span");
+    meta.className = "muted";
+    meta.textContent = `${command.title} · ${category}${aliases}${keybind}`;
+    item.appendChild(title);
+    item.appendChild(meta);
+    nodes.commandCatalog.appendChild(item);
+  }
+}
+
 function renderCommandSessionList() {
   nodes.commandSessionList.innerHTML = "";
   const locked = interactionLocked();
@@ -90,6 +126,7 @@ function openCommandPanel(section) {
   renderThemeOptions();
   renderModeOptions();
   renderCommandSessionList();
+  renderCommandCatalog();
   updateCommandActionControls();
   nodes.commandPanel.classList.remove("hidden");
 

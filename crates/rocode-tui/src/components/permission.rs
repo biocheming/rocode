@@ -108,6 +108,27 @@ impl PermissionPrompt {
         self.is_open = !self.requests.is_empty();
     }
 
+    pub fn retain_requests<F>(&mut self, mut keep: F)
+    where
+        F: FnMut(&PermissionRequest) -> bool,
+    {
+        self.requests.retain(|request| keep(request));
+        if self.current_index >= self.requests.len() {
+            self.current_index = self.requests.len().saturating_sub(1);
+        }
+        self.is_open = !self.requests.is_empty();
+    }
+
+    pub fn remove_request(&mut self, request_id: &str) -> Option<PermissionRequest> {
+        let index = self.requests.iter().position(|request| request.id == request_id)?;
+        let request = self.requests.remove(index);
+        if self.current_index >= self.requests.len() {
+            self.current_index = self.requests.len().saturating_sub(1);
+        }
+        self.is_open = !self.requests.is_empty();
+        Some(request)
+    }
+
     pub fn current_request(&self) -> Option<&PermissionRequest> {
         self.requests.get(self.current_index)
     }
@@ -137,9 +158,7 @@ impl PermissionPrompt {
     }
 
     pub fn approve_always(&mut self) -> Option<PermissionRequest> {
-        let mut request = self.approve()?;
-        request.id = format!("{}_always", request.id);
-        Some(request)
+        self.approve()
     }
 
     pub fn close(&mut self) {

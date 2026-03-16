@@ -1,3 +1,5 @@
+use crate::UiActionId;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InteractiveCommand {
     Exit,
@@ -16,6 +18,11 @@ pub enum InteractiveCommand {
     SelectPreset(String),
     ListSessions,
     ParentSession,
+    ListChildSessions,
+    FocusChildSession(String),
+    FocusNextChildSession,
+    FocusPreviousChildSession,
+    BackToRootSession,
     ListTasks,
     ShowTask(String),
     KillTask(String),
@@ -32,6 +39,30 @@ pub enum InteractiveCommand {
     InspectStage(Option<String>),
     /// User typed an unknown /command — we should warn, not treat as prompt.
     Unknown(String),
+}
+
+impl InteractiveCommand {
+    pub fn ui_action_id(&self) -> Option<UiActionId> {
+        match self {
+            Self::Exit => Some(UiActionId::Exit),
+            Self::ShowHelp => Some(UiActionId::ShowHelp),
+            Self::ShowRecovery => Some(UiActionId::OpenRecoveryList),
+            Self::NewSession => Some(UiActionId::NewSession),
+            Self::ShowStatus => Some(UiActionId::ShowStatus),
+            Self::ListModels => Some(UiActionId::OpenModelList),
+            Self::ListProviders => Some(UiActionId::ConnectProvider),
+            Self::ListThemes => Some(UiActionId::OpenThemeList),
+            Self::ListPresets => Some(UiActionId::OpenPresetList),
+            Self::ListSessions => Some(UiActionId::OpenSessionList),
+            Self::ParentSession => Some(UiActionId::NavigateParentSession),
+            Self::ListTasks => Some(UiActionId::ListTasks),
+            Self::Compact => Some(UiActionId::CompactSession),
+            Self::Copy => Some(UiActionId::CopySession),
+            Self::ListAgents => Some(UiActionId::OpenAgentList),
+            Self::ToggleSidebar => Some(UiActionId::ToggleSidebar),
+            _ => None,
+        }
+    }
 }
 
 pub fn parse_interactive_command(input: &str) -> Option<InteractiveCommand> {
@@ -97,6 +128,26 @@ pub fn parse_interactive_command(input: &str) -> Option<InteractiveCommand> {
         }
         "session" | "sessions" | "resume" | "continue" => Some(InteractiveCommand::ListSessions),
         "parent" | "back" => Some(InteractiveCommand::ParentSession),
+        "child" | "children" => {
+            if arg.is_empty() {
+                Some(InteractiveCommand::ListChildSessions)
+            } else {
+                let mut sub_parts = arg.split_whitespace();
+                let sub_cmd = sub_parts.next().unwrap_or("");
+                let sub_arg = sub_parts.collect::<Vec<_>>().join(" ");
+                match sub_cmd {
+                    "list" => Some(InteractiveCommand::ListChildSessions),
+                    "focus" if !sub_arg.is_empty() => {
+                        Some(InteractiveCommand::FocusChildSession(sub_arg))
+                    }
+                    "focus" => Some(InteractiveCommand::ListChildSessions),
+                    "next" => Some(InteractiveCommand::FocusNextChildSession),
+                    "prev" | "previous" => Some(InteractiveCommand::FocusPreviousChildSession),
+                    "back" | "root" => Some(InteractiveCommand::BackToRootSession),
+                    _ => Some(InteractiveCommand::ListChildSessions),
+                }
+            }
+        }
         "compact" => Some(InteractiveCommand::Compact),
         "copy" => Some(InteractiveCommand::Copy),
         "agent" | "agents" => {
@@ -141,6 +192,7 @@ pub fn parse_interactive_command(input: &str) -> Option<InteractiveCommand> {
 #[cfg(test)]
 mod tests {
     use super::{parse_interactive_command, InteractiveCommand};
+    use crate::UiActionId;
 
     #[test]
     fn parses_plain_commands() {
@@ -199,6 +251,14 @@ mod tests {
         assert_eq!(
             parse_interactive_command("/back"),
             Some(InteractiveCommand::ParentSession)
+        );
+        assert_eq!(
+            parse_interactive_command("/child"),
+            Some(InteractiveCommand::ListChildSessions)
+        );
+        assert_eq!(
+            parse_interactive_command("/children"),
+            Some(InteractiveCommand::ListChildSessions)
         );
         assert_eq!(
             parse_interactive_command("/compact"),
@@ -331,6 +391,42 @@ mod tests {
     }
 
     #[test]
+    fn parses_child_session_commands() {
+        assert_eq!(
+            parse_interactive_command("/child list"),
+            Some(InteractiveCommand::ListChildSessions)
+        );
+        assert_eq!(
+            parse_interactive_command("/child focus child-42"),
+            Some(InteractiveCommand::FocusChildSession("child-42".to_string()))
+        );
+        assert_eq!(
+            parse_interactive_command("/child focus"),
+            Some(InteractiveCommand::ListChildSessions)
+        );
+        assert_eq!(
+            parse_interactive_command("/child next"),
+            Some(InteractiveCommand::FocusNextChildSession)
+        );
+        assert_eq!(
+            parse_interactive_command("/child prev"),
+            Some(InteractiveCommand::FocusPreviousChildSession)
+        );
+        assert_eq!(
+            parse_interactive_command("/child previous"),
+            Some(InteractiveCommand::FocusPreviousChildSession)
+        );
+        assert_eq!(
+            parse_interactive_command("/child back"),
+            Some(InteractiveCommand::BackToRootSession)
+        );
+        assert_eq!(
+            parse_interactive_command("/child root"),
+            Some(InteractiveCommand::BackToRootSession)
+        );
+    }
+
+    #[test]
     fn parses_inspect_commands() {
         assert_eq!(
             parse_interactive_command("/inspect"),
@@ -349,6 +445,40 @@ mod tests {
         assert_eq!(
             parse_interactive_command("/stages"),
             Some(InteractiveCommand::InspectStage(None))
+        );
+    }
+
+    #[test]
+    fn maps_non_parameterized_commands_to_ui_actions() {
+        assert_eq!(
+            InteractiveCommand::Exit.ui_action_id(),
+            Some(UiActionId::Exit)
+        );
+        assert_eq!(
+            InteractiveCommand::ListModels.ui_action_id(),
+            Some(UiActionId::OpenModelList)
+        );
+        assert_eq!(
+            InteractiveCommand::ToggleSidebar.ui_action_id(),
+            Some(UiActionId::ToggleSidebar)
+        );
+        assert_eq!(
+            InteractiveCommand::Compact.ui_action_id(),
+            Some(UiActionId::CompactSession)
+        );
+        assert_eq!(
+            InteractiveCommand::ListPresets.ui_action_id(),
+            Some(UiActionId::OpenPresetList)
+        );
+        assert_eq!(
+            InteractiveCommand::Copy.ui_action_id(),
+            Some(UiActionId::CopySession)
+        );
+        assert_eq!(InteractiveCommand::ListChildSessions.ui_action_id(), None);
+        assert_eq!(InteractiveCommand::Abort.ui_action_id(), None);
+        assert_eq!(
+            InteractiveCommand::SelectModel("foo".to_string()).ui_action_id(),
+            None
         );
     }
 }

@@ -13,7 +13,7 @@ use crate::{FilePart, MessageRole, PartType, Session, SessionMessage};
 
 use super::subtask::SubtaskExecutor;
 use super::{
-    AgentLookup, AgentParams, AskQuestionHook, ModelRef, PersistedSubsession,
+    AgentLookup, AgentParams, AskPermissionHook, AskQuestionHook, ModelRef, PersistedSubsession,
     PersistedSubsessionTurn, PromptHooks, SessionPrompt,
 };
 
@@ -157,6 +157,7 @@ impl SessionPrompt {
             default_model,
             options.hooks.agent_lookup.clone(),
             options.hooks.ask_question_hook.clone(),
+            options.hooks.ask_permission_hook.clone(),
         )
         .with_create_synthetic_message({
             let pending_synthetic_messages = pending_synthetic_messages.clone();
@@ -500,6 +501,7 @@ impl SessionPrompt {
         default_model: String,
         agent_lookup: Option<AgentLookup>,
         ask_question_hook: Option<AskQuestionHook>,
+        ask_permission_hook: Option<AskPermissionHook>,
     ) -> rocode_tool::ToolContext {
         let parent_directory = ctx.directory.clone();
         let agent_lookup_for_subsessions = agent_lookup.clone();
@@ -520,6 +522,18 @@ impl SessionPrompt {
                 let question_hook = question_hook.clone();
                 let session_id = session_id.clone();
                 async move { question_hook(session_id, questions).await }
+            })
+        } else {
+            ctx
+        };
+
+        let ctx = if let Some(ref permission_hook) = ask_permission_hook {
+            let session_id = ctx.session_id.clone();
+            let permission_hook = permission_hook.clone();
+            ctx.with_ask(move |request| {
+                let permission_hook = permission_hook.clone();
+                let session_id = session_id.clone();
+                async move { permission_hook(session_id, request).await }
             })
         } else {
             ctx
@@ -654,6 +668,9 @@ impl SessionPrompt {
                 .clone()
                 .unwrap_or_else(|| "subtask".to_string());
             executor = executor.with_ask_question_hook(question_hook, session_id);
+        }
+        if let Some(permission_hook) = options.hooks.ask_permission_hook.clone() {
+            executor = executor.with_ask_permission_hook(permission_hook);
         }
         if let Some(token) = options.abort.clone() {
             executor = executor.with_abort(token);

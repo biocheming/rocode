@@ -504,7 +504,7 @@ impl App {
                 KeyCode::Enter => {
                     self.slash_popup.select_current();
                     if let Some(action) = self.slash_popup.take_action() {
-                        self.execute_command_action(action)?;
+                        self.execute_ui_action(action)?;
                     }
                 }
                 KeyCode::Char(' ')
@@ -556,7 +556,7 @@ impl App {
                     let action = self.command_palette.selected_action();
                     self.command_palette.close();
                     if let Some(action) = action {
-                        self.execute_command_action(action)?;
+                        self.execute_ui_action(action)?;
                     }
                 }
                 KeyCode::Char(c)
@@ -740,7 +740,7 @@ impl App {
                 }
                 KeyCode::Enter => {
                     if let Some(theme_id) = self.theme_list_dialog.selected_theme_id() {
-                        let _ = self.context.set_theme_by_name(&theme_id);
+                        let _ = self.context.commit_theme_by_name(&theme_id);
                     }
                     self.theme_list_dialog.close();
                 }

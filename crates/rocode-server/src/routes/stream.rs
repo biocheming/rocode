@@ -4,27 +4,24 @@ use axum::{
     Json,
 };
 use futures::stream::Stream;
-use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::session_runtime::events::{
-    broadcast_session_updated, send_sse_server_event, ServerEvent,
+    broadcast_session_updated, send_sse_server_event, sse_output_block_hook, ServerEvent,
 };
-use crate::session_runtime::scheduler_stage_block_from_message;
 use crate::{ApiError, ServerState};
 use rocode_agent::{AgentInfo, AgentRegistry};
-use rocode_command::agent_presenter::output_block_to_web;
-use rocode_command::output_blocks::OutputBlock;
 use rocode_provider::ToolDefinition;
-use rocode_session::{MessageRole as SessionMessageRole, Session, SessionMessage};
+use rocode_session::{MessageRole as SessionMessageRole, MessageUsage, Session};
 
 use super::session::{
     resolve_prompt_request_config, resolved_session_directory, to_task_agent_info,
     SendMessageRequest,
 };
+use super::permission::request_permission;
 use super::tui::{request_question_answers_with_hook, QuestionEventHook};
 
 pub(crate) async fn send_stream_error_event(
@@ -59,104 +56,41 @@ pub(crate) async fn send_stream_usage_event(
     send_sse_server_event(tx, &event).await;
 }
 
-#[derive(Default)]
-struct AssistantEmitState {
-    usage: Option<(u64, u64)>,
-}
-
-struct StreamSnapshotEmitter {
-    assistants: HashMap<String, AssistantEmitState>,
-    scheduler_stages: HashMap<String, String>,
-}
-
-impl Default for StreamSnapshotEmitter {
-    fn default() -> Self {
-        Self {
-            assistants: HashMap::new(),
-            scheduler_stages: HashMap::new(),
-        }
-    }
-}
-
-impl StreamSnapshotEmitter {
-    async fn emit_snapshot(
-        &mut self,
-        tx: &mpsc::Sender<std::result::Result<Event, Infallible>>,
-        snapshot: &Session,
-    ) {
-        for message in &snapshot.messages {
-            match message.role {
-                SessionMessageRole::Assistant => {
-                    self.emit_assistant_message(tx, &snapshot.id, message).await;
-                }
-                _ => {}
-            }
-        }
-    }
-
-    async fn emit_assistant_message(
-        &mut self,
-        tx: &mpsc::Sender<std::result::Result<Event, Infallible>>,
-        session_id: &str,
-        message: &SessionMessage,
-    ) {
-        if self.emit_scheduler_stage(tx, session_id, message).await {
-            return;
-        }
-
-        let state = self.assistants.entry(message.id.clone()).or_default();
-        if let Some(usage) = message.usage.as_ref() {
-            let current = (usage.input_tokens, usage.output_tokens);
-            if state.usage != Some(current) {
-                send_stream_usage_event(
-                    tx,
-                    Some(session_id.to_string()),
-                    Some(message.id.clone()),
-                    current.0,
-                    current.1,
-                )
-                .await;
-                state.usage = Some(current);
-            }
-        }
-    }
-
-    async fn emit_scheduler_stage(
-        &mut self,
-        tx: &mpsc::Sender<std::result::Result<Event, Infallible>>,
-        session_id: &str,
-        message: &SessionMessage,
-    ) -> bool {
-        let Some(block) = scheduler_stage_block_from_message(message) else {
-            return false;
-        };
-
-        let signature =
-            output_block_to_web(&OutputBlock::SchedulerStage(Box::new(block.clone()))).to_string();
-        if self.scheduler_stages.get(&message.id) == Some(&signature) {
-            return true;
-        }
-        self.scheduler_stages.insert(message.id.clone(), signature);
-
-        emit_output_block(
-            tx,
-            session_id,
-            OutputBlock::SchedulerStage(Box::new(block)),
-            Some(message.id.as_str()),
-        )
-        .await;
-        true
-    }
-}
-
-async fn emit_output_block(
+async fn emit_latest_assistant_usage(
     tx: &mpsc::Sender<std::result::Result<Event, Infallible>>,
     session_id: &str,
-    block: OutputBlock,
-    id: Option<&str>,
+    session: &Session,
 ) {
-    let event = ServerEvent::output_block(session_id.to_string(), &block, id);
-    send_sse_server_event(tx, &event).await;
+    let latest_usage = session
+        .messages
+        .iter()
+        .rev()
+        .find(|message| matches!(message.role, SessionMessageRole::Assistant))
+        .and_then(|message| {
+            message
+                .usage
+                .as_ref()
+                .map(|usage| (message.id.clone(), usage.clone()))
+        });
+
+    let Some((message_id, usage)) = latest_usage else {
+        return;
+    };
+
+    let MessageUsage {
+        input_tokens,
+        output_tokens,
+        ..
+    } = usage;
+
+    send_stream_usage_event(
+        tx,
+        Some(session_id.to_string()),
+        Some(message_id),
+        input_tokens,
+        output_tokens,
+    )
+    .await;
 }
 
 fn filtered_tool_definitions(
@@ -304,17 +238,12 @@ pub(crate) async fn stream_message(
         let stream_tx = tx;
         let (update_tx, mut update_rx) = tokio::sync::mpsc::unbounded_channel::<Session>();
         let update_state = stream_state.clone();
-        let update_sse_tx = stream_tx.clone();
         let mut update_task = tokio::spawn(async move {
-            let mut emitter = StreamSnapshotEmitter::default();
             while let Some(snapshot) = update_rx.recv().await {
-                let snapshot_id = snapshot.id.clone();
                 {
                     let mut sessions = update_state.sessions.lock().await;
                     sessions.update(snapshot.clone());
                 }
-                broadcast_session_updated(update_state.as_ref(), snapshot_id, "stream.prompt");
-                emitter.emit_snapshot(&update_sse_tx, &snapshot).await;
             }
         });
 
@@ -381,6 +310,13 @@ pub(crate) async fn stream_message(
                 })
             }))
         };
+        let ask_permission_hook: Option<rocode_session::prompt::AskPermissionHook> = {
+            let state = stream_state.clone();
+            Some(Arc::new(move |session_id, request| {
+                let state = state.clone();
+                Box::pin(async move { request_permission(state, session_id, request).await })
+            }))
+        };
 
         let event_broadcast: Option<rocode_session::prompt::EventBroadcastHook> = {
             let state = stream_state.clone();
@@ -399,18 +335,7 @@ pub(crate) async fn stream_message(
             }))
         };
         let output_block_hook: Option<rocode_session::prompt::OutputBlockHook> = {
-            let sse_tx = stream_tx.clone();
-            Some(Arc::new(move |event| {
-                let sse_tx = sse_tx.clone();
-                tokio::spawn(async move {
-                    let server_event = ServerEvent::output_block(
-                        event.session_id,
-                        &event.block,
-                        event.id.as_deref(),
-                    );
-                    send_sse_server_event(&sse_tx, &server_event).await;
-                });
-            }))
+            Some(sse_output_block_hook(stream_tx.clone()))
         };
 
         if let Err(error) = prompt_runner
@@ -428,6 +353,7 @@ pub(crate) async fn stream_message(
                         output_block_hook,
                         agent_lookup,
                         ask_question_hook,
+                        ask_permission_hook,
                         publish_bus_hook: None,
                     },
                 },
@@ -495,8 +421,9 @@ pub(crate) async fn stream_message(
 
         {
             let mut sessions = stream_state.sessions.lock().await;
-            sessions.update(session);
+            sessions.update(session.clone());
         }
+        emit_latest_assistant_usage(&stream_tx, &stream_session_id, &session).await;
         broadcast_session_updated(
             stream_state.as_ref(),
             stream_session_id.clone(),
@@ -520,7 +447,7 @@ pub(crate) async fn stream_message(
 
 #[cfg(test)]
 mod tests {
-    use super::scheduler_stage_block_from_message;
+    use crate::session_runtime::scheduler_stage_block_from_message;
     use chrono::Utc;
     use rocode_command::governance_fixtures::canonical_scheduler_stage_fixture;
     use rocode_session::{MessagePart, MessageRole, PartType, SessionMessage};

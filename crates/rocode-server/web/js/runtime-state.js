@@ -62,14 +62,54 @@ function updateSessionRuntimeMeta(session) {
   nodes.sessionRuntimeMeta.innerHTML = renderMetaPills(entries);
 }
 
-function setSelectedMode(modeKey) {
+function currentWebUiPreferencesPatch() {
+  return {
+    webTheme: state.selectedTheme || "midnight",
+    webMode: state.selectedModeKey || null,
+  };
+}
+
+async function persistWebUiPreferences() {
+  await api("/config", {
+    method: "PATCH",
+    body: JSON.stringify({
+      uiPreferences: currentWebUiPreferencesPatch(),
+    }),
+  });
+}
+
+function applyWebUiPreferences(config = {}) {
+  const ui = config && (config.uiPreferences || config.ui_preferences) ? (config.uiPreferences || config.ui_preferences) : {};
+  const webTheme = ui.webTheme || ui.web_theme || null;
+  const webMode = ui.webMode || ui.web_mode || null;
+
+  if (webTheme) {
+    applyTheme(webTheme, { persist: false, announce: false });
+  } else {
+    applyTheme(state.selectedTheme || "midnight", { persist: false, announce: false });
+  }
+
+  setSelectedMode(webMode || null, { persist: false });
+}
+
+async function loadWebUiPreferences() {
+  const response = await api("/config");
+  const config = await response.json();
+  applyWebUiPreferences(config);
+  return config;
+}
+
+function setSelectedMode(modeKey, options = {}) {
+  const { persist = true } = options;
   state.selectedModeKey = modeKey && String(modeKey).trim() ? String(modeKey).trim() : null;
-  localStorage.setItem("rocode_web_mode", state.selectedModeKey || "auto");
   if (nodes.agentSelect) {
     nodes.agentSelect.value = state.selectedModeKey || "";
   }
   updateComposerMeta();
   updateSessionRuntimeMeta(currentSession());
+  if (persist) {
+    void persistWebUiPreferences().catch(() => {});
+  }
 }
 
 function sessionMetaEntries(session) {
@@ -151,6 +191,15 @@ function commandHintText() {
   if (state.busyAction) {
     return "Another action is running";
   }
+  const suggested = Array.isArray(state.uiCommands)
+    ? state.uiCommands
+        .filter((command) => command && command.slash && command.slash.suggested)
+        .slice(0, 4)
+        .map((command) => command.slash.name)
+    : [];
+  if (suggested.length > 0) {
+    return `Use ${suggested.join(", ")}`;
+  }
   return "Use /help, /agent, /preset, or /model";
 }
 
@@ -228,20 +277,25 @@ function applyStreamUsage(payload) {
   updateTokenUsage();
 }
 
-function applyTheme(themeId) {
+function applyTheme(themeId, options = {}) {
+  const { persist = true, announce = true } = options;
   const valid = THEMES.some((t) => t.id === themeId) ? themeId : "midnight";
   state.selectedTheme = valid;
   nodes.shell.dataset.theme = valid;
-  localStorage.setItem("rocode_web_theme", valid);
   if (nodes.themeSelect.value !== valid) {
     nodes.themeSelect.value = valid;
   }
-  applyOutputBlock({
-    kind: "status",
-    tone: "success",
-    text: `Theme switched to ${valid}`,
-    silent: true,
-  });
+  if (persist) {
+    void persistWebUiPreferences().catch(() => {});
+  }
+  if (announce) {
+    applyOutputBlock({
+      kind: "status",
+      tone: "success",
+      text: `Theme switched to ${valid}`,
+      silent: true,
+    });
+  }
 }
 
 function updatePanels() {

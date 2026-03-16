@@ -1,5 +1,20 @@
 // ── Output Block Dispatcher ────────────────────────────────────────────────
 
+function targetsSelectedSession(sessionId) {
+  return !sessionId || sessionId === state.selectedSession;
+}
+
+function applyOutputBlockEvent(payload) {
+  if (!payload) return false;
+  const sessionId = payload.sessionID || payload.sessionId || null;
+  if (!targetsSelectedSession(sessionId)) {
+    return false;
+  }
+  const block = payload && payload.block ? payload.block : payload;
+  applyOutputBlock(block);
+  return true;
+}
+
 function applyOutputBlock(block) {
   if (!block || !block.kind) return;
 
