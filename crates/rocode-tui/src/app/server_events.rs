@@ -1,4 +1,5 @@
 use super::*;
+use rocode_command::output_blocks::OutputBlock as WireOutputBlock;
 use rocode_types::{DiffEntry, ServerEvent, SessionRunStatus, SessionRunStatusWire, ToolCallPhase};
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -347,6 +348,13 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
             id,
             ..
         } => {
+            let block = match serde_json::from_value::<WireOutputBlock>(block) {
+                Ok(block) => block,
+                Err(err) => {
+                    tracing::debug!(%err, session_id, "failed to parse output block payload");
+                    return;
+                }
+            };
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                 StateChange::OutputBlock {
                     id,
@@ -364,6 +372,7 @@ mod tests {
     use super::forward_server_event;
     use crate::event::{CustomEvent, StateChange};
     use crate::Event;
+    use rocode_command::output_blocks::{MessagePhase, OutputBlock};
     use std::sync::mpsc::channel;
 
     #[test]
@@ -399,9 +408,13 @@ mod tests {
 
         assert_eq!(session_id, "session-1");
         assert_eq!(id.as_deref(), Some("message-1"));
-        assert_eq!(payload["kind"], "reasoning");
-        assert_eq!(payload["phase"], "delta");
-        assert_eq!(payload["text"], "thinking");
+        match payload {
+            OutputBlock::Reasoning(block) => {
+                assert_eq!(block.phase, MessagePhase::Delta);
+                assert_eq!(block.text, "thinking");
+            }
+            other => panic!("expected reasoning block, got {other:?}"),
+        }
     }
 
     #[test]

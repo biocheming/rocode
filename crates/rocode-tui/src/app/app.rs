@@ -231,13 +231,8 @@ impl App {
         let base_url = resolve_tui_base_url();
         let api_client = Arc::new(ApiClient::new(base_url.clone()));
         context.set_api_client(api_client);
-        let sse_session_filter: SessionFilter =
-            Arc::new(std::sync::Mutex::new(None));
-        spawn_server_event_listener(
-            event_tx.clone(),
-            base_url,
-            sse_session_filter.clone(),
-        );
+        let sse_session_filter: SessionFilter = Arc::new(std::sync::Mutex::new(None));
+        spawn_server_event_listener(event_tx.clone(), base_url, sse_session_filter.clone());
 
         if let Some(agent) = env_var_with_fallback("ROCODE_TUI_AGENT", "OPENCODE_TUI_AGENT") {
             let agent = agent.trim();
@@ -661,8 +656,7 @@ impl App {
                         } else if tool_call_count == 1 {
                             // Single tool call - cancel directly
                             if let Some(api) = self.context.get_api_client() {
-                                let tool_call_id =
-                                    active_tool_calls.keys().next().unwrap().clone();
+                                let tool_call_id = active_tool_calls.keys().next().unwrap().clone();
                                 if let Err(e) = api.cancel_tool_call(session_id, &tool_call_id) {
                                     self.toast.show(
                                         ToastVariant::Error,
@@ -1297,16 +1291,12 @@ impl App {
                         self.event_caused_change = true;
                     }
                 }
-                CustomEvent::StateChanged(StateChange::ToolCallStarted {
-                    session_id,
-                    ..
-                }) => {
+                CustomEvent::StateChanged(StateChange::ToolCallStarted { session_id, .. }) => {
                     // Refresh runtime state to get updated active tools from server
                     self.refresh_session_runtime(session_id);
                 }
                 CustomEvent::StateChanged(StateChange::ToolCallCompleted {
-                    session_id,
-                    ..
+                    session_id, ..
                 }) => {
                     // Refresh runtime state to get updated active tools from server
                     self.refresh_session_runtime(session_id);
@@ -1328,6 +1318,10 @@ impl App {
                 }) => {
                     let current_session = self.current_session_id();
                     let is_active_session = current_session.as_deref() == Some(session_id.as_str());
+                    let is_scheduler_stage = matches!(
+                        &payload,
+                        rocode_command::output_blocks::OutputBlock::SchedulerStage(_)
+                    );
                     let current_is_parent_of_target =
                         current_session.as_deref().is_some_and(|active| {
                             let session_ctx = self.context.session.read();
@@ -1343,15 +1337,13 @@ impl App {
                         session_ctx.apply_output_block_incremental(
                             session_id,
                             id.as_deref(),
-                            payload,
+                            &payload,
                         );
                     }
 
                     if let Route::Session { session_id: active } = self.context.current_route() {
                         if active == *session_id {
-                            if payload.get("kind").and_then(|value| value.as_str())
-                                == Some("scheduler_stage")
-                            {
+                            if is_scheduler_stage {
                                 self.refresh_child_sessions();
                             }
                             self.event_caused_change = true;

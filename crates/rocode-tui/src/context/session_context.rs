@@ -1,5 +1,10 @@
 use chrono::{DateTime, Utc};
-use rocode_command::output_blocks::SchedulerStageBlock;
+use rocode_command::output_blocks::{
+    MessageBlock as WireMessageBlock, MessagePhase as WireMessagePhase,
+    MessageRole as WireMessageRole, OutputBlock as WireOutputBlock,
+    ReasoningBlock as WireReasoningBlock, SchedulerStageBlock, ToolBlock as WireToolBlock,
+    ToolPhase as WireToolPhase,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -320,7 +325,7 @@ impl SessionContext {
         &mut self,
         session_id: &str,
         message_id: &str,
-        phase: &str,
+        phase: WireMessagePhase,
         text: &str,
     ) {
         if message_id.is_empty() {
@@ -365,7 +370,7 @@ impl SessionContext {
 
         // Find or create a Reasoning part
         match phase {
-            "start" => {
+            WireMessagePhase::Start => {
                 // Initialize or reset reasoning content
                 // Check if there's already a Reasoning part
                 let has_reasoning = message
@@ -378,7 +383,7 @@ impl SessionContext {
                     });
                 }
             }
-            "delta" => {
+            WireMessagePhase::Delta => {
                 // Append reasoning text
                 for part in &mut message.parts {
                     if let MessagePart::Reasoning {
@@ -390,10 +395,24 @@ impl SessionContext {
                     }
                 }
             }
-            "end" => {
+            WireMessagePhase::Full => {
+                if let Some(MessagePart::Reasoning {
+                    text: ref mut existing,
+                }) = message
+                    .parts
+                    .iter_mut()
+                    .find(|part| matches!(part, MessagePart::Reasoning { .. }))
+                {
+                    *existing = text.to_string();
+                } else {
+                    message.parts.push(MessagePart::Reasoning {
+                        text: text.to_string(),
+                    });
+                }
+            }
+            WireMessagePhase::End => {
                 // Reasoning complete - nothing special to do, the text is already there
             }
-            _ => {}
         }
     }
 
@@ -401,19 +420,23 @@ impl SessionContext {
         &mut self,
         session_id: &str,
         block_id: Option<&str>,
-        payload: &serde_json::Value,
+        block: &WireOutputBlock,
     ) {
         self.ensure_streaming_session(session_id, None, None);
 
-        let Some(kind) = payload.get("kind").and_then(|value| value.as_str()) else {
-            return;
-        };
-
-        match kind {
-            "message" => self.apply_message_block(session_id, block_id, payload),
-            "reasoning" => self.apply_reasoning_block(session_id, block_id, payload),
-            "tool" => self.apply_tool_block(session_id, block_id, payload),
-            "scheduler_stage" => self.apply_scheduler_stage_block(session_id, block_id, payload),
+        match block {
+            WireOutputBlock::Message(message) => {
+                self.apply_message_block(session_id, block_id, message);
+            }
+            WireOutputBlock::Reasoning(reasoning) => {
+                self.apply_reasoning_block(session_id, block_id, reasoning);
+            }
+            WireOutputBlock::Tool(tool) => {
+                self.apply_tool_block(session_id, block_id, tool);
+            }
+            WireOutputBlock::SchedulerStage(stage) => {
+                self.apply_scheduler_stage_block(session_id, block_id, stage.as_ref());
+            }
             _ => return,
         }
 
@@ -426,25 +449,14 @@ impl SessionContext {
         &mut self,
         session_id: &str,
         block_id: Option<&str>,
-        payload: &serde_json::Value,
+        block: &WireMessageBlock,
     ) {
-        let role = match payload
-            .get("role")
-            .and_then(|value| value.as_str())
-            .unwrap_or("assistant")
-        {
-            "system" => MessageRole::System,
-            "user" => MessageRole::User,
-            _ => MessageRole::Assistant,
+        let role = match block.role {
+            WireMessageRole::System => MessageRole::System,
+            WireMessageRole::User => MessageRole::User,
+            WireMessageRole::Assistant => MessageRole::Assistant,
         };
-        let phase = payload
-            .get("phase")
-            .and_then(|value| value.as_str())
-            .unwrap_or("delta");
-        let text = payload
-            .get("text")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default();
+        let text = block.text.as_str();
 
         let pos = self.ensure_message_for_block(session_id, block_id, role.clone());
         let Some(message) = self
@@ -455,15 +467,15 @@ impl SessionContext {
             return;
         };
 
-        match phase {
-            "start" => {
+        match block.phase {
+            WireMessagePhase::Start => {
                 message.role = role;
                 message.content.clear();
                 message
                     .parts
                     .retain(|part| !matches!(part, MessagePart::Text { .. }));
             }
-            "delta" => {
+            WireMessagePhase::Delta => {
                 if let Some(MessagePart::Text { text: existing }) = message
                     .parts
                     .iter_mut()
@@ -477,7 +489,7 @@ impl SessionContext {
                     });
                 }
             }
-            "full" => {
+            WireMessagePhase::Full => {
                 message.role = role;
                 message
                     .parts
@@ -486,8 +498,7 @@ impl SessionContext {
                     text: text.to_string(),
                 });
             }
-            "end" => {}
-            _ => {}
+            WireMessagePhase::End => {}
         }
 
         Self::refresh_message_content(message);
@@ -497,7 +508,7 @@ impl SessionContext {
         &mut self,
         session_id: &str,
         block_id: Option<&str>,
-        payload: &serde_json::Value,
+        block: &WireReasoningBlock,
     ) {
         // When block_id is None or empty, fall back to the last assistant message
         // for this session so reasoning is not silently discarded.
@@ -518,37 +529,18 @@ impl SessionContext {
                 &fallback_id
             }
         };
-        let phase = payload
-            .get("phase")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default();
-        let text = payload
-            .get("text")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default();
-        self.update_reasoning_incremental(session_id, message_id, phase, text);
+        self.update_reasoning_incremental(session_id, message_id, block.phase, &block.text);
     }
 
     fn apply_tool_block(
         &mut self,
         session_id: &str,
         block_id: Option<&str>,
-        payload: &serde_json::Value,
+        block: &WireToolBlock,
     ) {
         let tool_call_id = block_id.unwrap_or_default();
-        let tool_name = payload
-            .get("name")
-            .and_then(|value| value.as_str())
-            .unwrap_or("tool");
-        let phase = payload
-            .get("phase")
-            .and_then(|value| value.as_str())
-            .unwrap_or("running");
-        let detail = payload
-            .get("detail")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default()
-            .to_string();
+        let tool_name = block.name.as_str();
+        let detail = block.detail.as_deref().unwrap_or_default().to_string();
 
         let pos = self.ensure_message_for_block(session_id, None, MessageRole::Assistant);
         let Some(message) = self
@@ -559,8 +551,8 @@ impl SessionContext {
             return;
         };
 
-        match phase {
-            "start" | "running" => {
+        match block.phase {
+            WireToolPhase::Start | WireToolPhase::Running => {
                 let arguments = detail;
                 if let Some(MessagePart::ToolCall {
                     name,
@@ -582,8 +574,8 @@ impl SessionContext {
                     });
                 }
             }
-            "done" | "error" | "result" => {
-                let is_error = matches!(phase, "error");
+            WireToolPhase::Done | WireToolPhase::Error => {
+                let is_error = matches!(block.phase, WireToolPhase::Error);
                 if let Some(part) = message.parts.iter_mut().find(|part| {
                     matches!(
                         part,
@@ -611,7 +603,6 @@ impl SessionContext {
                     });
                 }
             }
-            _ => {}
         }
 
         Self::refresh_message_content(message);
@@ -621,12 +612,8 @@ impl SessionContext {
         &mut self,
         session_id: &str,
         block_id: Option<&str>,
-        payload: &serde_json::Value,
+        block: &SchedulerStageBlock,
     ) {
-        let Ok(block) = serde_json::from_value::<SchedulerStageBlock>(payload.clone()) else {
-            return;
-        };
-
         let pos = self.ensure_message_for_block(session_id, block_id, MessageRole::Assistant);
         let Some(message) = self
             .messages
@@ -643,7 +630,7 @@ impl SessionContext {
         message.parts.push(MessagePart::Text {
             text: block.text.clone(),
         });
-        message.metadata = Some(Self::scheduler_stage_metadata_from_block(&block));
+        message.metadata = Some(Self::scheduler_stage_metadata_from_block(block));
         Self::refresh_message_content(message);
 
         if let Some(child_session_id) = block.child_session_id.as_deref() {
@@ -965,7 +952,7 @@ mod tests {
         ctx.apply_output_block_incremental(
             "parent",
             Some("stage-message-1"),
-            &json!({
+            &serde_json::from_value::<WireOutputBlock>(json!({
                 "kind": "scheduler_stage",
                 "stage_id": "stage-1",
                 "profile": "atlas",
@@ -981,7 +968,8 @@ mod tests {
                 "active_categories": [],
                 "done_agent_count": 0,
                 "total_agent_count": 0
-            }),
+            }))
+            .expect("scheduler_stage block"),
         );
 
         let parent_messages = ctx.messages.get("parent").expect("parent messages");
@@ -1009,12 +997,13 @@ mod tests {
         ctx.apply_output_block_incremental(
             "child-1",
             Some("assistant-1"),
-            &json!({
+            &serde_json::from_value::<WireOutputBlock>(json!({
                 "kind": "message",
                 "phase": "delta",
                 "role": "assistant",
                 "text": "hello child"
-            }),
+            }))
+            .expect("message block"),
         );
 
         let child = ctx
@@ -1038,30 +1027,33 @@ mod tests {
         ctx.apply_output_block_incremental(
             "session-1",
             Some("assistant-1"),
-            &json!({
+            &serde_json::from_value::<WireOutputBlock>(json!({
                 "kind": "reasoning",
                 "phase": "start",
                 "text": ""
-            }),
+            }))
+            .expect("reasoning start block"),
         );
         ctx.apply_output_block_incremental(
             "session-1",
             Some("assistant-1"),
-            &json!({
+            &serde_json::from_value::<WireOutputBlock>(json!({
                 "kind": "reasoning",
                 "phase": "delta",
                 "text": "thinking..."
-            }),
+            }))
+            .expect("reasoning delta block"),
         );
         ctx.apply_output_block_incremental(
             "session-1",
             Some("assistant-1"),
-            &json!({
+            &serde_json::from_value::<WireOutputBlock>(json!({
                 "kind": "message",
                 "phase": "start",
                 "role": "assistant",
                 "text": ""
-            }),
+            }))
+            .expect("message start block"),
         );
 
         let message = ctx
