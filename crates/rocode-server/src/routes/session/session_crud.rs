@@ -21,6 +21,7 @@ pub struct ListSessionsQuery {
     pub start: Option<i64>,
     pub search: Option<String>,
     pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -365,12 +366,26 @@ pub(super) async fn list_sessions(
     State(state): State<Arc<ServerState>>,
     Query(query): Query<ListSessionsQuery>,
 ) -> Result<Json<Vec<SessionInfo>>> {
+    let ListSessionsQuery {
+        directory,
+        roots,
+        start,
+        search,
+        limit,
+        offset,
+    } = query;
+
+    // Normalize directory filtering to match how sessions are stored (canonical absolute paths).
+    // This lets clients pass "." or relative paths and still get consistent results.
+    let directory = directory.map(|raw| resolved_session_directory(&raw));
+
     let filter = rocode_session::SessionFilter {
-        directory: query.directory,
-        roots: query.roots.unwrap_or(false),
-        start: query.start,
-        search: query.search,
-        limit: query.limit,
+        directory,
+        roots: roots.unwrap_or(false),
+        start,
+        search,
+        limit,
+        offset,
     };
     let manager = state.sessions.lock().await;
     let sessions = manager.list_filtered(filter);
@@ -528,7 +543,9 @@ pub(super) async fn get_session_runtime(
             let sessions = state.sessions.lock().await;
             if sessions.get(&id).is_some() {
                 drop(sessions);
-                Ok(Json(crate::session_runtime::state::SessionRuntimeState::new(id)))
+                Ok(Json(
+                    crate::session_runtime::state::SessionRuntimeState::new(id),
+                ))
             } else {
                 Err(ApiError::SessionNotFound(id))
             }

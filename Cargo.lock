@@ -3661,6 +3661,7 @@ version = "2026.3.16"
 dependencies = [
  "async-trait",
  "rocode-types",
+ "rocode-util",
  "sea-orm",
  "sea-orm-migration",
  "serde_json",

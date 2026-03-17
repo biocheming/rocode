@@ -1,9 +1,9 @@
 use chrono::{DateTime, Utc};
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseTransaction, EntityTrait,
-    QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
-};
 use sea_orm::sea_query::OnConflict;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseTransaction, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect, Set, TransactionTrait,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -22,6 +22,22 @@ fn map_query_err(err: sea_orm::DbErr) -> DatabaseError {
 
 fn map_tx_err(err: sea_orm::DbErr) -> DatabaseError {
     DatabaseError::TransactionError(err.to_string())
+}
+
+fn normalize_limit_offset(limit: i64, offset: i64) -> Result<(u64, u64), DatabaseError> {
+    if limit < 0 {
+        return Err(DatabaseError::QueryError(format!(
+            "limit must be >= 0, got {}",
+            limit
+        )));
+    }
+    if offset < 0 {
+        return Err(DatabaseError::QueryError(format!(
+            "offset must be >= 0, got {}",
+            offset
+        )));
+    }
+    Ok((limit as u64, offset as u64))
 }
 
 fn status_to_string(status: &SessionStatus) -> &'static str {
@@ -87,27 +103,21 @@ fn session_insert_model(session: &Session) -> sessions::ActiveModel {
         title: Set(session.title.clone()),
         version: Set(session.version.clone()),
         share_url: Set(session.share.as_ref().map(|s| s.url.clone())),
-        summary_additions: Set(
-            session
-                .summary
-                .as_ref()
-                .map(|s| s.additions as i64)
-                .unwrap_or(0),
-        ),
-        summary_deletions: Set(
-            session
-                .summary
-                .as_ref()
-                .map(|s| s.deletions as i64)
-                .unwrap_or(0),
-        ),
-        summary_files: Set(
-            session
-                .summary
-                .as_ref()
-                .map(|s| s.files as i64)
-                .unwrap_or(0),
-        ),
+        summary_additions: Set(session
+            .summary
+            .as_ref()
+            .map(|s| s.additions as i64)
+            .unwrap_or(0)),
+        summary_deletions: Set(session
+            .summary
+            .as_ref()
+            .map(|s| s.deletions as i64)
+            .unwrap_or(0)),
+        summary_files: Set(session
+            .summary
+            .as_ref()
+            .map(|s| s.files as i64)
+            .unwrap_or(0)),
         summary_diffs: Set(summary_diffs),
         revert: Set(revert_json),
         permission: Set(permission_json),
@@ -148,27 +158,21 @@ fn session_update_model(session: &Session) -> sessions::ActiveModel {
         title: Set(session.title.clone()),
         version: Set(session.version.clone()),
         share_url: Set(session.share.as_ref().map(|s| s.url.clone())),
-        summary_additions: Set(
-            session
-                .summary
-                .as_ref()
-                .map(|s| s.additions as i64)
-                .unwrap_or(0),
-        ),
-        summary_deletions: Set(
-            session
-                .summary
-                .as_ref()
-                .map(|s| s.deletions as i64)
-                .unwrap_or(0),
-        ),
-        summary_files: Set(
-            session
-                .summary
-                .as_ref()
-                .map(|s| s.files as i64)
-                .unwrap_or(0),
-        ),
+        summary_additions: Set(session
+            .summary
+            .as_ref()
+            .map(|s| s.additions as i64)
+            .unwrap_or(0)),
+        summary_deletions: Set(session
+            .summary
+            .as_ref()
+            .map(|s| s.deletions as i64)
+            .unwrap_or(0)),
+        summary_files: Set(session
+            .summary
+            .as_ref()
+            .map(|s| s.files as i64)
+            .unwrap_or(0)),
         summary_diffs: Set(summary_diffs),
         revert: Set(revert_json),
         permission: Set(permission_json),
@@ -251,10 +255,10 @@ fn session_from_model(model: sessions::Model) -> Session {
 }
 
 fn message_insert_model(message: &SessionMessage) -> Result<messages::ActiveModel, DatabaseError> {
-    let data_json =
-        serde_json::to_string(&message.parts).map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-    let metadata_json =
-        serde_json::to_string(&message.metadata).map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+    let data_json = serde_json::to_string(&message.parts)
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+    let metadata_json = serde_json::to_string(&message.metadata)
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
 
     Ok(messages::ActiveModel {
         id: Set(message.id.clone()),
@@ -323,13 +327,70 @@ impl SessionRepository {
         project_id: Option<&str>,
         limit: i64,
     ) -> Result<Vec<Session>, DatabaseError> {
+        let (limit, _offset) = normalize_limit_offset(limit, 0)?;
         let mut query = sessions::Entity::find();
         if let Some(pid) = project_id {
             query = query.filter(sessions::Column::ProjectId.eq(pid));
         }
         let rows = query
             .order_by_desc(sessions::Column::UpdatedAt)
-            .limit(limit as u64)
+            .limit(limit)
+            .offset(0)
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+        Ok(rows.into_iter().map(session_from_model).collect())
+    }
+
+    pub async fn count(&self, project_id: Option<&str>) -> Result<u64, DatabaseError> {
+        let mut query = sessions::Entity::find();
+        if let Some(pid) = project_id {
+            query = query.filter(sessions::Column::ProjectId.eq(pid));
+        }
+        query.count(&self.conn).await.map_err(map_query_err)
+    }
+
+    pub async fn list_page(
+        &self,
+        project_id: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Session>, DatabaseError> {
+        let (limit, offset) = normalize_limit_offset(limit, offset)?;
+        let mut query = sessions::Entity::find();
+        if let Some(pid) = project_id {
+            query = query.filter(sessions::Column::ProjectId.eq(pid));
+        }
+        let rows = query
+            .order_by_desc(sessions::Column::UpdatedAt)
+            .limit(limit)
+            .offset(offset)
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+        Ok(rows.into_iter().map(session_from_model).collect())
+    }
+
+    pub async fn count_for_directory(&self, directory: &str) -> Result<u64, DatabaseError> {
+        sessions::Entity::find()
+            .filter(sessions::Column::Directory.eq(directory))
+            .count(&self.conn)
+            .await
+            .map_err(map_query_err)
+    }
+
+    pub async fn list_for_directory_page(
+        &self,
+        directory: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Session>, DatabaseError> {
+        let (limit, offset) = normalize_limit_offset(limit, offset)?;
+        let rows = sessions::Entity::find()
+            .filter(sessions::Column::Directory.eq(directory))
+            .order_by_desc(sessions::Column::UpdatedAt)
+            .limit(limit)
+            .offset(offset)
             .all(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -500,10 +561,7 @@ impl SessionRepository {
     ) -> Result<(), DatabaseError> {
         let tx = self.conn.begin().await.map_err(map_tx_err)?;
 
-        let keep_ids: HashSet<String> = messages_to_flush
-            .iter()
-            .map(|m| m.id.clone())
-            .collect();
+        let keep_ids: HashSet<String> = messages_to_flush.iter().map(|m| m.id.clone()).collect();
 
         let result = async {
             self.upsert_session_in_tx(&tx, session).await?;
@@ -569,6 +627,33 @@ impl MessageRepository {
         let rows = messages::Entity::find()
             .filter(messages::Column::SessionId.eq(session_id))
             .order_by_asc(messages::Column::CreatedAt)
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+
+        Ok(rows.into_iter().filter_map(message_from_model).collect())
+    }
+
+    pub async fn count_for_session(&self, session_id: &str) -> Result<u64, DatabaseError> {
+        messages::Entity::find()
+            .filter(messages::Column::SessionId.eq(session_id))
+            .count(&self.conn)
+            .await
+            .map_err(map_query_err)
+    }
+
+    pub async fn list_for_session_page(
+        &self,
+        session_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<SessionMessage>, DatabaseError> {
+        let (limit, offset) = normalize_limit_offset(limit, offset)?;
+        let rows = messages::Entity::find()
+            .filter(messages::Column::SessionId.eq(session_id))
+            .order_by_asc(messages::Column::CreatedAt)
+            .limit(limit)
+            .offset(offset)
             .all(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -1125,6 +1210,102 @@ mod tests {
 
         let all = session_repo.list(None, 100).await.unwrap();
         assert_eq!(all.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn session_count_and_pagination_work() {
+        let db = Database::in_memory().await.unwrap();
+        let session_repo = SessionRepository::new(db.conn().clone());
+
+        let mut s1 = make_session("s1");
+        s1.time.created = 10;
+        s1.time.updated = 10;
+        session_repo.upsert(&s1).await.unwrap();
+
+        let mut s2 = make_session("s2");
+        s2.time.created = 20;
+        s2.time.updated = 20;
+        session_repo.upsert(&s2).await.unwrap();
+
+        let mut s3 = make_session("s3");
+        s3.time.created = 30;
+        s3.time.updated = 30;
+        session_repo.upsert(&s3).await.unwrap();
+
+        let mut s4 = make_session("s4");
+        s4.time.created = 40;
+        s4.time.updated = 40;
+        session_repo.upsert(&s4).await.unwrap();
+
+        let mut s5 = make_session("s5");
+        s5.directory = "/tmp/other".to_string();
+        s5.time.created = 50;
+        s5.time.updated = 50;
+        session_repo.upsert(&s5).await.unwrap();
+
+        assert_eq!(session_repo.count(None).await.unwrap(), 5);
+        assert_eq!(
+            session_repo.count_for_directory("/tmp/test").await.unwrap(),
+            4
+        );
+        assert_eq!(
+            session_repo
+                .count_for_directory("/tmp/other")
+                .await
+                .unwrap(),
+            1
+        );
+
+        let first_two = session_repo.list_page(None, 2, 0).await.unwrap();
+        assert_eq!(
+            first_two.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["s5", "s4"]
+        );
+
+        let middle_two = session_repo.list_page(None, 2, 2).await.unwrap();
+        assert_eq!(
+            middle_two.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["s3", "s2"]
+        );
+
+        let dir_sessions = session_repo
+            .list_for_directory_page("/tmp/test", 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(
+            dir_sessions
+                .iter()
+                .map(|s| s.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["s4", "s3", "s2", "s1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn message_count_and_pagination_work() {
+        let db = Database::in_memory().await.unwrap();
+        let session_repo = SessionRepository::new(db.conn().clone());
+        let message_repo = MessageRepository::new(db.conn().clone());
+
+        session_repo.upsert(&make_session("s1")).await.unwrap();
+
+        for (idx, millis) in [10, 20, 30, 40, 50].iter().enumerate() {
+            let id = format!("m{}", idx + 1);
+            let mut msg = make_message(&id, "s1", MessageRole::User);
+            msg.created_at = DateTime::from_timestamp_millis(*millis).unwrap_or_else(Utc::now);
+            message_repo.create(&msg).await.unwrap();
+        }
+
+        assert_eq!(message_repo.count_for_session("s1").await.unwrap(), 5);
+
+        let page = message_repo
+            .list_for_session_page("s1", 2, 2)
+            .await
+            .unwrap();
+        assert_eq!(
+            page.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            vec!["m3", "m4"]
+        );
     }
 
     #[tokio::test]

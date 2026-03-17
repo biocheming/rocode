@@ -71,8 +71,8 @@ impl MigrationTrait for Migration {
                 continue;
             }
 
-            let next_data = serde_json::to_string(&parts)
-                .map_err(|e| DbErr::Custom(e.to_string()))?;
+            let next_data =
+                serde_json::to_string(&parts).map_err(|e| DbErr::Custom(e.to_string()))?;
             let update_stmt = Statement::from_sql_and_values(
                 backend,
                 "UPDATE messages SET data = ? WHERE id = ?".to_string(),
@@ -85,9 +85,7 @@ impl MigrationTrait for Migration {
         if updated_rows > 0 || recovered_inputs > 0 || invalid_reroutes > 0 {
             info!(
                 updated_rows,
-                recovered_inputs,
-                invalid_reroutes,
-                "tool call input data migration complete"
+                recovered_inputs, invalid_reroutes, "tool call input data migration complete"
             );
         }
 
@@ -135,25 +133,102 @@ fn sanitize_tool_call_input_for_storage(tool_name: &str, input: &Value) -> (Valu
         );
     }
 
-    if let Some(text) = input.as_str() {
-        // The legacy store could truncate tool arguments and keep a short preview.
-        // Attempt recovery when the preview looks like a valid JSON object.
-        if let Some(preview) = text.strip_prefix("{") {
-            let candidate = format!("{{{}", preview);
-            if let Ok(value) = serde_json::from_str::<Value>(&candidate) {
-                return (value, true, false);
-            }
+    if let Some(raw) = input.as_str() {
+        if let Some(parsed) = rocode_util::json::try_parse_json_object_robust(raw) {
+            return (parsed, true, false);
         }
+        if let Some(recovered) =
+            rocode_util::json::recover_tool_arguments_from_jsonish(tool_name, raw)
+        {
+            return (recovered, true, false);
+        }
+
+        return (
+            invalid_tool_payload_for_storage(
+                tool_name,
+                "Stored tool arguments are malformed/truncated and cannot be replayed safely.",
+                serde_json::json!({
+                    "type": "string",
+                    "raw_len": raw.len(),
+                    "preview": raw.chars().take(240).collect::<String>(),
+                }),
+            ),
+            false,
+            true,
+        );
     }
+
+    let input_type = match input {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+        Value::String(_) => "string",
+    };
 
     (
         invalid_tool_payload_for_storage(
             tool_name,
-            "Unsupported tool arguments shape; value could not be recovered.",
-            input.clone(),
+            "Stored tool arguments are non-object and cannot be replayed safely.",
+            serde_json::json!({
+                "type": input_type,
+            }),
         ),
         false,
         true,
     )
 }
 
+#[cfg(test)]
+mod tests {
+    use super::sanitize_tool_call_input_for_storage;
+
+    #[test]
+    fn sanitize_tool_call_input_for_storage_recovers_jsonish() {
+        let raw = serde_json::Value::String(
+            "{\"file_path\":\"t2.html\",\"content\":\"<!DOCTYPE html>".to_string(),
+        );
+        let (sanitized, recovered, rerouted_invalid) =
+            sanitize_tool_call_input_for_storage("write", &raw);
+        assert!(sanitized.is_object());
+        assert!(recovered);
+        assert!(!rerouted_invalid);
+        assert_eq!(sanitized["file_path"], "t2.html");
+    }
+
+    #[test]
+    fn sanitize_tool_call_input_for_storage_routes_unrecoverable_to_invalid_payload() {
+        let raw = serde_json::Value::String("not-json".to_string());
+        let (sanitized, recovered, rerouted_invalid) =
+            sanitize_tool_call_input_for_storage("write", &raw);
+        assert!(sanitized.is_object());
+        assert!(!recovered);
+        assert!(rerouted_invalid);
+        assert_eq!(sanitized["tool"], "write");
+        assert_eq!(sanitized["receivedArgs"]["type"], "string");
+        assert!(sanitized["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("malformed/truncated"));
+    }
+
+    #[test]
+    fn sanitize_tool_call_input_for_storage_rewrites_legacy_sentinel_object() {
+        let raw = serde_json::json!({
+            "_rocode_unrecoverable_tool_args": true,
+            "raw_len": 42,
+            "raw_preview": "{\"content\":\"<html>"
+        });
+        let (sanitized, recovered, rerouted_invalid) =
+            sanitize_tool_call_input_for_storage("write", &raw);
+        assert!(sanitized.is_object());
+        assert!(!recovered);
+        assert!(rerouted_invalid);
+        assert_eq!(sanitized["tool"], "write");
+        assert_eq!(
+            sanitized["receivedArgs"]["source"],
+            "legacy-unrecoverable-sentinel"
+        );
+    }
+}

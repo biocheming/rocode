@@ -16,4 +16,4 @@ async-trait = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 rocode-types = { path = "../rocode-types" }
-
+rocode-util = { path = "../rocode-util" }
