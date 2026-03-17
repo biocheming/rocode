@@ -107,6 +107,21 @@ where
     })
 }
 
+/// Deserialize an optional i64 from a JSON value, accepting number/string/bool.
+pub fn deserialize_opt_i64_lossy<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(match value {
+        None | Some(Value::Null) => None,
+        Some(Value::Number(value)) => value.as_i64().or_else(|| value.as_u64().map(|v| v as i64)),
+        Some(Value::Bool(value)) => Some(i64::from(value)),
+        Some(Value::String(raw)) => raw.trim().parse::<i64>().ok(),
+        _ => None,
+    })
+}
+
 pub fn deserialize_vec_string_lossy<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: Deserializer<'de>,

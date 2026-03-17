@@ -120,28 +120,39 @@ impl JsonRpcMessage {
     /// This is the canonical discrimination algorithm — adapters must not
     /// reimplement it.
     pub fn from_value(value: Value) -> Result<Self, JsonRpcError> {
-        if value.get("id").is_some() {
-            serde_json::from_value(value)
+        let kind = match &value {
+            Value::Object(map) => {
+                if map.contains_key("id") {
+                    Some("response")
+                } else if map.contains_key("method") {
+                    Some("notification")
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+
+        match kind {
+            Some("response") => serde_json::from_value(value)
                 .map(JsonRpcMessage::Response)
                 .map_err(|e| JsonRpcError {
                     code: -32700,
                     message: format!("Failed to parse response: {e}"),
                     data: None,
-                })
-        } else if value.get("method").is_some() {
-            serde_json::from_value(value)
+                }),
+            Some("notification") => serde_json::from_value(value)
                 .map(JsonRpcMessage::Notification)
                 .map_err(|e| JsonRpcError {
                     code: -32700,
                     message: format!("Failed to parse notification: {e}"),
                     data: None,
-                })
-        } else {
-            Err(JsonRpcError {
+                }),
+            _ => Err(JsonRpcError {
                 code: -32600,
                 message: "Invalid JSON-RPC message: missing both 'id' and 'method'".into(),
                 data: None,
-            })
+            }),
         }
     }
 
@@ -246,8 +257,9 @@ mod tests {
         // The "id" inside params is fine — we check that there's no `"id":` at the top level
         // by verifying the struct fields (notification has: jsonrpc, method, params only).
         let parsed: Value = serde_json::from_str(&json).unwrap();
+        let has_top_level_id = matches!(&parsed, Value::Object(map) if map.contains_key("id"));
         assert!(
-            parsed.get("id").is_none(),
+            !has_top_level_id,
             "notification must not have top-level 'id'"
         );
     }
