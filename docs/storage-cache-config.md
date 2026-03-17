@@ -480,6 +480,8 @@ CLI 可打印该路径：
 ### 4.3 表结构与字段含义（逐表）
 
 > 时间戳字段说明：绝大多数 `*_at` / `time_*` 字段都是 **epoch millis**（整数毫秒）。
+>
+> 如果你关注的是“目录/会话/消息/活动 part 的存储形式，以及是否支持总数/分页/offset（面向后续 server 开发）”，建议同时阅读：`docs/session-message-storage.md`。
 
 #### 4.3.1 `sessions`：会话元数据
 

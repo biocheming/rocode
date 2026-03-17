@@ -12,6 +12,8 @@ This directory contains product-facing examples and design references for ROCode
   - 面向使用者的命令、scheduler、TUI 交互说明
 - `storage-cache-config.md`
   - 存储 / 缓存 / 配置路径与数据库结构（源码导读，含表结构与字段语义）
+- `session-message-storage.md`
+  - 会话 / 消息 / parts（含“活动 part”）的存储形式与分页能力评估（面向后续 server 开发）
 - `docs/examples/scheduler/README.md`
   - public scheduler presets、stage 默认值、当前行为说明
 - `docs/examples/scheduler/SCHEDULER_GUIDE.md`
