@@ -128,6 +128,7 @@ const nodes = {
   settingsProviderEditor: document.getElementById("settingsProviderEditor"),
   settingsProviderKey: document.getElementById("settingsProviderKey"),
   settingsProviderId: document.getElementById("settingsProviderId"),
+  settingsProviderBase: document.getElementById("settingsProviderBase"),
   settingsProviderName: document.getElementById("settingsProviderName"),
   settingsProviderBaseUrl: document.getElementById("settingsProviderBaseUrl"),
   settingsProviderApiKey: document.getElementById("settingsProviderApiKey"),

@@ -522,6 +522,7 @@ function renderProviderEditorFields(providerKey, provider) {
   if (!providerKey || !provider) {
     nodes.settingsProviderKey.value = "";
     nodes.settingsProviderId.value = "";
+    nodes.settingsProviderBase.value = "";
     nodes.settingsProviderName.value = "";
     nodes.settingsProviderBaseUrl.value = "";
     nodes.settingsProviderApiKey.value = "";
@@ -536,6 +537,7 @@ function renderProviderEditorFields(providerKey, provider) {
   nodes.settingsProviderKey.value = providerKey;
   nodes.settingsProviderKey.disabled = true;
   nodes.settingsProviderId.value = provider.id || "";
+  nodes.settingsProviderBase.value = provider.base || "";
   nodes.settingsProviderName.value = provider.name || "";
   nodes.settingsProviderBaseUrl.value = provider.base_url || provider.baseUrl || "";
   nodes.settingsProviderApiKey.value = provider.api_key || provider.apiKey || "";
@@ -999,6 +1001,7 @@ async function saveSelectedProvider() {
     ...existing,
     name: nodes.settingsProviderName.value.trim() || null,
     id: nodes.settingsProviderId.value.trim() || null,
+    base: nodes.settingsProviderBase.value.trim() || null,
     api_key: nodes.settingsProviderApiKey.value.trim() || null,
     base_url: nodes.settingsProviderBaseUrl.value.trim() || null,
     env: csvToList(nodes.settingsProviderEnv.value),
