@@ -653,15 +653,23 @@ fn match_pending_question_request(
     input: &serde_json::Value,
     pending_questions: &mut Vec<super::super::tui::QuestionInfo>,
 ) -> Option<super::super::tui::QuestionInfo> {
-    let input_questions = input.get("questions")?.as_array()?;
-    let normalized_input = input_questions
+    #[derive(Debug, Deserialize, Default)]
+    struct QuestionToolInput {
+        #[serde(default)]
+        questions: Vec<QuestionToolQuestion>,
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct QuestionToolQuestion {
+        #[serde(default)]
+        question: Option<String>,
+    }
+
+    let parsed: QuestionToolInput = serde_json::from_value(input.clone()).ok()?;
+    let normalized_input = parsed
+        .questions
         .iter()
-        .filter_map(|question| {
-            question
-                .get("question")
-                .and_then(|value| value.as_str())
-                .map(normalize_question_text)
-        })
+        .filter_map(|question| question.question.as_deref().map(normalize_question_text))
         .collect::<Vec<_>>();
     if normalized_input.is_empty() {
         return None;
@@ -688,29 +696,43 @@ fn question_pending_interaction_json(
     question_info: super::super::tui::QuestionInfo,
     input: &serde_json::Value,
 ) -> serde_json::Value {
-    let input_questions = input
-        .get("questions")
-        .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let questions = input_questions
+    #[derive(Debug, Deserialize, Default)]
+    struct QuestionToolInput {
+        #[serde(default)]
+        questions: Vec<QuestionToolQuestion>,
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct QuestionToolQuestion {
+        #[serde(default)]
+        question: Option<String>,
+        #[serde(default)]
+        header: Option<String>,
+        #[serde(default)]
+        multiple: bool,
+        #[serde(default)]
+        options: Option<Vec<QuestionToolOption>>,
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct QuestionToolOption {
+        #[serde(default)]
+        label: Option<String>,
+    }
+
+    let parsed: QuestionToolInput = serde_json::from_value(input.clone()).unwrap_or_default();
+    let questions = parsed
+        .questions
         .iter()
         .enumerate()
         .map(|(index, question)| {
-            let options = question
-                .get("options")
-                .and_then(|value| value.as_array())
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(|option| {
-                            option
-                                .get("label")
-                                .and_then(|value| value.as_str())
-                                .map(str::to_string)
-                        })
-                        .collect::<Vec<_>>()
-                })
+            let parsed_labels = question.options.as_ref().map(|values| {
+                values
+                    .iter()
+                    .filter_map(|option| option.label.clone())
+                    .collect::<Vec<_>>()
+            });
+            let options = parsed_labels
                 .or_else(|| {
                     question_info
                         .options
@@ -719,15 +741,9 @@ fn question_pending_interaction_json(
                 })
                 .unwrap_or_default();
             serde_json::json!({
-                "question": question
-                    .get("question")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or_default(),
-                "header": question.get("header").and_then(|value| value.as_str()),
-                "multiple": question
-                    .get("multiple")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false),
+                "question": question.question.as_deref().unwrap_or_default(),
+                "header": question.header.as_deref(),
+                "multiple": question.multiple,
                 "options": options,
             })
         })

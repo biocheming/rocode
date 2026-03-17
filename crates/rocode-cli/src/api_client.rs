@@ -262,10 +262,7 @@ impl CliApiClient {
         &self,
         session_id: &str,
     ) -> anyhow::Result<SessionRuntimeState> {
-        let url = server_url(
-            &self.base_url,
-            &format!("/session/{}/runtime", session_id),
-        );
+        let url = server_url(&self.base_url, &format!("/session/{}/runtime", session_id));
         let resp = self.client.get(&url).send().await?;
         Self::json_ok(resp, "get session runtime").await
     }

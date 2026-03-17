@@ -13,8 +13,8 @@ use crate::runtime_control::{ExecutionPatch, ExecutionStatus, FieldUpdate};
 use crate::ServerState;
 use rocode_command::output_blocks::{
     MessageBlock, MessageRole as OutputMessageRole, OutputBlock, ReasoningBlock,
-    SchedulerDecisionBlock, SchedulerDecisionField, SchedulerDecisionRenderSpec, SchedulerDecisionSection,
-    SchedulerStageBlock,
+    SchedulerDecisionBlock, SchedulerDecisionField, SchedulerDecisionRenderSpec,
+    SchedulerDecisionSection, SchedulerStageBlock,
 };
 use rocode_orchestrator::{
     parse_execution_gate_decision, parse_route_decision, scheduler_stage_observability,
@@ -1132,7 +1132,13 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
             "on_scheduler_stage_reasoning called"
         );
 
-        let (message_id, child_session_id, child_message_id, start_child_reasoning, start_reasoning) = {
+        let (
+            message_id,
+            child_session_id,
+            child_message_id,
+            start_child_reasoning,
+            start_reasoning,
+        ) = {
             let mut guard = self.active_stage_messages.lock().await;
             match guard.last_mut() {
                 Some(active) => {
@@ -1143,7 +1149,8 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                         active.child_reasoning_started = true;
                     }
                     // For main session (non-child), track reasoning started
-                    let start_reasoning = active.child_session_id.is_none() && !active.reasoning_started;
+                    let start_reasoning =
+                        active.child_session_id.is_none() && !active.reasoning_started;
                     if start_reasoning {
                         active.reasoning_started = true;
                     }
@@ -3630,15 +3637,15 @@ mod tests {
         let emitted_blocks = emitted.lock().expect("emitted blocks").clone();
 
         // Should emit reasoning start, delta, and end blocks
-        let reasoning_start = emitted_blocks.iter().find(|e| {
-            matches!(&e.block, OutputBlock::Reasoning(b) if b.phase == MessagePhase::Start)
-        });
-        let reasoning_delta = emitted_blocks.iter().find(|e| {
-            matches!(&e.block, OutputBlock::Reasoning(b) if b.text == "main session reasoning")
-        });
-        let reasoning_end = emitted_blocks.iter().find(|e| {
-            matches!(&e.block, OutputBlock::Reasoning(b) if b.phase == MessagePhase::End)
-        });
+        let reasoning_start = emitted_blocks.iter().find(
+            |e| matches!(&e.block, OutputBlock::Reasoning(b) if b.phase == MessagePhase::Start),
+        );
+        let reasoning_delta = emitted_blocks.iter().find(
+            |e| matches!(&e.block, OutputBlock::Reasoning(b) if b.text == "main session reasoning"),
+        );
+        let reasoning_end = emitted_blocks.iter().find(
+            |e| matches!(&e.block, OutputBlock::Reasoning(b) if b.phase == MessagePhase::End),
+        );
 
         assert!(
             reasoning_start.is_some(),

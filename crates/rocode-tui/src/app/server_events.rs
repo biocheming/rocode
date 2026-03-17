@@ -75,10 +75,7 @@ pub(super) fn spawn_server_event_listener(
         let base_event_url = format!("{}/event", base_url.trim_end_matches('/'));
         loop {
             // Read current session filter and build the SSE URL.
-            let current_filter = session_filter
-                .lock()
-                .ok()
-                .and_then(|guard| guard.clone());
+            let current_filter = session_filter.lock().ok().and_then(|guard| guard.clone());
             let event_url = match &current_filter {
                 Some(sid) => format!("{}?session={}", base_event_url, sid),
                 None => base_event_url.clone(),
@@ -146,10 +143,7 @@ fn consume_server_event_stream(
                     // After each complete event frame, check whether the
                     // session filter has changed. If so, break out to
                     // trigger a reconnect with the updated URL.
-                    let current = session_filter
-                        .lock()
-                        .ok()
-                        .and_then(|guard| guard.clone());
+                    let current = session_filter.lock().ok().and_then(|guard| guard.clone());
                     if current != *connected_filter {
                         tracing::debug!(
                             old = ?connected_filter,

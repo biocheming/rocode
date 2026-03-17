@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
@@ -67,39 +68,25 @@ impl Tool for EditTool {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let file_path: String = args
-            .get("file_path")
-            .or_else(|| args.get("filePath"))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                ToolError::InvalidArguments("file_path (or filePath) is required".into())
-            })?
-            .trim()
-            .to_string();
+        #[derive(Debug, Deserialize)]
+        struct EditInput {
+            #[serde(alias = "filePath")]
+            file_path: String,
+            #[serde(alias = "oldString")]
+            old_string: String,
+            #[serde(alias = "newString")]
+            new_string: String,
+            #[serde(default, alias = "replaceAll")]
+            replace_all: bool,
+        }
 
-        let old_string: String = args
-            .get("old_string")
-            .or_else(|| args.get("oldString"))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                ToolError::InvalidArguments("old_string (or oldString) is required".into())
-            })?
-            .to_string();
+        let input: EditInput =
+            serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
 
-        let new_string: String = args
-            .get("new_string")
-            .or_else(|| args.get("newString"))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                ToolError::InvalidArguments("new_string (or newString) is required".into())
-            })?
-            .to_string();
-
-        let replace_all = args
-            .get("replace_all")
-            .or_else(|| args.get("replaceAll"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let file_path = input.file_path.trim().to_string();
+        let old_string = input.old_string;
+        let new_string = input.new_string;
+        let replace_all = input.replace_all;
 
         let base_dir = if ctx.directory.is_empty() {
             &self.directory

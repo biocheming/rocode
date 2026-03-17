@@ -927,15 +927,15 @@ fn parse_auth_info_payload(payload: serde_json::Value) -> Option<AuthInfo> {
         return Some(auth);
     }
 
-    let key = payload
-        .get("api_key")
-        .and_then(|v| v.as_str())
-        .or_else(|| payload.get("apiKey").and_then(|v| v.as_str()))
-        .or_else(|| payload.get("token").and_then(|v| v.as_str()))
-        .or_else(|| payload.get("key").and_then(|v| v.as_str()))
-        .map(str::to_string)?;
+    #[derive(Debug, Deserialize)]
+    struct ApiKeyAuthPayload {
+        #[serde(alias = "api_key", alias = "apiKey", alias = "token", alias = "key")]
+        key: String,
+    }
 
-    Some(AuthInfo::Api { key })
+    serde_json::from_value::<ApiKeyAuthPayload>(payload)
+        .ok()
+        .map(|payload| AuthInfo::Api { key: payload.key })
 }
 
 // ===========================================================================

@@ -23,20 +23,25 @@ const OPENAI_API_URL: &str = "https://api.openai.com/v1/chat/completions";
 // Config helpers
 // ===========================================================================
 
+#[derive(Debug, Deserialize, Default)]
+struct OpenAiConfigOptions {
+    #[serde(default)]
+    organization: Option<String>,
+    #[serde(default)]
+    legacy_only: bool,
+}
+
+fn openai_config_options(config: &ProviderConfig) -> OpenAiConfigOptions {
+    serde_json::from_value(serde_json::to_value(&config.options).unwrap_or(Value::Null))
+        .unwrap_or_default()
+}
+
 fn organization_from_config(config: &ProviderConfig) -> Option<String> {
-    config
-        .options
-        .get("organization")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+    openai_config_options(config).organization
 }
 
 fn is_legacy_only(config: &ProviderConfig) -> bool {
-    config
-        .options
-        .get("legacy_only")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
+    openai_config_options(config).legacy_only
 }
 
 fn runtime_pipeline_enabled(config: &ProviderConfig) -> bool {
@@ -308,12 +313,20 @@ fn normalize_tool_call_arguments_for_request(
 ) -> NormalizedHistoricalToolCall {
     match input {
         Value::Object(obj) => {
-            let is_legacy_unrecoverable = obj
-                .get("_rocode_unrecoverable_tool_args")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
+            #[derive(Debug, Deserialize, Default)]
+            struct LegacyUnrecoverableToolArgsSentinel {
+                #[serde(default, rename = "_rocode_unrecoverable_tool_args")]
+                unrecoverable: bool,
+                #[serde(default)]
+                raw_len: Option<u64>,
+                #[serde(default)]
+                raw_preview: Option<String>,
+            }
 
-            if !is_legacy_unrecoverable {
+            let sentinel: LegacyUnrecoverableToolArgsSentinel =
+                serde_json::from_value(Value::Object(obj.clone())).unwrap_or_default();
+
+            if !sentinel.unrecoverable {
                 return NormalizedHistoricalToolCall {
                     tool_name: tool_name.to_string(),
                     arguments: input.to_string(),
@@ -323,8 +336,8 @@ fn normalize_tool_call_arguments_for_request(
             let received_args = json!({
                 "type": "object",
                 "source": "legacy-unrecoverable-sentinel",
-                "raw_len": obj.get("raw_len").and_then(Value::as_u64),
-                "preview": obj.get("raw_preview").and_then(Value::as_str),
+                "raw_len": sentinel.raw_len,
+                "preview": sentinel.raw_preview,
             });
             let payload = invalid_tool_payload_for_history(
                 tool_name,
@@ -473,6 +486,52 @@ struct LegacySseParserState {
     reasoning_open: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct LegacySseChunk {
+    #[serde(default)]
+    choices: Vec<LegacySseChoice>,
+    #[serde(default)]
+    usage: Option<RawUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LegacySseChoice {
+    #[serde(default)]
+    delta: Option<LegacySseDelta>,
+    #[serde(default)]
+    finish_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct LegacySseDelta {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default, rename = "reasoning_text")]
+    reasoning_text: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<LegacySseToolCall>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct LegacySseToolCall {
+    #[serde(default)]
+    index: Option<u32>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    function: Option<LegacySseFunction>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct LegacySseFunction {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<Value>,
+}
+
 #[allow(dead_code)]
 fn parse_legacy_sse_data(data: &str, state: &mut LegacySseParserState) -> Vec<StreamEvent> {
     let mut events = Vec::new();
@@ -488,162 +547,171 @@ fn parse_legacy_sse_data(data: &str, state: &mut LegacySseParserState) -> Vec<St
         return events;
     }
 
-    let chunk: Value = match serde_json::from_str(data) {
+    let chunk: LegacySseChunk = match serde_json::from_str(data) {
         Ok(v) => v,
         Err(_) => return events,
     };
 
-    let usage = chunk.get("usage");
-    let prompt_tokens = usage
-        .and_then(|u| u.get("prompt_tokens"))
-        .and_then(Value::as_u64)
+    let prompt_tokens = chunk
+        .usage
+        .as_ref()
+        .and_then(|u| u.prompt_tokens)
         .unwrap_or(0);
-    let completion_tokens = usage
-        .and_then(|u| u.get("completion_tokens"))
-        .and_then(Value::as_u64)
+    let completion_tokens = chunk
+        .usage
+        .as_ref()
+        .and_then(|u| u.completion_tokens)
         .unwrap_or(0);
 
-    if usage.is_some() {
+    if chunk.usage.is_some() {
         events.push(StreamEvent::Usage {
             prompt_tokens,
             completion_tokens,
         });
     }
 
-    if let Some(choices) = chunk.get("choices").and_then(Value::as_array) {
-        for choice in choices {
-            if let Some(delta) = choice.get("delta") {
-                let reasoning = delta
-                    .get("reasoning_content")
-                    .or_else(|| delta.get("reasoning_text"))
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
+    for choice in chunk.choices {
+        if let Some(delta) = choice.delta {
+            let reasoning = delta
+                .reasoning_content
+                .as_deref()
+                .or(delta.reasoning_text.as_deref())
+                .unwrap_or("");
 
-                if !reasoning.is_empty() {
-                    if !state.reasoning_open {
-                        state.reasoning_open = true;
-                        events.push(StreamEvent::ReasoningStart {
-                            id: "reasoning-0".to_string(),
-                        });
-                    }
-                    events.push(StreamEvent::ReasoningDelta {
+            if !reasoning.is_empty() {
+                if !state.reasoning_open {
+                    state.reasoning_open = true;
+                    events.push(StreamEvent::ReasoningStart {
                         id: "reasoning-0".to_string(),
-                        text: reasoning.to_string(),
                     });
                 }
+                events.push(StreamEvent::ReasoningDelta {
+                    id: "reasoning-0".to_string(),
+                    text: reasoning.to_string(),
+                });
+            }
 
-                if let Some(text) = delta.get("content").and_then(Value::as_str) {
-                    if !text.is_empty() {
-                        if state.reasoning_open {
-                            state.reasoning_open = false;
-                            events.push(StreamEvent::ReasoningEnd {
-                                id: "reasoning-0".to_string(),
-                            });
-                        }
-                        events.push(StreamEvent::TextDelta(text.to_string()));
-                    }
-                }
-
-                if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
-                    if !tool_calls.is_empty() && state.reasoning_open {
+            if let Some(text) = delta.content.as_deref() {
+                if !text.is_empty() {
+                    if state.reasoning_open {
                         state.reasoning_open = false;
                         events.push(StreamEvent::ReasoningEnd {
                             id: "reasoning-0".to_string(),
                         });
                     }
-                    for tc in tool_calls {
-                        let index = tc.get("index").and_then(Value::as_u64).unwrap_or(0) as u32;
-                        let id = if let Some(id) = tc
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .filter(|s| !s.is_empty())
-                        {
-                            let id = id.to_string();
-                            state.tool_call_ids.insert(index, id.clone());
-                            id
-                        } else {
-                            state
-                                .tool_call_ids
-                                .entry(index)
-                                .or_insert_with(|| format!("tool-call-{}", index))
-                                .clone()
-                        };
-
-                        if let Some(func) = tc.get("function") {
-                            if let Some(name) = func.get("name").and_then(Value::as_str) {
-                                let should_emit_start = state
-                                    .tool_call_names
-                                    .get(&index)
-                                    .map(|existing| existing != name)
-                                    .unwrap_or(true);
-                                state.tool_call_names.insert(index, name.to_string());
-                                if should_emit_start {
-                                    events.push(StreamEvent::ToolCallStart {
-                                        id: id.clone(),
-                                        name: name.to_string(),
-                                    });
-                                }
-                            }
-
-                            if let Some(arguments) = func.get("arguments").and_then(Value::as_str) {
-                                if !arguments.is_empty() {
-                                    tracing::info!(
-                                        tool_call_id = %id,
-                                        arguments_len = arguments.len(),
-                                        arguments_preview = %arguments.chars().take(200).collect::<String>(),
-                                        "[DIAG-SSE] ToolCallDelta emitted from SSE arguments string"
-                                    );
-                                    events.push(StreamEvent::ToolCallDelta {
-                                        id,
-                                        input: arguments.to_string(),
-                                    });
-                                }
-                            } else if let Some(arguments_value) = func.get("arguments") {
-                                // LiteLLM or other proxies may send arguments as a JSON
-                                // object instead of a string. Handle this case.
-                                tracing::info!(
-                                    tool_call_id = %id,
-                                    arguments_type = %if arguments_value.is_object() { "object" } else if arguments_value.is_null() { "null" } else { "other" },
-                                    arguments_preview = %arguments_value.to_string().chars().take(200).collect::<String>(),
-                                    "[DIAG-SSE] arguments field is NOT a string"
-                                );
-                                if arguments_value.is_object()
-                                    && !arguments_value.as_object().is_none_or(|o| o.is_empty())
-                                {
-                                    let serialized = arguments_value.to_string();
-                                    events.push(StreamEvent::ToolCallDelta {
-                                        id,
-                                        input: serialized,
-                                    });
-                                }
-                            }
-                        }
-                    }
+                    events.push(StreamEvent::TextDelta(text.to_string()));
                 }
             }
 
-            if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
+            if !delta.tool_calls.is_empty() {
                 if state.reasoning_open {
                     state.reasoning_open = false;
                     events.push(StreamEvent::ReasoningEnd {
                         id: "reasoning-0".to_string(),
                     });
                 }
-                let normalized_reason = if reason == "tool_calls" {
-                    "tool-calls".to_string()
-                } else {
-                    reason.to_string()
-                };
-                events.push(StreamEvent::FinishStep {
-                    finish_reason: Some(normalized_reason),
-                    usage: crate::stream::StreamUsage {
-                        prompt_tokens,
-                        completion_tokens,
-                        ..Default::default()
-                    },
-                    provider_metadata: None,
+                for tc in delta.tool_calls {
+                    let index = tc.index.unwrap_or(0);
+                    let id = if let Some(id) = tc.id.as_deref().filter(|id| !id.is_empty()) {
+                        let id = id.to_string();
+                        state.tool_call_ids.insert(index, id.clone());
+                        id
+                    } else {
+                        state
+                            .tool_call_ids
+                            .entry(index)
+                            .or_insert_with(|| format!("tool-call-{}", index))
+                            .clone()
+                    };
+
+                    if let Some(func) = tc.function {
+                        if let Some(name) = func.name.as_deref() {
+                            let should_emit_start = state
+                                .tool_call_names
+                                .get(&index)
+                                .map(|existing| existing != name)
+                                .unwrap_or(true);
+                            state.tool_call_names.insert(index, name.to_string());
+                            if should_emit_start {
+                                events.push(StreamEvent::ToolCallStart {
+                                    id: id.clone(),
+                                    name: name.to_string(),
+                                });
+                            }
+                        }
+
+                        if let Some(arguments_value) = func.arguments {
+                            match arguments_value {
+                                Value::String(arguments) => {
+                                    if !arguments.is_empty() {
+                                        tracing::info!(
+                                            tool_call_id = %id,
+                                            arguments_len = arguments.len(),
+                                            arguments_preview = %arguments.chars().take(200).collect::<String>(),
+                                            "[DIAG-SSE] ToolCallDelta emitted from SSE arguments string"
+                                        );
+                                        events.push(StreamEvent::ToolCallDelta {
+                                            id,
+                                            input: arguments,
+                                        });
+                                    }
+                                }
+                                arguments_value => {
+                                    // LiteLLM or other proxies may send arguments as a JSON
+                                    // object instead of a string. Handle this case.
+                                    let arguments_type = if arguments_value.is_object() {
+                                        "object"
+                                    } else if arguments_value.is_null() {
+                                        "null"
+                                    } else {
+                                        "other"
+                                    };
+                                    tracing::info!(
+                                        tool_call_id = %id,
+                                        arguments_type = %arguments_type,
+                                        arguments_preview = %arguments_value.to_string().chars().take(200).collect::<String>(),
+                                        "[DIAG-SSE] arguments field is NOT a string"
+                                    );
+                                    if arguments_value.is_object()
+                                        && !arguments_value
+                                            .as_object()
+                                            .is_none_or(|object| object.is_empty())
+                                    {
+                                        let serialized = arguments_value.to_string();
+                                        events.push(StreamEvent::ToolCallDelta {
+                                            id,
+                                            input: serialized,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(reason) = choice.finish_reason.as_deref() {
+            if state.reasoning_open {
+                state.reasoning_open = false;
+                events.push(StreamEvent::ReasoningEnd {
+                    id: "reasoning-0".to_string(),
                 });
             }
+            let normalized_reason = if reason == "tool_calls" {
+                "tool-calls".to_string()
+            } else {
+                reason.to_string()
+            };
+            events.push(StreamEvent::FinishStep {
+                finish_reason: Some(normalized_reason),
+                usage: crate::stream::StreamUsage {
+                    prompt_tokens,
+                    completion_tokens,
+                    ..Default::default()
+                },
+                provider_metadata: None,
+            });
         }
     }
 
@@ -823,6 +891,7 @@ fn assistant_message_to_openai(content: &crate::Content) -> (Value, Vec<String>)
         crate::Content::Parts(parts) => {
             let mut text = String::new();
             let mut tool_calls = Vec::new();
+            let mut tool_call_ids = Vec::new();
 
             for part in parts {
                 match part.content_type.as_str() {
@@ -838,6 +907,7 @@ fn assistant_message_to_openai(content: &crate::Content) -> (Value, Vec<String>)
                                 &tool_use.id,
                                 &tool_use.input,
                             );
+                            tool_call_ids.push(tool_use.id.clone());
                             tool_calls.push(json!({
                                 "id": tool_use.id,
                                 "type": "function",
@@ -871,19 +941,8 @@ fn assistant_message_to_openai(content: &crate::Content) -> (Value, Vec<String>)
                 );
                 message.insert("tool_calls".to_string(), Value::Array(tool_calls));
             }
-            let ids = message
-                .get("tool_calls")
-                .and_then(|value| value.as_array())
-                .map(|calls| {
-                    calls
-                        .iter()
-                        .filter_map(|call| call.get("id").and_then(Value::as_str))
-                        .map(|id| id.to_string())
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
 
-            (Value::Object(message), ids)
+            (Value::Object(message), tool_call_ids)
         }
     }
 }
@@ -1300,50 +1359,61 @@ fn reassemble_sse_chunks(body: &str) -> Result<RawChatResponse, ProviderError> {
         if data == "[DONE]" {
             break;
         }
-        let chunk: Value = match serde_json::from_str(data) {
+        let chunk: LegacySseChunk = match serde_json::from_str(data) {
             Ok(v) => v,
             Err(_) => continue,
         };
-        if let Some(choices) = chunk.get("choices").and_then(|c| c.as_array()) {
-            for choice in choices {
-                if let Some(delta) = choice.get("delta") {
-                    if let Some(text) = delta.get("content").and_then(|v| v.as_str()) {
-                        content.push_str(text);
+
+        if let Some(u) = chunk.usage {
+            usage = Some(u);
+        }
+
+        for choice in chunk.choices {
+            if let Some(delta) = choice.delta {
+                if let Some(text) = delta.content {
+                    content.push_str(&text);
+                }
+
+                // ZhipuAI uses "reasoning_content"; OpenAI uses "reasoning_text"
+                let reasoning_val = delta.reasoning_content.or(delta.reasoning_text);
+                if let Some(r) = reasoning_val {
+                    reasoning.push_str(&r);
+                }
+
+                for tc in delta.tool_calls {
+                    let idx = tc.index.unwrap_or(0);
+                    let entry = tool_calls.entry(idx).or_insert((None, None, String::new()));
+
+                    if let Some(id) = tc.id {
+                        entry.0 = Some(id);
                     }
-                    // ZhipuAI uses "reasoning_content"; OpenAI uses "reasoning_text"
-                    let reasoning_val = delta
-                        .get("reasoning_content")
-                        .or_else(|| delta.get("reasoning_text"))
-                        .and_then(|v| v.as_str());
-                    if let Some(r) = reasoning_val {
-                        reasoning.push_str(r);
-                    }
-                    if let Some(tcs) = delta.get("tool_calls").and_then(|v| v.as_array()) {
-                        for tc in tcs {
-                            let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let entry =
-                                tool_calls.entry(idx).or_insert((None, None, String::new()));
-                            if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
-                                entry.0 = Some(id.to_string());
-                            }
-                            if let Some(func) = tc.get("function") {
-                                if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
-                                    entry.1 = Some(name.to_string());
+
+                    if let Some(func) = tc.function {
+                        if let Some(name) = func.name {
+                            entry.1 = Some(name);
+                        }
+
+                        if let Some(arguments_value) = func.arguments {
+                            match arguments_value {
+                                Value::String(args) => entry.2.push_str(&args),
+                                Value::Object(object) if !object.is_empty() => {
+                                    let serialized = Value::Object(object).to_string();
+                                    if entry.2.is_empty() {
+                                        entry.2 = serialized;
+                                    } else {
+                                        entry.2.push_str(&serialized);
+                                    }
                                 }
-                                if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
-                                    entry.2.push_str(args);
-                                }
+                                _ => {}
                             }
                         }
                     }
                 }
-                if let Some(fr) = choice.get("finish_reason").and_then(|v| v.as_str()) {
-                    finish_reason = Some(fr.to_string());
-                }
             }
-        }
-        if let Some(u) = chunk.get("usage") {
-            usage = serde_json::from_value(u.clone()).ok();
+
+            if let Some(fr) = choice.finish_reason {
+                finish_reason = Some(fr);
+            }
         }
     }
 

@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use regex::Regex;
+use serde::Deserialize;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -79,25 +80,27 @@ impl Tool for GrepTool {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let pattern: String = args["pattern"]
-            .as_str()
-            .ok_or_else(|| ToolError::InvalidArguments("pattern is required".into()))?
-            .to_string();
+        #[derive(Debug, Deserialize)]
+        struct GrepInput {
+            pattern: String,
+            #[serde(default)]
+            path: Option<String>,
+            #[serde(default)]
+            glob: Option<String>,
+            #[serde(default, alias = "ignoreCase")]
+            ignore_case: bool,
+            #[serde(default)]
+            hidden: bool,
+        }
 
-        let search_path: String = args["path"]
-            .as_str()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| ctx.directory.clone());
+        let input: GrepInput =
+            serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
 
-        let glob_filter: Option<String> = args["glob"].as_str().map(|s| s.to_string());
-
-        let ignore_case: bool = args
-            .get("ignore_case")
-            .or_else(|| args.get("ignoreCase"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        let include_hidden: bool = args["hidden"].as_bool().unwrap_or(false);
+        let pattern = input.pattern;
+        let search_path = input.path.unwrap_or_else(|| ctx.directory.clone());
+        let glob_filter = input.glob;
+        let ignore_case = input.ignore_case;
+        let include_hidden = input.hidden;
 
         let base_dir = if search_path.is_empty() {
             &self.directory

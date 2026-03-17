@@ -123,10 +123,7 @@ pub(crate) async fn request_permission(
     PERMISSION_WAITERS.lock().await.remove(&permission_id);
 
     // Clear pending permission from aggregated runtime state.
-    state
-        .runtime_state
-        .permission_resolved(&session_id)
-        .await;
+    state.runtime_state.permission_resolved(&session_id).await;
 
     match wait_result {
         Ok(Ok(PermissionReply { reply, message })) => match reply.as_str() {

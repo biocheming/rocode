@@ -334,7 +334,9 @@ mod tests {
         let providers = reloaded.provider.as_ref().expect("provider map");
         assert!(providers.get("old").is_none());
         assert_eq!(
-            providers.get("new").and_then(|provider| provider.name.as_deref()),
+            providers
+                .get("new")
+                .and_then(|provider| provider.name.as_deref()),
             Some("New")
         );
     }

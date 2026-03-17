@@ -187,7 +187,9 @@ impl CAbiPlugin {
             let bytes = cstr.to_bytes();
             let result = std::str::from_utf8(bytes)
                 .map(|s| s.to_string())
-                .map_err(|e| HookError::ExecutionError(format!("cabi returned non-utf8 string: {e}")));
+                .map_err(|e| {
+                    HookError::ExecutionError(format!("cabi returned non-utf8 string: {e}"))
+                });
 
             // Always free the plugin-allocated string, even if decoding fails.
             unsafe { (state.free_string)(state.instance, ptr) };
@@ -386,7 +388,11 @@ pub(crate) unsafe fn try_load_from_library(
         destroy,
         invoke_hook,
         free_string,
-        call_lock: if threadsafe { None } else { Some(Mutex::new(())) },
+        call_lock: if threadsafe {
+            None
+        } else {
+            Some(Mutex::new(()))
+        },
     });
 
     tracing::info!(
@@ -397,5 +403,7 @@ pub(crate) unsafe fn try_load_from_library(
         "loaded cabi plugin"
     );
 
-    Ok(Some(Arc::new(CAbiPlugin::new(name, version, hooks, state)) as Arc<dyn Plugin>))
+    Ok(Some(
+        Arc::new(CAbiPlugin::new(name, version, hooks, state)) as Arc<dyn Plugin>
+    ))
 }

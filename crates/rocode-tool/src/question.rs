@@ -14,7 +14,7 @@ impl QuestionTool {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct QuestionInput {
-    #[serde(rename = "questions")]
+    #[serde(rename = "questions", deserialize_with = "deserialize_questions")]
     questions: Vec<QuestionDef>,
 }
 
@@ -272,19 +272,17 @@ impl Default for QuestionTool {
     }
 }
 
-fn parse_question_input(args: serde_json::Value) -> Result<QuestionInput, ToolError> {
-    if let Ok(input) = serde_json::from_value::<QuestionInput>(args.clone()) {
-        return Ok(input);
-    }
+fn deserialize_questions<'de, D>(deserializer: D) -> Result<Vec<QuestionDef>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    parse_questions_value(&value).map_err(serde::de::Error::custom)
+}
 
-    let obj = args
-        .as_object()
-        .ok_or_else(|| ToolError::InvalidArguments("question input must be an object".into()))?;
-    let questions_value = obj
-        .get("questions")
-        .ok_or_else(|| ToolError::InvalidArguments("questions is required".into()))?;
-    let questions = parse_questions_value(questions_value).map_err(ToolError::InvalidArguments)?;
-    Ok(QuestionInput { questions })
+fn parse_question_input(args: serde_json::Value) -> Result<QuestionInput, ToolError> {
+    serde_json::from_value::<QuestionInput>(args)
+        .map_err(|e| ToolError::InvalidArguments(e.to_string()))
 }
 
 fn parse_questions_value(value: &serde_json::Value) -> Result<Vec<QuestionDef>, String> {

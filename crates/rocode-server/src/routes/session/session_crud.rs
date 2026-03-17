@@ -528,7 +528,9 @@ pub(super) async fn get_session_runtime(
             let sessions = state.sessions.lock().await;
             if sessions.get(&id).is_some() {
                 drop(sessions);
-                Ok(Json(crate::session_runtime::state::SessionRuntimeState::new(id)))
+                Ok(Json(
+                    crate::session_runtime::state::SessionRuntimeState::new(id),
+                ))
             } else {
                 Err(ApiError::SessionNotFound(id))
             }

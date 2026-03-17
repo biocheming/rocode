@@ -35,12 +35,12 @@ enum BrowserSessionOperation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 struct BrowserSessionInput {
     operation: BrowserSessionOperation,
     #[serde(default, alias = "sessionId")]
     session_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "baseUrl")]
     base_url: Option<String>,
     #[serde(default)]
     url: Option<String>,
@@ -48,7 +48,7 @@ struct BrowserSessionInput {
     path: Option<String>,
     #[serde(default)]
     headers: HashMap<String, String>,
-    #[serde(default)]
+    #[serde(default, alias = "userAgent")]
     user_agent: Option<String>,
     #[serde(default = "default_format")]
     format: String,

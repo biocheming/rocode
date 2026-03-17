@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use walkdir::WalkDir;
@@ -10,6 +11,18 @@ const DEFAULT_READ_LIMIT: usize = 2000;
 const MAX_LINE_LENGTH: usize = 2000;
 const MAX_BYTES: usize = 50 * 1024;
 const DESCRIPTION: &str = include_str!("read.txt");
+
+fn deserialize_opt_u64_lossy<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Number(number)) => number.as_u64(),
+        Some(serde_json::Value::String(raw)) => raw.parse::<u64>().ok(),
+        _ => None,
+    })
+}
 
 const INSTRUCTION_FILES: &[&str] = &[
     "AGENTS.md",
@@ -82,12 +95,21 @@ impl Tool for ReadTool {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let file_path: String = args
-            .get("file_path")
-            .or_else(|| args.get("filePath"))
-            .or_else(|| args.get("filepath"))
-            .or_else(|| args.get("path"))
-            .and_then(|v| v.as_str())
+        #[derive(Debug, Deserialize)]
+        struct ReadInput {
+            #[serde(default, alias = "filePath", alias = "filepath", alias = "path")]
+            file_path: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+            offset: Option<u64>,
+            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+            limit: Option<u64>,
+        }
+
+        let input: ReadInput = serde_json::from_value(args.clone())
+            .map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
+
+        let file_path: String = input
+            .file_path
             .ok_or_else(|| {
                 ToolError::InvalidArguments(format!(
                     "file_path is required. Got args: {}. If you are unsure of the correct path, use glob first.",
@@ -103,9 +125,9 @@ impl Tool for ReadTool {
             ));
         }
 
-        let offset: usize = args["offset"].as_u64().unwrap_or(1) as usize;
+        let offset: usize = input.offset.unwrap_or(1) as usize;
 
-        let limit: usize = args["limit"].as_u64().unwrap_or(DEFAULT_READ_LIMIT as u64) as usize;
+        let limit: usize = input.limit.unwrap_or(DEFAULT_READ_LIMIT as u64) as usize;
 
         if offset < 1 {
             return Err(ToolError::InvalidArguments("offset must be >= 1".into()));

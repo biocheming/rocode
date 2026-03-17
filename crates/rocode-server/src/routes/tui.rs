@@ -80,8 +80,7 @@ pub(crate) async fn request_question_answers_with_hook(
         .question_created(
             &session_id,
             &question_info.id,
-            serde_json::to_value(&questions)
-                .unwrap_or_else(|_| serde_json::Value::Array(vec![])),
+            serde_json::to_value(&questions).unwrap_or_else(|_| serde_json::Value::Array(vec![])),
         )
         .await;
     if let Some(hook) = event_hook.as_ref() {
@@ -95,10 +94,7 @@ pub(crate) async fn request_question_answers_with_hook(
     state.runtime_control.drop_question(&question_info.id).await;
 
     // Clear pending question from aggregated runtime state.
-    state
-        .runtime_state
-        .question_resolved(&session_id)
-        .await;
+    state.runtime_state.question_resolved(&session_id).await;
 
     match wait_result {
         Ok(Ok(QuestionReply::Answers(answers))) => {

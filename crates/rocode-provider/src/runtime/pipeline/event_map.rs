@@ -1,5 +1,6 @@
 use crate::driver::StreamingEvent;
 use crate::protocol_loader::{ProtocolManifest, StreamingConfig};
+use serde::Deserialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MapperKind {
@@ -108,23 +109,47 @@ impl PathEventMapper {
     fn map_openai(&self, frame: &serde_json::Value) -> Vec<StreamingEvent> {
         let mut events = Vec::new();
 
+        #[derive(Debug, Deserialize, Default)]
+        struct OpenAiFrame {
+            #[serde(default)]
+            choices: Vec<OpenAiChoice>,
+        }
+
+        #[derive(Debug, Deserialize, Default)]
+        struct OpenAiChoice {
+            #[serde(default)]
+            delta: Option<OpenAiDelta>,
+            #[serde(default)]
+            finish_reason: Option<String>,
+        }
+
+        #[derive(Debug, Deserialize, Default)]
+        struct OpenAiDelta {
+            #[serde(default)]
+            reasoning_content: Option<String>,
+            #[serde(default, rename = "reasoning_text")]
+            reasoning_text: Option<String>,
+        }
+
+        let parsed: OpenAiFrame = serde_json::from_value(frame.clone()).unwrap_or_default();
+
         // OpenAI-compatible reasoning: reasoning_content or reasoning_text in delta
-        let delta = frame
-            .get("choices")
-            .and_then(|v| v.get(0))
-            .and_then(|v| v.get("delta"));
-        if let Some(delta) = delta {
-            let reasoning = delta
-                .get("reasoning_content")
-                .or_else(|| delta.get("reasoning_text"))
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
-            if !reasoning.is_empty() {
-                events.push(StreamingEvent::ThinkingDelta {
-                    thinking: reasoning.to_string(),
-                    tool_consideration: None,
-                });
-            }
+        let reasoning = parsed
+            .choices
+            .get(0)
+            .and_then(|choice| choice.delta.as_ref())
+            .and_then(|delta| {
+                delta
+                    .reasoning_content
+                    .as_deref()
+                    .or(delta.reasoning_text.as_deref())
+            })
+            .unwrap_or("");
+        if !reasoning.is_empty() {
+            events.push(StreamingEvent::ThinkingDelta {
+                thinking: reasoning.to_string(),
+                tool_consideration: None,
+            });
         }
 
         if let Some(content) = resolve_path(frame, &self.content_path).and_then(|v| v.as_str()) {
@@ -136,24 +161,37 @@ impl PathEventMapper {
             }
         }
 
-        if let Some(tool_calls) =
-            resolve_path(frame, &self.tool_call_path).and_then(|v| v.as_array())
-        {
+        if let Some(tool_calls_value) = resolve_path(frame, &self.tool_call_path).cloned() {
+            #[derive(Debug, Deserialize, Default)]
+            struct OpenAiToolCall {
+                #[serde(default)]
+                index: Option<u32>,
+                #[serde(default)]
+                id: Option<String>,
+                #[serde(default)]
+                function: Option<OpenAiToolCallFunction>,
+            }
+
+            #[derive(Debug, Deserialize, Default)]
+            struct OpenAiToolCallFunction {
+                #[serde(default)]
+                name: Option<String>,
+                #[serde(default)]
+                arguments: Option<String>,
+            }
+
+            let tool_calls: Vec<OpenAiToolCall> =
+                serde_json::from_value(tool_calls_value).unwrap_or_default();
             for tool_call in tool_calls {
-                let index = tool_call
-                    .get("index")
-                    .and_then(|v| v.as_u64())
-                    .map(|i| i as u32);
+                let index = tool_call.index;
                 let tool_call_id = tool_call
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .map(ToString::to_string)
+                    .id
                     .unwrap_or_else(|| format!("tool-call-{}", index.unwrap_or(0)));
 
                 if let Some(name) = tool_call
-                    .get("function")
-                    .and_then(|v| v.get("name"))
-                    .and_then(|v| v.as_str())
+                    .function
+                    .as_ref()
+                    .and_then(|function| function.name.as_deref())
                 {
                     if !name.is_empty() {
                         events.push(StreamingEvent::ToolCallStarted {
@@ -165,9 +203,9 @@ impl PathEventMapper {
                 }
 
                 if let Some(arguments) = tool_call
-                    .get("function")
-                    .and_then(|v| v.get("arguments"))
-                    .and_then(|v| v.as_str())
+                    .function
+                    .as_ref()
+                    .and_then(|function| function.arguments.as_deref())
                 {
                     if !arguments.is_empty() {
                         events.push(StreamingEvent::PartialToolCall {
@@ -182,12 +220,10 @@ impl PathEventMapper {
         }
 
         let usage = resolve_path(frame, &self.usage_path).cloned();
-        let finish_reason = frame
-            .get("choices")
-            .and_then(|v| v.get(0))
-            .and_then(|v| v.get("finish_reason"))
-            .and_then(|v| v.as_str())
-            .map(ToString::to_string);
+        let finish_reason = parsed
+            .choices
+            .get(0)
+            .and_then(|choice| choice.finish_reason.clone());
 
         if usage.is_some() || finish_reason.is_some() {
             events.push(StreamingEvent::Metadata {
@@ -206,17 +242,80 @@ impl PathEventMapper {
 
     fn map_anthropic(&self, frame: &serde_json::Value) -> Vec<StreamingEvent> {
         let mut events = Vec::new();
-        let event_type = frame
-            .get("type")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
+        #[derive(Debug, Deserialize, Default)]
+        struct AnthropicContentBlock {
+            #[serde(default, rename = "type")]
+            block_type: Option<String>,
+            #[serde(default)]
+            id: Option<String>,
+            #[serde(default)]
+            name: Option<String>,
+        }
 
-        match event_type {
-            "content_block_start" => {
-                let block = frame.get("content_block");
-                let block_type = block
-                    .and_then(|v| v.get("type"))
-                    .and_then(|v| v.as_str())
+        #[derive(Debug, Deserialize, Default)]
+        struct AnthropicDelta {
+            #[serde(default)]
+            thinking: Option<String>,
+            #[serde(default)]
+            text: Option<String>,
+            #[serde(default)]
+            partial_json: Option<String>,
+        }
+
+        #[derive(Debug, Deserialize, Default)]
+        struct AnthropicMessageDelta {
+            #[serde(default)]
+            stop_reason: Option<String>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[serde(tag = "type")]
+        enum AnthropicFrame {
+            #[serde(rename = "content_block_start")]
+            ContentBlockStart {
+                #[serde(default)]
+                index: Option<u32>,
+                #[serde(default)]
+                content_block: Option<AnthropicContentBlock>,
+            },
+            #[serde(rename = "content_block_delta")]
+            ContentBlockDelta {
+                #[serde(default)]
+                index: Option<u32>,
+                #[serde(default)]
+                content_block: Option<AnthropicContentBlock>,
+                #[serde(default)]
+                delta: Option<AnthropicDelta>,
+            },
+            #[serde(rename = "message_start")]
+            MessageStart,
+            #[serde(rename = "message_delta")]
+            MessageDelta {
+                #[serde(default)]
+                delta: Option<AnthropicMessageDelta>,
+            },
+            #[serde(rename = "message_stop")]
+            MessageStop,
+            #[serde(rename = "error")]
+            Error {
+                #[serde(default)]
+                error: Option<serde_json::Value>,
+            },
+            #[serde(other)]
+            Other,
+        }
+
+        let parsed: AnthropicFrame =
+            serde_json::from_value(frame.clone()).unwrap_or(AnthropicFrame::Other);
+
+        match parsed {
+            AnthropicFrame::ContentBlockStart {
+                index,
+                content_block,
+            } => {
+                let block_type = content_block
+                    .as_ref()
+                    .and_then(|block| block.block_type.as_deref())
                     .unwrap_or_default();
                 if block_type == "thinking" {
                     events.push(StreamingEvent::ThinkingDelta {
@@ -225,18 +324,13 @@ impl PathEventMapper {
                     });
                 }
                 if block_type == "tool_use" {
-                    let index = frame
-                        .get("index")
-                        .and_then(|v| v.as_u64())
-                        .map(|v| v as u32);
-                    let tool_call_id = block
-                        .and_then(|v| v.get("id"))
-                        .and_then(|v| v.as_str())
-                        .map(ToString::to_string)
+                    let tool_call_id = content_block
+                        .as_ref()
+                        .and_then(|block| block.id.clone())
                         .unwrap_or_else(|| format!("tool-call-{}", index.unwrap_or(0)));
-                    let tool_name = block
-                        .and_then(|v| v.get("name"))
-                        .and_then(|v| v.as_str())
+                    let tool_name = content_block
+                        .as_ref()
+                        .and_then(|block| block.name.as_deref())
                         .unwrap_or_default()
                         .to_string();
                     events.push(StreamingEvent::ToolCallStarted {
@@ -246,12 +340,12 @@ impl PathEventMapper {
                     });
                 }
             }
-            "content_block_delta" => {
-                if let Some(thinking) = frame
-                    .get("delta")
-                    .and_then(|v| v.get("thinking"))
-                    .and_then(|v| v.as_str())
-                {
+            AnthropicFrame::ContentBlockDelta {
+                index,
+                content_block,
+                delta,
+            } => {
+                if let Some(thinking) = delta.as_ref().and_then(|delta| delta.thinking.as_deref()) {
                     if !thinking.is_empty() {
                         events.push(StreamingEvent::ThinkingDelta {
                             thinking: thinking.to_string(),
@@ -260,11 +354,7 @@ impl PathEventMapper {
                     }
                 }
 
-                if let Some(text) = frame
-                    .get("delta")
-                    .and_then(|v| v.get("text"))
-                    .and_then(|v| v.as_str())
-                {
+                if let Some(text) = delta.as_ref().and_then(|delta| delta.text.as_deref()) {
                     if !text.is_empty() {
                         events.push(StreamingEvent::PartialContentDelta {
                             content: text.to_string(),
@@ -273,21 +363,14 @@ impl PathEventMapper {
                     }
                 }
 
-                if let Some(partial_json) = frame
-                    .get("delta")
-                    .and_then(|v| v.get("partial_json"))
-                    .and_then(|v| v.as_str())
+                if let Some(partial_json) = delta
+                    .as_ref()
+                    .and_then(|delta| delta.partial_json.as_deref())
                 {
                     if !partial_json.is_empty() {
-                        let index = frame
-                            .get("index")
-                            .and_then(|v| v.as_u64())
-                            .map(|v| v as u32);
-                        let tool_call_id = frame
-                            .get("content_block")
-                            .and_then(|v| v.get("id"))
-                            .and_then(|v| v.as_str())
-                            .map(ToString::to_string)
+                        let tool_call_id = content_block
+                            .as_ref()
+                            .and_then(|block| block.id.clone())
                             .unwrap_or_else(|| format!("tool-call-{}", index.unwrap_or(0)));
                         events.push(StreamingEvent::PartialToolCall {
                             tool_call_id,
@@ -298,7 +381,7 @@ impl PathEventMapper {
                     }
                 }
             }
-            "message_start" => {
+            AnthropicFrame::MessageStart => {
                 let usage = resolve_path(frame, &self.usage_path).cloned();
                 if usage.is_some() {
                     events.push(StreamingEvent::Metadata {
@@ -308,12 +391,8 @@ impl PathEventMapper {
                     });
                 }
             }
-            "message_delta" => {
-                let stop_reason = frame
-                    .get("delta")
-                    .and_then(|v| v.get("stop_reason"))
-                    .and_then(|v| v.as_str())
-                    .map(ToString::to_string);
+            AnthropicFrame::MessageDelta { delta } => {
+                let stop_reason = delta.and_then(|delta| delta.stop_reason);
                 if stop_reason.is_some() {
                     events.push(StreamingEvent::Metadata {
                         usage: None,
@@ -325,21 +404,21 @@ impl PathEventMapper {
                     });
                 }
             }
-            "message_stop" => {
+            AnthropicFrame::MessageStop => {
                 events.push(StreamingEvent::StreamEnd {
                     finish_reason: None,
                 });
             }
-            "error" => {
-                if let Some(error) = frame.get("error") {
+            AnthropicFrame::Error { error } => {
+                if let Some(error) = error {
                     events.push(StreamingEvent::StreamError {
-                        error: error.clone(),
+                        error,
                         event_id: None,
                     });
                 }
             }
-            _ => {}
-        }
+            AnthropicFrame::Other => {}
+        };
 
         events
     }
@@ -356,15 +435,28 @@ impl PathEventMapper {
             }
         }
 
+        #[derive(Debug, Deserialize, Default)]
+        struct GeminiFrame {
+            #[serde(default)]
+            usage_metadata: Option<serde_json::Value>,
+            #[serde(default)]
+            candidates: Vec<GeminiCandidate>,
+        }
+
+        #[derive(Debug, Deserialize, Default)]
+        struct GeminiCandidate {
+            #[serde(default, alias = "finishReason")]
+            finish_reason: Option<String>,
+        }
+
+        let parsed: GeminiFrame = serde_json::from_value(frame.clone()).unwrap_or_default();
         let usage = resolve_path(frame, &self.usage_path)
             .cloned()
-            .or_else(|| frame.get("usage_metadata").cloned());
-        let finish_reason = frame
-            .get("candidates")
-            .and_then(|v| v.get(0))
-            .and_then(|v| v.get("finish_reason").or_else(|| v.get("finishReason")))
-            .and_then(|v| v.as_str())
-            .map(ToString::to_string);
+            .or(parsed.usage_metadata);
+        let finish_reason = parsed
+            .candidates
+            .get(0)
+            .and_then(|candidate| candidate.finish_reason.clone());
 
         if usage.is_some() || finish_reason.is_some() {
             events.push(StreamingEvent::Metadata {

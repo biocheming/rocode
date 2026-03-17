@@ -171,12 +171,7 @@ impl RuntimeStateStore {
     }
 
     /// Register a tool call start.
-    pub async fn tool_started(
-        &self,
-        session_id: &str,
-        tool_call_id: &str,
-        tool_name: &str,
-    ) {
+    pub async fn tool_started(&self, session_id: &str, tool_call_id: &str, tool_name: &str) {
         self.update(session_id, |s| {
             s.run_status = RunStatus::WaitingOnTool;
             s.active_tools.push(ActiveToolSummary {
@@ -191,8 +186,7 @@ impl RuntimeStateStore {
     /// Register a tool call end.
     pub async fn tool_ended(&self, session_id: &str, tool_call_id: &str) {
         self.update(session_id, |s| {
-            s.active_tools
-                .retain(|t| t.tool_call_id != tool_call_id);
+            s.active_tools.retain(|t| t.tool_call_id != tool_call_id);
             // If no more tools are active, revert to Running.
             if s.active_tools.is_empty() && s.run_status == RunStatus::WaitingOnTool {
                 s.run_status = RunStatus::Running;
@@ -317,9 +311,7 @@ mod tests {
         assert_eq!(state.run_status, RunStatus::Running);
         assert_eq!(state.current_message_id.as_deref(), Some("msg_001"));
 
-        store
-            .tool_started("ses_1", "tc_1", "bash")
-            .await;
+        store.tool_started("ses_1", "tc_1", "bash").await;
         let state = store.get("ses_1").await.unwrap();
         assert_eq!(state.run_status, RunStatus::WaitingOnTool);
         assert_eq!(state.active_tools.len(), 1);

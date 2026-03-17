@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use serde::Deserialize;
 use std::collections::HashSet;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -11,6 +12,18 @@ use rocode_plugin::{HookContext, HookEvent};
 
 const DEFAULT_TIMEOUT_MS: u64 = 2 * 60 * 1000;
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;
+
+fn deserialize_opt_u64_lossy<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Number(number)) => number.as_u64(),
+        Some(serde_json::Value::String(raw)) => raw.parse::<u64>().ok(),
+        _ => None,
+    })
+}
 
 #[cfg(unix)]
 async fn kill_process_tree(pid: u32) {
@@ -124,22 +137,24 @@ impl Tool for BashTool {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let command: String = args["command"]
-            .as_str()
-            .ok_or_else(|| ToolError::InvalidArguments("command is required".into()))?
-            .to_string();
+        #[derive(Debug, Deserialize)]
+        struct BashInput {
+            #[serde(alias = "cmd")]
+            command: String,
+            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+            timeout: Option<u64>,
+            #[serde(default)]
+            workdir: Option<String>,
+            description: String,
+        }
 
-        let timeout_ms: u64 = args["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_MS);
+        let input: BashInput =
+            serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
 
-        let workdir: String = args["workdir"]
-            .as_str()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| ctx.directory.clone());
-
-        let description: String = args["description"]
-            .as_str()
-            .ok_or_else(|| ToolError::InvalidArguments("description is required".into()))?
-            .to_string();
+        let command = input.command;
+        let timeout_ms: u64 = input.timeout.unwrap_or(DEFAULT_TIMEOUT_MS);
+        let workdir: String = input.workdir.unwrap_or_else(|| ctx.directory.clone());
+        let description: String = input.description;
 
         let title = description.clone();
 
@@ -169,19 +184,32 @@ impl Tool for BashTool {
             let Some(payload) = output.payload.as_ref() else {
                 continue;
             };
-            let Some(object) = payload
-                .get("output")
-                .and_then(|value| value.as_object())
-                .or_else(|| payload.as_object())
-            else {
-                continue;
-            };
-            let Some(env) = object.get("env").and_then(|value| value.as_object()) else {
-                continue;
-            };
-            for (key, value) in env {
-                if let Some(value_str) = value.as_str() {
-                    env_vars.insert(key.clone(), value_str.to_string());
+            #[derive(Debug, Deserialize, Default)]
+            struct ShellEnvHookPayload {
+                #[serde(default)]
+                output: Option<ShellEnvHookOutput>,
+                #[serde(default)]
+                env: Option<serde_json::Value>,
+            }
+
+            #[derive(Debug, Deserialize, Default)]
+            struct ShellEnvHookOutput {
+                #[serde(default)]
+                env: Option<serde_json::Value>,
+            }
+
+            let parsed: ShellEnvHookPayload =
+                serde_json::from_value(payload.clone()).unwrap_or_default();
+            let env_value = parsed
+                .output
+                .and_then(|output| output.env)
+                .or(parsed.env)
+                .unwrap_or(serde_json::Value::Null);
+            if let serde_json::Value::Object(env) = env_value {
+                for (key, value) in env {
+                    if let Some(value_str) = value.as_str() {
+                        env_vars.insert(key, value_str.to_string());
+                    }
                 }
             }
         }

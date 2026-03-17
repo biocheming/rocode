@@ -682,10 +682,7 @@ impl ApiClient {
         Ok(response.json::<SessionExecutionTopology>()?)
     }
 
-    pub fn get_session_runtime(
-        &self,
-        session_id: &str,
-    ) -> anyhow::Result<SessionRuntimeState> {
+    pub fn get_session_runtime(&self, session_id: &str) -> anyhow::Result<SessionRuntimeState> {
         let url = format!("{}/session/{}/runtime", self.base_url, session_id);
         let response = self.client.get(&url).send()?;
         if !response.status().is_success() {

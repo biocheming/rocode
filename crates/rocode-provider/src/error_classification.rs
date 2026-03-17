@@ -37,15 +37,22 @@ pub fn classify_provider_error(error: &ProviderError) -> StandardErrorCode {
 }
 
 fn extract_provider_code_from_json(value: &serde_json::Value) -> Option<String> {
-    if let Some(error) = value.get("error") {
-        if let Some(code) = error.get("code").and_then(|v| v.as_str()) {
-            return Some(code.to_string());
-        }
-        if let Some(kind) = error.get("type").and_then(|v| v.as_str()) {
-            return Some(kind.to_string());
-        }
+    #[derive(serde::Deserialize)]
+    struct ErrorEnvelope {
+        #[serde(default)]
+        error: Option<ErrorBody>,
     }
-    None
+
+    #[derive(serde::Deserialize)]
+    struct ErrorBody {
+        #[serde(default)]
+        code: Option<String>,
+        #[serde(default, rename = "type")]
+        kind: Option<String>,
+    }
+
+    let envelope: ErrorEnvelope = serde_json::from_value(value.clone()).ok()?;
+    envelope.error.and_then(|error| error.code.or(error.kind))
 }
 
 /// Extract provider-specific error code from message body text.

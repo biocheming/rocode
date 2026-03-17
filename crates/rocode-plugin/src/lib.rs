@@ -8,11 +8,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-pub mod circuit_breaker;
 pub mod cabi;
+pub mod circuit_breaker;
 pub mod feature_flags;
-pub mod hook_names;
 pub(crate) mod hook_io;
+pub mod hook_names;
 pub mod native;
 pub mod subprocess;
 

@@ -105,10 +105,11 @@ struct TaskFlowTaskView {
     error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct TaskFlowModelView {
+    #[serde(rename = "providerID", alias = "providerId", alias = "provider_id")]
     provider_id: String,
+    #[serde(rename = "modelID", alias = "modelId", alias = "model_id")]
     model_id: String,
 }
 
@@ -386,10 +387,7 @@ fn delegated_metadata_string(metadata: &Metadata, key: &str) -> Result<String, T
 }
 
 fn parse_model_view(value: &serde_json::Value) -> Option<TaskFlowModelView> {
-    Some(TaskFlowModelView {
-        provider_id: value.get("providerID")?.as_str()?.to_string(),
-        model_id: value.get("modelID")?.as_str()?.to_string(),
-    })
+    serde_json::from_value::<TaskFlowModelView>(value.clone()).ok()
 }
 
 fn title_case(value: &str) -> String {

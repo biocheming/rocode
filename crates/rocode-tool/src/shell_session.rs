@@ -45,7 +45,7 @@ enum ShellSessionState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 struct ShellSessionInput {
     operation: ShellSessionOperation,
     #[serde(default, alias = "sessionId")]
@@ -61,10 +61,12 @@ struct ShellSessionInput {
     #[serde(default)]
     input: Option<String>,
     #[serde(default)]
+    #[serde(alias = "appendNewline")]
     append_newline: bool,
     #[serde(default)]
     cursor: Option<u64>,
     #[serde(default)]
+    #[serde(alias = "waitMs")]
     wait_ms: Option<u64>,
     #[serde(default)]
     cols: Option<u16>,

@@ -143,11 +143,7 @@ async fn connect_and_consume(
     // relevant to our session (plus global events like config.updated).
     // This replaces most client-side is_my_session filtering, though we
     // keep the client-side checks as a defense-in-depth measure.
-    let url = format!(
-        "{}?session={}",
-        server_url(base_url, "/event"),
-        session_id,
-    );
+    let url = format!("{}?session={}", server_url(base_url, "/event"), session_id,);
     let client = reqwest::Client::new();
 
     let resp = client

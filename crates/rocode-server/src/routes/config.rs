@@ -20,14 +20,23 @@ pub(crate) fn config_routes() -> Router<Arc<ServerState>> {
     Router::new()
         .route("/", get(get_config).patch(patch_config))
         .route("/providers", get(get_config_providers))
-        .route("/provider/{key}", put(put_provider_config).delete(delete_provider_config))
+        .route(
+            "/provider/{key}",
+            put(put_provider_config).delete(delete_provider_config),
+        )
         .route(
             "/provider/{key}/models/{model_key}",
             put(put_provider_model_config).delete(delete_provider_model_config),
         )
-        .route("/plugin/{key}", put(put_plugin_config).delete(delete_plugin_config))
+        .route(
+            "/plugin/{key}",
+            put(put_plugin_config).delete(delete_plugin_config),
+        )
         .route("/mcp/{key}", put(put_mcp_config).delete(delete_mcp_config))
-        .route("/scheduler", get(get_scheduler_config).put(put_scheduler_config))
+        .route(
+            "/scheduler",
+            get(get_scheduler_config).put(put_scheduler_config),
+        )
 }
 
 async fn get_config(State(state): State<Arc<ServerState>>) -> Result<Json<AppConfig>> {
@@ -203,7 +212,9 @@ async fn put_provider_model_config(
         .config_store
         .replace_with(|config| {
             let provider_map = config.provider.get_or_insert_with(HashMap::new);
-            let provider = provider_map.entry(key.clone()).or_insert_with(ProviderConfig::default);
+            let provider = provider_map
+                .entry(key.clone())
+                .or_insert_with(ProviderConfig::default);
             let models = provider.models.get_or_insert_with(HashMap::new);
             models.insert(model_key.clone(), model);
             Ok(())
@@ -354,7 +365,9 @@ fn summarize_scheduler_profiles(
     }
 }
 
-async fn scheduler_config_response(state: &Arc<ServerState>) -> Result<Json<SchedulerConfigResponse>> {
+async fn scheduler_config_response(
+    state: &Arc<ServerState>,
+) -> Result<Json<SchedulerConfigResponse>> {
     let config = state.config_store.config();
     let raw_path = config
         .scheduler_path
@@ -415,10 +428,9 @@ fn resolve_scheduler_write_target(
         return Ok((raw_path, path));
     }
 
-    let project_dir = state
-        .config_store
-        .project_dir()
-        .ok_or_else(|| crate::ApiError::BadRequest("scheduler config requires a project directory".to_string()))?;
+    let project_dir = state.config_store.project_dir().ok_or_else(|| {
+        crate::ApiError::BadRequest("scheduler config requires a project directory".to_string())
+    })?;
     Ok((raw_path, project_dir.join(path)))
 }
 
@@ -436,9 +448,11 @@ async fn put_scheduler_config(
         })?;
     }
 
-    fs::write(&resolved_path, &request.content).await.map_err(|error| {
-        crate::ApiError::InternalError(format!("failed to write scheduler config: {error}"))
-    })?;
+    fs::write(&resolved_path, &request.content)
+        .await
+        .map_err(|error| {
+            crate::ApiError::InternalError(format!("failed to write scheduler config: {error}"))
+        })?;
 
     if state.config_store.config().scheduler_path.as_deref() != Some(raw_path.as_str()) {
         state

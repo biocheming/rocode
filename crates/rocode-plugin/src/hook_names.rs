@@ -34,4 +34,3 @@ pub fn hook_name_to_event(name: &str) -> Option<HookEvent> {
         _ => None,
     }
 }
-

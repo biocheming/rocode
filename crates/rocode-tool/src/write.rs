@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
@@ -60,20 +61,18 @@ impl Tool for WriteTool {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let file_path: String = args
-            .get("file_path")
-            .or_else(|| args.get("filePath"))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                ToolError::InvalidArguments("file_path (or filePath) is required".into())
-            })?
-            .trim()
-            .to_string();
+        #[derive(Debug, Deserialize)]
+        struct WriteInput {
+            #[serde(alias = "filePath")]
+            file_path: String,
+            content: String,
+        }
 
-        let content: String = args["content"]
-            .as_str()
-            .ok_or_else(|| ToolError::InvalidArguments("content is required".into()))?
-            .to_string();
+        let input: WriteInput =
+            serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
+
+        let file_path = input.file_path.trim().to_string();
+        let content = input.content;
 
         let base_dir = if ctx.directory.is_empty() {
             &self.directory
