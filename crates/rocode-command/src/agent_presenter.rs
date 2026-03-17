@@ -6,6 +6,7 @@ use crate::output_blocks::{
     SessionEventField, StatusBlock, ToolBlock, ToolPhase, ToolStructuredDetail,
 };
 use rocode_agent::{AgentRenderEvent, AgentRenderOutcome, AgentToolOutput};
+use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -260,6 +261,14 @@ fn history_tool_result_detail(title: Option<&str>, content: &str) -> Option<Stri
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct TodoItem {
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    status: Option<String>,
+}
+
 fn apply_history_tool_call_display_override(
     web: &mut serde_json::Value,
     tool_name: &str,
@@ -267,43 +276,100 @@ fn apply_history_tool_call_display_override(
 ) {
     match tool_name {
         "question" => {
-            let Some(questions) = input.get("questions").and_then(|value| value.as_array()) else {
+            #[derive(Debug, Deserialize)]
+            struct QuestionToolInput {
+                #[serde(rename = "questions", deserialize_with = "deserialize_questions")]
+                questions: Vec<QuestionDef>,
+            }
+
+            #[derive(Debug, Deserialize)]
+            struct QuestionDef {
+                question: String,
+                #[serde(default)]
+                header: Option<String>,
+            }
+
+            fn deserialize_questions<'de, D>(deserializer: D) -> Result<Vec<QuestionDef>, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let value = serde_json::Value::deserialize(deserializer)?;
+                fn parse_questions_value(
+                    value: &serde_json::Value,
+                ) -> Result<Vec<QuestionDef>, String> {
+                    match value {
+                        serde_json::Value::Array(_) => {
+                            serde_json::from_value::<Vec<QuestionDef>>(value.clone())
+                                .map_err(|e| format!("failed to parse questions array: {e}"))
+                        }
+                        serde_json::Value::Object(_) => {
+                            serde_json::from_value::<QuestionDef>(value.clone())
+                                .map(|q| vec![q])
+                                .map_err(|e| format!("failed to parse question object: {e}"))
+                        }
+                        serde_json::Value::String(raw) => {
+                            if let Ok(list) = serde_json::from_str::<Vec<QuestionDef>>(raw) {
+                                return Ok(list);
+                            }
+                            if let Ok(single) = serde_json::from_str::<QuestionDef>(raw) {
+                                return Ok(vec![single]);
+                            }
+                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(raw) {
+                                return parse_questions_value(&parsed);
+                            }
+                            Err("questions must be an array/object or a JSON string representing them"
+                                .into())
+                        }
+                        _ => Err("questions must be an array/object or a JSON string".into()),
+                    }
+                }
+                parse_questions_value(&value).map_err(serde::de::Error::custom)
+            }
+
+            let Ok(parsed) = serde_json::from_value::<QuestionToolInput>(input.clone()) else {
                 return;
             };
-            if questions.is_empty() {
+            if parsed.questions.is_empty() {
                 return;
             }
-            let summary = Some(if questions.len() == 1 {
+            let summary = Some(if parsed.questions.len() == 1 {
                 "1 question requested".to_string()
             } else {
-                format!("{} questions requested", questions.len())
+                format!("{} questions requested", parsed.questions.len())
             });
-            let fields = questions
+            let fields = parsed
+                .questions
                 .iter()
                 .enumerate()
-                .filter_map(|(index, item)| {
+                .map(|(index, item)| {
                     let label = item
-                        .get("header")
-                        .and_then(|value| value.as_str())
-                        .filter(|value| !value.trim().is_empty())
+                        .header
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
                         .map(str::to_string)
                         .unwrap_or_else(|| format!("Question {}", index + 1));
-                    let question = item.get("question").and_then(|value| value.as_str())?;
-                    Some(json!({
+                    json!({
                         "label": label,
-                        "value": question,
-                    }))
+                        "value": item.question,
+                    })
                 })
                 .collect::<Vec<_>>();
             apply_display_override(web, summary, fields, None);
         }
         "todowrite" | "todo_write" => {
-            let Some(todos) = input.get("todos").and_then(|value| value.as_array()) else {
+            #[derive(Debug, Deserialize)]
+            struct TodoWriteToolInput {
+                #[serde(default)]
+                todos: Vec<TodoItem>,
+            }
+
+            let Ok(parsed) = serde_json::from_value::<TodoWriteToolInput>(input.clone()) else {
                 return;
             };
-            let summary = Some(format!("{} todo items proposed", todos.len()));
-            let fields = todo_summary_fields_from_array(todos);
-            let preview = todo_preview_from_array(todos);
+            let summary = Some(format!("{} todo items proposed", parsed.todos.len()));
+            let fields = todo_summary_fields_from_array(&parsed.todos);
+            let preview = todo_preview_from_array(&parsed.todos);
             apply_display_override(web, summary, fields, preview);
         }
         "todoread" | "todo_read" => {
@@ -326,6 +392,13 @@ fn apply_history_tool_result_display_override(
 ) {
     match tool_name {
         "question" => {
+            #[derive(Debug, Deserialize)]
+            struct DisplayField {
+                key: String,
+                #[serde(default)]
+                value: Option<String>,
+            }
+
             let summary = metadata
                 .get("display.summary")
                 .and_then(|value| value.as_str())
@@ -333,26 +406,22 @@ fn apply_history_tool_result_display_override(
                 .or_else(|| title.map(str::to_string));
             let fields = metadata
                 .get("display.fields")
-                .and_then(|value| value.as_array())
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(|field| {
-                            Some(json!({
-                                "label": field.get("key")?.as_str()?,
-                                "value": field.get("value")?.as_str().unwrap_or(""),
-                            }))
-                        })
-                        .collect::<Vec<_>>()
+                .and_then(|value| serde_json::from_value::<Vec<DisplayField>>(value.clone()).ok())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|field| {
+                    json!({
+                        "label": field.key,
+                        "value": field.value.unwrap_or_default(),
+                    })
                 })
-                .unwrap_or_default();
+                .collect::<Vec<_>>();
             apply_display_override(web, summary, fields, None);
         }
         "todowrite" | "todo_write" | "todoread" | "todo_read" => {
             let todos = metadata
                 .get("todos")
-                .and_then(|value| value.as_array())
-                .cloned()
+                .and_then(|value| serde_json::from_value::<Vec<TodoItem>>(value.clone()).ok())
                 .unwrap_or_default();
             let summary = title.map(str::to_string).or_else(|| {
                 metadata
@@ -435,7 +504,7 @@ fn apply_display_override(
     }
 }
 
-fn todo_summary_fields_from_array(todos: &[serde_json::Value]) -> Vec<serde_json::Value> {
+fn todo_summary_fields_from_array(todos: &[TodoItem]) -> Vec<serde_json::Value> {
     if todos.is_empty() {
         return Vec::new();
     }
@@ -443,11 +512,7 @@ fn todo_summary_fields_from_array(todos: &[serde_json::Value]) -> Vec<serde_json
     let mut in_progress = 0_u64;
     let mut completed = 0_u64;
     for todo in todos {
-        match todo
-            .get("status")
-            .and_then(|value| value.as_str())
-            .unwrap_or("pending")
-        {
+        match todo.status.as_deref().unwrap_or("pending") {
             "completed" => completed += 1,
             "in_progress" | "in-progress" | "in progress" => in_progress += 1,
             _ => pending += 1,
@@ -461,7 +526,7 @@ fn todo_summary_fields_from_array(todos: &[serde_json::Value]) -> Vec<serde_json
     ]
 }
 
-fn todo_preview_from_array(todos: &[serde_json::Value]) -> Option<serde_json::Value> {
+fn todo_preview_from_array(todos: &[TodoItem]) -> Option<serde_json::Value> {
     if todos.is_empty() {
         return None;
     }
@@ -469,11 +534,11 @@ fn todo_preview_from_array(todos: &[serde_json::Value]) -> Option<serde_json::Va
         .iter()
         .take(8)
         .filter_map(|todo| {
-            let content = todo.get("content").and_then(|value| value.as_str())?;
-            let status = todo
-                .get("status")
-                .and_then(|value| value.as_str())
-                .unwrap_or("pending");
+            let content = todo.content.trim();
+            if content.is_empty() {
+                return None;
+            }
+            let status = todo.status.as_deref().unwrap_or("pending");
             Some(format!("- [{}] {}", status, content))
         })
         .collect::<Vec<_>>();
@@ -495,26 +560,38 @@ fn extract_tool_input_structured(
     tool_name: &str,
     input: &serde_json::Value,
 ) -> Option<ToolStructuredDetail> {
+    #[derive(Debug, Deserialize)]
+    struct FilePathOnlyInput {
+        #[serde(default, alias = "filePath")]
+        file_path: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct BashCommandInput {
+        #[serde(default, alias = "cmd")]
+        command: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct PatternOnlyInput {
+        #[serde(default)]
+        pattern: String,
+    }
+
     match tool_name {
         "edit" | "multiedit" => {
-            let file_path = input
-                .get("file_path")
-                .or_else(|| input.get("filePath"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let file_path = serde_json::from_value::<FilePathOnlyInput>(input.clone())
+                .map(|input| input.file_path)
+                .unwrap_or_default();
             Some(ToolStructuredDetail::FileEdit {
                 file_path,
                 diff_preview: None,
             })
         }
         "write" => {
-            let file_path = input
-                .get("file_path")
-                .or_else(|| input.get("filePath"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let file_path = serde_json::from_value::<FilePathOnlyInput>(input.clone())
+                .map(|input| input.file_path)
+                .unwrap_or_default();
             Some(ToolStructuredDetail::FileWrite {
                 file_path,
                 bytes: None,
@@ -523,12 +600,9 @@ fn extract_tool_input_structured(
             })
         }
         "read" => {
-            let file_path = input
-                .get("file_path")
-                .or_else(|| input.get("filePath"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let file_path = serde_json::from_value::<FilePathOnlyInput>(input.clone())
+                .map(|input| input.file_path)
+                .unwrap_or_default();
             Some(ToolStructuredDetail::FileRead {
                 file_path,
                 total_lines: None,
@@ -536,11 +610,9 @@ fn extract_tool_input_structured(
             })
         }
         "bash" => {
-            let command_preview = input
-                .get("command")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let command_preview = serde_json::from_value::<BashCommandInput>(input.clone())
+                .map(|input| input.command)
+                .unwrap_or_default();
             Some(ToolStructuredDetail::BashExec {
                 command_preview,
                 exit_code: None,
@@ -549,11 +621,9 @@ fn extract_tool_input_structured(
             })
         }
         "grep" => {
-            let pattern = input
-                .get("pattern")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let pattern = serde_json::from_value::<PatternOnlyInput>(input.clone())
+                .map(|input| input.pattern)
+                .unwrap_or_default();
             Some(ToolStructuredDetail::Search {
                 pattern,
                 matches: None,
@@ -561,11 +631,9 @@ fn extract_tool_input_structured(
             })
         }
         "glob" => {
-            let pattern = input
-                .get("pattern")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let pattern = serde_json::from_value::<PatternOnlyInput>(input.clone())
+                .map(|input| input.pattern)
+                .unwrap_or_default();
             Some(ToolStructuredDetail::Search {
                 pattern,
                 matches: None,

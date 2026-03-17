@@ -2,9 +2,8 @@ use futures::StreamExt;
 use rocode_command::cli_style::CliStyle;
 use rocode_command::output_blocks::{
     render_cli_block_rich, BlockTone, MessageBlock, MessagePhase, MessageRole, OutputBlock,
-    QueueItemBlock, ReasoningBlock, SchedulerDecisionBlock, SchedulerDecisionField,
-    SchedulerDecisionRenderSpec, SchedulerDecisionSection, SchedulerStageBlock, SessionEventBlock,
-    SessionEventField, StatusBlock, ToolBlock, ToolPhase,
+    QueueItemBlock, ReasoningBlock, SchedulerStageBlock, SessionEventBlock, SessionEventField,
+    StatusBlock, ToolBlock, ToolPhase,
 };
 use rocode_config::schema::ShareMode;
 use rocode_config::Config;
@@ -57,15 +56,117 @@ async fn fetch_remote_config(client: &reqwest::Client, base_url: &str) -> anyhow
     parse_http_json(client.get(config_endpoint).send().await?).await
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind")]
+enum RemoteOutputBlockFrame {
+    #[serde(rename = "status")]
+    Status(StatusWire),
+    #[serde(rename = "message")]
+    Message(MessageWire),
+    #[serde(rename = "tool")]
+    Tool(ToolWire),
+    #[serde(rename = "reasoning")]
+    Reasoning(ReasoningWire),
+    #[serde(rename = "session_event")]
+    SessionEvent(SessionEventWire),
+    #[serde(rename = "queue_item")]
+    QueueItem(QueueItemWire),
+    #[serde(rename = "scheduler_stage")]
+    SchedulerStage(SchedulerStageBlock),
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct StatusWire {
+    #[serde(default)]
+    tone: Option<String>,
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct MessageWire {
+    #[serde(default)]
+    role: Option<String>,
+    #[serde(default)]
+    phase: Option<String>,
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ToolWire {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    phase: Option<String>,
+    #[serde(default)]
+    detail: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ReasoningWire {
+    #[serde(default)]
+    phase: Option<String>,
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct SessionEventWire {
+    #[serde(default)]
+    event: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    summary: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_session_event_fields_lossy")]
+    fields: Vec<SessionEventFieldWire>,
+    #[serde(default)]
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionEventFieldWire {
+    label: String,
+    value: String,
+    #[serde(default)]
+    tone: Option<String>,
+}
+
+fn deserialize_session_event_fields_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Vec<SessionEventFieldWire>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    Ok(serde_json::from_value::<Vec<SessionEventFieldWire>>(value).unwrap_or_default())
+}
+
+fn default_queue_position() -> usize {
+    1
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct QueueItemWire {
+    #[serde(default = "default_queue_position")]
+    position: usize,
+    #[serde(default)]
+    text: String,
+}
+
 pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBlock> {
-    let kind = payload.get("kind")?.as_str()?;
-    match kind {
-        "status" => {
-            let tone = match payload
-                .get("tone")
-                .and_then(|v| v.as_str())
-                .unwrap_or("normal")
-            {
+    let frame: RemoteOutputBlockFrame = serde_json::from_value(payload.clone()).ok()?;
+    match frame {
+        RemoteOutputBlockFrame::Status(payload) => {
+            let tone = match payload.tone.as_deref().unwrap_or("normal") {
                 "title" => BlockTone::Title,
                 "muted" => BlockTone::Muted,
                 "success" => BlockTone::Success,
@@ -73,60 +174,33 @@ pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBl
                 "error" => BlockTone::Error,
                 _ => BlockTone::Normal,
             };
-            let text = payload
-                .get("text")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
+            let text = payload.text;
             Some(OutputBlock::Status(StatusBlock { tone, text }))
         }
-        "message" => {
-            let role = match payload
-                .get("role")
-                .and_then(|v| v.as_str())
-                .unwrap_or("assistant")
-            {
+        RemoteOutputBlockFrame::Message(payload) => {
+            let role = match payload.role.as_deref().unwrap_or("assistant") {
                 "user" => MessageRole::User,
                 "system" => MessageRole::System,
                 _ => MessageRole::Assistant,
             };
-            let phase = match payload
-                .get("phase")
-                .and_then(|v| v.as_str())
-                .unwrap_or("delta")
-            {
+            let phase = match payload.phase.as_deref().unwrap_or("delta") {
                 "start" => MessagePhase::Start,
                 "end" => MessagePhase::End,
                 "full" => MessagePhase::Full,
                 _ => MessagePhase::Delta,
             };
-            let text = payload
-                .get("text")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
+            let text = payload.text;
             Some(OutputBlock::Message(MessageBlock { role, phase, text }))
         }
-        "tool" => {
-            let name = payload
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("tool")
-                .to_string();
-            let phase = match payload
-                .get("phase")
-                .and_then(|v| v.as_str())
-                .unwrap_or("running")
-            {
+        RemoteOutputBlockFrame::Tool(payload) => {
+            let name = payload.name.unwrap_or_else(|| "tool".to_string());
+            let phase = match payload.phase.as_deref().unwrap_or("running") {
                 "start" => ToolPhase::Start,
                 "done" | "result" => ToolPhase::Done,
                 "error" => ToolPhase::Error,
                 _ => ToolPhase::Running,
             };
-            let detail = payload
-                .get("detail")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+            let detail = payload.detail;
             Some(OutputBlock::Tool(ToolBlock {
                 name,
                 phase,
@@ -134,247 +208,45 @@ pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBl
                 structured: None,
             }))
         }
-        "reasoning" => {
-            let phase = match payload
-                .get("phase")
-                .and_then(|v| v.as_str())
-                .unwrap_or("delta")
-            {
+        RemoteOutputBlockFrame::Reasoning(payload) => {
+            let phase = match payload.phase.as_deref().unwrap_or("delta") {
                 "start" => MessagePhase::Start,
                 "end" => MessagePhase::End,
                 "full" => MessagePhase::Full,
                 _ => MessagePhase::Delta,
             };
-            let text = payload
-                .get("text")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
+            let text = payload.text;
             Some(OutputBlock::Reasoning(ReasoningBlock { phase, text }))
         }
-        "session_event" => Some(OutputBlock::SessionEvent(SessionEventBlock {
-            event: payload
-                .get("event")
-                .and_then(|v| v.as_str())
-                .unwrap_or("event")
-                .to_string(),
-            title: payload
-                .get("title")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Session Event")
-                .to_string(),
-            status: payload
-                .get("status")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            summary: payload
-                .get("summary")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            fields: payload
-                .get("fields")
-                .and_then(|v| v.as_array())
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(|field| {
-                            Some(SessionEventField {
-                                label: field.get("label")?.as_str()?.to_string(),
-                                value: field.get("value")?.as_str()?.to_string(),
-                                tone: field
-                                    .get("tone")
-                                    .and_then(|value| value.as_str())
-                                    .map(str::to_string),
-                            })
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-            body: payload
-                .get("body")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-        })),
-        "queue_item" => Some(OutputBlock::QueueItem(QueueItemBlock {
-            position: payload
-                .get("position")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(1) as usize,
-            text: payload
-                .get("text")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
-        })),
-        "scheduler_stage" => Some(OutputBlock::SchedulerStage(Box::new(SchedulerStageBlock {
-            stage_id: payload
-                .get("stage_id")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            profile: payload
-                .get("profile")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            stage: payload
-                .get("stage")
-                .and_then(|v| v.as_str())
-                .unwrap_or("stage")
-                .to_string(),
-            title: payload
-                .get("title")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Scheduler Stage")
-                .to_string(),
-            text: payload
-                .get("text")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            stage_index: payload.get("stage_index").and_then(|v| v.as_u64()),
-            stage_total: payload.get("stage_total").and_then(|v| v.as_u64()),
-            step: payload.get("step").and_then(|v| v.as_u64()),
-            status: payload
-                .get("status")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            focus: payload
-                .get("focus")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            last_event: payload
-                .get("last_event")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            waiting_on: payload
-                .get("waiting_on")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            activity: payload
-                .get("activity")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            loop_budget: payload
-                .get("loop_budget")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            available_skill_count: payload
-                .get("available_skill_count")
-                .and_then(|v| v.as_u64()),
-            available_agent_count: payload
-                .get("available_agent_count")
-                .and_then(|v| v.as_u64()),
-            available_category_count: payload
-                .get("available_category_count")
-                .and_then(|v| v.as_u64()),
-            active_skills: payload
-                .get("active_skills")
-                .and_then(|v| v.as_array())
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(|value| value.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            active_agents: payload
-                .get("active_agents")
-                .and_then(|v| v.as_array())
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(|value| value.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            active_categories: payload
-                .get("active_categories")
-                .and_then(|v| v.as_array())
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(|value| value.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            done_agent_count: payload
-                .get("done_agent_count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32,
-            total_agent_count: payload
-                .get("total_agent_count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32,
-            prompt_tokens: payload.get("prompt_tokens").and_then(|v| v.as_u64()),
-            completion_tokens: payload.get("completion_tokens").and_then(|v| v.as_u64()),
-            reasoning_tokens: payload.get("reasoning_tokens").and_then(|v| v.as_u64()),
-            cache_read_tokens: payload.get("cache_read_tokens").and_then(|v| v.as_u64()),
-            cache_write_tokens: payload.get("cache_write_tokens").and_then(|v| v.as_u64()),
-            decision: parse_scheduler_decision(payload.get("decision")),
-            child_session_id: payload
-                .get("child_session_id")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-        }))),
-        _ => None,
+        RemoteOutputBlockFrame::SessionEvent(payload) => {
+            Some(OutputBlock::SessionEvent(SessionEventBlock {
+                event: payload.event.unwrap_or_else(|| "event".to_string()),
+                title: payload.title.unwrap_or_else(|| "Session Event".to_string()),
+                status: payload.status,
+                summary: payload.summary,
+                fields: payload
+                    .fields
+                    .into_iter()
+                    .map(|field| SessionEventField {
+                        label: field.label,
+                        value: field.value,
+                        tone: field.tone,
+                    })
+                    .collect(),
+                body: payload.body,
+            }))
+        }
+        RemoteOutputBlockFrame::QueueItem(payload) => {
+            Some(OutputBlock::QueueItem(QueueItemBlock {
+                position: payload.position,
+                text: payload.text,
+            }))
+        }
+        RemoteOutputBlockFrame::SchedulerStage(payload) => {
+            Some(OutputBlock::SchedulerStage(Box::new(payload)))
+        }
+        RemoteOutputBlockFrame::Unknown => None,
     }
-}
-
-fn parse_scheduler_decision(payload: Option<&serde_json::Value>) -> Option<SchedulerDecisionBlock> {
-    let payload = payload?;
-    Some(SchedulerDecisionBlock {
-        kind: payload.get("kind")?.as_str()?.to_string(),
-        title: payload.get("title")?.as_str()?.to_string(),
-        spec: parse_scheduler_decision_spec(payload.get("spec"))?,
-        fields: payload
-            .get("fields")
-            .and_then(|value| value.as_array())
-            .map(|fields| {
-                fields
-                    .iter()
-                    .filter_map(|field| {
-                        Some(SchedulerDecisionField {
-                            label: field.get("label")?.as_str()?.to_string(),
-                            value: field.get("value")?.as_str()?.to_string(),
-                            tone: field
-                                .get("tone")
-                                .and_then(|value| value.as_str())
-                                .map(|value| value.to_string()),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default(),
-        sections: payload
-            .get("sections")
-            .and_then(|value| value.as_array())
-            .map(|sections| {
-                sections
-                    .iter()
-                    .filter_map(|section| {
-                        Some(SchedulerDecisionSection {
-                            title: section.get("title")?.as_str()?.to_string(),
-                            body: section.get("body")?.as_str()?.to_string(),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default(),
-    })
-}
-
-fn parse_scheduler_decision_spec(
-    payload: Option<&serde_json::Value>,
-) -> Option<SchedulerDecisionRenderSpec> {
-    let payload = payload?;
-    Some(SchedulerDecisionRenderSpec {
-        version: payload.get("version")?.as_str()?.to_string(),
-        show_header_divider: payload.get("show_header_divider")?.as_bool()?,
-        field_order: payload.get("field_order")?.as_str()?.to_string(),
-        field_label_emphasis: payload.get("field_label_emphasis")?.as_str()?.to_string(),
-        status_palette: payload.get("status_palette")?.as_str()?.to_string(),
-        section_spacing: payload.get("section_spacing")?.as_str()?.to_string(),
-        update_policy: payload.get("update_policy")?.as_str()?.to_string(),
-    })
 }
 
 pub(crate) async fn resolve_remote_session(

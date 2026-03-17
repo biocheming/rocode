@@ -1,4 +1,5 @@
 use super::*;
+use serde::Deserialize;
 
 impl App {
     pub(super) fn sync_config_from_server(&mut self) -> anyhow::Result<()> {
@@ -81,15 +82,26 @@ impl App {
             None => return,
         };
         let child_id = {
+            #[derive(Debug, Deserialize, Default)]
+            struct ChildSessionMeta {
+                #[serde(default)]
+                scheduler_stage_child_session_id: Option<String>,
+            }
+
+            fn child_id_from_meta(
+                meta: &std::collections::HashMap<String, serde_json::Value>,
+            ) -> Option<String> {
+                serde_json::to_value(meta)
+                    .ok()
+                    .and_then(|value| serde_json::from_value::<ChildSessionMeta>(value).ok())
+                    .and_then(|parsed| parsed.scheduler_stage_child_session_id)
+            }
+
             let session_ctx = self.context.session.read();
             session_ctx.messages.get(&session_id).and_then(|msgs| {
-                msgs.iter().rev().find_map(|msg| {
-                    msg.metadata
-                        .as_ref()
-                        .and_then(|m| m.get("scheduler_stage_child_session_id"))
-                        .and_then(serde_json::Value::as_str)
-                        .map(String::from)
-                })
+                msgs.iter()
+                    .rev()
+                    .find_map(|msg| msg.metadata.as_ref().and_then(child_id_from_meta))
             })
         };
         if let Some(child_id) = child_id {
@@ -422,17 +434,29 @@ impl App {
         }
 
         let (handoff_mode, handoff_command) = {
+            #[derive(Debug, Deserialize, Default)]
+            struct SchedulerHandoffMeta {
+                #[serde(default)]
+                scheduler_handoff_mode: Option<String>,
+                #[serde(default)]
+                scheduler_handoff_command: Option<String>,
+            }
+
             let session_ctx = self.context.session.read();
             let session = session_ctx.sessions.get(session_id);
             let metadata = session.and_then(|s| s.metadata.as_ref());
-            let mode = metadata
-                .and_then(|m| m.get("scheduler_handoff_mode"))
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            let command = metadata
-                .and_then(|m| m.get("scheduler_handoff_command"))
-                .and_then(|v| v.as_str())
-                .map(String::from);
+            let parsed = metadata
+                .and_then(|meta| serde_json::to_value(meta).ok())
+                .and_then(|value| serde_json::from_value::<SchedulerHandoffMeta>(value).ok())
+                .unwrap_or_default();
+            let mode = parsed
+                .scheduler_handoff_mode
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+            let command = parsed
+                .scheduler_handoff_command
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
             (mode, command)
         };
 

@@ -863,11 +863,21 @@ impl ApiClient {
                 text
             );
         }
-        let value = response.json::<serde_json::Value>()?;
-        Ok(value
-            .get("deleted")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true))
+        #[derive(Debug, Deserialize)]
+        #[serde(untagged)]
+        enum DeleteSessionResponse {
+            Bool(bool),
+            Object {
+                #[serde(default)]
+                deleted: Option<bool>,
+            },
+        }
+
+        let parsed: DeleteSessionResponse = response.json()?;
+        Ok(match parsed {
+            DeleteSessionResponse::Bool(value) => value,
+            DeleteSessionResponse::Object { deleted } => deleted.unwrap_or(true),
+        })
     }
 
     pub fn send_prompt(
@@ -1141,11 +1151,21 @@ impl ApiClient {
                 text
             );
         }
-        let value = response.json::<serde_json::Value>()?;
-        Ok(value
-            .get("success")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true))
+        #[derive(Debug, Deserialize)]
+        #[serde(untagged)]
+        enum SuccessResponse {
+            Bool(bool),
+            Object {
+                #[serde(default)]
+                success: Option<bool>,
+            },
+        }
+
+        let parsed: SuccessResponse = response.json()?;
+        Ok(match parsed {
+            SuccessResponse::Bool(value) => value,
+            SuccessResponse::Object { success } => success.unwrap_or(true),
+        })
     }
 
     pub fn connect_mcp(&self, name: &str) -> anyhow::Result<bool> {
@@ -1259,11 +1279,21 @@ impl ApiClient {
                 text
             );
         }
-        let value = response.json::<serde_json::Value>()?;
-        Ok(value
-            .get("success")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true))
+        #[derive(Debug, Deserialize)]
+        #[serde(untagged)]
+        enum SuccessResponse {
+            Bool(bool),
+            Object {
+                #[serde(default)]
+                success: Option<bool>,
+            },
+        }
+
+        let parsed: SuccessResponse = response.json()?;
+        Ok(match parsed {
+            SuccessResponse::Bool(value) => value,
+            SuccessResponse::Object { success } => success.unwrap_or(true),
+        })
     }
 
     pub fn compact_session(&self, session_id: &str) -> anyhow::Result<CompactResponse> {

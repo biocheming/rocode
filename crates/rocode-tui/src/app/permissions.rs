@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use crate::components::{PermissionRequest, PermissionType};
+use serde::Deserialize;
 
 use super::App;
 
@@ -26,30 +27,59 @@ impl App {
     fn permission_request_to_prompt(
         permission: &crate::api::PermissionRequestInfo,
     ) -> PermissionRequest {
-        let input = permission.input.as_object().cloned().unwrap_or_default();
+        #[derive(Debug, Deserialize, Default)]
+        struct PermissionInput {
+            #[serde(default)]
+            permission: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_patterns_lossy")]
+            patterns: Vec<String>,
+            #[serde(default)]
+            metadata: Option<PermissionMetadata>,
+        }
+
+        #[derive(Debug, Deserialize, Default)]
+        struct PermissionMetadata {
+            #[serde(default)]
+            command: Option<String>,
+            #[serde(default)]
+            filepath: Option<String>,
+            #[serde(default)]
+            path: Option<String>,
+        }
+
+        fn deserialize_patterns_lossy<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+            let Some(value) = value else {
+                return Ok(Vec::new());
+            };
+            match value {
+                serde_json::Value::Array(values) => Ok(values
+                    .into_iter()
+                    .filter_map(|value| value.as_str().map(str::to_string))
+                    .collect()),
+                _ => Ok(Vec::new()),
+            }
+        }
+
+        let input =
+            serde_json::from_value::<PermissionInput>(permission.input.clone()).unwrap_or_default();
         let permission_name = input
-            .get("permission")
-            .and_then(|value| value.as_str())
+            .permission
+            .as_deref()
             .unwrap_or(permission.tool.as_str());
-        let resource = input
-            .get("patterns")
-            .and_then(|value| value.as_array())
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(|value| value.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .filter(|value| !value.is_empty())
+
+        let resource = (!input.patterns.is_empty())
+            .then(|| input.patterns.join(", "))
             .or_else(|| {
-                input.get("metadata").and_then(|value| {
-                    value
-                        .get("command")
-                        .and_then(|item| item.as_str())
-                        .or_else(|| value.get("filepath").and_then(|item| item.as_str()))
-                        .or_else(|| value.get("path").and_then(|item| item.as_str()))
-                        .map(str::to_string)
+                input.metadata.and_then(|meta| {
+                    meta.command
+                        .or(meta.filepath)
+                        .or(meta.path)
+                        .map(|value| value.trim().to_string())
+                        .filter(|value| !value.is_empty())
                 })
             })
             .unwrap_or_else(|| permission.message.clone());

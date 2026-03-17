@@ -4,6 +4,7 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
+use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::Value;
 
 use super::markdown::MarkdownRenderer;
@@ -16,6 +17,15 @@ pub struct ToolResultInfo {
     pub is_error: bool,
     pub title: Option<String>,
     pub metadata: Option<HashMap<String, serde_json::Value>>,
+}
+
+fn parse_metadata<T>(metadata: &HashMap<String, serde_json::Value>) -> Option<T>
+where
+    T: DeserializeOwned,
+{
+    serde_json::to_value(metadata)
+        .ok()
+        .and_then(|value| serde_json::from_value(value).ok())
 }
 
 #[derive(Clone, Copy)]
@@ -67,13 +77,24 @@ pub fn tool_glyph(name: &str) -> &'static str {
 
 /// Returns true if this tool typically produces block-level output
 fn is_block_tool(name: &str, result: Option<&ToolResultInfo>) -> bool {
+    #[derive(Debug, Deserialize)]
+    struct DisplayModeMeta {
+        #[serde(rename = "display.mode")]
+        display_mode: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct DiffMeta {
+        diff: Option<String>,
+    }
+
     // Check display.mode override from metadata
     if let Some(info) = result {
         if let Some(mode) = info
             .metadata
             .as_ref()
-            .and_then(|m| m.get("display.mode"))
-            .and_then(|v| v.as_str())
+            .and_then(parse_metadata::<DisplayModeMeta>)
+            .and_then(|meta| meta.display_mode)
         {
             return mode == "block";
         }
@@ -90,13 +111,13 @@ fn is_block_tool(name: &str, result: Option<&ToolResultInfo>) -> bool {
     // edit/write tools with diff metadata are block-level
     if is_write_tool(&normalized) || is_edit_tool(&normalized) {
         if let Some(info) = result {
-            if info
+            let has_diff = info
                 .metadata
                 .as_ref()
-                .and_then(|m| m.get("diff"))
-                .and_then(|v| v.as_str())
-                .is_some_and(|d| !d.is_empty())
-            {
+                .and_then(parse_metadata::<DiffMeta>)
+                .and_then(|meta| meta.diff)
+                .is_some_and(|diff| !diff.is_empty());
+            if has_diff {
                 return true;
             }
         }
@@ -414,13 +435,19 @@ pub fn render_tool_call(
             }
         } else {
             // Check for display.summary override
+            #[derive(Debug, Deserialize)]
+            struct DisplaySummaryMeta {
+                #[serde(rename = "display.summary")]
+                summary: Option<String>,
+            }
+
             let display_summary = info
                 .metadata
                 .as_ref()
-                .and_then(|m| m.get("display.summary"))
-                .and_then(|v| v.as_str());
+                .and_then(parse_metadata::<DisplaySummaryMeta>)
+                .and_then(|meta| meta.summary);
 
-            if let Some(summary) = display_summary {
+            if let Some(summary) = display_summary.as_deref() {
                 main_spans.push(Span::styled(
                     format!(" — {}", format_preview_line(summary, 80)),
                     Style::default().fg(theme.text_muted),
@@ -496,15 +523,60 @@ fn render_display_hints(
         None => return false,
     };
 
-    let has_fields = metadata.contains_key("display.fields");
-    let has_summary = metadata.contains_key("display.summary");
+    #[derive(Debug, Deserialize, Default)]
+    struct DisplayHintsMeta {
+        #[serde(
+            rename = "display.summary",
+            default,
+            deserialize_with = "deserialize_opt_string_lossy"
+        )]
+        summary: Option<String>,
+        #[serde(
+            rename = "display.fields",
+            default,
+            deserialize_with = "deserialize_display_fields_lossy"
+        )]
+        fields: Vec<DisplayField>,
+    }
 
-    if !has_fields && !has_summary {
+    #[derive(Debug, Deserialize, Default)]
+    struct DisplayField {
+        #[serde(default)]
+        key: String,
+        #[serde(default)]
+        value: String,
+    }
+
+    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::String(s)) => Some(s),
+            _ => None,
+        })
+    }
+
+    fn deserialize_display_fields_lossy<'de, D>(
+        deserializer: D,
+    ) -> Result<Vec<DisplayField>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        let Some(value) = value else {
+            return Ok(Vec::new());
+        };
+        Ok(serde_json::from_value::<Vec<DisplayField>>(value).unwrap_or_default())
+    }
+
+    let meta = parse_metadata::<DisplayHintsMeta>(metadata).unwrap_or_default();
+    if meta.summary.is_none() && meta.fields.is_empty() {
         return false;
     }
 
-    // Render display.summary as the summary line
-    if let Some(summary) = metadata.get("display.summary").and_then(|v| v.as_str()) {
+    if let Some(summary) = meta.summary.as_deref() {
         lines.push(block_content_line(
             format_preview_line(summary, 96),
             Style::default().fg(theme.text_muted),
@@ -513,18 +585,22 @@ fn render_display_hints(
         ));
     }
 
-    // Render display.fields as key-value pairs
-    if let Some(fields) = metadata.get("display.fields").and_then(|v| v.as_array()) {
-        for field in fields {
-            let key = field.get("key").and_then(|v| v.as_str()).unwrap_or("?");
-            let value = field.get("value").and_then(|v| v.as_str()).unwrap_or("");
-            lines.push(block_content_line(
-                format!("{}: {}", key, format_preview_line(value, 88 - key.len())),
-                Style::default().fg(theme.text),
-                theme,
-                bg,
-            ));
-        }
+    for field in &meta.fields {
+        let key = if field.key.trim().is_empty() {
+            "?"
+        } else {
+            field.key.as_str()
+        };
+        lines.push(block_content_line(
+            format!(
+                "{}: {}",
+                key,
+                format_preview_line(&field.value, 88 - key.len())
+            ),
+            Style::default().fg(theme.text),
+            theme,
+            bg,
+        ));
     }
 
     true
@@ -539,12 +615,95 @@ fn render_batch_result_block(
     bg: ratatui::style::Color,
     lines: &mut Vec<Line<'static>>,
 ) {
-    // Parse sub-tool names from arguments for labeling
-    let arg_parsed = serde_json::from_str::<Value>(arguments).ok();
-    let calls = arg_parsed
-        .as_ref()
-        .and_then(|v| v.get("toolCalls").or_else(|| v.get("tool_calls")))
-        .and_then(|v| v.as_array());
+    #[derive(Debug, Deserialize, Default)]
+    struct BatchArguments {
+        #[serde(rename = "toolCalls", alias = "tool_calls", default)]
+        tool_calls: Vec<BatchToolCall>,
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct BatchToolCall {
+        #[serde(default)]
+        tool: Option<String>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        tool_name: Option<String>,
+        #[serde(default)]
+        parameters: Option<serde_json::Value>,
+    }
+
+    impl BatchToolCall {
+        fn display_name(&self) -> Option<&str> {
+            self.tool
+                .as_deref()
+                .or(self.name.as_deref())
+                .or(self.tool_name.as_deref())
+        }
+    }
+
+    fn deserialize_opt_bool_lossy<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::Bool(v)) => Some(v),
+            _ => None,
+        })
+    }
+
+    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::String(v)) => Some(v),
+            _ => None,
+        })
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(untagged)]
+    enum BatchResultsPayload {
+        Array(Vec<BatchResultEntry>),
+        Object {
+            #[serde(default)]
+            results: Vec<BatchResultEntry>,
+        },
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct BatchResultEntry {
+        #[serde(default, deserialize_with = "deserialize_opt_bool_lossy")]
+        success: Option<bool>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        output: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        result: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        error: Option<String>,
+    }
+
+    impl BatchResultEntry {
+        fn is_ok(&self) -> bool {
+            self.success.unwrap_or(true)
+        }
+
+        fn output_text(&self) -> &str {
+            self.output
+                .as_deref()
+                .or(self.result.as_deref())
+                .or(self.error.as_deref())
+                .unwrap_or("")
+        }
+    }
+
+    let calls = serde_json::from_str::<BatchArguments>(arguments)
+        .ok()
+        .map(|args| args.tool_calls)
+        .unwrap_or_default();
 
     // Try to parse the result as JSON array.
     // The batch tool output is: "All N tools...\n\nResults:\n[{...}]"
@@ -553,18 +712,17 @@ fn render_batch_result_block(
         .find("Results:\n")
         .map(|pos| &result_text[pos + "Results:\n".len()..])
         .unwrap_or(result_text);
-    let result_parsed = serde_json::from_str::<Value>(json_text).ok();
-    let result_array = result_parsed.as_ref().and_then(|v| {
-        v.as_array()
-            .or_else(|| v.get("results").and_then(|r| r.as_array()))
-    });
 
-    if let Some(results) = result_array {
+    let result_payload = serde_json::from_str::<BatchResultsPayload>(json_text).ok();
+    let results = match result_payload {
+        Some(BatchResultsPayload::Array(entries)) => Some(entries),
+        Some(BatchResultsPayload::Object { results }) => Some(results),
+        None => None,
+    };
+
+    if let Some(results) = results.as_ref() {
         let total = results.len();
-        let ok_count = results
-            .iter()
-            .filter(|r| r.get("success").and_then(|v| v.as_bool()).unwrap_or(true))
-            .count();
+        let ok_count = results.iter().filter(|r| r.is_ok()).count();
         let fail_count = total - ok_count;
 
         // Summary line: "5 tools: 5 ok" or "5 tools: 3 ok, 2 failed"
@@ -592,20 +750,12 @@ fn render_batch_result_block(
         // Render each sub-tool as a mini entry
         for (i, result_entry) in results.iter().enumerate() {
             let sub_name = calls
-                .and_then(|c| c.get(i))
-                .and_then(|c| {
-                    c.get("tool")
-                        .or_else(|| c.get("name"))
-                        .or_else(|| c.get("tool_name"))
-                        .and_then(|v| v.as_str())
-                })
+                .get(i)
+                .and_then(|call| call.display_name())
                 .unwrap_or("?");
             let sub_glyph = tool_glyph(sub_name);
 
-            let is_ok = result_entry
-                .get("success")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
+            let is_ok = result_entry.is_ok();
             let (icon, icon_color) = if is_ok {
                 ("●", theme.success)
             } else {
@@ -613,12 +763,7 @@ fn render_batch_result_block(
             };
 
             // Extract a short preview of the sub-tool result
-            let sub_result = result_entry
-                .get("output")
-                .or_else(|| result_entry.get("result"))
-                .or_else(|| result_entry.get("error"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let sub_result = result_entry.output_text();
             let first_line = sub_result
                 .lines()
                 .find(|l| !l.trim().is_empty())
@@ -643,16 +788,14 @@ fn render_batch_result_block(
             ];
 
             // Add sub-tool argument preview if available
-            if let Some(call_args) = calls.and_then(|c| c.get(i)) {
-                let sub_args_str = call_args.get("parameters").map(|v| v.to_string());
-                if let Some(ref args_json) = sub_args_str {
-                    let sub_normalized = normalize_tool_name(sub_name);
-                    if let Some(preview) = tool_argument_preview(&sub_normalized, args_json) {
-                        spans.push(Span::styled(
-                            format!("  {}", format_preview_line(&preview, 40)),
-                            Style::default().fg(theme.text_muted).bg(bg),
-                        ));
-                    }
+            if let Some(call_args) = calls.get(i).and_then(|call| call.parameters.as_ref()) {
+                let args_json = call_args.to_string();
+                let sub_normalized = normalize_tool_name(sub_name);
+                if let Some(preview) = tool_argument_preview(&sub_normalized, &args_json) {
+                    spans.push(Span::styled(
+                        format!("  {}", format_preview_line(&preview, 40)),
+                        Style::default().fg(theme.text_muted).bg(bg),
+                    ));
                 }
             }
 
@@ -711,23 +854,84 @@ fn render_question_result_block(
     bg: ratatui::style::Color,
     lines: &mut Vec<Line<'static>>,
 ) {
-    // Parse questions from arguments
-    let arg_parsed = serde_json::from_str::<Value>(arguments).ok();
-    let questions = arg_parsed
-        .as_ref()
-        .and_then(|v| v.get("questions"))
-        .and_then(|v| v.as_array());
+    #[derive(Debug, Deserialize)]
+    struct QuestionArguments {
+        #[serde(rename = "questions", deserialize_with = "deserialize_questions")]
+        questions: Vec<QuestionDef>,
+    }
 
-    // Parse answers from result
-    let result_parsed = serde_json::from_str::<Value>(result_text).ok();
-    let answers = result_parsed
-        .as_ref()
-        .and_then(|v| v.get("answers"))
-        .and_then(|v| v.as_array());
+    #[derive(Debug, Deserialize)]
+    struct QuestionDef {
+        question: String,
+        #[serde(default)]
+        options: Vec<QuestionOption>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct QuestionOption {
+        label: String,
+        #[serde(default)]
+        description: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct QuestionResult {
+        #[serde(default)]
+        answers: Vec<String>,
+    }
+
+    fn deserialize_questions<'de, D>(deserializer: D) -> Result<Vec<QuestionDef>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        fn parse_questions_value(value: &serde_json::Value) -> Result<Vec<QuestionDef>, String> {
+            match value {
+                serde_json::Value::Array(_) => {
+                    serde_json::from_value::<Vec<QuestionDef>>(value.clone())
+                        .map_err(|e| format!("failed to parse questions array: {e}"))
+                }
+                serde_json::Value::Object(_) => {
+                    serde_json::from_value::<QuestionDef>(value.clone())
+                        .map(|q| vec![q])
+                        .map_err(|e| format!("failed to parse question object: {e}"))
+                }
+                serde_json::Value::String(raw) => {
+                    if let Ok(list) = serde_json::from_str::<Vec<QuestionDef>>(raw) {
+                        return Ok(list);
+                    }
+                    if let Ok(single) = serde_json::from_str::<QuestionDef>(raw) {
+                        return Ok(vec![single]);
+                    }
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(raw) {
+                        return parse_questions_value(&parsed);
+                    }
+                    Err(
+                        "questions must be an array/object or a JSON string representing them"
+                            .into(),
+                    )
+                }
+                _ => Err("questions must be an array/object or a JSON string".into()),
+            }
+        }
+
+        parse_questions_value(&value).map_err(serde::de::Error::custom)
+    }
+
+    // Parse questions from arguments (if possible)
+    let questions = serde_json::from_str::<QuestionArguments>(arguments)
+        .ok()
+        .map(|args| args.questions);
+
+    // Parse answers from result (best-effort; defaults to empty list)
+    let answers = serde_json::from_str::<QuestionResult>(result_text)
+        .ok()
+        .map(|result| result.answers)
+        .unwrap_or_default();
 
     if let Some(qs) = questions {
         for (i, q) in qs.iter().enumerate() {
-            let q_text = q.get("question").and_then(|v| v.as_str()).unwrap_or("?");
+            let q_text = q.question.as_str();
             // Show question
             lines.push(block_content_line(
                 format!("Q: {}", format_preview_line(q_text, 88)),
@@ -736,27 +940,20 @@ fn render_question_result_block(
                 bg,
             ));
             // Show options if any
-            if let Some(opts) = q.get("options").and_then(|v| v.as_array()) {
-                for opt in opts.iter() {
-                    let label = opt.get("label").and_then(|v| v.as_str()).unwrap_or("?");
-                    let desc = opt.get("description").and_then(|v| v.as_str());
-                    let opt_text = match desc {
-                        Some(d) => format!("  · {} — {}", label, format_preview_line(d, 64)),
-                        None => format!("  · {}", label),
-                    };
-                    lines.push(block_content_line(
-                        opt_text,
-                        Style::default().fg(theme.text_muted),
-                        theme,
-                        bg,
-                    ));
-                }
+            for opt in &q.options {
+                let opt_text = match opt.description.as_deref() {
+                    Some(desc) => format!("  · {} — {}", opt.label, format_preview_line(desc, 64)),
+                    None => format!("  · {}", opt.label),
+                };
+                lines.push(block_content_line(
+                    opt_text,
+                    Style::default().fg(theme.text_muted),
+                    theme,
+                    bg,
+                ));
             }
             // Show answer
-            let answer = answers
-                .and_then(|a| a.get(i))
-                .and_then(|v| v.as_str())
-                .unwrap_or("(no answer)");
+            let answer = answers.get(i).map(String::as_str).unwrap_or("(no answer)");
             lines.push(block_content_line(
                 format!("A: {}", format_preview_line(answer, 88)),
                 Style::default().fg(theme.success),
@@ -839,12 +1036,17 @@ fn render_write_result_block(
     }
 
     if show_tool_details {
+        #[derive(Debug, Deserialize)]
+        struct DiffMeta {
+            diff: Option<String>,
+        }
+
         // Render inline diff from metadata if available
-        if let Some(diff_str) = metadata
-            .and_then(|m| m.get("diff"))
-            .and_then(|v| v.as_str())
-            .filter(|d| !d.is_empty())
-        {
+        let diff_str = metadata
+            .and_then(parse_metadata::<DiffMeta>)
+            .and_then(|meta| meta.diff)
+            .filter(|diff| !diff.is_empty());
+        if let Some(diff_str) = diff_str.as_deref() {
             render_inline_diff(diff_str, theme, bg, lines);
         } else if let Some(first_line) = result_text.lines().find(|line| !line.trim().is_empty()) {
             lines.push(block_content_line(
@@ -905,11 +1107,40 @@ fn render_edit_result_block(
     bg: ratatui::style::Color,
     lines: &mut Vec<Line<'static>>,
 ) {
+    #[derive(Debug, Deserialize, Default)]
+    struct EditMeta {
+        #[serde(default)]
+        replacements: Option<u64>,
+        #[serde(default, deserialize_with = "deserialize_vec_value_lossy")]
+        diagnostics: Vec<serde_json::Value>,
+        diff: Option<String>,
+    }
+
+    fn deserialize_vec_value_lossy<'de, D>(
+        deserializer: D,
+    ) -> Result<Vec<serde_json::Value>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        let Some(value) = value else {
+            return Ok(Vec::new());
+        };
+        Ok(match value {
+            serde_json::Value::Array(values) => values,
+            _ => Vec::new(),
+        })
+    }
+
     let args_parsed = serde_json::from_str::<Value>(arguments).ok();
     let edit_path = args_parsed
         .as_ref()
         .and_then(extract_path)
         .or_else(|| extract_jsonish_path_from_raw(arguments));
+
+    let meta = metadata
+        .and_then(parse_metadata::<EditMeta>)
+        .unwrap_or_default();
 
     lines.push(block_content_line(
         "✦ Edit Complete",
@@ -932,10 +1163,7 @@ fn render_edit_result_block(
     }
 
     // Show replacement count from metadata if available
-    if let Some(replacements) = metadata
-        .and_then(|m| m.get("replacements"))
-        .and_then(|v| v.as_u64())
-    {
+    if let Some(replacements) = meta.replacements {
         lines.push(block_content_line(
             format!("{} replacement(s)", replacements),
             Style::default().fg(theme.text_muted),
@@ -945,26 +1173,18 @@ fn render_edit_result_block(
     }
 
     // Show diagnostics warning if present
-    if let Some(diags) = metadata
-        .and_then(|m| m.get("diagnostics"))
-        .and_then(|v| v.as_array())
-    {
-        if !diags.is_empty() {
-            lines.push(block_content_line(
-                format!("⚠ {} diagnostic(s)", diags.len()),
-                Style::default().fg(theme.warning),
-                theme,
-                bg,
-            ));
-        }
+    if !meta.diagnostics.is_empty() {
+        lines.push(block_content_line(
+            format!("⚠ {} diagnostic(s)", meta.diagnostics.len()),
+            Style::default().fg(theme.warning),
+            theme,
+            bg,
+        ));
     }
 
     if show_tool_details {
-        if let Some(diff_str) = metadata
-            .and_then(|m| m.get("diff"))
-            .and_then(|v| v.as_str())
-            .filter(|d| !d.is_empty())
-        {
+        let diff_str = meta.diff.as_deref().filter(|diff| !diff.is_empty());
+        if let Some(diff_str) = diff_str {
             render_inline_diff(diff_str, theme, bg, lines);
         } else if let Some(first_line) = result_text.lines().find(|line| !line.trim().is_empty()) {
             lines.push(block_content_line(
@@ -987,21 +1207,103 @@ fn render_patch_result_block(
     bg: ratatui::style::Color,
     lines: &mut Vec<Line<'static>>,
 ) {
-    // Extract file list from metadata
-    let files: Vec<String> = metadata
-        .and_then(|m| m.get("files"))
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|f| {
-                    // files metadata is array of objects with "path" key, or strings
-                    f.as_str()
-                        .map(String::from)
-                        .or_else(|| f.get("path").and_then(|p| p.as_str()).map(String::from))
-                })
-                .collect()
+    #[derive(Debug, Deserialize, Default)]
+    struct PatchMeta {
+        #[serde(default, deserialize_with = "deserialize_files_lossy")]
+        files: Vec<PatchFile>,
+        #[serde(default, deserialize_with = "deserialize_vec_value_lossy")]
+        diagnostics: Vec<serde_json::Value>,
+        diff: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(untagged)]
+    enum PatchFile {
+        Path(String),
+        Object(PatchFileObject),
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct PatchFileObject {
+        #[serde(default, rename = "relativePath")]
+        relative_path: Option<String>,
+        #[serde(default)]
+        path: Option<String>,
+        #[serde(default, rename = "type")]
+        change_type: Option<String>,
+        #[serde(default)]
+        diff: Option<String>,
+    }
+
+    impl PatchFile {
+        fn path_str(&self) -> Option<&str> {
+            match self {
+                PatchFile::Path(path) => Some(path.as_str()),
+                PatchFile::Object(obj) => {
+                    obj.relative_path.as_deref().or_else(|| obj.path.as_deref())
+                }
+            }
+        }
+
+        fn diff_tuple(&self) -> Option<(String, String, String)> {
+            let PatchFile::Object(obj) = self else {
+                return None;
+            };
+            let diff = obj.diff.as_deref().unwrap_or("").trim();
+            if diff.is_empty() {
+                return None;
+            }
+            let path = obj
+                .relative_path
+                .as_deref()
+                .or_else(|| obj.path.as_deref())
+                .unwrap_or("?")
+                .to_string();
+            let change_type = obj
+                .change_type
+                .clone()
+                .unwrap_or_else(|| "update".to_string());
+            Some((path, change_type, diff.to_string()))
+        }
+    }
+
+    fn deserialize_vec_value_lossy<'de, D>(
+        deserializer: D,
+    ) -> Result<Vec<serde_json::Value>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        let Some(value) = value else {
+            return Ok(Vec::new());
+        };
+        Ok(match value {
+            serde_json::Value::Array(values) => values,
+            _ => Vec::new(),
         })
+    }
+
+    fn deserialize_files_lossy<'de, D>(deserializer: D) -> Result<Vec<PatchFile>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        let Some(value) = value else {
+            return Ok(Vec::new());
+        };
+        Ok(serde_json::from_value::<Vec<PatchFile>>(value).unwrap_or_default())
+    }
+
+    let meta = metadata
+        .and_then(parse_metadata::<PatchMeta>)
         .unwrap_or_default();
+
+    let files: Vec<String> = meta
+        .files
+        .iter()
+        .filter_map(PatchFile::path_str)
+        .map(str::to_string)
+        .collect();
 
     lines.push(block_content_line(
         format!("✦ Patch Applied — {} file(s)", files.len().max(1)),
@@ -1031,49 +1333,22 @@ fn render_patch_result_block(
     }
 
     // Show diagnostics warning if present
-    if let Some(diags) = metadata
-        .and_then(|m| m.get("diagnostics"))
-        .and_then(|v| v.as_array())
-    {
-        if !diags.is_empty() {
-            lines.push(block_content_line(
-                format!("⚠ {} diagnostic(s)", diags.len()),
-                Style::default().fg(theme.warning),
-                theme,
-                bg,
-            ));
-        }
+    if !meta.diagnostics.is_empty() {
+        lines.push(block_content_line(
+            format!("⚠ {} diagnostic(s)", meta.diagnostics.len()),
+            Style::default().fg(theme.warning),
+            theme,
+            bg,
+        ));
     }
 
     if show_tool_details {
         // Try per-file diffs first (richer display with headers)
-        let per_file_diffs: Vec<(String, String, String)> = metadata
-            .and_then(|m| m.get("files"))
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|f| {
-                        let path = f
-                            .get("relativePath")
-                            .or_else(|| f.get("path"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("?")
-                            .to_string();
-                        let change_type = f
-                            .get("type")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("update")
-                            .to_string();
-                        let diff = f.get("diff").and_then(|v| v.as_str()).unwrap_or("");
-                        if diff.is_empty() {
-                            None
-                        } else {
-                            Some((path, change_type, diff.to_string()))
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let per_file_diffs: Vec<(String, String, String)> = meta
+            .files
+            .iter()
+            .filter_map(PatchFile::diff_tuple)
+            .collect();
 
         if !per_file_diffs.is_empty() {
             for (path, change_type, diff_str) in &per_file_diffs {
@@ -1091,11 +1366,7 @@ fn render_patch_result_block(
                 ));
                 render_inline_diff(diff_str, theme, bg, lines);
             }
-        } else if let Some(diff_str) = metadata
-            .and_then(|m| m.get("diff"))
-            .and_then(|v| v.as_str())
-            .filter(|d| !d.is_empty())
-        {
+        } else if let Some(diff_str) = meta.diff.as_deref().filter(|diff| !diff.is_empty()) {
             render_inline_diff(diff_str, theme, bg, lines);
         } else if let Some(first_line) = result_text.lines().find(|line| !line.trim().is_empty()) {
             lines.push(block_content_line(
@@ -1196,6 +1467,63 @@ fn parse_markdown_checklist(text: &str) -> Vec<ChecklistItem> {
 }
 
 fn parse_task_argument_summary(arguments: &str) -> TaskArgumentSummary {
+    #[derive(Debug, Deserialize, Default)]
+    struct TaskArgs {
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        category: Option<String>,
+        #[serde(
+            default,
+            alias = "subagentType",
+            deserialize_with = "deserialize_opt_string_lossy"
+        )]
+        subagent_type: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        description: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        prompt: Option<String>,
+        #[serde(
+            default,
+            alias = "loadSkills",
+            deserialize_with = "deserialize_opt_vec_lossy"
+        )]
+        load_skills: Option<Vec<serde_json::Value>>,
+    }
+
+    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::String(s)) => Some(s),
+            _ => None,
+        })
+    }
+
+    fn deserialize_opt_vec_lossy<'de, D>(
+        deserializer: D,
+    ) -> Result<Option<Vec<serde_json::Value>>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::Array(values)) => Some(values),
+            _ => None,
+        })
+    }
+
+    fn normalize_opt_string(value: Option<String>) -> Option<String> {
+        value.and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+    }
+
     let mut summary = TaskArgumentSummary::default();
     let raw = arguments.trim();
     if raw.is_empty() {
@@ -1209,10 +1537,11 @@ fn parse_task_argument_summary(arguments: &str) -> TaskArgumentSummary {
         return summary;
     };
 
-    summary.category = extract_string_key(value, &["category"]);
-    summary.subagent_type = extract_string_key(value, &["subagent_type", "subagentType"]);
-    summary.description = extract_string_key(value, &["description"]);
-    let prompt = extract_string_key(value, &["prompt"]);
+    let args = serde_json::from_value::<TaskArgs>(value.clone()).unwrap_or_default();
+    summary.category = normalize_opt_string(args.category);
+    summary.subagent_type = normalize_opt_string(args.subagent_type);
+    summary.description = normalize_opt_string(args.description);
+    let prompt = normalize_opt_string(args.prompt);
     if let Some(prompt_text) = prompt.as_deref() {
         summary.checklist = parse_markdown_checklist(prompt_text)
             .into_iter()
@@ -1227,11 +1556,7 @@ fn parse_task_argument_summary(arguments: &str) -> TaskArgumentSummary {
             .or_else(|| prompt.lines().map(str::trim).find(|line| !line.is_empty()))
             .map(|line| format_preview_line(line, 88))
     });
-    summary.skill_count = value
-        .get("load_skills")
-        .or_else(|| value.get("loadSkills"))
-        .and_then(|v| v.as_array())
-        .map(Vec::len);
+    summary.skill_count = args.load_skills.as_ref().map(Vec::len);
 
     summary
 }
@@ -1332,6 +1657,58 @@ fn render_task_result_block(
     bg: ratatui::style::Color,
     lines: &mut Vec<Line<'static>>,
 ) {
+    #[derive(Debug, Deserialize)]
+    struct TaskMetaHints {
+        #[serde(
+            rename = "hasTextOutput",
+            default,
+            deserialize_with = "deserialize_opt_bool_lossy"
+        )]
+        has_text_output: Option<bool>,
+        #[serde(default)]
+        model: Option<TaskModelHints>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct TaskModelHints {
+        #[serde(
+            rename = "providerID",
+            alias = "provider_id",
+            default,
+            deserialize_with = "deserialize_opt_string_lossy"
+        )]
+        provider_id: Option<String>,
+        #[serde(
+            rename = "modelID",
+            alias = "model_id",
+            default,
+            deserialize_with = "deserialize_opt_string_lossy"
+        )]
+        model_id: Option<String>,
+    }
+
+    fn deserialize_opt_bool_lossy<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::Bool(v)) => Some(v),
+            _ => None,
+        })
+    }
+
+    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::String(v)) => Some(v),
+            _ => None,
+        })
+    }
+
     let arg_summary = parse_task_argument_summary(arguments);
     let subagent = arg_summary
         .category
@@ -1376,8 +1753,8 @@ fn render_task_result_block(
             bg,
         ));
     }
-    if let Some(meta) = metadata {
-        if let Some(has_text_output) = meta.get("hasTextOutput").and_then(|v| v.as_bool()) {
+    if let Some(meta) = metadata.and_then(parse_metadata::<TaskMetaHints>) {
+        if let Some(has_text_output) = meta.has_text_output {
             lines.push(block_content_line(
                 format!(
                     "Text Output: {}",
@@ -1388,17 +1765,9 @@ fn render_task_result_block(
                 bg,
             ));
         }
-        if let Some(model) = meta.get("model").and_then(|v| v.as_object()) {
-            let provider = model
-                .get("providerID")
-                .or_else(|| model.get("provider_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let model_id = model
-                .get("modelID")
-                .or_else(|| model.get("model_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+        if let Some(model) = meta.model {
+            let provider = model.provider_id.unwrap_or_default();
+            let model_id = model.model_id.unwrap_or_default();
             if !provider.is_empty() || !model_id.is_empty() {
                 let rendered = if !provider.is_empty() && !model_id.is_empty() {
                     format!("{provider}:{model_id}")
@@ -1956,74 +2325,163 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
     }
 
     if normalized_name == "batch" {
-        if let Some(calls) = parsed
-            .as_ref()
-            .and_then(|v| v.get("toolCalls").or_else(|| v.get("tool_calls")))
-            .and_then(|v| v.as_array())
-        {
-            let count = calls.len();
-            let names: Vec<String> = calls
-                .iter()
-                .filter_map(|call| {
-                    call.get("tool")
-                        .or_else(|| call.get("name"))
-                        .or_else(|| call.get("tool_name"))
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                })
-                .collect();
-            // Deduplicate while preserving order
-            let mut seen = std::collections::HashSet::new();
-            let unique: Vec<&str> = names
-                .iter()
-                .filter(|n| seen.insert(n.as_str()))
-                .map(|n| n.as_str())
-                .collect();
-            return if unique.is_empty() {
-                Some(format!("{} tools", count))
-            } else {
-                Some(format!("{} tools ({})", count, unique.join(", ")))
-            };
+        #[derive(Debug, Deserialize, Default)]
+        struct BatchArguments {
+            #[serde(rename = "toolCalls", alias = "tool_calls", default)]
+            tool_calls: Vec<BatchToolCall>,
+        }
+
+        #[derive(Debug, Deserialize, Default)]
+        struct BatchToolCall {
+            #[serde(default)]
+            tool: Option<String>,
+            #[serde(default)]
+            name: Option<String>,
+            #[serde(default)]
+            tool_name: Option<String>,
+        }
+
+        impl BatchToolCall {
+            fn display_name(&self) -> Option<&str> {
+                self.tool
+                    .as_deref()
+                    .or(self.name.as_deref())
+                    .or(self.tool_name.as_deref())
+            }
+        }
+
+        if let Some(value) = parsed.as_ref() {
+            if let Ok(args) = serde_json::from_value::<BatchArguments>(value.clone()) {
+                let count = args.tool_calls.len();
+                let names: Vec<String> = args
+                    .tool_calls
+                    .iter()
+                    .filter_map(|call| call.display_name().map(str::to_string))
+                    .collect();
+                // Deduplicate while preserving order
+                let mut seen = std::collections::HashSet::new();
+                let unique: Vec<&str> = names
+                    .iter()
+                    .filter(|n| seen.insert(n.as_str()))
+                    .map(|n| n.as_str())
+                    .collect();
+                return if unique.is_empty() {
+                    Some(format!("{} tools", count))
+                } else {
+                    Some(format!("{} tools ({})", count, unique.join(", ")))
+                };
+            }
         }
     }
 
     if normalized_name == "question" {
-        if let Some(questions) = object
-            .and_then(|value| value.get("questions"))
-            .and_then(|value| value.as_array())
+        #[derive(Debug, Deserialize)]
+        struct QuestionArguments {
+            #[serde(rename = "questions", deserialize_with = "deserialize_questions")]
+            questions: Vec<QuestionDef>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct QuestionDef {
+            question: String,
+        }
+
+        fn deserialize_questions<'de, D>(deserializer: D) -> Result<Vec<QuestionDef>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
         {
-            let count = questions.len();
-            // Show the first question text as preview
-            let first_q = questions
-                .first()
-                .and_then(|q| q.get("question").and_then(|v| v.as_str()));
-            return match first_q {
-                Some(text) if count == 1 => Some(format_preview_line(text, 72)),
-                Some(text) => Some(format!(
-                    "{} (+{} more)",
-                    format_preview_line(text, 52),
-                    count - 1
-                )),
-                None => Some(format!(
-                    "{} question{}",
-                    count,
-                    if count == 1 { "" } else { "s" }
-                )),
-            };
+            let value = serde_json::Value::deserialize(deserializer)?;
+            fn parse_questions_value(
+                value: &serde_json::Value,
+            ) -> Result<Vec<QuestionDef>, String> {
+                match value {
+                    serde_json::Value::Array(_) => {
+                        serde_json::from_value::<Vec<QuestionDef>>(value.clone())
+                            .map_err(|e| format!("failed to parse questions array: {e}"))
+                    }
+                    serde_json::Value::Object(_) => {
+                        serde_json::from_value::<QuestionDef>(value.clone())
+                            .map(|q| vec![q])
+                            .map_err(|e| format!("failed to parse question object: {e}"))
+                    }
+                    serde_json::Value::String(raw) => {
+                        if let Ok(list) = serde_json::from_str::<Vec<QuestionDef>>(raw) {
+                            return Ok(list);
+                        }
+                        if let Ok(single) = serde_json::from_str::<QuestionDef>(raw) {
+                            return Ok(vec![single]);
+                        }
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(raw) {
+                            return parse_questions_value(&parsed);
+                        }
+                        Err(
+                            "questions must be an array/object or a JSON string representing them"
+                                .into(),
+                        )
+                    }
+                    _ => Err("questions must be an array/object or a JSON string".into()),
+                }
+            }
+            parse_questions_value(&value).map_err(serde::de::Error::custom)
+        }
+
+        if let Some(value) = object {
+            if let Ok(args) = serde_json::from_value::<QuestionArguments>(
+                serde_json::Value::Object(value.clone()),
+            ) {
+                let count = args.questions.len();
+                let first_q = args.questions.first().map(|q| q.question.as_str());
+                return match first_q {
+                    Some(text) if count == 1 => Some(format_preview_line(text, 72)),
+                    Some(text) => Some(format!(
+                        "{} (+{} more)",
+                        format_preview_line(text, 52),
+                        count - 1
+                    )),
+                    None => Some(format!(
+                        "{} question{}",
+                        count,
+                        if count == 1 { "" } else { "s" }
+                    )),
+                };
+            }
         }
     }
 
     if matches!(normalized_name, "todowrite" | "todo_write") {
-        if let Some(count) = object
-            .and_then(|value| value.get("todos"))
-            .and_then(|value| value.as_array())
-            .map(Vec::len)
+        #[derive(Debug, Deserialize, Default)]
+        struct TodoWriteArguments {
+            #[serde(default, deserialize_with = "deserialize_todos_lossy")]
+            todos: Vec<serde_json::Value>,
+        }
+
+        fn deserialize_todos_lossy<'de, D>(
+            deserializer: D,
+        ) -> Result<Vec<serde_json::Value>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
         {
-            return Some(format!(
-                "Update {} todo{}",
-                count,
-                if count == 1 { "" } else { "s" }
-            ));
+            let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+            let Some(value) = value else {
+                return Ok(Vec::new());
+            };
+            Ok(match value {
+                serde_json::Value::Array(values) => values,
+                _ => Vec::new(),
+            })
+        }
+
+        if let Some(value) = object {
+            if let Ok(args) = serde_json::from_value::<TodoWriteArguments>(
+                serde_json::Value::Object(value.clone()),
+            ) {
+                let count = args.todos.len();
+                return Some(format!(
+                    "Update {} todo{}",
+                    count,
+                    if count == 1 { "" } else { "s" }
+                ));
+            }
         }
         return Some("Update todos".to_string());
     }
