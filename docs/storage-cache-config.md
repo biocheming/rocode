@@ -2,7 +2,8 @@
 
 > 生成时间：`2026-03-17`  
 > 代码基线：workspace `version = 2026.3.16`（见 `Cargo.toml`）  
-> Git：`1958451`（`master`）  
+> 分支基线：`rewrite/sea-orm-storage`（持久化层已迁移到 SeaORM）  
+> 说明：DB schema 以 `crates/rocode-storage-migration`（SeaORM migrations）为准；`crates/rocode-storage/src/schema.rs` 仅作为 legacy SQL 参考。
 >
 > 本文从**当前仓库源码**出发，系统梳理 ROCode 的：
 >
@@ -451,10 +452,11 @@ Prefer small, reviewable diffs.
 
 实现入口：
 
-- Schema：`crates/rocode-storage/src/schema.rs`
-- 连接与迁移：`crates/rocode-storage/src/database.rs`
-- Repository（读写逻辑）：`crates/rocode-storage/src/repository.rs`
-- 数据结构（序列化格式）：`crates/rocode-types/src/*.rs`
+- Schema（迁移定义 / Source of truth）：`crates/rocode-storage-migration/src/*.rs`
+- Entity Models：`crates/rocode-storage/src/entities/*.rs`
+- 连接与迁移：`crates/rocode-storage/src/database.rs`（SeaORM connect + `Migrator::up`）
+- Repository（读写逻辑）：`crates/rocode-storage/src/repository.rs`（SeaORM Query API）
+- 数据结构（序列化格式）：`crates/rocode-types/src/*.rs`（DB 序列化/反序列化用的“持久化视图”）
 
 ### 4.1 数据库文件路径
 
@@ -485,7 +487,7 @@ CLI 可打印该路径：
 
 #### 4.3.1 `sessions`：会话元数据
 
-建表 SQL：`CREATE_SESSIONS_TABLE`（`crates/rocode-storage/src/schema.rs`）
+迁移定义：`crates/rocode-storage-migration/src/m20260317_000001_create_sessions.rs`
 
 |字段|类型|含义|
 |---|---|---|
@@ -516,11 +518,11 @@ CLI 可打印该路径：
 |`time_compacting`|INTEGER nullable|进入 compaction 的时间（ms）|
 |`time_archived`|INTEGER nullable|进入 archived 的时间（ms）|
 
-Rust 写入/读取映射：`crates/rocode-storage/src/repository.rs` → `SessionRow` / `bind_session_upsert(...)`
+Rust 写入/读取映射：`crates/rocode-storage/src/repository.rs` → `session_insert_model(...)` / `session_update_model(...)` / `session_from_model(...)`
 
 #### 4.3.2 `messages`：消息元数据 + parts JSON
 
-建表 SQL：`CREATE_MESSAGES_TABLE`（`crates/rocode-storage/src/schema.rs`）
+迁移定义：`crates/rocode-storage-migration/src/m20260317_000002_create_messages.rs`
 
 |字段|类型|含义|
 |---|---|---|
@@ -540,8 +542,8 @@ Rust 写入/读取映射：`crates/rocode-storage/src/repository.rs` → `Sessio
 |`metadata`|TEXT nullable|JSON：`HashMap<String, Value>`（经常存 provider/model 等）|
 |`data`|TEXT nullable|JSON：`Vec<MessagePart>`（核心内容，见下）|
 
-> 实现细节：当前 Rust 的 `MessageRepository` 写入时主要使用 `finish/metadata/data`（见 `crates/rocode-storage/src/repository.rs` → `MESSAGE_UPSERT_SQL`），  
-> 上表中 `provider_id/model_id/tokens_* / cost` 列目前在仓库内未发现被写入的路径（更像是兼容/预留结构）。
+> 实现细节：当前 Rust 的 `MessageRepository` 写入时主要使用 `finish/metadata/data`（见 `crates/rocode-storage/src/repository.rs` → `message_insert_model(...)` + `Entity::insert(...).on_conflict(...)`），  
+> 上表中 `provider_id/model_id/tokens_* / cost` 列目前在仓库内多数路径未写入（更像是兼容/预留结构；常见做法是写进 `metadata`）。
 
 `data` 的 JSON 结构来源：`rocode-types::MessagePart` / `PartType`（`crates/rocode-types/src/message.rs`）
 
@@ -556,7 +558,7 @@ Rust 写入/读取映射：`crates/rocode-storage/src/repository.rs` → `Sessio
 
 #### 4.3.3 `parts`：message parts 的“可索引”拆分表（可选）
 
-建表 SQL：`CREATE_PARTS_TABLE`（`crates/rocode-storage/src/schema.rs`）
+迁移定义：`crates/rocode-storage-migration/src/m20260317_000003_create_parts.rs`
 
 该表用于把 `MessagePart` 的一些字段拆出来，方便查询/过滤（例如 tool calls）。
 
@@ -590,7 +592,7 @@ Rust 写入/读取映射：`crates/rocode-storage/src/repository.rs` → `Sessio
 
 #### 4.3.4 `todos`：会话 todo 列表
 
-建表 SQL：`CREATE_TODOS_TABLE`（`crates/rocode-storage/src/schema.rs`）
+迁移定义：`crates/rocode-storage-migration/src/m20260317_000004_create_todos.rs`
 
 主键：`(session_id, todo_id)`
 
@@ -607,7 +609,7 @@ Rust 写入/读取映射：`crates/rocode-storage/src/repository.rs` → `Sessio
 
 #### 4.3.5 `session_shares`：分享会话的 id/secret/url
 
-建表 SQL：`CREATE_SESSION_SHARES_TABLE`（`crates/rocode-storage/src/schema.rs`）
+迁移定义：`crates/rocode-storage-migration/src/m20260317_000006_create_session_shares.rs`
 
 |字段|类型|含义|
 |---|---|---|
@@ -621,7 +623,7 @@ Repo：`crates/rocode-storage/src/repository.rs` → `ShareRepository`
 
 #### 4.3.6 `permissions`：项目级权限（当前仓库未见完整读写链路）
 
-建表 SQL：`CREATE_PERMISSIONS_TABLE`（`crates/rocode-storage/src/schema.rs`）
+迁移定义：`crates/rocode-storage-migration/src/m20260317_000005_create_permissions.rs`
 
 |字段|类型|含义|
 |---|---|---|
@@ -636,38 +638,42 @@ Repo：`crates/rocode-storage/src/repository.rs` → `ShareRepository`
 
 ### 4.4 索引（Indexes）
 
-索引 SQL：`CREATE_INDEXES`（`crates/rocode-storage/src/schema.rs`）
+索引迁移：
+
+- 基础索引：`crates/rocode-storage-migration/src/m20260317_000007_create_indexes.rs`
+- 分页相关补充索引：`crates/rocode-storage-migration/src/m20260317_000010_add_pagination_indexes.rs`
 
 主要包含：
 
 - sessions：按 `project_id`、`parent_id`、`updated_at DESC`、`status`
 - messages：按 `session_id`、`created_at`
+- messages（补充）：按 `(session_id, created_at)`（更适合 `WHERE session_id = ? ORDER BY created_at`）
 - parts：按 `message_id`、`session_id`、`sort_order`
 - todos：按 `session_id`、`status`
+- sessions（补充）：按 `(directory, updated_at)`（更适合 `WHERE directory = ? ORDER BY updated_at`）
 
 ---
 
 ### 4.5 迁移（Migrations）
 
-迁移列表：`crates/rocode-storage/src/schema.rs` → `ALL_MIGRATIONS`
+迁移定义入口：
 
-额外“升级补丁”示例：
-
-- `ALTER TABLE messages ADD COLUMN finish TEXT`
-- `ALTER TABLE sessions ADD COLUMN metadata TEXT`
-- `ALTER TABLE messages ADD COLUMN metadata TEXT`
+- `crates/rocode-storage-migration/src/lib.rs` → `rocode_storage_migration::Migrator`
+- 每个 migration 一个文件：`crates/rocode-storage-migration/src/m20260317_*.rs`
 
 执行逻辑：
 
-- 顺序执行所有 migration SQL
-- 若遇到 `"duplicate column"`（重复 add column）会忽略
+- `crates/rocode-storage/src/database.rs` 在连接成功后调用 `rocode_storage_migration::Migrator::up(&conn, None)`。
+- 迁移是增量执行的：已执行的 migration 会记录在 SeaORM 的 migration 表中（默认 `seaql_migrations`）。
 
-代码：`crates/rocode-storage/src/database.rs` → `run_migrations(...)`
+兼容性迁移（用于历史 DB 升级）：
 
-此外还有一个**存量数据修复迁移**：
+- `crates/rocode-storage-migration/src/m20260317_000008_legacy_alter_columns.rs`：为旧 DB 补列（`finish/metadata` 等），并忽略 “duplicate column / already exists”。
+- `crates/rocode-storage-migration/src/m20260317_000009_migrate_tool_call_input_data.rs`：修复 `messages.data` 中历史 `toolCall.input` 的异常形态（截断字符串 / legacy sentinel 等），把它们规整成稳定 payload 以便安全回放。
 
-- 针对 `messages.data` 中 `toolCall.input` 的旧格式/截断字符串进行修复或隔离
-- 代码：`crates/rocode-storage/src/database.rs` → `run_tool_call_input_data_migration(...)`
+分页/查询相关补充：
+
+- `crates/rocode-storage-migration/src/m20260317_000010_add_pagination_indexes.rs`：新增 `(directory, updated_at)` 与 `(session_id, created_at)` 索引（更适合 server 侧分页查询）。
 
 ---
 
