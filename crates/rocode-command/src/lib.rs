@@ -388,44 +388,84 @@ impl CommandRegistry {
     }
 }
 
-fn command_payload_object(
-    payload: &serde_json::Value,
-) -> Option<&serde_json::Map<String, serde_json::Value>> {
-    payload
-        .get("output")
-        .and_then(|value| value.as_object())
-        .or_else(|| payload.as_object())
-        .or_else(|| payload.get("data").and_then(|value| value.as_object()))
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        _ => None,
+    })
+}
+
+fn parse_hook_payload<T: serde::de::DeserializeOwned>(payload: &serde_json::Value) -> Option<T> {
+    #[derive(Debug, Deserialize)]
+    #[serde(untagged)]
+    enum HookEnvelope<T> {
+        Output { output: T },
+        Data { data: T },
+        Direct(T),
+    }
+
+    let envelope: HookEnvelope<T> = serde_json::from_value(payload.clone()).ok()?;
+    Some(match envelope {
+        HookEnvelope::Output { output } => output,
+        HookEnvelope::Data { data } => data,
+        HookEnvelope::Direct(value) => value,
+    })
 }
 
 fn apply_command_hook_payload(rendered: &mut String, payload: &serde_json::Value) {
-    let Some(object) = command_payload_object(payload) else {
+    #[derive(Debug, Deserialize, Default)]
+    struct CommandHookPartWire {
+        #[serde(
+            default,
+            rename = "type",
+            deserialize_with = "deserialize_opt_string_lossy"
+        )]
+        kind: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        text: Option<String>,
+    }
+
+    fn deserialize_parts_lossy<'de, D>(
+        deserializer: D,
+    ) -> Result<Vec<CommandHookPartWire>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        let Some(value) = value else {
+            return Ok(Vec::new());
+        };
+        Ok(serde_json::from_value::<Vec<CommandHookPartWire>>(value).unwrap_or_default())
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct CommandHookPayloadWire {
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        output: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        template: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_parts_lossy")]
+        parts: Vec<CommandHookPartWire>,
+    }
+
+    let Some(parsed) = parse_hook_payload::<CommandHookPayloadWire>(payload) else {
         return;
     };
 
-    if let Some(text) = object
-        .get("output")
-        .and_then(|value| value.as_str())
-        .or_else(|| object.get("template").and_then(|value| value.as_str()))
-    {
-        *rendered = text.to_string();
+    if let Some(text) = parsed.output.or(parsed.template) {
+        *rendered = text;
         return;
     }
 
-    let Some(parts) = object.get("parts").and_then(|value| value.as_array()) else {
-        return;
-    };
-
-    let text = parts
-        .iter()
-        .filter_map(|part| part.as_object())
-        .filter(|part| {
-            part.get("type")
-                .and_then(|value| value.as_str())
-                .map(|kind| kind == "text")
-                .unwrap_or(false)
-        })
-        .filter_map(|part| part.get("text").and_then(|value| value.as_str()))
+    let text = parsed
+        .parts
+        .into_iter()
+        .filter(|part| part.kind.as_deref() == Some("text"))
+        .filter_map(|part| part.text)
         .collect::<Vec<_>>()
         .join("\n");
 

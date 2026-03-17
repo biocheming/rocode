@@ -218,11 +218,11 @@ pub(crate) fn stream_server_events(
             let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
                 return true;
             };
-            match value.get("sessionID").and_then(|v| v.as_str()) {
+            match json_object_field_str(&value, "sessionID") {
                 Some(sid) => sid == filter.as_str(),
                 None => {
                     // Also check "parentID" for child_session events.
-                    match value.get("parentID").and_then(|v| v.as_str()) {
+                    match json_object_field_str(&value, "parentID") {
                         Some(pid) => pid == filter.as_str(),
                         None => true, // global event
                     }
@@ -331,6 +331,14 @@ fn parse_server_event(raw: &str) -> Option<ServerEvent> {
     serde_json::from_str(raw).ok()
 }
 
+fn json_object_field_str<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    let object = value.as_object()?;
+    object
+        .iter()
+        .find_map(|(candidate, value)| (candidate == key).then_some(value))
+        .and_then(|value| value.as_str())
+}
+
 fn is_mergeable_output_delta(event: &ServerEvent) -> bool {
     let ServerEvent::OutputBlock { id, block, .. } = event else {
         return false;
@@ -340,8 +348,8 @@ fn is_mergeable_output_delta(event: &ServerEvent) -> bool {
     }
     matches!(
         (
-            block.get("kind").and_then(|value| value.as_str()),
-            block.get("phase").and_then(|value| value.as_str()),
+            json_object_field_str(block, "kind"),
+            json_object_field_str(block, "phase"),
         ),
         (Some("message"), Some("delta")) | (Some("reasoning"), Some("delta"))
     )
@@ -368,31 +376,36 @@ fn merge_output_block_delta(current: &mut ServerEvent, next: &ServerEvent) -> bo
         return false;
     }
 
-    let current_kind = current_block.get("kind").and_then(|value| value.as_str());
-    let next_kind = next_block.get("kind").and_then(|value| value.as_str());
-    let current_phase = current_block.get("phase").and_then(|value| value.as_str());
-    let next_phase = next_block.get("phase").and_then(|value| value.as_str());
+    let current_kind = json_object_field_str(current_block, "kind");
+    let next_kind = json_object_field_str(next_block, "kind");
+    let current_phase = json_object_field_str(current_block, "phase");
+    let next_phase = json_object_field_str(next_block, "phase");
     if current_kind != next_kind || current_phase != Some("delta") || next_phase != Some("delta") {
         return false;
     }
     if current_kind == Some("message")
-        && current_block.get("role").and_then(|value| value.as_str())
-            != next_block.get("role").and_then(|value| value.as_str())
+        && json_object_field_str(current_block, "role")
+            != json_object_field_str(next_block, "role")
     {
         return false;
     }
 
-    let Some(next_text) = next_block.get("text").and_then(|value| value.as_str()) else {
+    let Some(next_text) = json_object_field_str(next_block, "text") else {
         return false;
     };
-    let Some(current_text) = current_block
-        .get_mut("text")
-        .and_then(|value| value.as_str())
-    else {
+    let Some(current_text) = json_object_field_str(current_block, "text") else {
         return false;
     };
 
-    current_block["text"] = serde_json::Value::String(format!("{current_text}{next_text}"));
+    let merged = format!("{current_text}{next_text}");
+    let Some(object) = current_block.as_object_mut() else {
+        return false;
+    };
+    if let Some((_, text)) = object.iter_mut().find(|(candidate, _)| candidate == "text") {
+        *text = serde_json::Value::String(merged);
+    } else {
+        object.insert("text".to_string(), serde_json::Value::String(merged));
+    }
     true
 }
 

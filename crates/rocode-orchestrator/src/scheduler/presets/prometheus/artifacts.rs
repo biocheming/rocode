@@ -80,7 +80,7 @@ pub fn validate_prometheus_planning_tool_call(
                     "tool `{tool_name}` requires a file_path when used in Prometheus planning stages"
                 ))
             })?;
-            validate_prometheus_artifact_path(raw_path, exec_ctx)
+            validate_prometheus_artifact_path(raw_path.as_str(), exec_ctx)
         }
         _ => Ok(()),
     }
@@ -127,12 +127,17 @@ pub fn compose_prometheus_planning_artifact(input: SchedulerPlanningArtifactInpu
     })
 }
 
-fn extract_tool_file_path(arguments: &serde_json::Value) -> Option<&str> {
-    arguments
-        .get("file_path")
-        .or_else(|| arguments.get("filePath"))
-        .and_then(|value| value.as_str())
-        .map(str::trim)
+fn extract_tool_file_path(arguments: &serde_json::Value) -> Option<String> {
+    #[derive(Debug, serde::Deserialize, Default)]
+    struct ToolFilePathArgsWire {
+        #[serde(default, alias = "filePath")]
+        file_path: Option<String>,
+    }
+
+    let parsed = serde_json::from_value::<ToolFilePathArgsWire>(arguments.clone()).ok()?;
+    parsed
+        .file_path
+        .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
 }
 

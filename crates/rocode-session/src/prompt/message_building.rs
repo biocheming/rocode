@@ -33,6 +33,119 @@ type LegacyToolResult = (
 
 type LegacyToolResultMap = HashMap<String, LegacyToolResult>;
 
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        _ => None,
+    })
+}
+
+fn deserialize_opt_u64_lossy<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Number(value)) => value.as_u64(),
+        Some(serde_json::Value::String(raw)) => raw.trim().parse::<u64>().ok(),
+        _ => None,
+    })
+}
+
+fn deserialize_opt_f64_lossy<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Number(value)) => value.as_f64(),
+        Some(serde_json::Value::String(raw)) => raw.trim().parse::<f64>().ok(),
+        _ => None,
+    })
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct LegacyUsageWire {
+    #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+    prompt_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+    completion_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+    cache_read_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+    cache_write_tokens: Option<u64>,
+}
+
+fn deserialize_opt_legacy_usage_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Option<LegacyUsageWire>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_value::<LegacyUsageWire>(value).ok())
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct MessageMetadataWire {
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    step_start_snapshot: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    snapshot: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    step_finish_snapshot: Option<String>,
+
+    #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+    tokens_input: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+    tokens_output: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+    tokens_cache_read: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+    tokens_cache_write: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_opt_legacy_usage_lossy")]
+    usage: Option<LegacyUsageWire>,
+
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    finish_reason: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_f64_lossy")]
+    cost: Option<f64>,
+
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    agent: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    model_provider: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    model_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    variant: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    mode: Option<String>,
+}
+
+fn parse_message_metadata(metadata: &HashMap<String, serde_json::Value>) -> MessageMetadataWire {
+    let map: serde_json::Map<String, serde_json::Value> = metadata
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    serde_json::from_value::<MessageMetadataWire>(serde_json::Value::Object(map))
+        .unwrap_or_default()
+}
+
+fn clamp_u64_to_i32(value: Option<u64>) -> i32 {
+    value
+        .unwrap_or(0)
+        .min(i32::MAX as u64)
+        .clamp(0, i32::MAX as u64) as i32
+}
+
 struct LegacyToolStateInput<'a> {
     tool_call_id: &'a str,
     tool_name: &'a str,
@@ -361,46 +474,23 @@ impl SessionPrompt {
             }
 
             // Fallback to metadata for backward compatibility with legacy snapshots.
-            #[derive(Debug, Deserialize, Default)]
-            struct LegacyUsageWire {
-                #[serde(default)]
-                prompt_tokens: Option<u64>,
-                #[serde(default)]
-                completion_tokens: Option<u64>,
-                #[serde(default)]
-                cache_read_tokens: Option<u64>,
-                #[serde(default)]
-                cache_write_tokens: Option<u64>,
-            }
+            let meta = parse_message_metadata(&msg.metadata);
+            let legacy_usage = meta.usage.unwrap_or_default();
 
-            let legacy_usage = msg
-                .metadata
-                .get("usage")
-                .and_then(|value| serde_json::from_value::<LegacyUsageWire>(value.clone()).ok())
-                .unwrap_or_default();
-
-            usage.input += msg
-                .metadata
-                .get("tokens_input")
-                .and_then(|v| v.as_u64())
+            usage.input += meta
+                .tokens_input
                 .or(legacy_usage.prompt_tokens)
                 .unwrap_or(0);
-            usage.output += msg
-                .metadata
-                .get("tokens_output")
-                .and_then(|v| v.as_u64())
+            usage.output += meta
+                .tokens_output
                 .or(legacy_usage.completion_tokens)
                 .unwrap_or(0);
-            usage.cache_read += msg
-                .metadata
-                .get("tokens_cache_read")
-                .and_then(|v| v.as_u64())
+            usage.cache_read += meta
+                .tokens_cache_read
                 .or(legacy_usage.cache_read_tokens)
                 .unwrap_or(0);
-            usage.cache_write += msg
-                .metadata
-                .get("tokens_cache_write")
-                .and_then(|v| v.as_u64())
+            usage.cache_write += meta
+                .tokens_cache_write
                 .or(legacy_usage.cache_write_tokens)
                 .unwrap_or(0);
         }
@@ -517,6 +607,9 @@ impl SessionPrompt {
 
         for msg in messages {
             let created = msg.created_at.timestamp_millis();
+            let meta = parse_message_metadata(&msg.metadata);
+            let input = clamp_u64_to_i32(meta.tokens_input);
+            let output = clamp_u64_to_i32(meta.tokens_output);
             let mut parts: Vec<V2Part> = msg
                 .parts
                 .iter()
@@ -584,11 +677,10 @@ impl SessionPrompt {
                 })
                 .collect();
 
-            if let Some(snapshot) = msg
-                .metadata
-                .get("step_start_snapshot")
-                .or_else(|| msg.metadata.get("snapshot"))
-                .and_then(|v| v.as_str())
+            if let Some(snapshot) = meta
+                .step_start_snapshot
+                .as_deref()
+                .or(meta.snapshot.as_deref())
             {
                 parts.push(V2Part::StepStart(StepStartPart {
                     id: format!("prt_{}", uuid::Uuid::new_v4()),
@@ -597,23 +689,7 @@ impl SessionPrompt {
                     snapshot: Some(snapshot.to_string()),
                 }));
             }
-            if let Some(snapshot) = msg
-                .metadata
-                .get("step_finish_snapshot")
-                .and_then(|v| v.as_str())
-            {
-                let input = msg
-                    .metadata
-                    .get("tokens_input")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0)
-                    .clamp(0, i32::MAX as i64) as i32;
-                let output = msg
-                    .metadata
-                    .get("tokens_output")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0)
-                    .clamp(0, i32::MAX as i64) as i32;
+            if let Some(snapshot) = meta.step_finish_snapshot.as_deref() {
                 parts.push(V2Part::StepFinish(StepFinishPart {
                     id: format!("prt_{}", uuid::Uuid::new_v4()),
                     session_id: msg.session_id.clone(),
@@ -621,15 +697,11 @@ impl SessionPrompt {
                     reason: msg
                         .finish
                         .as_deref()
-                        .or_else(|| msg.metadata.get("finish_reason").and_then(|v| v.as_str()))
+                        .or(meta.finish_reason.as_deref())
                         .unwrap_or("stop")
                         .to_string(),
                     snapshot: Some(snapshot.to_string()),
-                    cost: msg
-                        .metadata
-                        .get("cost")
-                        .and_then(|v| v.as_f64())
-                        .unwrap_or(0.0),
+                    cost: meta.cost.unwrap_or(0.0),
                     tokens: StepTokens {
                         total: Some(input.saturating_add(output)),
                         input,
@@ -647,118 +719,60 @@ impl SessionPrompt {
                         id: msg.id.clone(),
                         session_id: msg.session_id.clone(),
                         time: UserTime { created },
-                        agent: msg
-                            .metadata
-                            .get("agent")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("general")
-                            .to_string(),
+                        agent: meta.agent.as_deref().unwrap_or("general").to_string(),
                         model: V2ModelRef {
-                            provider_id: msg
-                                .metadata
-                                .get("model_provider")
-                                .and_then(|v| v.as_str())
+                            provider_id: meta
+                                .model_provider
+                                .as_deref()
                                 .unwrap_or(provider_id)
                                 .to_string(),
-                            model_id: msg
-                                .metadata
-                                .get("model_id")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or(model_id)
-                                .to_string(),
+                            model_id: meta.model_id.as_deref().unwrap_or(model_id).to_string(),
                         },
                         format: None,
                         summary: None,
                         system: None,
                         tools: None,
-                        variant: msg
-                            .metadata
-                            .get("variant")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
+                        variant: meta.variant.clone(),
                     }
                 }
-                _ => {
-                    let input = msg
-                        .metadata
-                        .get("tokens_input")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0)
-                        .clamp(0, i32::MAX as i64) as i32;
-                    let output = msg
-                        .metadata
-                        .get("tokens_output")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0)
-                        .clamp(0, i32::MAX as i64) as i32;
-                    MessageInfo::Assistant {
-                        id: msg.id.clone(),
-                        session_id: msg.session_id.clone(),
-                        time: AssistantTime {
-                            created,
-                            completed: Some(created),
-                        },
-                        parent_id: if last_user_id.is_empty() {
-                            msg.id.clone()
-                        } else {
-                            last_user_id.clone()
-                        },
-                        model_id: msg
-                            .metadata
-                            .get("model_id")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(model_id)
-                            .to_string(),
-                        provider_id: msg
-                            .metadata
-                            .get("model_provider")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(provider_id)
-                            .to_string(),
-                        mode: msg
-                            .metadata
-                            .get("mode")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("default")
-                            .to_string(),
-                        agent: msg
-                            .metadata
-                            .get("agent")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("general")
-                            .to_string(),
-                        path: MessagePath {
-                            cwd: session_directory.to_string(),
-                            root: session_directory.to_string(),
-                        },
-                        summary: None,
-                        cost: msg
-                            .metadata
-                            .get("cost")
-                            .and_then(|v| v.as_f64())
-                            .unwrap_or(0.0),
-                        tokens: AssistantTokens {
-                            total: Some(input.saturating_add(output)),
-                            input,
-                            output,
-                            reasoning: 0,
-                            cache: CacheTokens { read: 0, write: 0 },
-                        },
-                        error: None,
-                        structured: None,
-                        variant: msg
-                            .metadata
-                            .get("variant")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
-                        finish: msg.finish.clone().or_else(|| {
-                            msg.metadata
-                                .get("finish_reason")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string())
-                        }),
-                    }
-                }
+                _ => MessageInfo::Assistant {
+                    id: msg.id.clone(),
+                    session_id: msg.session_id.clone(),
+                    time: AssistantTime {
+                        created,
+                        completed: Some(created),
+                    },
+                    parent_id: if last_user_id.is_empty() {
+                        msg.id.clone()
+                    } else {
+                        last_user_id.clone()
+                    },
+                    model_id: meta.model_id.as_deref().unwrap_or(model_id).to_string(),
+                    provider_id: meta
+                        .model_provider
+                        .as_deref()
+                        .unwrap_or(provider_id)
+                        .to_string(),
+                    mode: meta.mode.as_deref().unwrap_or("default").to_string(),
+                    agent: meta.agent.as_deref().unwrap_or("general").to_string(),
+                    path: MessagePath {
+                        cwd: session_directory.to_string(),
+                        root: session_directory.to_string(),
+                    },
+                    summary: None,
+                    cost: meta.cost.unwrap_or(0.0),
+                    tokens: AssistantTokens {
+                        total: Some(input.saturating_add(output)),
+                        input,
+                        output,
+                        reasoning: 0,
+                        cache: CacheTokens { read: 0, write: 0 },
+                    },
+                    error: None,
+                    structured: None,
+                    variant: meta.variant.clone(),
+                    finish: msg.finish.clone().or_else(|| meta.finish_reason.clone()),
+                },
             };
 
             out.push(MessageWithParts { info, parts });

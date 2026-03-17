@@ -1,3 +1,4 @@
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -194,19 +195,34 @@ impl Default for PermissionEngine {
     }
 }
 
-fn hook_payload_object(
-    payload: &serde_json::Value,
-) -> Option<&serde_json::Map<String, serde_json::Value>> {
-    payload
-        .get("output")
-        .and_then(|value| value.as_object())
-        .or_else(|| payload.as_object())
-        .or_else(|| payload.get("data").and_then(|value| value.as_object()))
+fn parse_hook_payload<T: DeserializeOwned>(payload: &serde_json::Value) -> Option<T> {
+    #[derive(Debug, Deserialize)]
+    #[serde(untagged)]
+    enum HookEnvelope<T> {
+        Output { output: T },
+        Data { data: T },
+        Direct(T),
+    }
+
+    let envelope: HookEnvelope<T> = serde_json::from_value(payload.clone()).ok()?;
+    Some(match envelope {
+        HookEnvelope::Output { output } => output,
+        HookEnvelope::Data { data } => data,
+        HookEnvelope::Direct(value) => value,
+    })
 }
 
 fn extract_permission_status(payload: &serde_json::Value) -> Option<String> {
-    hook_payload_object(payload)
-        .and_then(|object| object.get("status"))
+    #[derive(Debug, Deserialize, Default)]
+    struct PermissionStatusWire {
+        #[serde(default)]
+        status: Option<serde_json::Value>,
+    }
+
+    let parsed = parse_hook_payload::<PermissionStatusWire>(payload)?;
+    parsed
+        .status
+        .as_ref()
         .and_then(|value| value.as_str())
         .filter(|status| matches!(*status, "ask" | "deny" | "allow"))
         .map(ToString::to_string)

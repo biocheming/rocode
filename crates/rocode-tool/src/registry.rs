@@ -2,6 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
+
 use crate::{Tool, ToolContext, ToolError, ToolResult};
 use rocode_plugin::{HookContext, HookEvent};
 
@@ -196,6 +199,17 @@ fn recover_bash_args_from_jsonish(input: &str) -> Option<serde_json::Value> {
     None
 }
 
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        _ => None,
+    })
+}
+
 pub fn normalize_tool_arguments(tool_id: &str, mut args: serde_json::Value) -> serde_json::Value {
     // Normalize: if args is a JSON array of objects, merge them into a single
     // object. Some models produce `[{"file_path":"x"},{"content":"y"}]` instead
@@ -303,13 +317,20 @@ pub fn normalize_tool_arguments(tool_id: &str, mut args: serde_json::Value) -> s
 
     // Normalize bash schema defaults regardless of which recovery path succeeded.
     if tool_id == "bash" {
-        if let Some(obj) = args.as_object_mut() {
-            let needs_description = obj
-                .get("description")
-                .and_then(|v| v.as_str())
-                .map(|s| s.trim().is_empty())
-                .unwrap_or(true);
-            if needs_description {
+        #[derive(Debug, Deserialize, Default)]
+        struct BashArgsWire {
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            description: Option<String>,
+        }
+
+        let needs_description = serde_json::from_value::<BashArgsWire>(args.clone())
+            .ok()
+            .and_then(|wire| wire.description)
+            .map(|description| description.trim().is_empty())
+            .unwrap_or(true);
+
+        if needs_description {
+            if let Some(obj) = args.as_object_mut() {
                 obj.insert(
                     "description".to_string(),
                     serde_json::Value::String("Execute shell command".to_string()),
@@ -537,56 +558,97 @@ impl ToolRegistry {
     }
 }
 
-fn hook_payload_object(
-    payload: &serde_json::Value,
-) -> Option<&serde_json::Map<String, serde_json::Value>> {
-    payload
-        .get("output")
-        .and_then(|value| value.as_object())
-        .or_else(|| payload.as_object())
-        .or_else(|| payload.get("data").and_then(|value| value.as_object()))
+fn parse_hook_payload<T: DeserializeOwned>(payload: &serde_json::Value) -> Option<T> {
+    #[derive(Debug, Deserialize)]
+    #[serde(untagged)]
+    enum HookEnvelope<T> {
+        Output { output: T },
+        Data { data: T },
+        Direct(T),
+    }
+
+    let envelope: HookEnvelope<T> = serde_json::from_value(payload.clone()).ok()?;
+    Some(match envelope {
+        HookEnvelope::Output { output } => output,
+        HookEnvelope::Data { data } => data,
+        HookEnvelope::Direct(value) => value,
+    })
 }
 
 fn apply_tool_definition_payload(schema: &mut ToolSchema, payload: &serde_json::Value) {
-    let Some(object) = hook_payload_object(payload) else {
+    #[derive(Debug, Deserialize, Default)]
+    struct ToolDefinitionHookWire {
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        description: Option<String>,
+        #[serde(default)]
+        parameters: Option<serde_json::Value>,
+    }
+
+    let Some(parsed) = parse_hook_payload::<ToolDefinitionHookWire>(payload) else {
         return;
     };
-    if let Some(description) = object.get("description").and_then(|value| value.as_str()) {
-        schema.description = description.to_string();
+    if let Some(description) = parsed.description {
+        schema.description = description;
     }
-    if let Some(parameters) = object.get("parameters") {
-        schema.parameters = parameters.clone();
+    if let Some(parameters) = parsed.parameters {
+        schema.parameters = parameters;
     }
 }
 
 fn apply_tool_before_payload(args: &mut serde_json::Value, payload: &serde_json::Value) {
-    let Some(object) = hook_payload_object(payload) else {
+    #[derive(Debug, Deserialize, Default)]
+    struct ToolBeforeHookWire {
+        #[serde(default)]
+        args: Option<serde_json::Value>,
+    }
+
+    let Some(parsed) = parse_hook_payload::<ToolBeforeHookWire>(payload) else {
         return;
     };
-    if let Some(next_args) = object.get("args") {
-        *args = next_args.clone();
+    if let Some(next_args) = parsed.args {
+        *args = next_args;
     }
 }
 
 fn apply_tool_after_payload(result: &mut ToolResult, payload: &serde_json::Value) {
-    let Some(object) = hook_payload_object(payload) else {
+    fn deserialize_opt_metadata_map_lossy<'de, D>(
+        deserializer: D,
+    ) -> Result<Option<HashMap<String, serde_json::Value>>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::Object(map)) => Some(map.into_iter().collect()),
+            _ => None,
+        })
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct ToolAfterHookWire {
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        title: Option<String>,
+        #[serde(default)]
+        output: Option<serde_json::Value>,
+        #[serde(default, deserialize_with = "deserialize_opt_metadata_map_lossy")]
+        metadata: Option<HashMap<String, serde_json::Value>>,
+    }
+
+    let Some(parsed) = parse_hook_payload::<ToolAfterHookWire>(payload) else {
         return;
     };
-    if let Some(title) = object.get("title").and_then(|value| value.as_str()) {
-        result.title = title.to_string();
+    if let Some(title) = parsed.title {
+        result.title = title;
     }
-    if let Some(output) = object.get("output") {
+    if let Some(output) = parsed.output {
         if let Some(output_str) = output.as_str() {
             result.output = output_str.to_string();
         } else if !output.is_null() {
             result.output = output.to_string();
         }
     }
-    if let Some(metadata) = object.get("metadata").and_then(|value| value.as_object()) {
-        result.metadata = metadata
-            .iter()
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect();
+    if let Some(metadata) = parsed.metadata {
+        result.metadata = metadata;
     }
 }
 

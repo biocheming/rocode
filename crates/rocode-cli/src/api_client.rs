@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use crate::util::server_url;
 use rocode_config::Config;
+use serde::Deserialize;
 
 // Re-export shared types from TUI api module so callers don't need to
 // depend on rocode_tui directly.
@@ -112,11 +113,8 @@ impl CliApiClient {
     pub async fn delete_session(&self, session_id: &str) -> anyhow::Result<bool> {
         let url = server_url(&self.base_url, &format!("/session/{}", session_id));
         let resp = self.client.delete(&url).send().await?;
-        let value: serde_json::Value = Self::json_ok(resp, "delete session").await?;
-        Ok(value
-            .get("deleted")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true))
+        let value: DeletedResponseWire = Self::json_ok(resp, "delete session").await?;
+        Ok(value.deleted.unwrap_or(true))
     }
 
     // ── Prompt ───────────────────────────────────────────────────────
@@ -144,10 +142,11 @@ impl CliApiClient {
         Self::json_ok(resp, "send prompt").await
     }
 
-    pub async fn abort_session(&self, session_id: &str) -> anyhow::Result<serde_json::Value> {
+    pub async fn abort_session(&self, session_id: &str) -> anyhow::Result<bool> {
         let url = server_url(&self.base_url, &format!("/session/{}/abort", session_id));
         let resp = self.client.post(&url).send().await?;
-        Self::json_ok(resp, "abort session").await
+        let value: AbortSessionResponseWire = Self::json_ok(resp, "abort session").await?;
+        Ok(value.aborted())
     }
 
     pub async fn execute_shell(
@@ -385,12 +384,9 @@ impl CliApiClient {
     pub async fn remove_mcp_auth(&self, name: &str) -> anyhow::Result<bool> {
         let url = server_url(&self.base_url, &format!("/mcp/{}/auth", name));
         let resp = self.client.delete(&url).send().await?;
-        let value: serde_json::Value =
+        let value: SuccessResponseWire =
             Self::json_ok(resp, &format!("remove MCP auth `{}`", name)).await?;
-        Ok(value
-            .get("success")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true))
+        Ok(value.success.unwrap_or(true))
     }
 
     pub async fn connect_mcp(&self, name: &str) -> anyhow::Result<bool> {
@@ -412,19 +408,15 @@ impl CliApiClient {
     pub async fn get_lsp_servers(&self) -> anyhow::Result<Vec<String>> {
         let url = server_url(&self.base_url, "/lsp");
         let resp = self.client.get(&url).send().await?;
-        let v: serde_json::Value = Self::json_ok(resp, "get LSP status").await?;
-        Ok(v.get("servers")
-            .and_then(|s| serde_json::from_value::<Vec<String>>(s.clone()).ok())
-            .unwrap_or_default())
+        let v: LspStatusWire = Self::json_ok(resp, "get LSP status").await?;
+        Ok(v.servers)
     }
 
     pub async fn get_formatters(&self) -> anyhow::Result<Vec<String>> {
         let url = server_url(&self.base_url, "/formatter");
         let resp = self.client.get(&url).send().await?;
-        let v: serde_json::Value = Self::json_ok(resp, "get formatters").await?;
-        Ok(v.get("formatters")
-            .and_then(|s| serde_json::from_value::<Vec<String>>(s.clone()).ok())
-            .unwrap_or_default())
+        let v: FormatterStatusWire = Self::json_ok(resp, "get formatters").await?;
+        Ok(v.formatters)
     }
 
     // ── Session sharing / compact / revert / fork ────────────────────
@@ -438,12 +430,9 @@ impl CliApiClient {
     pub async fn unshare_session(&self, session_id: &str) -> anyhow::Result<bool> {
         let url = server_url(&self.base_url, &format!("/session/{}/share", session_id));
         let resp = self.client.delete(&url).send().await?;
-        let value: serde_json::Value =
+        let value: SuccessResponseWire =
             Self::json_ok(resp, &format!("unshare session `{}`", session_id)).await?;
-        Ok(value
-            .get("success")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true))
+        Ok(value.success.unwrap_or(true))
     }
 
     pub async fn compact_session(&self, session_id: &str) -> anyhow::Result<CompactResponse> {
@@ -505,5 +494,81 @@ impl CliApiClient {
     ) -> anyhow::Result<T> {
         let bytes = Self::expect_success(resp, action).await?;
         Ok(serde_json::from_slice(&bytes)?)
+    }
+}
+
+fn deserialize_opt_bool_lossy<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Bool(value)) => Some(value),
+        Some(serde_json::Value::String(raw)) => match raw.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" | "y" => Some(true),
+            "false" | "0" | "no" | "n" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
+fn deserialize_string_vec_lossy<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Array(values)) => values
+            .into_iter()
+            .filter_map(|value| match value {
+                serde_json::Value::String(value) => Some(value),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    })
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct DeletedResponseWire {
+    #[serde(default, deserialize_with = "deserialize_opt_bool_lossy")]
+    deleted: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct SuccessResponseWire {
+    #[serde(default, deserialize_with = "deserialize_opt_bool_lossy")]
+    success: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct LspStatusWire {
+    #[serde(default, deserialize_with = "deserialize_string_vec_lossy")]
+    servers: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct FormatterStatusWire {
+    #[serde(default, deserialize_with = "deserialize_string_vec_lossy")]
+    formatters: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum AbortSessionResponseWire {
+    Bool(bool),
+    Object {
+        #[serde(default, deserialize_with = "deserialize_opt_bool_lossy")]
+        aborted: Option<bool>,
+    },
+}
+
+impl AbortSessionResponseWire {
+    fn aborted(&self) -> bool {
+        match self {
+            AbortSessionResponseWire::Bool(value) => *value,
+            AbortSessionResponseWire::Object { aborted } => aborted.unwrap_or(true),
+        }
     }
 }

@@ -134,11 +134,28 @@ pub fn prometheus_user_choice_payload() -> Value {
 }
 
 pub fn parse_prometheus_user_choice(output: &str) -> String {
-    serde_json::from_str::<Value>(output)
+    #[derive(Debug, serde::Deserialize, Default)]
+    struct UserChoiceWire {
+        #[serde(default)]
+        answers: Option<AnswersWire>,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(untagged)]
+    enum AnswersWire {
+        Flat(Vec<String>),
+        Nested(Vec<Vec<String>>),
+    }
+
+    serde_json::from_str::<UserChoiceWire>(output)
         .ok()
-        .and_then(|value| value.get("answers").and_then(|v| v.as_array()).cloned())
-        .and_then(|answers| answers.first().cloned())
-        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .and_then(|wire| wire.answers)
+        .and_then(|answers| match answers {
+            AnswersWire::Flat(values) => values.into_iter().next(),
+            AnswersWire::Nested(values) => values.into_iter().next().and_then(|inner| inner.into_iter().next()),
+        })
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
         .unwrap_or_else(|| PROMETHEUS_DEFAULT_HANDOFF_CHOICE.to_string())
 }
 

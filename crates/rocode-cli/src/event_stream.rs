@@ -65,7 +65,7 @@ pub enum CliServerEvent {
     OutputBlock {
         session_id: String,
         id: Option<String>,
-        payload: serde_json::Value,
+        block_json: serde_json::Value,
     },
     /// An error event from the server.
     Error {
@@ -317,6 +317,8 @@ struct OutputBlockWire {
     session_id: String,
     #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
     id: Option<String>,
+    #[serde(default)]
+    block: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -621,7 +623,7 @@ fn parse_event(
         ServerEventWire::OutputBlock(event) => Some(CliServerEvent::OutputBlock {
             session_id: event.session_id,
             id: event.id,
-            payload: json.clone(),
+            block_json: event.block.unwrap_or_else(|| json.clone()),
         }),
         ServerEventWire::Error(event) => Some(CliServerEvent::Error {
             session_id: event.session_id,

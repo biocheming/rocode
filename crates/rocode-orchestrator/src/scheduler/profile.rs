@@ -2003,35 +2003,62 @@ pub fn parse_execution_gate_decision(output: &str) -> Option<SchedulerExecutionG
     None
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct ExecutionGateDecisionWire {
+    #[serde(default)]
+    status: Option<Value>,
+    #[serde(default, alias = "gateDecision")]
+    gate_decision: Option<Value>,
+    #[serde(default)]
+    summary: Option<Value>,
+    #[serde(default)]
+    reasoning: Option<Value>,
+    #[serde(default, alias = "executionFidelity")]
+    execution_fidelity: Option<Value>,
+    #[serde(default, alias = "nextInput")]
+    next_input: Option<Value>,
+    #[serde(default, alias = "nextActions")]
+    next_actions: Option<Value>,
+    #[serde(default, alias = "finalResponse")]
+    final_response: Option<Value>,
+    #[serde(default, alias = "verificationSummary")]
+    verification_summary: Option<Value>,
+    #[serde(default, alias = "taskStatus")]
+    task_status: Option<Value>,
+    #[serde(default, alias = "minorIssues")]
+    minor_issues: Option<Value>,
+}
+
 fn parse_execution_gate_candidate(candidate: &str) -> Option<SchedulerExecutionGateDecision> {
     if let Ok(decision) = serde_json::from_str::<SchedulerExecutionGateDecision>(candidate) {
         return Some(normalize_execution_gate_decision(decision));
     }
 
-    let value = serde_json::from_str::<Value>(candidate).ok()?;
-    let status = value
-        .get("status")
+    let wire = serde_json::from_str::<ExecutionGateDecisionWire>(candidate).ok()?;
+    let status = wire
+        .status
+        .as_ref()
         .and_then(Value::as_str)
-        .or_else(|| value.get("gate_decision").and_then(Value::as_str))
+        .or_else(|| wire.gate_decision.as_ref().and_then(Value::as_str))
         .and_then(parse_execution_gate_status_token)?;
 
     let summary = first_non_empty_string(&[
-        value.get("summary").and_then(Value::as_str),
-        value.get("reasoning").and_then(Value::as_str),
-        value.get("execution_fidelity").and_then(Value::as_str),
+        wire.summary.as_ref().and_then(Value::as_str),
+        wire.reasoning.as_ref().and_then(Value::as_str),
+        wire.execution_fidelity.as_ref().and_then(Value::as_str),
     ])
     .unwrap_or_default()
     .to_string();
 
     let next_input = first_non_empty_string(&[
-        value.get("next_input").and_then(Value::as_str),
-        joined_string_array(value.get("next_actions")).as_deref(),
+        wire.next_input.as_ref().and_then(Value::as_str),
+        joined_string_array(wire.next_actions.as_ref()).as_deref(),
     ])
     .map(str::to_string);
 
     let final_response = first_non_empty_string(&[
-        value.get("final_response").and_then(Value::as_str),
-        build_legacy_gate_details_markdown(&value).as_deref(),
+        wire.final_response.as_ref().and_then(Value::as_str),
+        build_legacy_gate_details_markdown(&wire).as_deref(),
     ])
     .map(str::to_string);
 
@@ -2076,11 +2103,12 @@ fn joined_string_array(value: Option<&Value>) -> Option<String> {
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
-fn build_legacy_gate_details_markdown(value: &Value) -> Option<String> {
+fn build_legacy_gate_details_markdown(wire: &ExecutionGateDecisionWire) -> Option<String> {
     let mut sections = Vec::new();
 
-    if let Some(summary) = value
-        .get("verification_summary")
+    if let Some(summary) = wire
+        .verification_summary
+        .as_ref()
         .and_then(Value::as_object)
         .filter(|summary| !summary.is_empty())
     {
@@ -2097,8 +2125,9 @@ fn build_legacy_gate_details_markdown(value: &Value) -> Option<String> {
         }
     }
 
-    if let Some(task_status) = value
-        .get("task_status")
+    if let Some(task_status) = wire
+        .task_status
+        .as_ref()
         .and_then(Value::as_object)
         .filter(|status| !status.is_empty())
     {
@@ -2114,8 +2143,9 @@ fn build_legacy_gate_details_markdown(value: &Value) -> Option<String> {
         }
     }
 
-    if let Some(execution_fidelity) = value
-        .get("execution_fidelity")
+    if let Some(execution_fidelity) = wire
+        .execution_fidelity
+        .as_ref()
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -2123,11 +2153,11 @@ fn build_legacy_gate_details_markdown(value: &Value) -> Option<String> {
         sections.push(format!("### Execution Fidelity\n{}", execution_fidelity));
     }
 
-    if let Some(minor_issues) = joined_string_array(value.get("minor_issues")) {
+    if let Some(minor_issues) = joined_string_array(wire.minor_issues.as_ref()) {
         sections.push(format!("### Minor Issues\n{}", minor_issues));
     }
 
-    if let Some(next_actions) = joined_string_array(value.get("next_actions")) {
+    if let Some(next_actions) = joined_string_array(wire.next_actions.as_ref()) {
         sections.push(format!("### Next Actions\n{}", next_actions));
     }
 

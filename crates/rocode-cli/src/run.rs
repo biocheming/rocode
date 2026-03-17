@@ -35,6 +35,7 @@ use rocode_orchestrator::{
 };
 use rocode_provider::ProviderRegistry;
 use rocode_util::util::color::strip_ansi;
+use serde::Deserialize;
 use tokio::sync::{mpsc, Mutex as AsyncMutex};
 use tokio_util::sync::CancellationToken;
 
@@ -3064,10 +3065,7 @@ async fn cli_trigger_abort(handle: CliActiveAbortHandle) -> bool {
             api_client,
             session_id,
         } => match api_client.abort_session(&session_id).await {
-            Ok(result) => result
-                .get("aborted")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true),
+            Ok(aborted) => aborted,
             Err(e) => {
                 tracing::error!("Failed to abort server session: {}", e);
                 false
@@ -4774,14 +4772,13 @@ fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style:
         CliServerEvent::OutputBlock {
             session_id,
             id,
-            payload,
+            block_json,
         } => {
             if !is_related_session(&session_id) {
                 return;
             }
-            let block_payload = payload.get("block").unwrap_or(&payload);
-            let Some(block) = parse_output_block(block_payload) else {
-                tracing::debug!(?id, payload = %block_payload, "failed to parse output_block");
+            let Some(block) = parse_output_block(&block_json) else {
+                tracing::debug!(?id, payload = %block_json, "failed to parse output_block");
                 return;
             };
             if matches!(block, OutputBlock::Reasoning(_))
@@ -4959,6 +4956,57 @@ async fn handle_question_from_sse(
     }
 }
 
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        _ => None,
+    })
+}
+
+fn deserialize_string_vec_lossy<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Array(values)) => values
+            .into_iter()
+            .filter_map(|value| match value {
+                serde_json::Value::String(value) => Some(value),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    })
+}
+
+fn deserialize_metadata_map_lossy<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Object(map)) => map.into_iter().collect(),
+        _ => HashMap::new(),
+    })
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct PermissionInputWire {
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    permission: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_string_vec_lossy")]
+    patterns: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_metadata_map_lossy")]
+    metadata: HashMap<String, serde_json::Value>,
+}
+
 async fn handle_permission_from_sse(
     runtime: &CliExecutionRuntime,
     api_client: &Arc<CliApiClient>,
@@ -4981,31 +5029,10 @@ async fn handle_permission_from_sse(
             }
         };
 
-    let input = info.input.as_object().cloned().unwrap_or_default();
-    let permission = input
-        .get("permission")
-        .and_then(|value| value.as_str())
-        .unwrap_or(info.tool.as_str())
-        .to_string();
-    let patterns = input
-        .get("patterns")
-        .and_then(|value| value.as_array())
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(|value| value.as_str().map(str::to_string))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let metadata = input
-        .get("metadata")
-        .and_then(|value| value.as_object())
-        .map(|map| {
-            map.iter()
-                .map(|(key, value)| (key.clone(), value.clone()))
-                .collect::<HashMap<_, _>>()
-        })
-        .unwrap_or_default();
+    let input: PermissionInputWire = serde_json::from_value(info.input.clone()).unwrap_or_default();
+    let permission = input.permission.unwrap_or_else(|| info.tool.clone());
+    let patterns = input.patterns;
+    let metadata = input.metadata;
 
     {
         let memory = runtime.permission_memory.lock().await;

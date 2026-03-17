@@ -232,9 +232,22 @@ fn invalid_tool_payload_for_storage(tool_name: &str, error: &str, received_args:
 }
 
 fn sanitize_tool_call_input_for_storage(tool_name: &str, input: &Value) -> (Value, bool, bool) {
-    if let Some(obj) = input.as_object() {
-        let is_legacy_unrecoverable = obj
-            .get("_rocode_unrecoverable_tool_args")
+    if input.is_object() {
+        #[derive(Debug, serde::Deserialize, Default)]
+        struct LegacyUnrecoverableToolArgsWire {
+            #[serde(default)]
+            _rocode_unrecoverable_tool_args: Option<Value>,
+            #[serde(default)]
+            raw_len: Option<Value>,
+            #[serde(default)]
+            raw_preview: Option<Value>,
+        }
+
+        let parsed = serde_json::from_value::<LegacyUnrecoverableToolArgsWire>(input.clone())
+            .unwrap_or_default();
+        let is_legacy_unrecoverable = parsed
+            ._rocode_unrecoverable_tool_args
+            .as_ref()
             .and_then(Value::as_bool)
             .unwrap_or(false);
         if !is_legacy_unrecoverable {
@@ -244,8 +257,8 @@ fn sanitize_tool_call_input_for_storage(tool_name: &str, input: &Value) -> (Valu
         let received_args = serde_json::json!({
             "type": "object",
             "source": "legacy-unrecoverable-sentinel",
-            "raw_len": obj.get("raw_len").and_then(Value::as_u64),
-            "preview": obj.get("raw_preview").and_then(Value::as_str),
+            "raw_len": parsed.raw_len.as_ref().and_then(Value::as_u64),
+            "preview": parsed.raw_preview.as_ref().and_then(Value::as_str),
         });
         return (
             invalid_tool_payload_for_storage(

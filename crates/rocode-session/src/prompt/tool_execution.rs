@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use serde::Deserialize;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -29,6 +30,27 @@ struct ToolExecutionOptions {
     provider_id: String,
     model_id: String,
     hooks: PromptHooks,
+}
+
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        _ => None,
+    })
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct McpToolWire {
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    description: Option<String>,
+    #[serde(default)]
+    parameters: Option<serde_json::Value>,
 }
 
 #[derive(Clone)]
@@ -441,32 +463,29 @@ impl SessionPrompt {
     }
 
     pub(super) fn mcp_tools_from_session(session: &Session) -> Vec<ToolDefinition> {
-        session
+        let tools: Vec<McpToolWire> = session
             .metadata
             .get("mcp_tools")
-            .and_then(|v| v.as_array())
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| {
-                        let name = item.get("name").and_then(|v| v.as_str())?.to_string();
-                        let description = item
-                            .get("description")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
-                        let parameters = item
-                            .get("parameters")
-                            .cloned()
-                            .unwrap_or_else(|| serde_json::json!({"type":"object"}));
-                        Some(ToolDefinition {
-                            name,
-                            description,
-                            parameters,
-                        })
-                    })
-                    .collect()
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default();
+
+        tools
+            .into_iter()
+            .filter_map(|tool| {
+                let name = tool.name?.trim().to_string();
+                if name.is_empty() {
+                    return None;
+                }
+                Some(ToolDefinition {
+                    name,
+                    description: tool.description,
+                    parameters: tool
+                        .parameters
+                        .unwrap_or_else(|| serde_json::json!({"type":"object"})),
+                })
             })
-            .unwrap_or_default()
+            .collect()
     }
 
     pub(super) fn load_persisted_subsessions(
