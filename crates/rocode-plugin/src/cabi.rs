@@ -24,7 +24,7 @@ use libloading::Library;
 use serde_json::Value;
 
 use crate::hook_io::hook_io_from_context;
-use crate::{subprocess, Hook, HookContext, HookError, HookOutput, Plugin, PluginSystem};
+use crate::{hook_names, Hook, HookContext, HookError, HookOutput, Plugin, PluginSystem};
 
 /// C ABI version implemented by this host.
 pub const ROCODE_CABI_VERSION_V1: u32 = 1;
@@ -235,7 +235,7 @@ impl Plugin for CAbiPlugin {
     ) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
         Box::pin(async move {
             for hook_name in &self.hooks {
-                let Some(event) = subprocess::hook_name_to_event(hook_name.as_str()) else {
+                let Some(event) = hook_names::hook_name_to_event(hook_name.as_str()) else {
                     tracing::debug!(
                         plugin = self.name.as_str(),
                         hook = hook_name.as_str(),
