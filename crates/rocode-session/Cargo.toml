@@ -32,7 +32,6 @@ regex = { workspace = true }
 dirs = { workspace = true }
 glob = { workspace = true }
 reqwest = { workspace = true }
-sqlx = { workspace = true }
 url = { workspace = true }
 base64 = { workspace = true }
 

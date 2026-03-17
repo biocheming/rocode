@@ -11,6 +11,7 @@ members = [
     "crates/rocode-provider",
     "crates/rocode-session",
     "crates/rocode-storage",
+    "crates/rocode-storage-migration",
     "crates/rocode-tool",
     "crates/rocode-agent",
     "crates/rocode-server",
@@ -75,6 +76,8 @@ dashmap = "6.1"
 url = "2.5"
 lsp-types = "0.97"
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+sea-orm = { version = "0.12", features = ["macros", "runtime-tokio-native-tls", "sqlx-sqlite"] }
+sea-orm-migration = { version = "0.12", features = ["runtime-tokio-native-tls", "sqlx-sqlite"] }
 portable-pty = "0.8"
 oauth2 = "5"
 sha2 = "0.10"

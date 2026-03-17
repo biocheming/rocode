@@ -39,7 +39,6 @@ serde_json = { workspace = true }
 reqwest = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
-sqlx = { workspace = true }
 url = { workspace = true }
 which = { workspace = true }
 crossterm = "0.27"

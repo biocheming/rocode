@@ -402,9 +402,9 @@ impl ServerState {
             .with_tool_runtime_config(tool_runtime_config),
         );
         let db = Database::new().await?;
-        let pool = db.pool().clone();
-        state.session_repo = Some(SessionRepository::new(pool.clone()));
-        state.message_repo = Some(MessageRepository::new(pool));
+        let conn = db.conn().clone();
+        state.session_repo = Some(SessionRepository::new(conn.clone()));
+        state.message_repo = Some(MessageRepository::new(conn));
         state.load_sessions_from_storage().await?;
         Ok(state)
     }
@@ -832,11 +832,11 @@ mod tests {
         let db = Database::in_memory()
             .await
             .expect("in-memory db should initialize");
-        let pool = db.pool().clone();
+        let conn = db.conn().clone();
 
         let state = state_with_repos(
-            SessionRepository::new(pool.clone()),
-            MessageRepository::new(pool.clone()),
+            SessionRepository::new(conn.clone()),
+            MessageRepository::new(conn.clone()),
         );
         let (session_id, user_created_at, assistant_created_at) = {
             let mut manager = state.sessions.lock().await;
@@ -877,8 +877,8 @@ mod tests {
             .expect("session snapshot should sync to storage");
 
         let reloaded = state_with_repos(
-            SessionRepository::new(pool.clone()),
-            MessageRepository::new(pool),
+            SessionRepository::new(conn.clone()),
+            MessageRepository::new(conn.clone()),
         );
         reloaded
             .load_sessions_from_storage()
@@ -901,12 +901,12 @@ mod tests {
         let db = Database::in_memory()
             .await
             .expect("in-memory db should initialize");
-        let pool = db.pool().clone();
-        let session_repo = SessionRepository::new(pool.clone());
+        let conn = db.conn().clone();
+        let session_repo = SessionRepository::new(conn.clone());
 
         let state = state_with_repos(
-            SessionRepository::new(pool.clone()),
-            MessageRepository::new(pool),
+            SessionRepository::new(conn.clone()),
+            MessageRepository::new(conn),
         );
         let session_id = {
             let mut manager = state.sessions.lock().await;

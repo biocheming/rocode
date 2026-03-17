@@ -42,8 +42,8 @@ pub(crate) async fn export_session_data(
     output: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     let db = Database::new().await?;
-    let session_repo = SessionRepository::new(db.pool().clone());
-    let message_repo = MessageRepository::new(db.pool().clone());
+    let session_repo = SessionRepository::new(db.conn().clone());
+    let message_repo = MessageRepository::new(db.conn().clone());
 
     let session = if let Some(session_id) = session_id {
         session_repo
@@ -140,8 +140,8 @@ pub(crate) async fn import_session_data(file_or_url: String) -> anyhow::Result<(
     }
 
     let db = Database::new().await?;
-    let session_repo = SessionRepository::new(db.pool().clone());
-    let message_repo = MessageRepository::new(db.pool().clone());
+    let session_repo = SessionRepository::new(db.conn().clone());
+    let message_repo = MessageRepository::new(db.conn().clone());
 
     let mut imported = 0usize;
     for mut entry in entries {
