@@ -9,7 +9,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::runtime_control::SessionRunStatus;
-use crate::session_runtime::events::broadcast_session_updated;
+use crate::session_runtime::events::{
+    broadcast_server_event, broadcast_session_updated, ServerEvent,
+};
 use crate::{ApiError, Result, ServerState};
 
 // ─── Request / Response structs ───────────────────────────────────────
@@ -322,13 +324,12 @@ pub(super) async fn set_session_run_status(
         }
     }
 
-    state.broadcast(
-        &serde_json::json!({
-            "type": "session.status",
-            "sessionID": session_id,
-            "status": status,
-        })
-        .to_string(),
+    broadcast_server_event(
+        state.as_ref(),
+        &ServerEvent::SessionStatus {
+            session_id: session_id.to_string(),
+            status: rocode_types::SessionRunStatusWire::Tagged(status),
+        },
     );
 }
 
@@ -528,7 +529,9 @@ pub(super) async fn get_session_runtime(
             let sessions = state.sessions.lock().await;
             if sessions.get(&id).is_some() {
                 drop(sessions);
-                Ok(Json(crate::session_runtime::state::SessionRuntimeState::new(id)))
+                Ok(Json(
+                    crate::session_runtime::state::SessionRuntimeState::new(id),
+                ))
             } else {
                 Err(ApiError::SessionNotFound(id))
             }
