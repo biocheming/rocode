@@ -5,7 +5,7 @@ use ratatui::{
     layout::Rect,
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
 
@@ -240,6 +240,9 @@ impl PermissionPrompt {
         );
 
         self.last_rendered_area.set(Some(popup_area));
+
+        // Clear underlying content so no text bleeds through
+        frame.render_widget(Clear, popup_area);
 
         let title = format!(
             "{} {} - Permission Request",

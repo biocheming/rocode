@@ -269,8 +269,14 @@ async fn cli_prompt_action_text(
         .lock()
         .ok()
         .and_then(|slot| slot.as_ref().cloned());
-    if let Some(prompt_session) = prompt_session.as_ref() {
-        let _ = prompt_session.suspend();
+    let already_suspended = runtime
+        .terminal_surface
+        .as_ref()
+        .map_or(false, |s| s.prompt_suspended.load(Ordering::Relaxed));
+    if !already_suspended {
+        if let Some(prompt_session) = prompt_session.as_ref() {
+            let _ = prompt_session.suspend();
+        }
     }
 
     {
@@ -294,6 +300,9 @@ async fn cli_prompt_action_text(
 
     if let Some(prompt_session) = prompt_session.as_ref() {
         let _ = prompt_session.resume();
+    }
+    if let Some(surface) = runtime.terminal_surface.as_ref() {
+        surface.prompt_suspended.store(false, Ordering::Relaxed);
     }
 
     match result {
@@ -1584,14 +1593,22 @@ struct CliTerminalSurface {
     style: CliStyle,
     frontend_projection: Arc<Mutex<CliFrontendProjection>>,
     prompt_session: Mutex<Option<Arc<PromptSession>>>,
+    prompt_suspended: AtomicBool,
+    busy_flag: Arc<AtomicBool>,
 }
 
 impl CliTerminalSurface {
-    fn new(style: CliStyle, frontend_projection: Arc<Mutex<CliFrontendProjection>>) -> Self {
+    fn new(
+        style: CliStyle,
+        frontend_projection: Arc<Mutex<CliFrontendProjection>>,
+        busy_flag: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             style,
             frontend_projection,
             prompt_session: Mutex::new(None),
+            prompt_suspended: AtomicBool::new(false),
+            busy_flag,
         }
     }
 
@@ -1635,12 +1652,15 @@ impl CliTerminalSurface {
             .and_then(|slot| slot.as_ref().cloned());
 
         if let Some(prompt_session) = prompt {
-            let _ = prompt_session.suspend();
+            if !self.prompt_suspended.load(Ordering::Relaxed) {
+                let _ = prompt_session.suspend();
+            }
             let write_result: io::Result<()> = {
                 print!("\x1B[2J\x1B[1;1H{}", transcript.rendered_text());
                 io::stdout().flush()
             };
             let _ = prompt_session.resume();
+            self.prompt_suspended.store(false, Ordering::Relaxed);
             write_result?;
         } else {
             print!("\x1B[2J\x1B[1;1H{}", transcript.rendered_text());
@@ -1662,12 +1682,19 @@ impl CliTerminalSurface {
             .and_then(|slot| slot.as_ref().cloned());
 
         if let Some(prompt_session) = prompt {
-            let _ = prompt_session.suspend();
+            let busy = self.busy_flag.load(Ordering::Relaxed);
+            if !self.prompt_suspended.load(Ordering::Relaxed) {
+                let _ = prompt_session.suspend();
+                self.prompt_suspended.store(true, Ordering::Relaxed);
+            }
             let write_result: io::Result<()> = {
                 print!("{}", rendered);
                 io::stdout().flush()
             };
-            let _ = prompt_session.resume();
+            if !busy {
+                let _ = prompt_session.resume();
+                self.prompt_suspended.store(false, Ordering::Relaxed);
+            }
             write_result
         } else {
             print!("{}", rendered);
@@ -1683,6 +1710,20 @@ impl CliTerminalSurface {
             .and_then(|slot| slot.as_ref().cloned())
         {
             prompt.refresh()?;
+        }
+        Ok(())
+    }
+
+    fn ensure_prompt_visible(&self) -> io::Result<()> {
+        if self.prompt_suspended.swap(false, Ordering::Relaxed) {
+            if let Some(prompt_session) = self
+                .prompt_session
+                .lock()
+                .ok()
+                .and_then(|slot| slot.as_ref().cloned())
+            {
+                let _ = prompt_session.resume();
+            }
         }
         Ok(())
     }
@@ -3895,6 +3936,7 @@ async fn run_chat_session(
     let terminal_surface = Arc::new(CliTerminalSurface::new(
         repl_style.clone(),
         runtime.frontend_projection.clone(),
+        busy_flag.clone(),
     ));
     let prompt_chrome = Arc::new(CliPromptChrome::new(
         &runtime,
@@ -4445,6 +4487,9 @@ async fn run_chat_session(
         }
 
         runtime.busy_flag.store(false, Ordering::SeqCst);
+        if let Some(surface) = runtime.terminal_surface.as_ref() {
+            let _ = surface.ensure_prompt_visible();
+        }
         if runtime.exit_requested.load(Ordering::SeqCst)
             && runtime.queued_inputs.lock().await.is_empty()
         {
@@ -4939,6 +4984,7 @@ async fn handle_question_from_sse(
         runtime.observed_topology.clone(),
         runtime.frontend_projection.clone(),
         runtime.prompt_session_slot.clone(),
+        runtime.terminal_surface.clone(),
         guard,
     )
     .await;
@@ -5313,6 +5359,7 @@ async fn cli_ask_question(
     observed_topology: Arc<Mutex<CliObservedExecutionTopology>>,
     frontend_projection: Arc<Mutex<CliFrontendProjection>>,
     prompt_session_slot: Arc<std::sync::Mutex<Option<Arc<PromptSession>>>>,
+    terminal_surface: Option<Arc<CliTerminalSurface>>,
     spinner_guard: SpinnerGuard,
 ) -> Result<Vec<Vec<String>>, rocode_tool::ToolError> {
     // Pause spinner so it doesn't trample the interactive prompt.
@@ -5322,8 +5369,13 @@ async fn cli_ask_question(
         .lock()
         .ok()
         .and_then(|slot| slot.as_ref().cloned());
-    if let Some(prompt_session) = prompt_session.as_ref() {
-        let _ = prompt_session.suspend();
+    let already_suspended = terminal_surface
+        .as_ref()
+        .map_or(false, |s| s.prompt_suspended.load(Ordering::Relaxed));
+    if !already_suspended {
+        if let Some(prompt_session) = prompt_session.as_ref() {
+            let _ = prompt_session.suspend();
+        }
     }
 
     // Ensure terminal is in a clean state for the interactive selector:
@@ -5416,6 +5468,9 @@ async fn cli_ask_question(
                 if let Some(prompt_session) = prompt_session.as_ref() {
                     let _ = prompt_session.resume();
                 }
+                if let Some(ref surface) = terminal_surface {
+                    surface.prompt_suspended.store(false, Ordering::Relaxed);
+                }
                 spinner_guard.resume();
                 return Err(rocode_tool::ToolError::ExecutionError(
                     "User cancelled the question".to_string(),
@@ -5432,6 +5487,9 @@ async fn cli_ask_question(
                 );
                 if let Some(prompt_session) = prompt_session.as_ref() {
                     let _ = prompt_session.resume();
+                }
+                if let Some(ref surface) = terminal_surface {
+                    surface.prompt_suspended.store(false, Ordering::Relaxed);
                 }
                 spinner_guard.resume();
                 return Err(rocode_tool::ToolError::ExecutionError(format!(
@@ -5452,6 +5510,9 @@ async fn cli_ask_question(
     );
     if let Some(prompt_session) = prompt_session.as_ref() {
         let _ = prompt_session.resume();
+    }
+    if let Some(ref surface) = terminal_surface {
+        surface.prompt_suspended.store(false, Ordering::Relaxed);
     }
     spinner_guard.resume();
     Ok(all_answers)

@@ -88,6 +88,8 @@ const nodes = {
   terminalPanel: document.getElementById("terminalPanel"),
   terminalToggleBtn: document.getElementById("terminalToggleBtn"),
   workspaceToggleBtn: document.getElementById("workspaceToggleBtn"),
+  runtimeToggleBtn: document.getElementById("runtimeToggleBtn"),
+  runtimeRail: document.getElementById("runtimeRail"),
   terminalTabList: document.getElementById("terminalTabList"),
   terminalViewport: document.getElementById("terminalViewport"),
   terminalNewBtn: document.getElementById("terminalNewBtn"),

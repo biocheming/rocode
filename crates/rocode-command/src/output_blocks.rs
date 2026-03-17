@@ -57,10 +57,14 @@ fn render_message_block(message: &MessageBlock) -> String {
 
 fn render_reasoning_block(reasoning: &ReasoningBlock) -> String {
     match reasoning.phase {
-        MessagePhase::Start => "[thinking] ".to_string(),
+        MessagePhase::Start => "\n[thinking]\n│ ".to_string(),
         MessagePhase::Delta => {
             let cleaned = strip_think_tags(&reasoning.text);
-            cleaned
+            if cleaned.is_empty() {
+                String::new()
+            } else {
+                indent_continuation_lines(&cleaned, "│ ")
+            }
         }
         MessagePhase::End => "\n".to_string(),
         MessagePhase::Full => {
@@ -68,7 +72,7 @@ fn render_reasoning_block(reasoning: &ReasoningBlock) -> String {
             if cleaned.is_empty() {
                 String::new()
             } else {
-                format!("[thinking] {}\n", cleaned)
+                format!("[thinking]\n│ {}\n", indent_continuation_lines(&cleaned, "│ "))
             }
         }
     }
@@ -386,15 +390,19 @@ fn strip_think_tags(text: &str) -> String {
 
 fn render_reasoning_rich(reasoning: &ReasoningBlock, style: &CliStyle) -> String {
     match reasoning.phase {
-        MessagePhase::Start => {
-            format!("  {} ", style.dim("💭"))
-        }
+        MessagePhase::Start => format!(
+            "\n{} {}\n{} ",
+            style.dim("╭"),
+            style.dim("thinking"),
+            style.dim("│")
+        ),
         MessagePhase::Delta => {
             let cleaned = strip_think_tags(&reasoning.text);
             if cleaned.is_empty() {
                 String::new()
             } else {
-                style.dim(&cleaned)
+                let indented = indent_continuation_lines(&cleaned, "│ ");
+                style.dim(&indented)
             }
         }
         MessagePhase::End => "\n".to_string(),
@@ -403,8 +411,13 @@ fn render_reasoning_rich(reasoning: &ReasoningBlock, style: &CliStyle) -> String
             if cleaned.is_empty() {
                 String::new()
             } else {
-                let rendered = style.dim(&cleaned);
-                format!("  {} {}\n", style.dim("💭"), rendered)
+                let indented = indent_continuation_lines(&cleaned, "│ ");
+                format!(
+                    "{} {}\n{}\n",
+                    style.dim("╭"),
+                    style.dim("thinking"),
+                    style.dim(&format!("│ {}", indented))
+                )
             }
         }
     }

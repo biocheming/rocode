@@ -170,6 +170,19 @@ impl RawChatResponse {
                     }
                 }
 
+                if let Some(reasoning) = &raw_msg._reasoning_text {
+                    if !reasoning.is_empty() {
+                        parts.insert(
+                            0,
+                            crate::ContentPart {
+                                content_type: "reasoning".to_string(),
+                                text: Some(reasoning.clone()),
+                                ..Default::default()
+                            },
+                        );
+                    }
+                }
+
                 // Tool calls → ContentPart with tool_use
                 if let Some(tool_calls) = &raw_msg.tool_calls {
                     for tc in tool_calls {
@@ -1140,6 +1153,9 @@ fn responses_generate_options(_config: &ProviderConfig, request: &ChatRequest) -
             openai_reasoning_effort(&request.model, request.variant.as_deref())
                 .map(ToString::to_string);
     }
+    if provider_options.reasoning_summary.is_none() && provider_options.reasoning_effort.is_some() {
+        provider_options.reasoning_summary = Some("auto".to_string());
+    }
 
     GenerateOptions {
         prompt,
@@ -1916,6 +1932,56 @@ mod tests {
             .clone();
         assert!(input.is_object(), "valid JSON args should remain an object");
         assert_eq!(input["file_path"], "t2.html");
+    }
+
+    #[test]
+    fn raw_chat_response_preserves_reasoning_text_as_part() {
+        let raw = RawChatResponse {
+            id: Some("resp_reasoning".to_string()),
+            model: Some("test-model".to_string()),
+            choices: vec![RawChoice {
+                index: Some(0),
+                message: Some(RawMessage {
+                    role: Some("assistant".to_string()),
+                    content: Some("final answer".to_string()),
+                    tool_calls: None,
+                    _reasoning_text: Some("thinking trace".to_string()),
+                }),
+                finish_reason: Some("stop".to_string()),
+            }],
+            usage: None,
+        };
+
+        let chat = raw.into_chat_response();
+        let crate::Content::Parts(parts) = &chat.choices[0].message.content else {
+            panic!("expected parts content");
+        };
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].content_type, "reasoning");
+        assert_eq!(parts[0].text.as_deref(), Some("thinking trace"));
+        assert_eq!(parts[1].content_type, "text");
+        assert_eq!(parts[1].text.as_deref(), Some("final answer"));
+    }
+
+    #[test]
+    fn responses_generate_options_defaults_reasoning_summary_to_auto() {
+        let request = ChatRequest {
+            model: "gpt-5".to_string(),
+            variant: Some("medium".to_string()),
+            messages: vec![Message::user("hello".to_string())],
+            system: None,
+            tools: None,
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            stream: None,
+            provider_options: None,
+        };
+
+        let options = responses_generate_options(&ProviderConfig::new("test", "", ""), &request);
+        let provider_options = options.provider_options.expect("provider options");
+        assert_eq!(provider_options.reasoning_effort.as_deref(), Some("medium"));
+        assert_eq!(provider_options.reasoning_summary.as_deref(), Some("auto"));
     }
 
     #[test]

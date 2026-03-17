@@ -28,6 +28,7 @@ function setWorkspaceOpen(open) {
   if (!nodes.workspacePanel || !nodes.workspaceToggleBtn) return;
   nodes.workspacePanel.classList.toggle("hidden", !open);
   nodes.workspaceToggleBtn.classList.toggle("active", open);
+  document.documentElement.style.setProperty("--workspace-rail-width", open ? "320px" : "0px");
 }
 
 function ensureTerminalSelection() {
@@ -240,6 +241,15 @@ function initTerminalPanel() {
     nodes.workspaceToggleBtn.addEventListener("click", () => {
       const isHidden = nodes.workspacePanel && nodes.workspacePanel.classList.contains("hidden");
       setWorkspaceOpen(Boolean(isHidden));
+    });
+  }
+
+  if (nodes.runtimeToggleBtn) {
+    nodes.runtimeToggleBtn.addEventListener("click", () => {
+      if (!nodes.runtimeRail) return;
+      const isHidden = nodes.runtimeRail.classList.contains("hidden");
+      nodes.runtimeRail.classList.toggle("hidden", !isHidden);
+      nodes.runtimeToggleBtn.classList.toggle("active", isHidden);
     });
   }
 

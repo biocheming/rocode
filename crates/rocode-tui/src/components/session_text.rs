@@ -85,17 +85,23 @@ pub fn render_reasoning_part(
     let total_content_lines = content_lines.len();
     let collapsible = total_content_lines > preview_lines;
 
-    let header_style = Style::default().fg(theme.info).add_modifier(Modifier::BOLD);
+    let header_style = Style::default()
+        .fg(theme.text_muted)
+        .add_modifier(Modifier::BOLD | Modifier::ITALIC);
+    let body_prefix_style = Style::default().fg(theme.border_subtle);
+    let body_style = Style::default()
+        .fg(theme.text_muted)
+        .add_modifier(Modifier::ITALIC);
 
     if collapsible && collapsed {
         lines.push(Line::from(Span::styled(
-            format!("▶ Thinking ({} lines)", total_content_lines),
+            format!("▶ reasoning · {} lines", total_content_lines),
             header_style,
         )));
         return ReasoningRender { lines, collapsible };
     }
 
-    lines.push(Line::from(Span::styled("▼ Thinking", header_style)));
+    lines.push(Line::from(Span::styled("▼ reasoning", header_style)));
 
     let visible_count = if collapsible && collapsed {
         preview_lines
@@ -104,19 +110,26 @@ pub fn render_reasoning_part(
     };
 
     for line in content_lines.into_iter().take(visible_count) {
-        let mut spans = vec![Span::styled("  ", Style::default().fg(theme.text_muted))];
+        let mut spans = vec![Span::styled("┆ ", body_prefix_style)];
         spans.extend(
             line.spans
                 .into_iter()
-                .map(|span| Span::styled(span.content, span.style.fg(theme.text_muted))),
+                .map(|span| {
+                    Span::styled(
+                        span.content,
+                        span.style
+                            .fg(theme.text_muted)
+                            .add_modifier(Modifier::ITALIC),
+                    )
+                }),
         );
         lines.push(Line::from(spans));
     }
 
     if collapsible {
         lines.push(Line::from(Span::styled(
-            "  [click to collapse]",
-            Style::default().fg(theme.text_muted),
+            "┆ collapse",
+            body_style,
         )));
     }
 

@@ -186,28 +186,37 @@ impl AppContext {
     }
 
     pub fn toggle_header(&self) {
-        let mut show = self.show_header.write();
-        *show = !*show;
+        let value = {
+            let mut show = self.show_header.write();
+            *show = !*show;
+            *show
+        };
         self.persist_ui_preferences(UiPreferencesConfig {
-            show_header: Some(*show),
+            show_header: Some(value),
             ..Default::default()
         });
     }
 
     pub fn toggle_scrollbar(&self) {
-        let mut show = self.show_scrollbar.write();
-        *show = !*show;
+        let value = {
+            let mut show = self.show_scrollbar.write();
+            *show = !*show;
+            *show
+        };
         self.persist_ui_preferences(UiPreferencesConfig {
-            show_scrollbar: Some(*show),
+            show_scrollbar: Some(value),
             ..Default::default()
         });
     }
 
     pub fn toggle_tips_hidden(&self) {
-        let mut hidden = self.tips_hidden.write();
-        *hidden = !*hidden;
+        let value = {
+            let mut hidden = self.tips_hidden.write();
+            *hidden = !*hidden;
+            *hidden
+        };
         self.persist_ui_preferences(UiPreferencesConfig {
-            tips_hidden: Some(*hidden),
+            tips_hidden: Some(value),
             ..Default::default()
         });
     }
@@ -281,40 +290,52 @@ impl AppContext {
     }
 
     pub fn toggle_thinking(&self) {
-        let mut show = self.show_thinking.write();
-        *show = !*show;
+        let value = {
+            let mut show = self.show_thinking.write();
+            *show = !*show;
+            *show
+        };
         self.persist_ui_preferences(UiPreferencesConfig {
-            show_thinking: Some(*show),
+            show_thinking: Some(value),
             ..Default::default()
         });
     }
 
     pub fn toggle_tool_details(&self) {
-        let mut show = self.show_tool_details.write();
-        *show = !*show;
+        let value = {
+            let mut show = self.show_tool_details.write();
+            *show = !*show;
+            *show
+        };
         self.persist_ui_preferences(UiPreferencesConfig {
-            show_tool_details: Some(*show),
+            show_tool_details: Some(value),
             ..Default::default()
         });
     }
 
     pub fn toggle_message_density(&self) {
-        let mut density = self.message_density.write();
-        *density = match *density {
-            MessageDensity::Compact => MessageDensity::Cozy,
-            MessageDensity::Cozy => MessageDensity::Compact,
+        let density_str = {
+            let mut density = self.message_density.write();
+            *density = match *density {
+                MessageDensity::Compact => MessageDensity::Cozy,
+                MessageDensity::Cozy => MessageDensity::Compact,
+            };
+            density.as_str().to_string()
         };
         self.persist_ui_preferences(UiPreferencesConfig {
-            message_density: Some(density.as_str().to_string()),
+            message_density: Some(density_str),
             ..Default::default()
         });
     }
 
     pub fn toggle_semantic_highlight(&self) {
-        let mut enabled = self.semantic_highlight.write();
-        *enabled = !*enabled;
+        let value = {
+            let mut enabled = self.semantic_highlight.write();
+            *enabled = !*enabled;
+            *enabled
+        };
         self.persist_ui_preferences(UiPreferencesConfig {
-            semantic_highlight: Some(*enabled),
+            semantic_highlight: Some(value),
             ..Default::default()
         });
     }
@@ -325,7 +346,9 @@ impl AppContext {
 
     pub fn save_recent_models(&self, recent: &[(String, String)]) {
         let updated = recent.to_vec();
-        *self.recent_models.write() = updated.clone();
+        {
+            *self.recent_models.write() = updated.clone();
+        }
         self.persist_ui_preferences(UiPreferencesConfig {
             recent_models: updated
                 .into_iter()

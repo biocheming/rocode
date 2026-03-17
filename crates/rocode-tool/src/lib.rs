@@ -15,6 +15,7 @@ pub mod git_runtime;
 pub mod github_research;
 pub mod glob_tool;
 pub mod grep_tool;
+pub mod rust_search;
 pub mod invalid;
 pub mod ls;
 pub mod lsp_tool;

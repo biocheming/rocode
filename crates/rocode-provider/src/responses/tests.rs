@@ -233,3 +233,30 @@ async fn test_do_stream_uses_registered_custom_fetch_proxy() {
 
     unregister_custom_fetch_proxy("test-provider-stream");
 }
+
+#[tokio::test]
+async fn explicit_reasoning_options_enable_responses_reasoning_for_third_party_models() {
+    let model = OpenAIResponsesLanguageModel::new(
+        "MiniMax-M2.5",
+        OpenAIResponsesConfig {
+            provider: "test-provider".to_string(),
+            ..Default::default()
+        },
+    );
+
+    let prepared = model
+        .get_args(&GenerateOptions {
+            prompt: vec![Message::user("hello".to_string())],
+            provider_options: Some(ResponsesProviderOptions {
+                reasoning_effort: Some("medium".to_string()),
+                reasoning_summary: Some("auto".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await
+        .expect("prepared args");
+
+    assert_eq!(prepared.body["reasoning"]["effort"], "medium");
+    assert_eq!(prepared.body["reasoning"]["summary"], "auto");
+}

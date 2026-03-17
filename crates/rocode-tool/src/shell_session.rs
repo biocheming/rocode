@@ -45,7 +45,6 @@ enum ShellSessionState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct ShellSessionInput {
     operation: ShellSessionOperation,
     #[serde(default, alias = "sessionId")]
@@ -60,11 +59,11 @@ struct ShellSessionInput {
     env: HashMap<String, String>,
     #[serde(default)]
     input: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "appendNewline")]
     append_newline: bool,
     #[serde(default)]
     cursor: Option<u64>,
-    #[serde(default)]
+    #[serde(default, alias = "waitMs")]
     wait_ms: Option<u64>,
     #[serde(default)]
     cols: Option<u16>,
@@ -789,13 +788,71 @@ fn spawn_shell(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::future::Future;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tempfile::tempdir;
+    use tokio::sync::Mutex as AsyncMutex;
+
+    const SHELL_TEST_TIMEOUT: Duration = Duration::from_secs(10);
 
     fn should_skip_pty_test(err: &ToolError) -> bool {
         matches!(err, ToolError::ExecutionError(message) if message.contains("failed to create PTY") || message.contains("failed to openpty"))
     }
-    use std::sync::Arc;
-    use tempfile::tempdir;
-    use tokio::sync::Mutex as AsyncMutex;
+
+    async fn run_shell_test<F>(name: &str, future: F)
+    where
+        F: Future<Output = ()>,
+    {
+        match tokio::time::timeout(SHELL_TEST_TIMEOUT, future).await {
+            Ok(()) => {}
+            Err(_) => panic!(
+                "shell session test `{}` exceeded {:?}; PTY tests must fail fast instead of hanging",
+                name, SHELL_TEST_TIMEOUT
+            ),
+        }
+    }
+
+    fn test_exit_script(marker: &str) -> String {
+        #[cfg(windows)]
+        {
+            format!("echo {marker}\r\nexit\r\n")
+        }
+        #[cfg(not(windows))]
+        {
+            format!("printf '{marker}\\n'\nexit\n")
+        }
+    }
+
+    async fn wait_for_session_state(
+        ctx: ToolContext,
+        session_id: &serde_json::Value,
+        expected: &str,
+    ) -> ToolResult {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            let status = ShellSessionTool::new()
+                .execute(
+                    serde_json::json!({
+                        "operation": "status",
+                        "session_id": session_id
+                    }),
+                    ctx.clone(),
+                )
+                .await
+                .expect("status should succeed");
+            if status.metadata["session"]["state"] == serde_json::json!(expected) {
+                return status;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "shell session did not reach `{}` before timeout; last state was {}",
+                expected,
+                status.metadata["session"]["state"]
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
 
     #[test]
     fn schema_exposes_shell_session_operations() {
@@ -812,165 +869,155 @@ mod tests {
 
     #[tokio::test]
     async fn shell_session_roundtrip_start_write_read_status() {
-        let dir = tempdir().expect("tempdir");
-        let permissions = Arc::new(AsyncMutex::new(Vec::<String>::new()));
-        let permissions_clone = permissions.clone();
-        let ctx = ToolContext::new(
-            "session-1".into(),
-            "message-1".into(),
-            dir.path().to_string_lossy().to_string(),
-        )
-        .with_ask(move |req| {
-            let permissions_clone = permissions_clone.clone();
-            async move {
-                permissions_clone.lock().await.push(req.permission);
-                Ok(())
-            }
-        });
-
-        let start = match ShellSessionTool::new()
-            .execute(
-                serde_json::json!({
-                    "operation": "start",
-                    "command": "sh",
-                    "args": ["-i"],
-                    "description": "Start shell for structured tool testing"
-                }),
-                ctx.clone(),
+        run_shell_test("shell_session_roundtrip_start_write_read_status", async {
+            let dir = tempdir().expect("tempdir");
+            let permissions = Arc::new(AsyncMutex::new(Vec::<String>::new()));
+            let permissions_clone = permissions.clone();
+            let ctx = ToolContext::new(
+                "session-1".into(),
+                "message-1".into(),
+                dir.path().to_string_lossy().to_string(),
             )
-            .await
-        {
-            Ok(result) => result,
-            Err(err) if should_skip_pty_test(&err) => {
-                eprintln!(
-                    "skipping PTY integration test in current environment: {}",
-                    err
-                );
-                return;
-            }
-            Err(err) => panic!("shell session start should succeed: {}", err),
-        };
-        let session_id = start.metadata["session"]["id"]
-            .as_str()
-            .expect("session id")
-            .to_string();
+            .with_ask(move |req| {
+                let permissions_clone = permissions_clone.clone();
+                async move {
+                    permissions_clone.lock().await.push(req.permission);
+                    Ok(())
+                }
+            });
 
-        ShellSessionTool::new()
-            .execute(
-                serde_json::json!({
-                    "operation": "write",
-                    "session_id": session_id,
-                    "input": "printf 'hello-shell\\n'\nexit\n",
-                    "description": "Emit a marker and exit"
-                }),
-                ctx.clone(),
-            )
-            .await
-            .expect("write should succeed");
+            let start = match ShellSessionTool::new()
+                .execute(
+                    serde_json::json!({
+                        "operation": "start",
+                        "description": "Start shell for structured tool testing"
+                    }),
+                    ctx.clone(),
+                )
+                .await
+            {
+                Ok(result) => result,
+                Err(err) if should_skip_pty_test(&err) => {
+                    eprintln!(
+                        "skipping PTY integration test in current environment: {}",
+                        err
+                    );
+                    return;
+                }
+                Err(err) => panic!("shell session start should succeed: {}", err),
+            };
+            let session_id = start.metadata["session"]["id"]
+                .as_str()
+                .expect("session id")
+                .to_string();
 
-        let read = ShellSessionTool::new()
-            .execute(
-                serde_json::json!({
-                    "operation": "read",
-                    "session_id": start.metadata["session"]["id"],
-                    "cursor": 0,
-                    "wait_ms": 2000
-                }),
-                ctx.clone(),
-            )
-            .await
-            .expect("read should succeed");
-        assert!(
-            read.output.contains("hello-shell"),
-            "output was: {}",
-            read.output
-        );
+            let marker = "hello-shell";
+            ShellSessionTool::new()
+                .execute(
+                    serde_json::json!({
+                        "operation": "write",
+                        "session_id": session_id,
+                        "input": test_exit_script(marker),
+                        "description": "Emit a marker and exit"
+                    }),
+                    ctx.clone(),
+                )
+                .await
+                .expect("write should succeed");
 
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        let status = ShellSessionTool::new()
-            .execute(
-                serde_json::json!({
-                    "operation": "status",
-                    "session_id": start.metadata["session"]["id"]
-                }),
-                ctx,
-            )
-            .await
-            .expect("status should succeed");
-        assert_eq!(
-            status.metadata["session"]["state"],
-            serde_json::json!("exited")
-        );
+            let read = ShellSessionTool::new()
+                .execute(
+                    serde_json::json!({
+                        "operation": "read",
+                        "session_id": start.metadata["session"]["id"],
+                        "cursor": 0,
+                        "wait_ms": 2_000
+                    }),
+                    ctx.clone(),
+                )
+                .await
+                .expect("read should succeed");
+            assert!(read.output.contains(marker), "output was: {}", read.output);
 
-        let permissions = permissions.lock().await;
-        assert!(
-            permissions
-                .iter()
-                .filter(|item| item.as_str() == "bash")
-                .count()
-                >= 2
-        );
+            let status =
+                wait_for_session_state(ctx, &start.metadata["session"]["id"], "exited").await;
+            assert_eq!(
+                status.metadata["session"]["state"],
+                serde_json::json!("exited")
+            );
+
+            let permissions = permissions.lock().await;
+            assert!(
+                permissions
+                    .iter()
+                    .filter(|item| item.as_str() == "bash")
+                    .count()
+                    >= 2
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn shell_session_terminate_stops_running_process() {
-        let dir = tempdir().expect("tempdir");
-        let ctx = ToolContext::new(
-            "session-2".into(),
-            "message-2".into(),
-            dir.path().to_string_lossy().to_string(),
-        );
-        let start = match ShellSessionTool::new()
-            .execute(
-                serde_json::json!({
-                    "operation": "start",
-                    "command": "sh",
-                    "args": ["-i"]
-                }),
-                ctx.clone(),
-            )
-            .await
-        {
-            Ok(result) => result,
-            Err(err) if should_skip_pty_test(&err) => {
-                eprintln!(
-                    "skipping PTY integration test in current environment: {}",
-                    err
-                );
-                return;
-            }
-            Err(err) => panic!("start should succeed: {}", err),
-        };
-        let session_id = start.metadata["session"]["id"]
-            .as_str()
-            .expect("session id")
-            .to_string();
+        run_shell_test("shell_session_terminate_stops_running_process", async {
+            let dir = tempdir().expect("tempdir");
+            let ctx = ToolContext::new(
+                "session-2".into(),
+                "message-2".into(),
+                dir.path().to_string_lossy().to_string(),
+            );
+            let start = match ShellSessionTool::new()
+                .execute(
+                    serde_json::json!({
+                        "operation": "start"
+                    }),
+                    ctx.clone(),
+                )
+                .await
+            {
+                Ok(result) => result,
+                Err(err) if should_skip_pty_test(&err) => {
+                    eprintln!(
+                        "skipping PTY integration test in current environment: {}",
+                        err
+                    );
+                    return;
+                }
+                Err(err) => panic!("start should succeed: {}", err),
+            };
+            let session_id = start.metadata["session"]["id"]
+                .as_str()
+                .expect("session id")
+                .to_string();
 
-        ShellSessionTool::new()
-            .execute(
-                serde_json::json!({
-                    "operation": "terminate",
-                    "session_id": session_id
-                }),
-                ctx.clone(),
-            )
-            .await
-            .expect("terminate should succeed");
+            ShellSessionTool::new()
+                .execute(
+                    serde_json::json!({
+                        "operation": "terminate",
+                        "session_id": session_id
+                    }),
+                    ctx.clone(),
+                )
+                .await
+                .expect("terminate should succeed");
 
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-        let status = ShellSessionTool::new()
-            .execute(
-                serde_json::json!({
-                    "operation": "status",
-                    "session_id": start.metadata["session"]["id"]
-                }),
-                ctx,
-            )
-            .await
-            .expect("status should succeed");
-        assert_ne!(
-            status.metadata["session"]["state"],
-            serde_json::json!("running")
-        );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            let status = ShellSessionTool::new()
+                .execute(
+                    serde_json::json!({
+                        "operation": "status",
+                        "session_id": start.metadata["session"]["id"]
+                    }),
+                    ctx,
+                )
+                .await
+                .expect("status should succeed");
+            assert_ne!(
+                status.metadata["session"]["state"],
+                serde_json::json!("running")
+            );
+        })
+        .await;
     }
 }

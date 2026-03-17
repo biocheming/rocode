@@ -3277,10 +3277,12 @@ dependencies = [
  "base64",
  "chrono",
  "content_inspector",
+ "crossbeam-channel",
  "dirs",
  "futures",
  "glob",
  "html2md",
+ "ignore",
  "lsp-types",
  "portable-pty",
  "regex",
@@ -5153,7 +5155,7 @@ dependencies = [
 
 [[package]]
 name = "wasip3"
-version = "0.4.0+wasi-0.3.0-rc-2026-03-16"
+version = "0.4.0+wasi-0.3.0-rc-2026-01-06"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5428f8bf88ea5ddc08faddef2ac4a67e390b88186c703ce6dbd955e1c145aca5"
 dependencies = [

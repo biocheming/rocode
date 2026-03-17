@@ -71,6 +71,9 @@
               <h3 id="sessionTitle" class="conversation-title">No session</h3>
             </div>
             <div class="conversation-actions">
+              <button id="runtimeToggleBtn" class="conversation-header-btn" title="Toggle runtime panels">
+                <span class="icon-glyph" aria-hidden="true">⚙</span>
+              </button>
               <button id="terminalToggleBtn" class="conversation-header-btn conversation-header-btn-terminal" title="Toggle terminal">
                 <span class="icon-glyph" aria-hidden="true">›_</span>
               </button>
@@ -97,7 +100,7 @@
 
           <div class="conversation-body">
             <section class="conversation-stream">
-              <section class="runtime-rail">
+              <section class="runtime-rail hidden" id="runtimeRail">
                 <section id="childSessionRail" class="child-session-rail hidden"></section>
                 <section id="focusedChildPanel" class="focused-child-panel hidden"></section>
                 <section id="executionPanel" class="runtime-card hidden"></section>
@@ -260,23 +263,21 @@
                         Select a configured provider or add one from the known provider catalog.
                       </div>
                       <div id="settingsProviderEditor" class="hidden">
-                        <div class="settings-grid">
-                          <div class="form-group">
-                            <label class="form-label" for="settingsProviderKey">Provider Key</label>
-                            <input id="settingsProviderKey" class="form-input" type="text" placeholder="minimax" />
-                          </div>
-                          <div class="form-group">
-                            <label class="form-label" for="settingsProviderId">Runtime Provider ID</label>
-                            <input id="settingsProviderId" class="form-input" type="text" placeholder="minimax" />
-                          </div>
-                          <div class="form-group">
-                            <label class="form-label" for="settingsProviderName">Display Name</label>
-                            <input id="settingsProviderName" class="form-input" type="text" placeholder="MiniMax" />
-                          </div>
-                          <div class="form-group">
-                            <label class="form-label" for="settingsProviderBaseUrl">Base URL</label>
-                            <input id="settingsProviderBaseUrl" class="form-input" type="text" placeholder="https://api.example.com/v1" />
-                          </div>
+                        <div class="form-group">
+                          <label class="form-label" for="settingsProviderKey">Provider Key</label>
+                          <input id="settingsProviderKey" class="form-input" type="text" placeholder="minimax" />
+                        </div>
+                        <div class="form-group">
+                          <label class="form-label" for="settingsProviderId">Runtime Provider ID</label>
+                          <input id="settingsProviderId" class="form-input" type="text" placeholder="minimax" />
+                        </div>
+                        <div class="form-group">
+                          <label class="form-label" for="settingsProviderName">Display Name</label>
+                          <input id="settingsProviderName" class="form-input" type="text" placeholder="MiniMax" />
+                        </div>
+                        <div class="form-group">
+                          <label class="form-label" for="settingsProviderBaseUrl">Base URL</label>
+                          <input id="settingsProviderBaseUrl" class="form-input" type="text" placeholder="https://api.example.com/v1" />
                         </div>
                         <div class="form-group">
                           <label class="form-label" for="settingsProviderApiKey">API Key</label>
@@ -288,7 +289,7 @@
                         </div>
                         <div class="form-group">
                           <label class="form-label" for="settingsProviderOptions">Provider Options (JSON)</label>
-                          <textarea id="settingsProviderOptions" class="form-input form-textarea settings-codearea" rows="5" placeholder='{"timeout": 30}'></textarea>
+                          <textarea id="settingsProviderOptions" class="form-input form-textarea settings-codearea" rows="4" placeholder='{"timeout": 30}'></textarea>
                         </div>
 
                         <div class="settings-section-head settings-section-head-tight">

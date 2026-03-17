@@ -32,6 +32,8 @@ async-trait = { workspace = true }
 futures = { workspace = true }
 regex = { workspace = true }
 glob = { workspace = true }
+ignore = "0.4"
+crossbeam-channel = "0.5"
 walkdir = { workspace = true }
 dirs = { workspace = true }
 chrono = { workspace = true }

@@ -7,8 +7,8 @@ pub fn user_message_bg(theme: &Theme) -> Color {
 }
 
 pub fn thinking_message_bg(theme: &Theme) -> Color {
-    // Thinking sits between panel and menu tones for subtle separation.
-    blend(theme.background_menu, theme.background_panel, 1, 3)
+    // Thinking uses a stronger panel tint so it reads as a separate lane.
+    blend(theme.background_menu, theme.background_panel, 1, 2)
 }
 
 pub fn assistant_border_color(theme: &Theme) -> Color {
@@ -16,7 +16,7 @@ pub fn assistant_border_color(theme: &Theme) -> Color {
 }
 
 pub fn thinking_border_color(theme: &Theme) -> Color {
-    theme.background_element
+    theme.border_subtle
 }
 
 fn blend(foreground: Color, background: Color, num: u16, den: u16) -> Color {

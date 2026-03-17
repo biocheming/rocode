@@ -48,6 +48,9 @@ impl OpenAIResponsesLanguageModel {
     pub async fn get_args(&self, options: &GenerateOptions) -> Result<PreparedArgs, ProviderError> {
         let model_config = get_responses_model_config(&self.model_id);
         let provider_options = options.provider_options.clone().unwrap_or_default();
+        let supports_reasoning = model_config.is_reasoning_model
+            || provider_options.reasoning_effort.is_some()
+            || provider_options.reasoning_summary.is_some();
         let mut warnings = validate_responses_settings(ResponsesSettingsValidation {
             model_config: &model_config,
             options: &provider_options,
@@ -157,7 +160,7 @@ impl OpenAIResponsesLanguageModel {
                 Value::Number(max_output_tokens.into()),
             );
         }
-        if !model_config.is_reasoning_model {
+        if !supports_reasoning {
             if let Some(temperature) = options.temperature {
                 obj.insert("temperature".to_string(), json!(temperature));
             }
@@ -205,7 +208,7 @@ impl OpenAIResponsesLanguageModel {
             obj.insert("text".to_string(), Value::Object(text_obj));
         }
 
-        if model_config.is_reasoning_model {
+        if supports_reasoning {
             let mut reasoning = serde_json::Map::new();
             if let Some(effort) = provider_options.reasoning_effort.clone() {
                 reasoning.insert("effort".to_string(), Value::String(effort));

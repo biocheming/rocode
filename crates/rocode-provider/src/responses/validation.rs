@@ -67,6 +67,9 @@ pub fn validate_responses_settings(input: ResponsesSettingsValidation<'_>) -> Ve
         top_p,
     } = input;
     let mut warnings = Vec::new();
+    let supports_reasoning = model_config.is_reasoning_model
+        || options.reasoning_effort.is_some()
+        || options.reasoning_summary.is_some();
 
     if top_k.is_some() {
         warnings.push(CallWarning::UnsupportedSetting {
@@ -100,7 +103,7 @@ pub fn validate_responses_settings(input: ResponsesSettingsValidation<'_>) -> Ve
     }
 
     // Reasoning model validations
-    if model_config.is_reasoning_model {
+    if supports_reasoning {
         if temperature.is_some() {
             warnings.push(CallWarning::UnsupportedSetting {
                 setting: "temperature".to_string(),

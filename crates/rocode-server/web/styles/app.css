@@ -597,8 +597,7 @@
 }
 
 .composer {
-  max-width: var(--max-content-width);
-  margin: 0 auto;
+  max-width: 100%;
   background-color: var(--bg-surface);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-xl);
@@ -1535,7 +1534,7 @@
   min-height: 0;
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) var(--workspace-rail-width, 320px);
   gap: var(--space-4);
 }
 
@@ -1801,7 +1800,7 @@
 }
 
 .composer {
-  max-width: min(1280px, calc(100vw - 48px));
+  max-width: 100%;
 }
 
 .badge.ok {
@@ -2341,7 +2340,7 @@
 
 .conversation-body {
   gap: 16px;
-  grid-template-columns: minmax(0, 1fr) 336px;
+  grid-template-columns: minmax(0, 1fr) var(--workspace-rail-width, 320px);
 }
 
 .runtime-rail,
@@ -2380,7 +2379,7 @@
 }
 
 .message-feed > * {
-  width: min(100%, 860px);
+  width: 100%;
 }
 
 .message {
@@ -2703,7 +2702,7 @@
 }
 
 .composer {
-  max-width: min(1220px, calc(100vw - 56px));
+  max-width: 100%;
   padding: 12px 14px 10px;
   border-radius: 18px;
   border-color: color-mix(in srgb, var(--border-default) 82%, transparent);
@@ -3312,6 +3311,13 @@
 
 .composer-shell {
   grid-row: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--workspace-rail-width, 320px);
+  gap: 16px;
+}
+
+.composer-shell > .composer {
+  grid-column: 1;
 }
 
 .terminal-panel {
@@ -3432,7 +3438,7 @@
 
 .conversation-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) var(--workspace-rail-width, 320px);
   min-height: 0;
 }
 
@@ -4371,7 +4377,7 @@
 }
 
 .composer {
-  max-width: 820px;
+  max-width: 100%;
   background-color: var(--composer-bg);
   border-radius: 14px;
   border-color: var(--composer-border);
@@ -4762,4 +4768,106 @@
 .terminal-tab:hover .terminal-tab-close,
 .terminal-tab.active .terminal-tab-close {
   opacity: 0.8;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Dark Theme Overrides — Flatten gradients to solid backgrounds
+   Applies to: midnight, graphite
+   ═══════════════════════════════════════════════════════════════ */
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .shell {
+  background: var(--bg-base);
+}
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .sidebar {
+  background: var(--bg-surface);
+}
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .message-reasoning {
+  background: var(--bg-surface);
+}
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .hero-card {
+  background: var(--bg-surface);
+}
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .conversation-header {
+  background: var(--bg-surface);
+}
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .workspace-panel,
+:is([data-theme="midnight"], [data-theme="graphite"]) .workspace-card {
+  background: var(--bg-surface);
+}
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .workspace-card-emphasis {
+  background: var(--accent-primary-soft);
+}
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .session-item.active {
+  background: var(--bg-base);
+}
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .workspace {
+  background: var(--bg-base);
+  background-image: none;
+}
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .sidebar-brand-mark {
+  background: var(--accent-primary-soft);
+}
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .message-user {
+  background: color-mix(in srgb, var(--accent-user) 88%, var(--bg-elevated));
+}
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .message-assistant {
+  background: var(--bg-surface);
+}
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .message-system {
+  background: var(--bg-surface);
+}
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .scheduler-stage {
+  background: var(--bg-surface);
+}
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .child-session-card {
+  background: var(--bg-base);
+}
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .child-session-card.active {
+  background: var(--accent-primary-soft);
+}
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .focused-child-field,
+:is([data-theme="midnight"], [data-theme="graphite"]) .focused-child-entry {
+  background: var(--bg-base);
+}
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .workspace-tab.active {
+  background: var(--bg-surface);
+}
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .composer-shell {
+  background: var(--bg-base);
+}
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .composer {
+  background: var(--bg-surface);
+}
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .runtime-card,
+:is([data-theme="midnight"], [data-theme="graphite"]) .child-session-rail,
+:is([data-theme="midnight"], [data-theme="graphite"]) .focused-child-panel {
+  background: var(--bg-surface);
+}
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .meta-pill {
+  background: var(--bg-surface);
+}
+
+:is([data-theme="midnight"], [data-theme="graphite"]) .message-content pre {
+  background: var(--bg-surface);
 }
