@@ -11,6 +11,7 @@ use crate::{ApiError, Result, ServerState};
 use rocode_command::agent_presenter::{
     history_session_event_to_web, history_tool_call_to_web, history_tool_result_to_web,
 };
+use rocode_types::QuestionToolInput;
 
 use super::session_crud::persist_sessions_if_enabled;
 
@@ -653,14 +654,13 @@ fn match_pending_question_request(
     input: &serde_json::Value,
     pending_questions: &mut Vec<super::super::tui::QuestionInfo>,
 ) -> Option<super::super::tui::QuestionInfo> {
-    let input_questions = input.get("questions")?.as_array()?;
-    let normalized_input = input_questions
+    let input = QuestionToolInput::from_value(input);
+    let normalized_input = input
+        .questions
         .iter()
         .filter_map(|question| {
-            question
-                .get("question")
-                .and_then(|value| value.as_str())
-                .map(normalize_question_text)
+            let text = question.question.trim();
+            (!text.is_empty()).then(|| normalize_question_text(text))
         })
         .collect::<Vec<_>>();
     if normalized_input.is_empty() {
@@ -688,46 +688,35 @@ fn question_pending_interaction_json(
     question_info: super::super::tui::QuestionInfo,
     input: &serde_json::Value,
 ) -> serde_json::Value {
-    let input_questions = input
-        .get("questions")
-        .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let questions = input_questions
+    let input = QuestionToolInput::from_value(input);
+    let questions = input
+        .questions
         .iter()
         .enumerate()
         .map(|(index, question)| {
-            let options = question
-                .get("options")
-                .and_then(|value| value.as_array())
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(|option| {
-                            option
-                                .get("label")
-                                .and_then(|value| value.as_str())
-                                .map(str::to_string)
-                        })
-                        .collect::<Vec<_>>()
+            let mut options = question
+                .options
+                .iter()
+                .filter_map(|option| {
+                    let label = option.label.trim();
+                    (!label.is_empty()).then(|| label.to_string())
                 })
-                .or_else(|| {
-                    question_info
-                        .options
-                        .as_ref()
-                        .and_then(|options| options.get(index).cloned())
-                })
-                .unwrap_or_default();
+                .collect::<Vec<_>>();
+
+            if options.is_empty() {
+                if let Some(fallback) = question_info
+                    .options
+                    .as_ref()
+                    .and_then(|options| options.get(index).cloned())
+                {
+                    options = fallback;
+                }
+            }
+
             serde_json::json!({
-                "question": question
-                    .get("question")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or_default(),
-                "header": question.get("header").and_then(|value| value.as_str()),
-                "multiple": question
-                    .get("multiple")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false),
+                "question": question.question.as_str(),
+                "header": question.header.as_deref(),
+                "multiple": question.multiple,
                 "options": options,
             })
         })

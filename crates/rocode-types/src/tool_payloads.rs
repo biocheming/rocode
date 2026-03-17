@@ -67,6 +67,31 @@ where
     })
 }
 
+/// Deserialize a boolean from a JSON value, accepting bool/number/string.
+///
+/// Defaults to `false` on missing/null/unrecognized values.
+pub fn deserialize_bool_lossy<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(match value {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(value)) => value,
+        Some(Value::Number(value)) => value.as_u64().unwrap_or(0) != 0,
+        Some(Value::String(raw)) => {
+            let normalized = raw.trim().to_ascii_lowercase();
+            match normalized.as_str() {
+                "" => false,
+                "true" | "1" | "yes" | "y" | "on" => true,
+                "false" | "0" | "no" | "n" | "off" => false,
+                _ => false,
+            }
+        }
+        _ => false,
+    })
+}
+
 /// Deserialize an optional u64 from a JSON value, accepting number/string/bool.
 pub fn deserialize_opt_u64_lossy<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
 where
@@ -264,7 +289,7 @@ pub struct QuestionPrompt {
     pub header: Option<String>,
     #[serde(default)]
     pub options: Vec<QuestionOption>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_bool_lossy")]
     pub multiple: bool,
 }
 
