@@ -49,6 +49,7 @@ use rocode_orchestrator::{session_runtime_request_defaults, CompiledExecutionReq
 use rocode_plugin::{HookContext, HookEvent};
 use rocode_provider::transform::{apply_caching, ProviderType};
 use rocode_provider::{Provider, ToolDefinition};
+use serde::Deserialize;
 
 use crate::compaction::{run_compaction, CompactionResult};
 use crate::message_v2::ModelRef as V2ModelRef;
@@ -2193,31 +2194,39 @@ impl SessionPrompt {
     }
 
     fn collect_pending_subtasks(message: &SessionMessage) -> Vec<PendingSubtask> {
+        #[derive(Debug, Deserialize, Default)]
+        struct PendingSubtaskMetadataWire {
+            #[serde(default)]
+            id: String,
+            #[serde(default)]
+            agent: Option<String>,
+            #[serde(default)]
+            prompt: Option<String>,
+            #[serde(default)]
+            description: Option<String>,
+        }
+
         let metadata_by_id: HashMap<String, (String, String, String)> = message
             .metadata
             .get("pending_subtasks")
-            .and_then(|v| v.as_array())
+            .and_then(|value| {
+                serde_json::from_value::<Vec<PendingSubtaskMetadataWire>>(value.clone()).ok()
+            })
             .map(|items| {
                 items
-                    .iter()
+                    .into_iter()
                     .filter_map(|item| {
-                        let id = item.get("id").and_then(|v| v.as_str())?.to_string();
+                        if item.id.trim().is_empty() {
+                            return None;
+                        }
                         let agent = item
-                            .get("agent")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("general")
+                            .agent
+                            .unwrap_or_else(|| "general".to_string())
+                            .trim()
                             .to_string();
-                        let prompt = item
-                            .get("prompt")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let description = item
-                            .get("description")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        Some((id, (agent, prompt, description)))
+                        let prompt = item.prompt.unwrap_or_default();
+                        let description = item.description.unwrap_or_default();
+                        Some((item.id, (agent, prompt, description)))
                     })
                     .collect()
             })
