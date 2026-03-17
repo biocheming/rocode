@@ -1,8 +1,8 @@
 # ROCode 存储 / 缓存 / 配置路径与数据库结构（源码导读）
 
-> 生成时间：`2026-03-17`  
+> 生成时间：`2026-03-18`  
 > 代码基线：workspace `version = 2026.3.16`（见 `Cargo.toml`）  
-> 分支基线：`rewrite/sea-orm-storage`（持久化层已迁移到 SeaORM）  
+> 分支基线：`rewrite/sea-orm-storage`（SeaORM + parts 正规化写入闭环）  
 > 说明：DB schema 以 `crates/rocode-storage-migration`（SeaORM migrations）为准；`crates/rocode-storage/src/schema.rs` 仅作为 legacy SQL 参考。
 >
 > 本文从**当前仓库源码**出发，系统梳理 ROCode 的：
