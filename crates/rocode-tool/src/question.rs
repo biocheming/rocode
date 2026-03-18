@@ -281,8 +281,38 @@ where
 }
 
 fn parse_question_input(args: serde_json::Value) -> Result<QuestionInput, ToolError> {
-    serde_json::from_value::<QuestionInput>(args)
-        .map_err(|e| ToolError::InvalidArguments(e.to_string()))
+    #[derive(Debug, Deserialize, Default)]
+    struct RawQuestionInputWire {
+        #[serde(default)]
+        questions: Option<serde_json::Value>,
+    }
+
+    let raw: RawQuestionInputWire = serde_json::from_value(args.clone()).unwrap_or_default();
+    let mut input = serde_json::from_value::<QuestionInput>(args)
+        .map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
+    input.questions.retain(|q| !q.question.trim().is_empty());
+    if !input.questions.is_empty() {
+        return Ok(input);
+    }
+
+    match raw.questions {
+        None | Some(serde_json::Value::Null) => Err(ToolError::InvalidArguments(
+            "questions is required".to_string(),
+        )),
+        Some(serde_json::Value::Array(array)) if array.is_empty() => {
+            Err(ToolError::InvalidArguments(
+                "questions must not be empty".to_string(),
+            ))
+        }
+        Some(serde_json::Value::Bool(_)) | Some(serde_json::Value::Number(_)) => {
+            Err(ToolError::InvalidArguments(
+                "questions must be an array/object or a JSON string representing them".to_string(),
+            ))
+        }
+        _ => Err(ToolError::InvalidArguments(
+            "questions must contain at least one valid question".to_string(),
+        )),
+    }
 }
 
 fn parse_questions_value(value: &serde_json::Value) -> Result<Vec<QuestionDef>, String> {
@@ -342,6 +372,24 @@ mod tests {
             .expect_err("numeric questions should fail");
         let msg = err.to_string();
         assert!(msg.contains("questions must be an array/object"));
+    }
+
+    #[test]
+    fn parse_question_input_rejects_empty_questions_array() {
+        let err = parse_question_input(serde_json::json!({ "questions": [] }))
+            .expect_err("empty questions should fail");
+        assert!(err.to_string().contains("questions must not be empty"));
+    }
+
+    #[test]
+    fn parse_question_input_rejects_blank_questions() {
+        let err = parse_question_input(serde_json::json!({
+            "questions": [{ "question": "   " }]
+        }))
+        .expect_err("blank question should fail");
+        assert!(err
+            .to_string()
+            .contains("questions must contain at least one valid question"));
     }
 
     #[test]

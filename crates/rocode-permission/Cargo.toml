@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 rocode-core = { path = "../rocode-core" }
 rocode-plugin = { path = "../rocode-plugin" }
+rocode-types = { path = "../rocode-types" }
 glob = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }

@@ -215,15 +215,17 @@ fn parse_hook_payload<T: DeserializeOwned>(payload: &serde_json::Value) -> Optio
 fn extract_permission_status(payload: &serde_json::Value) -> Option<String> {
     #[derive(Debug, Deserialize, Default)]
     struct PermissionStatusWire {
-        #[serde(default)]
-        status: Option<serde_json::Value>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        status: Option<String>,
     }
 
     let parsed = parse_hook_payload::<PermissionStatusWire>(payload)?;
     parsed
         .status
-        .as_ref()
-        .and_then(|value| value.as_str())
+        .as_deref()
         .filter(|status| matches!(*status, "ask" | "deny" | "allow"))
         .map(ToString::to_string)
 }
@@ -277,5 +279,34 @@ mod tests {
         assert!(wildcard_match("foo/bar/baz", "*/baz"));
         assert!(wildcard_match("foo/bar/baz", "*bar*"));
         assert!(!wildcard_match("foo", "bar"));
+    }
+
+    #[test]
+    fn extract_permission_status_accepts_trimmed_output_status() {
+        let payload = serde_json::json!({
+            "output": {
+                "status": " allow "
+            }
+        });
+        assert_eq!(extract_permission_status(&payload).as_deref(), Some("allow"));
+    }
+
+    #[test]
+    fn extract_permission_status_accepts_data_envelope() {
+        let payload = serde_json::json!({
+            "data": {
+                "status": "ask"
+            }
+        });
+        assert_eq!(extract_permission_status(&payload).as_deref(), Some("ask"));
+    }
+
+    #[test]
+    fn extract_permission_status_rejects_unknown_or_non_string_status() {
+        let unknown = serde_json::json!({ "status": "later" });
+        assert_eq!(extract_permission_status(&unknown), None);
+
+        let non_string = serde_json::json!({ "status": true });
+        assert_eq!(extract_permission_status(&non_string), None);
     }
 }

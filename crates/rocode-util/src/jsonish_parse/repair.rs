@@ -751,7 +751,13 @@ pub(super) fn detect_tool(value: &Value, schemas: &[ToolSchema]) -> Option<Strin
 
     // Direct name field takes priority
     if let Ok(probe) = serde_json::from_value::<ToolNameProbeWire>(value.clone()) {
-        if let Some(name_str) = probe.name.as_deref().or(probe.tool.as_deref()) {
+        if let Some(name_str) = probe
+            .name
+            .as_deref()
+            .or(probe.tool.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             if let Some(schema) = schemas.iter().find(|schema| schema.name == name_str) {
                 return Some(schema.name.clone());
             }

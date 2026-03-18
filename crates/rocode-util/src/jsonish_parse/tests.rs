@@ -30,6 +30,15 @@ fn test_complete_json() {
 }
 
 #[test]
+fn test_direct_tool_name_with_whitespace() {
+    let mut parser = StreamingToolParser::new(test_schemas());
+    parser.push(r#"{"name":" run_command "}"#);
+
+    let result = parser.finalize().unwrap();
+    assert_eq!(result.tool_name, "run_command");
+}
+
+#[test]
 fn test_streaming_chunks() {
     let mut parser = StreamingToolParser::new(test_schemas());
 
