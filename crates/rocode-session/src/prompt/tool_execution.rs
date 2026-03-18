@@ -53,6 +53,47 @@ struct McpToolWire {
     parameters: Option<serde_json::Value>,
 }
 
+fn deserialize_vec_mcp_tools_lossy<'de, D>(deserializer: D) -> Result<Vec<McpToolWire>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    Ok(serde_json::from_value::<Vec<McpToolWire>>(value).unwrap_or_default())
+}
+
+fn deserialize_subsessions_lossy<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, PersistedSubsession>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(HashMap::new());
+    };
+    Ok(serde_json::from_value::<HashMap<String, PersistedSubsession>>(value).unwrap_or_default())
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ToolExecutionSessionMetadataWire {
+    #[serde(default, deserialize_with = "deserialize_vec_mcp_tools_lossy")]
+    mcp_tools: Vec<McpToolWire>,
+    #[serde(default, deserialize_with = "deserialize_subsessions_lossy")]
+    subsessions: HashMap<String, PersistedSubsession>,
+}
+
+fn tool_execution_session_metadata_wire(
+    metadata: &HashMap<String, serde_json::Value>,
+) -> ToolExecutionSessionMetadataWire {
+    let Ok(value) = serde_json::to_value(metadata) else {
+        return ToolExecutionSessionMetadataWire::default();
+    };
+    serde_json::from_value::<ToolExecutionSessionMetadataWire>(value).unwrap_or_default()
+}
+
 #[derive(Clone)]
 pub(super) struct PersistedSubsessionPromptOptions {
     pub(super) default_model: String,
@@ -463,12 +504,8 @@ impl SessionPrompt {
     }
 
     pub(super) fn mcp_tools_from_session(session: &Session) -> Vec<ToolDefinition> {
-        let tools: Vec<McpToolWire> = session
-            .metadata
-            .get("mcp_tools")
-            .cloned()
-            .and_then(|value| serde_json::from_value(value).ok())
-            .unwrap_or_default();
+        let wire = tool_execution_session_metadata_wire(&session.metadata);
+        let tools = wire.mcp_tools;
 
         tools
             .into_iter()
@@ -491,12 +528,7 @@ impl SessionPrompt {
     pub(super) fn load_persisted_subsessions(
         session: &Session,
     ) -> HashMap<String, PersistedSubsession> {
-        session
-            .metadata
-            .get("subsessions")
-            .cloned()
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default()
+        tool_execution_session_metadata_wire(&session.metadata).subsessions
     }
 
     pub(super) fn save_persisted_subsessions(

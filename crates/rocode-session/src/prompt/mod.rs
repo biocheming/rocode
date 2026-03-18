@@ -1314,12 +1314,7 @@ impl SessionPrompt {
                     let subtask_id = format!("sub_{}", uuid::Uuid::new_v4());
                     let description = description.clone().unwrap_or_else(|| prompt.clone());
                     msg.add_subtask(subtask_id.clone(), description.clone());
-                    let mut pending = msg
-                        .metadata
-                        .get("pending_subtasks")
-                        .and_then(|v| v.as_array())
-                        .cloned()
-                        .unwrap_or_default();
+                    let mut pending = Self::pending_subtasks_metadata_values(&msg.metadata);
                     pending.push(serde_json::json!({
                         "id": subtask_id,
                         "agent": agent,
@@ -1528,12 +1523,41 @@ impl SessionPrompt {
             }
         };
 
+        fn deserialize_opt_string_lossy<'de, D>(
+            deserializer: D,
+        ) -> std::result::Result<Option<String>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+            Ok(match value {
+                Some(serde_json::Value::String(value)) => Some(value),
+                _ => None,
+            })
+        }
+
+        #[derive(Debug, Default, Deserialize)]
+        struct ResumeSessionMetadataWire {
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            model_provider: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            model_id: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            agent: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            model_variant: Option<String>,
+        }
+
+        let metadata = serde_json::to_value(&session.metadata)
+            .ok()
+            .and_then(|value| serde_json::from_value::<ResumeSessionMetadataWire>(value).ok())
+            .unwrap_or_default();
+
         let model = session.messages.iter().rev().find_map(|m| match m.role {
-            MessageRole::User => session
-                .metadata
-                .get("model_provider")
-                .and_then(|p| p.as_str())
-                .zip(session.metadata.get("model_id").and_then(|i| i.as_str()))
+            MessageRole::User => metadata
+                .model_provider
+                .as_deref()
+                .zip(metadata.model_id.as_deref())
                 .map(|(provider_id, model_id)| ModelRef {
                     provider_id: provider_id.to_string(),
                     model_id: model_id.to_string(),
@@ -1551,17 +1575,9 @@ impl SessionPrompt {
             .unwrap_or_else(|| "anthropic".to_string());
 
         let session_id = session_id.to_string();
-        let resume_agent = session
-            .metadata
-            .get("agent")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let resume_agent = metadata.agent.clone();
         let compiled_request = compiled_request.inherit_missing(&session_runtime_request_defaults(
-            session
-                .metadata
-                .get("model_variant")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
+            metadata.model_variant.clone(),
         ));
 
         {
@@ -2193,6 +2209,22 @@ impl SessionPrompt {
         }
     }
 
+    fn pending_subtasks_metadata_values(
+        metadata: &HashMap<String, serde_json::Value>,
+    ) -> Vec<serde_json::Value> {
+        #[derive(Debug, Default, Deserialize)]
+        struct PendingSubtasksWire {
+            #[serde(default)]
+            pending_subtasks: Vec<serde_json::Value>,
+        }
+
+        let Ok(value) = serde_json::to_value(metadata) else {
+            return Vec::new();
+        };
+        let wire = serde_json::from_value::<PendingSubtasksWire>(value).unwrap_or_default();
+        wire.pending_subtasks
+    }
+
     fn collect_pending_subtasks(message: &SessionMessage) -> Vec<PendingSubtask> {
         #[derive(Debug, Deserialize, Default)]
         struct PendingSubtaskMetadataWire {
@@ -2206,12 +2238,13 @@ impl SessionPrompt {
             description: Option<String>,
         }
 
-        let metadata_by_id: HashMap<String, (String, String, String)> = message
-            .metadata
-            .get("pending_subtasks")
-            .and_then(|value| {
-                serde_json::from_value::<Vec<PendingSubtaskMetadataWire>>(value.clone()).ok()
-            })
+        let pending = Self::pending_subtasks_metadata_values(&message.metadata);
+
+        let metadata_by_id: HashMap<String, (String, String, String)> =
+            serde_json::from_value::<Vec<PendingSubtaskMetadataWire>>(serde_json::Value::Array(
+                pending,
+            ))
+            .ok()
             .map(|items| {
                 items
                     .into_iter()
