@@ -9,6 +9,9 @@ import {
   loadWebUiPreferences,
   sendPrompt,
   setTheme,
+  selectSession,
+  setActiveDomain,
+  handleSSEEvent,
 } from "~/stores/app";
 import { loadTerminalSessions } from "~/stores/terminal";
 import { NavRail } from "~/components/nav/NavRail";
@@ -32,10 +35,7 @@ const App: Component = () => {
   // Global SSE event stream
   const sse = useSSE({
     url: "/event",
-    onEvent: (name, payload) => {
-      // Global event handling — will be wired to store actions
-      // For now, just log
-    },
+    onEvent: handleSSEEvent,
   });
 
   onMount(async () => {
@@ -76,7 +76,7 @@ const App: Component = () => {
     <div class={styles.app}>
       <NavRail
         onNewSession={() => createAndSelectSession()}
-        onSelectSession={() => {}}
+        onSelectSession={(id) => selectSession(id)}
         onOpenSettings={() => setSettingsOpen(true)}
       />
       <main class={styles.mainStage}>
@@ -92,7 +92,7 @@ const App: Component = () => {
           }
         >
           <ContextHeader />
-          <DomainTabs active={state.activeDomain} onSelect={() => {}} />
+          <DomainTabs active={state.activeDomain} onSelect={(id) => setActiveDomain(id)} />
           <div class={styles.domainContent}>
             <Switch>
               <Match when={state.activeDomain === "chat"}>

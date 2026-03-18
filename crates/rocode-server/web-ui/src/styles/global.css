@@ -65,7 +65,8 @@ select {
   --font-size-lg: 1.125rem;
   --font-size-xl: 1.25rem;
   --font-size-2xl: 1.5rem;
-  --font-mono: "SF Mono", "Fira Code", "Fira Mono", "Roboto Mono",
+  --font-mono: "RobotoMono Nerd Font Mono", "0xProto Nerd Font Mono",
+    "SF Mono", "Fira Code", "Fira Mono", "Roboto Mono",
     "Cascadia Code", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 
   /* Transitions */

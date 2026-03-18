@@ -26,6 +26,16 @@ export { terminal, setTerminal };
 
 const MAX_BUFFER_SIZE = 200 * 1024; // 200KB
 
+// Strip ANSI escape sequences so raw PTY output is readable in a plain <div>
+function stripAnsi(text: string): string {
+  return text
+    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")   // CSI sequences (colors, cursor, etc.)
+    .replace(/\x1b\([A-B]/g, "")               // charset selection
+    .replace(/\x1b\][^\x07]*\x07/g, "")        // OSC sequences (title, etc.)
+    .replace(/\x1b\[\?[0-9;]*[a-zA-Z]/g, "")   // private mode sequences
+    .replace(/\r/g, "");                         // carriage returns
+}
+
 export function toggleTerminal() {
   setTerminal("open", !terminal.open);
 }
@@ -36,7 +46,7 @@ export function setActiveTerminal(sessionId: string) {
 
 export function appendTerminalOutput(sessionId: string, chunk: string) {
   const current = terminal.buffers.get(sessionId) ?? "";
-  let next = current + chunk;
+  let next = current + stripAnsi(chunk);
   if (next.length > MAX_BUFFER_SIZE) {
     next = next.slice(-MAX_BUFFER_SIZE);
   }
@@ -46,7 +56,7 @@ export function appendTerminalOutput(sessionId: string, chunk: string) {
 export async function createTerminalSession(): Promise<TerminalSession> {
   const response = await api("/pty", {
     method: "POST",
-    body: JSON.stringify({ command: null, cwd: null }),
+    body: JSON.stringify({ command: "/bin/bash", cwd: "~" }),
   });
   const session: TerminalSession = await response.json();
   setTerminal(

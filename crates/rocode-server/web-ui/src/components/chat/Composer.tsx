@@ -1,5 +1,5 @@
 import { type Component, createSignal, Show } from "solid-js";
-import { state, interactionLocked, selectedModeLabel } from "~/stores/app";
+import { state, interactionLocked, abortCurrentExecution, selectedModeLabel } from "~/stores/app";
 import { compactPath } from "~/utils/format";
 import styles from "./Composer.module.css";
 
@@ -71,7 +71,7 @@ export const Composer: Component<ComposerProps> = (props) => {
             class={styles.cancelBtn}
             title="Cancel"
             onClick={() => {
-              // Will call abortCurrentExecution
+              void abortCurrentExecution().catch(() => {});
             }}
           >
             ✕

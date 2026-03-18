@@ -5,6 +5,7 @@
 import { createSignal, createMemo, batch } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { api, apiJson } from "~/api/client";
+import { parseSSE } from "~/api/sse";
 import { baseName } from "~/utils/format";
 import type {
   Session,
@@ -488,6 +489,14 @@ export async function refreshExecutionTopology(sessionId?: string): Promise<void
 export async function sendPrompt(content: string): Promise<void> {
   if (!content || interactionLocked()) return;
 
+  // Show user message immediately in the feed
+  _outputBlockListener?.({
+    kind: "message",
+    phase: "full",
+    role: "user",
+    text: content,
+  }, undefined);
+
   batch(() => {
     setState("streaming", true);
     setState("abortRequested", false);
@@ -519,8 +528,11 @@ export async function sendPrompt(content: string): Promise<void> {
       body: JSON.stringify(payload),
     });
 
-    // SSE parsing is handled by the useSSE hook or the caller
-    return response as unknown as void;
+    // Consume the SSE response — output_block events also arrive via global /event,
+    // but we consume here to keep the connection alive until the stream ends.
+    await parseSSE(response, () => {
+      // Events are handled by the global SSE handler
+    });
   } catch (error) {
     throw error;
   } finally {
@@ -530,4 +542,170 @@ export async function sendPrompt(content: string): Promise<void> {
     });
     void refreshExecutionTopology().catch(() => {});
   }
+}
+
+// ── Session selection ───────────────────────────────────────────────────────
+
+export async function selectSession(sessionId: string): Promise<void> {
+  if (state.selectedSession === sessionId) return;
+  const session = state.sessions.find((s) => s.id === sessionId);
+  if (!session) return;
+
+  batch(() => {
+    setState("selectedSession", sessionId);
+    setState("selectedProject", projectKey(session));
+    setState("streaming", false);
+    setState("abortRequested", false);
+  });
+}
+
+export async function loadSessionMessages(sessionId: string): Promise<OutputBlock[]> {
+  const response = await api(`/session/${sessionId}/message`);
+  const data = await response.json();
+  const blocks: OutputBlock[] = [];
+  for (const msg of data || []) {
+    // Each message has parts[]; collect text parts into a single block
+    const parts = (msg.parts ?? []) as { type?: string; text?: string; tool_call?: unknown; tool_result?: unknown }[];
+    const textParts = parts
+      .filter((p) => p.type === "text" && p.text)
+      .map((p) => p.text!)
+      .join("\n");
+    if (textParts) {
+      blocks.push({
+        kind: "message",
+        phase: "full",
+        role: msg.role ?? "assistant",
+        text: textParts,
+      });
+    }
+  }
+  return blocks;
+}
+
+// ── Domain tab ──────────────────────────────────────────────────────────────
+
+export function setActiveDomain(domain: AppState["activeDomain"]) {
+  setState("activeDomain", domain);
+}
+
+// ── Global SSE event handler ────────────────────────────────────────────────
+
+export function handleSSEEvent(_name: string, payload: unknown) {
+  const event = payload as Record<string, unknown>;
+  const type = event?.type as string | undefined;
+  if (!type) return;
+
+  const eventSessionId = (event.sessionID ?? event.session_id) as string | undefined;
+
+  switch (type) {
+    case "output_block": {
+      // Only process events for the currently selected session
+      if (eventSessionId && eventSessionId === state.selectedSession) {
+        const block = event.block as OutputBlock | undefined;
+        if (block) {
+          // Dispatch to the global output block listener if registered
+          _outputBlockListener?.(block, event.id as string | undefined);
+        }
+      }
+      break;
+    }
+    case "usage": {
+      if (eventSessionId && eventSessionId === state.selectedSession) {
+        applyStreamUsage(event as unknown as UsageEvent);
+      }
+      break;
+    }
+    case "error": {
+      if (eventSessionId && eventSessionId === state.selectedSession) {
+        const done = event.done as boolean | undefined;
+        if (done) {
+          batch(() => {
+            setState("streaming", false);
+            setState("abortRequested", false);
+          });
+        }
+        _outputBlockListener?.({
+          kind: "status",
+          tone: "error",
+          text: (event.error as string) || "Unknown error",
+        }, undefined);
+      }
+      break;
+    }
+    case "session.updated": {
+      void refreshSessionsIndex().catch(() => {});
+      break;
+    }
+    case "session.status": {
+      const status = event.status as string | undefined;
+      if (eventSessionId === state.selectedSession) {
+        if (status === "idle" || status === "complete" || status === "error") {
+          batch(() => {
+            setState("streaming", false);
+            setState("abortRequested", false);
+          });
+        }
+      }
+      break;
+    }
+    case "question.created": {
+      if (eventSessionId === state.selectedSession) {
+        setState("activeQuestionInteraction", {
+          request_id: event.requestID as string,
+          session_id: eventSessionId,
+          questions: event.questions as QuestionInteraction["questions"],
+        });
+      }
+      break;
+    }
+    case "question.resolved": {
+      if (eventSessionId === state.selectedSession) {
+        setState("activeQuestionInteraction", null);
+        setState("questionSubmitting", false);
+      }
+      break;
+    }
+    case "permission.requested": {
+      if (eventSessionId === state.selectedSession) {
+        const info = event.info as Record<string, unknown> | undefined;
+        setState("activePermissionInteraction", {
+          permission_id: event.permissionID as string,
+          session_id: eventSessionId,
+          message: (info?.message ?? info?.description) as string | undefined,
+          permission: info?.permission as string | undefined,
+          command: info?.command as string | undefined,
+          filepath: info?.filepath as string | undefined,
+          patterns: info?.patterns as string[] | undefined,
+        });
+      }
+      break;
+    }
+    case "permission.resolved": {
+      if (eventSessionId === state.selectedSession) {
+        setState("activePermissionInteraction", null);
+        setState("permissionSubmitting", false);
+      }
+      break;
+    }
+    case "execution.topology.changed": {
+      if (eventSessionId === state.selectedSession) {
+        void refreshExecutionTopology().catch(() => {});
+      }
+      break;
+    }
+    case "config.updated": {
+      void loadProviders().catch(() => {});
+      void loadModes().catch(() => {});
+      break;
+    }
+  }
+}
+
+// ── Output block listener (set by ChatDomain) ──────────────────────────────
+
+type OutputBlockListenerFn = (block: OutputBlock, id: string | undefined) => void;
+let _outputBlockListener: OutputBlockListenerFn | null = null;
+
+export function setOutputBlockListener(listener: OutputBlockListenerFn | null) {
+  _outputBlockListener = listener;
 }
