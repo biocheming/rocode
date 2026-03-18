@@ -3,13 +3,19 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{Tool, ToolContext, ToolError, ToolResult};
 use rocode_plugin::{HookContext, HookEvent};
 
 /// Tools that should not appear in suggestion lists when a tool is not found.
 const FILTERED_FROM_SUGGESTIONS: &[&str] = &["invalid", "patch", "batch"];
+
+#[derive(Debug, Serialize)]
+struct RecoveredWriteArgs {
+    file_path: String,
+    content: String,
+}
 
 fn looks_like_jsonish_payload(s: &str) -> bool {
     let trimmed = s.trim_start();
@@ -115,10 +121,7 @@ fn recover_write_args_from_jsonish(input: &str) -> Option<serde_json::Value> {
         let file_path = parse_jsonish_string_field(input, "file_path")
             .or_else(|| parse_jsonish_string_field(input, "filePath"))?;
         let content = parse_jsonish_string_field(input, "content").unwrap_or_default();
-        Some(serde_json::json!({
-            "file_path": file_path,
-            "content": content
-        }))
+        serde_json::to_value(RecoveredWriteArgs { file_path, content }).ok()
     }
 
     if let Some(recovered) = recover_once(input) {

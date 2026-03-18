@@ -27,6 +27,19 @@ pub struct WebSearchTool {
     options: HashMap<String, serde_json::Value>,
 }
 
+#[derive(Debug, Serialize)]
+struct WebSearchMcpArguments<'a> {
+    query: &'a str,
+    #[serde(rename = "type")]
+    search_type: &'a str,
+    #[serde(rename = "numResults")]
+    num_results: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    livecrawl: Option<&'a str>,
+    #[serde(rename = "contextMaxCharacters", skip_serializing_if = "Option::is_none")]
+    context_max_characters: Option<usize>,
+}
+
 impl WebSearchTool {
     pub fn new() -> Self {
         Self::from_config(None)
@@ -215,22 +228,20 @@ impl Tool for WebSearchTool {
         }
 
         // Well-known fields (override options if same key)
-        arguments.insert("query".to_string(), serde_json::json!(input.query.clone()));
-        arguments.insert(
-            "type".to_string(),
-            serde_json::json!(input
-                .search_type
-                .unwrap_or_else(|| self.default_search_type.clone())),
-        );
-        arguments.insert("numResults".to_string(), serde_json::json!(num_results));
-        if let Some(livecrawl) = &input.livecrawl {
-            arguments.insert("livecrawl".to_string(), serde_json::json!(livecrawl));
-        }
-        if let Some(max_chars) = input.context_max_characters {
-            arguments.insert(
-                "contextMaxCharacters".to_string(),
-                serde_json::json!(max_chars),
-            );
+        let known = WebSearchMcpArguments {
+            query: &input.query,
+            search_type: input.search_type.as_deref().unwrap_or(&self.default_search_type),
+            num_results,
+            livecrawl: input.livecrawl.as_deref(),
+            context_max_characters: input.context_max_characters,
+        };
+        if let Some(known_map) = serde_json::to_value(known)
+            .ok()
+            .and_then(|value| value.as_object().cloned())
+        {
+            for (key, value) in known_map {
+                arguments.insert(key, value);
+            }
         }
 
         let search_request = McpSearchRequest {

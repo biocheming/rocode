@@ -7,13 +7,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use serde::Serialize;
 use serde_json::Value;
 
 use rocode_plugin::subprocess::client::PluginToolDef;
 use rocode_plugin::subprocess::loader::PluginLoader;
 use rocode_core::contracts::attachments::{keys as attachment_keys, AttachmentTypeWire};
-use rocode_core::contracts::wire::keys as wire_keys;
-use rocode_core::contracts::plugin_hooks::keys as hook_keys;
 
 use crate::tool::{Metadata, Tool, ToolContext, ToolError, ToolResult};
 use crate::truncation;
@@ -24,6 +23,26 @@ pub struct PluginTool {
     description: String,
     parameters: Value,
     loader: Arc<PluginLoader>,
+}
+
+#[derive(Debug, Serialize)]
+struct PluginInvokeContext<'a> {
+    #[serde(rename = "sessionID")]
+    session_id: &'a str,
+    #[serde(rename = "messageID")]
+    message_id: &'a str,
+    agent: &'a str,
+    directory: &'a str,
+    worktree: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct PluginOutputAttachment {
+    #[serde(rename = "type")]
+    attachment_type: &'static str,
+    path: String,
+    original_bytes: usize,
+    original_lines: usize,
 }
 
 impl PluginTool {
@@ -58,25 +77,14 @@ impl Tool for PluginTool {
     }
 
     async fn execute(&self, args: Value, ctx: ToolContext) -> Result<ToolResult, ToolError> {
-        let mut context = serde_json::Map::new();
-        context.insert(
-            wire_keys::SESSION_ID.to_string(),
-            serde_json::json!(&ctx.session_id),
-        );
-        context.insert(
-            wire_keys::MESSAGE_ID.to_string(),
-            serde_json::json!(&ctx.message_id),
-        );
-        context.insert(hook_keys::AGENT.to_string(), serde_json::json!(&ctx.agent));
-        context.insert(
-            hook_keys::DIRECTORY.to_string(),
-            serde_json::json!(&ctx.directory),
-        );
-        context.insert(
-            hook_keys::WORKTREE.to_string(),
-            serde_json::json!(&ctx.worktree),
-        );
-        let context = Value::Object(context);
+        let context = serde_json::to_value(PluginInvokeContext {
+            session_id: &ctx.session_id,
+            message_id: &ctx.message_id,
+            agent: &ctx.agent,
+            directory: &ctx.directory,
+            worktree: &ctx.worktree,
+        })
+        .unwrap_or(Value::Null);
         let result = self
             .loader
             .invoke_plugin_tool(&self.plugin_id, &self.tool_id, args, context)
@@ -119,21 +127,13 @@ impl Tool for PluginTool {
         );
 
         let path_str = saved_path.display().to_string();
-        let mut attachment = serde_json::Map::new();
-        attachment.insert(
-            attachment_keys::TYPE.into(),
-            serde_json::json!(AttachmentTypeWire::File.as_str()),
-        );
-        attachment.insert(attachment_keys::PATH.into(), serde_json::json!(path_str));
-        attachment.insert(
-            attachment_keys::ORIGINAL_BYTES.into(),
-            serde_json::json!(original_bytes),
-        );
-        attachment.insert(
-            attachment_keys::ORIGINAL_LINES.into(),
-            serde_json::json!(original_lines),
-        );
-        let attachment_value = Value::Object(attachment);
+        let attachment_value = serde_json::to_value(PluginOutputAttachment {
+            attachment_type: AttachmentTypeWire::File.as_str(),
+            path: path_str,
+            original_bytes,
+            original_lines,
+        })
+        .unwrap_or(Value::Null);
 
         let mut metadata = Metadata::new();
         metadata.insert("truncated".into(), serde_json::json!(true));

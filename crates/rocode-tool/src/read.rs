@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use walkdir::WalkDir;
@@ -11,6 +11,16 @@ const DEFAULT_READ_LIMIT: usize = 2000;
 const MAX_LINE_LENGTH: usize = 2000;
 const MAX_BYTES: usize = 50 * 1024;
 const DESCRIPTION: &str = include_str!("read.txt");
+
+#[derive(Debug, Serialize)]
+struct ReadAttachment {
+    #[serde(rename = "type")]
+    attachment_type: &'static str,
+    mime: String,
+    url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filename: Option<String>,
+}
 
 fn deserialize_opt_u64_lossy<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
 where
@@ -309,14 +319,16 @@ fn handle_binary_file(
         msg
     );
 
-    let mut attachment = serde_json::Map::new();
-    attachment.insert("type".to_string(), serde_json::json!("file"));
-    attachment.insert("mime".to_string(), serde_json::json!(mime));
-    attachment.insert("url".to_string(), serde_json::json!(data_url));
-    if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
-        attachment.insert("filename".to_string(), serde_json::json!(filename));
-    }
-    let attachment_value = serde_json::Value::Object(attachment);
+    let attachment_value = serde_json::to_value(ReadAttachment {
+        attachment_type: "file",
+        mime: mime.to_string(),
+        url: data_url.clone(),
+        filename: path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .map(ToString::to_string),
+    })
+    .unwrap_or(serde_json::Value::Null);
 
     Ok(ToolResult {
         title,

@@ -15,6 +15,17 @@ pub struct WebFetchTool {
     client: Client,
 }
 
+#[derive(Debug, Serialize)]
+struct WebFetchImageAttachment {
+    #[serde(rename = "type")]
+    attachment_type: &'static str,
+    #[serde(rename = "mimeType")]
+    mime_type: String,
+    url: String,
+    size: usize,
+    data: String,
+}
+
 impl WebFetchTool {
     pub fn new() -> Self {
         Self {
@@ -171,13 +182,14 @@ impl Tool for WebFetchTool {
             metadata.insert("data".to_string(), serde_json::json!(data_url));
             metadata.insert(
                 attachment_keys::ATTACHMENT.to_string(),
-                serde_json::json!({
-                    (attachment_keys::TYPE): "image",
-                    "mimeType": mime,
-                    (attachment_keys::URL): url,
-                    "size": bytes.len(),
-                    "data": data_url
-                }),
+                serde_json::to_value(WebFetchImageAttachment {
+                    attachment_type: "image",
+                    mime_type: mime.to_string(),
+                    url: url.to_string(),
+                    size: bytes.len(),
+                    data: data_url,
+                })
+                .unwrap_or(serde_json::Value::Null),
             );
             return Ok(ToolResult {
                 title,

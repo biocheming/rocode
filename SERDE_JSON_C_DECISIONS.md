@@ -1,6 +1,6 @@
 # serde_json::json! C类裁决清单
 
-更新时间：2026-03-18
+更新时间：2026-03-18（第二轮清零）
 
 本清单用于回填 Plan #2684 / Step 9321 的“C类逐项裁决与清尾”。
 
@@ -11,8 +11,8 @@
 
 ## 模块汇总（生产代码）
 
-- `crates/rocode-command/src`：KEEP 1，REFACTOR 1（本步已完成）
-- `crates/rocode-tool/src`：KEEP 40，REFACTOR 12（本步已完成 4）
+- `crates/rocode-command/src`：KEEP 1，REFACTOR 1（已完成）
+- `crates/rocode-tool/src`：KEEP 40，REFACTOR 12（已完成）
 
 > 注：统计来自 `src/**`，排除了 tests/examples/docs 与 `#[cfg(test)]` 代码。
 
@@ -40,39 +40,41 @@
    - 场景：`files_metadata` 单文件条目对象反复拼接。
    - 处理：改为 `ApplyPatchFileChangeMeta`（含 wire key rename）。
 
+6. `crates/rocode-tool/src/read.rs`
+   - 场景：二进制附件对象构造。
+   - 处理：改为 `ReadAttachment` 结构体序列化。
+
+7. `crates/rocode-tool/src/media_inspect.rs`
+   - 场景：预读 `read` 调用参数对象。
+   - 处理：改为 `ReadInvokeArgs` 结构体序列化。
+
+8. `crates/rocode-tool/src/edit/tool.rs`
+   - 场景：LSP diagnostics 单条对象。
+   - 处理：改为 `LspDiagnosticEntry` 结构体序列化。
+
+9. `crates/rocode-tool/src/websearch.rs`
+   - 场景：MCP 参数对象构造。
+   - 处理：改为 `WebSearchMcpArguments` 并合并进 arguments map。
+
+10. `crates/rocode-tool/src/webfetch.rs`
+    - 场景：图片 attachment 对象。
+    - 处理：改为 `WebFetchImageAttachment` 结构体序列化。
+
+11. `crates/rocode-tool/src/plugin_tool.rs`
+    - 场景：plugin invoke context。
+    - 处理：改为 `PluginInvokeContext` 结构体序列化。
+
+12. `crates/rocode-tool/src/plugin_tool.rs`
+    - 场景：大输出 attachment 元信息。
+    - 处理：改为 `PluginOutputAttachment` 结构体序列化。
+
+13. `crates/rocode-tool/src/registry.rs`
+    - 场景：`recover_write_args_from_jsonish` 重建对象。
+    - 处理：改为 `RecoveredWriteArgs` 结构体序列化。
+
 ### 剩余待改（下一批）
 
-1. `crates/rocode-tool/src/read.rs`
-   - 场景：二进制附件对象构造。
-   - 建议：`ReadAttachment`。
-
-2. `crates/rocode-tool/src/media_inspect.rs`
-   - 场景：预读 `read` 调用参数对象。
-   - 建议：`ReadInvokeArgs`。
-
-3. `crates/rocode-tool/src/edit/tool.rs`
-   - 场景：LSP diagnostics 单条对象。
-   - 建议：`LspDiagnosticEntry`。
-
-4. `crates/rocode-tool/src/websearch.rs`
-   - 场景：MCP 参数对象构造。
-   - 建议：`WebSearchMcpArguments`。
-
-5. `crates/rocode-tool/src/webfetch.rs`
-   - 场景：图片 attachment 对象。
-   - 建议：`WebFetchImageAttachment`。
-
-6. `crates/rocode-tool/src/plugin_tool.rs`
-   - 场景：plugin invoke context。
-   - 建议：`PluginInvokeContext`。
-
-7. `crates/rocode-tool/src/plugin_tool.rs`
-   - 场景：大输出 attachment 元信息。
-   - 建议：`PluginOutputAttachment`。
-
-8. `crates/rocode-tool/src/registry.rs`
-   - 场景：`recover_write_args_from_jsonish` 重建对象。
-   - 建议：`RecoveredWriteArgs`。
+已清零（0 项）。
 
 ## KEEP 项（按类别回填）
 

@@ -1,5 +1,7 @@
 use async_trait::async_trait;
 use serde::Deserialize;
+#[cfg(feature = "lsp")]
+use serde::Serialize;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
@@ -26,6 +28,14 @@ impl Default for EditTool {
     fn default() -> Self {
         Self::new()
     }
+}
+
+#[cfg(feature = "lsp")]
+#[derive(Debug, Serialize)]
+struct LspDiagnosticEntry {
+    line: u32,
+    message: String,
+    severity: String,
 }
 
 #[async_trait]
@@ -387,11 +397,16 @@ async fn get_lsp_diagnostics_impl_with_meta(
 
                 let diagnostics_meta: Vec<serde_json::Value> = limited.iter()
                     .map(|d| {
-                        serde_json::json!({
-                            "line": d.range.start.line + 1,
-                            "message": d.message,
-                            "severity": d.severity.as_ref().map(|s| format!("{:?}", s)).unwrap_or_else(|| "Unknown".to_string())
+                        serde_json::to_value(LspDiagnosticEntry {
+                            line: d.range.start.line + 1,
+                            message: d.message.clone(),
+                            severity: d
+                                .severity
+                                .as_ref()
+                                .map(|s| format!("{:?}", s))
+                                .unwrap_or_else(|| "Unknown".to_string()),
                         })
+                        .unwrap_or(serde_json::Value::Null)
                     })
                     .collect();
 

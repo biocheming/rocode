@@ -36,6 +36,11 @@ struct MediaPreflight {
     attachments: Vec<serde_json::Value>,
 }
 
+#[derive(Debug, Serialize)]
+struct ReadInvokeArgs {
+    file_path: String,
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct MediaPreflightMetadataWire {
     #[serde(default)]
@@ -256,9 +261,10 @@ async fn execute_preflight_read(
     let result = registry
         .execute(
             "read",
-            serde_json::json!({
-                "file_path": resolved_path.to_string_lossy().to_string(),
-            }),
+            serde_json::to_value(ReadInvokeArgs {
+                file_path: resolved_path.to_string_lossy().to_string(),
+            })
+            .unwrap_or(serde_json::Value::Null),
             ctx.clone(),
         )
         .await?;
