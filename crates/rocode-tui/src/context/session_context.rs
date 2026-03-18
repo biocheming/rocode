@@ -1,12 +1,99 @@
 use chrono::{DateTime, Utc};
-use rocode_command::output_blocks::{
-    MessageBlock as WireMessageBlock, MessagePhase as WireMessagePhase,
-    MessageRole as WireMessageRole, OutputBlock as WireOutputBlock,
-    ReasoningBlock as WireReasoningBlock, SchedulerStageBlock, ToolBlock as WireToolBlock,
-    ToolPhase as WireToolPhase,
-};
+use rocode_command::output_blocks::SchedulerStageBlock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+fn parse_metadata<T>(metadata: &HashMap<String, serde_json::Value>) -> Option<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    serde_json::to_value(metadata)
+        .ok()
+        .and_then(|value| serde_json::from_value(value).ok())
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+enum WireMessageRole {
+    System,
+    User,
+    #[default]
+    Assistant,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+enum WireMessagePhase {
+    Start,
+    #[default]
+    Delta,
+    End,
+    Full,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+enum WireToolPhase {
+    Start,
+    #[default]
+    Running,
+    Done,
+    Error,
+    Result,
+    #[serde(other)]
+    Unknown,
+}
+
+fn default_tool_name() -> String {
+    "tool".to_string()
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "kind")]
+enum OutputBlockFrame {
+    #[serde(rename = "message")]
+    Message(MessageFrame),
+    #[serde(rename = "reasoning")]
+    Reasoning(ReasoningFrame),
+    #[serde(rename = "tool")]
+    Tool(ToolFrame),
+    #[serde(rename = "scheduler_stage")]
+    SchedulerStage(SchedulerStageBlock),
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Clone, Debug, Deserialize, Default)]
+struct MessageFrame {
+    #[serde(default)]
+    role: WireMessageRole,
+    #[serde(default)]
+    phase: WireMessagePhase,
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Default)]
+struct ReasoningFrame {
+    #[serde(default)]
+    phase: WireMessagePhase,
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Default)]
+struct ToolFrame {
+    #[serde(default = "default_tool_name")]
+    name: String,
+    #[serde(default)]
+    phase: WireToolPhase,
+    #[serde(default)]
+    detail: String,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
@@ -153,40 +240,76 @@ pub struct ChildSessionInfo {
 }
 
 pub fn collect_child_sessions(messages: &[Message]) -> Vec<ChildSessionInfo> {
+    #[derive(Debug, Deserialize, Default)]
+    struct SchedulerStageMeta {
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        scheduler_stage_child_session_id: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        scheduler_stage: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        scheduler_stage_title: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+        scheduler_stage_index: Option<u64>,
+        #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+        scheduler_stage_total: Option<u64>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        scheduler_stage_status: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        stage_id: Option<String>,
+    }
+
+    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::String(value)) => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            }
+            _ => None,
+        })
+    }
+
+    fn deserialize_opt_u64_lossy<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::Number(number)) => number.as_u64(),
+            Some(serde_json::Value::String(raw)) => raw.parse::<u64>().ok(),
+            _ => None,
+        })
+    }
+
     let mut seen = HashMap::new();
     for msg in messages {
         let meta = match msg.metadata.as_ref() {
             Some(m) => m,
             None => continue,
         };
-        let child_id = match meta
-            .get("scheduler_stage_child_session_id")
-            .and_then(|v| v.as_str())
-        {
-            Some(id) => id.to_string(),
-            None => continue,
+        let parsed = parse_metadata::<SchedulerStageMeta>(meta).unwrap_or_default();
+        let Some(child_id) = parsed.scheduler_stage_child_session_id.clone() else {
+            continue;
         };
-        let stage_name = meta
-            .get("scheduler_stage")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-        let stage_title = meta
-            .get("scheduler_stage_title")
-            .and_then(|v| v.as_str())
-            .map(String::from)
+        let stage_name = parsed
+            .scheduler_stage
+            .unwrap_or_else(|| "unknown".to_string());
+        let stage_title = parsed
+            .scheduler_stage_title
             .unwrap_or_else(|| stage_name.clone());
-        let stage_index = meta.get("scheduler_stage_index").and_then(|v| v.as_u64());
-        let stage_total = meta.get("scheduler_stage_total").and_then(|v| v.as_u64());
-        let status = meta
-            .get("scheduler_stage_status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("running")
-            .to_string();
-        let stage_id = meta
-            .get("stage_id")
-            .and_then(|v| v.as_str())
-            .map(String::from);
+        let stage_index = parsed.scheduler_stage_index;
+        let stage_total = parsed.scheduler_stage_total;
+        let status = parsed
+            .scheduler_stage_status
+            .unwrap_or_else(|| "running".to_string());
+        let stage_id = parsed.stage_id;
 
         let info = ChildSessionInfo {
             session_id: child_id.clone(),
@@ -325,7 +448,7 @@ impl SessionContext {
         &mut self,
         session_id: &str,
         message_id: &str,
-        phase: WireMessagePhase,
+        phase: &str,
         text: &str,
     ) {
         if message_id.is_empty() {
@@ -370,7 +493,7 @@ impl SessionContext {
 
         // Find or create a Reasoning part
         match phase {
-            WireMessagePhase::Start => {
+            "start" => {
                 // Initialize or reset reasoning content
                 // Check if there's already a Reasoning part
                 let has_reasoning = message
@@ -383,7 +506,7 @@ impl SessionContext {
                     });
                 }
             }
-            WireMessagePhase::Delta => {
+            "delta" => {
                 // Append reasoning text
                 for part in &mut message.parts {
                     if let MessagePart::Reasoning {
@@ -395,7 +518,7 @@ impl SessionContext {
                     }
                 }
             }
-            WireMessagePhase::Full => {
+            "full" => {
                 if let Some(MessagePart::Reasoning {
                     text: ref mut existing,
                 }) = message
@@ -410,9 +533,10 @@ impl SessionContext {
                     });
                 }
             }
-            WireMessagePhase::End => {
+            "end" => {
                 // Reasoning complete - nothing special to do, the text is already there
             }
+            _ => {}
         }
     }
 
@@ -420,24 +544,26 @@ impl SessionContext {
         &mut self,
         session_id: &str,
         block_id: Option<&str>,
-        block: &WireOutputBlock,
+        payload: &serde_json::Value,
     ) {
         self.ensure_streaming_session(session_id, None, None);
 
-        match block {
-            WireOutputBlock::Message(message) => {
-                self.apply_message_block(session_id, block_id, message);
+        let Ok(frame) = serde_json::from_value::<OutputBlockFrame>(payload.clone()) else {
+            return;
+        };
+
+        match frame {
+            OutputBlockFrame::Message(frame) => {
+                self.apply_message_block(session_id, block_id, frame)
             }
-            WireOutputBlock::Reasoning(reasoning) => {
-                self.apply_reasoning_block(session_id, block_id, reasoning);
+            OutputBlockFrame::Reasoning(frame) => {
+                self.apply_reasoning_block(session_id, block_id, frame);
             }
-            WireOutputBlock::Tool(tool) => {
-                self.apply_tool_block(session_id, block_id, tool);
+            OutputBlockFrame::Tool(frame) => self.apply_tool_block(session_id, block_id, frame),
+            OutputBlockFrame::SchedulerStage(block) => {
+                self.apply_scheduler_stage_block(session_id, block_id, block);
             }
-            WireOutputBlock::SchedulerStage(stage) => {
-                self.apply_scheduler_stage_block(session_id, block_id, stage.as_ref());
-            }
-            _ => return,
+            OutputBlockFrame::Unknown => return,
         }
 
         if let Some(session) = self.sessions.get_mut(session_id) {
@@ -449,14 +575,13 @@ impl SessionContext {
         &mut self,
         session_id: &str,
         block_id: Option<&str>,
-        block: &WireMessageBlock,
+        payload: MessageFrame,
     ) {
-        let role = match block.role {
+        let role = match payload.role {
             WireMessageRole::System => MessageRole::System,
             WireMessageRole::User => MessageRole::User,
-            WireMessageRole::Assistant => MessageRole::Assistant,
+            _ => MessageRole::Assistant,
         };
-        let text = block.text.as_str();
 
         let pos = self.ensure_message_for_block(session_id, block_id, role.clone());
         let Some(message) = self
@@ -467,7 +592,7 @@ impl SessionContext {
             return;
         };
 
-        match block.phase {
+        match payload.phase {
             WireMessagePhase::Start => {
                 message.role = role;
                 message.content.clear();
@@ -482,10 +607,10 @@ impl SessionContext {
                     .rev()
                     .find(|part| matches!(part, MessagePart::Text { .. }))
                 {
-                    existing.push_str(text);
+                    existing.push_str(&payload.text);
                 } else {
                     message.parts.push(MessagePart::Text {
-                        text: text.to_string(),
+                        text: payload.text.clone(),
                     });
                 }
             }
@@ -495,10 +620,11 @@ impl SessionContext {
                     .parts
                     .retain(|part| !matches!(part, MessagePart::Text { .. }));
                 message.parts.push(MessagePart::Text {
-                    text: text.to_string(),
+                    text: payload.text.clone(),
                 });
             }
             WireMessagePhase::End => {}
+            _ => {}
         }
 
         Self::refresh_message_content(message);
@@ -508,7 +634,7 @@ impl SessionContext {
         &mut self,
         session_id: &str,
         block_id: Option<&str>,
-        block: &WireReasoningBlock,
+        payload: ReasoningFrame,
     ) {
         // When block_id is None or empty, fall back to the last assistant message
         // for this session so reasoning is not silently discarded.
@@ -529,18 +655,20 @@ impl SessionContext {
                 &fallback_id
             }
         };
-        self.update_reasoning_incremental(session_id, message_id, block.phase, &block.text);
+        let phase = match payload.phase {
+            WireMessagePhase::Start => "start",
+            WireMessagePhase::Delta => "delta",
+            WireMessagePhase::End => "end",
+            WireMessagePhase::Full => "full",
+            _ => "",
+        };
+        self.update_reasoning_incremental(session_id, message_id, phase, &payload.text);
     }
 
-    fn apply_tool_block(
-        &mut self,
-        session_id: &str,
-        block_id: Option<&str>,
-        block: &WireToolBlock,
-    ) {
+    fn apply_tool_block(&mut self, session_id: &str, block_id: Option<&str>, payload: ToolFrame) {
         let tool_call_id = block_id.unwrap_or_default();
-        let tool_name = block.name.as_str();
-        let detail = block.detail.as_deref().unwrap_or_default().to_string();
+        let tool_name = payload.name.as_str();
+        let detail = payload.detail.clone();
 
         let pos = self.ensure_message_for_block(session_id, None, MessageRole::Assistant);
         let Some(message) = self
@@ -551,7 +679,7 @@ impl SessionContext {
             return;
         };
 
-        match block.phase {
+        match payload.phase {
             WireToolPhase::Start | WireToolPhase::Running => {
                 let arguments = detail;
                 if let Some(MessagePart::ToolCall {
@@ -574,8 +702,8 @@ impl SessionContext {
                     });
                 }
             }
-            WireToolPhase::Done | WireToolPhase::Error => {
-                let is_error = matches!(block.phase, WireToolPhase::Error);
+            WireToolPhase::Done | WireToolPhase::Error | WireToolPhase::Result => {
+                let is_error = matches!(payload.phase, WireToolPhase::Error);
                 if let Some(part) = message.parts.iter_mut().find(|part| {
                     matches!(
                         part,
@@ -603,6 +731,7 @@ impl SessionContext {
                     });
                 }
             }
+            _ => {}
         }
 
         Self::refresh_message_content(message);
@@ -612,7 +741,7 @@ impl SessionContext {
         &mut self,
         session_id: &str,
         block_id: Option<&str>,
-        block: &SchedulerStageBlock,
+        block: SchedulerStageBlock,
     ) {
         let pos = self.ensure_message_for_block(session_id, block_id, MessageRole::Assistant);
         let Some(message) = self
@@ -630,7 +759,7 @@ impl SessionContext {
         message.parts.push(MessagePart::Text {
             text: block.text.clone(),
         });
-        message.metadata = Some(Self::scheduler_stage_metadata_from_block(block));
+        message.metadata = Some(Self::scheduler_stage_metadata_from_block(&block));
         Self::refresh_message_content(message);
 
         if let Some(child_session_id) = block.child_session_id.as_deref() {
@@ -952,7 +1081,7 @@ mod tests {
         ctx.apply_output_block_incremental(
             "parent",
             Some("stage-message-1"),
-            &serde_json::from_value::<WireOutputBlock>(json!({
+            &json!({
                 "kind": "scheduler_stage",
                 "stage_id": "stage-1",
                 "profile": "atlas",
@@ -968,8 +1097,7 @@ mod tests {
                 "active_categories": [],
                 "done_agent_count": 0,
                 "total_agent_count": 0
-            }))
-            .expect("scheduler_stage block"),
+            }),
         );
 
         let parent_messages = ctx.messages.get("parent").expect("parent messages");
@@ -997,13 +1125,12 @@ mod tests {
         ctx.apply_output_block_incremental(
             "child-1",
             Some("assistant-1"),
-            &serde_json::from_value::<WireOutputBlock>(json!({
+            &json!({
                 "kind": "message",
                 "phase": "delta",
                 "role": "assistant",
                 "text": "hello child"
-            }))
-            .expect("message block"),
+            }),
         );
 
         let child = ctx
@@ -1027,33 +1154,30 @@ mod tests {
         ctx.apply_output_block_incremental(
             "session-1",
             Some("assistant-1"),
-            &serde_json::from_value::<WireOutputBlock>(json!({
+            &json!({
                 "kind": "reasoning",
                 "phase": "start",
                 "text": ""
-            }))
-            .expect("reasoning start block"),
+            }),
         );
         ctx.apply_output_block_incremental(
             "session-1",
             Some("assistant-1"),
-            &serde_json::from_value::<WireOutputBlock>(json!({
+            &json!({
                 "kind": "reasoning",
                 "phase": "delta",
                 "text": "thinking..."
-            }))
-            .expect("reasoning delta block"),
+            }),
         );
         ctx.apply_output_block_incremental(
             "session-1",
             Some("assistant-1"),
-            &serde_json::from_value::<WireOutputBlock>(json!({
+            &json!({
                 "kind": "message",
                 "phase": "start",
                 "role": "assistant",
                 "text": ""
-            }))
-            .expect("message start block"),
+            }),
         );
 
         let message = ctx

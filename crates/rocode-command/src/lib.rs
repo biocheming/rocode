@@ -388,33 +388,44 @@ impl CommandRegistry {
     }
 }
 
-fn command_payload_object(
-    payload: &serde_json::Value,
-) -> Option<&serde_json::Map<String, serde_json::Value>> {
-    payload
-        .get("output")
-        .and_then(|value| value.as_object())
-        .or_else(|| payload.as_object())
-        .or_else(|| payload.get("data").and_then(|value| value.as_object()))
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        _ => None,
+    })
+}
+
+fn parse_hook_payload<T: serde::de::DeserializeOwned>(payload: &serde_json::Value) -> Option<T> {
+    #[derive(Debug, Deserialize)]
+    #[serde(untagged)]
+    enum HookEnvelope<T> {
+        Output { output: T },
+        Data { data: T },
+        Direct(T),
+    }
+
+    let envelope: HookEnvelope<T> = serde_json::from_value(payload.clone()).ok()?;
+    Some(match envelope {
+        HookEnvelope::Output { output } => output,
+        HookEnvelope::Data { data } => data,
+        HookEnvelope::Direct(value) => value,
+    })
 }
 
 fn apply_command_hook_payload(rendered: &mut String, payload: &serde_json::Value) {
-    let Some(object) = command_payload_object(payload) else {
-        return;
-    };
-
-    #[derive(Debug, Default, Deserialize)]
+    #[derive(Debug, Deserialize, Default)]
     struct CommandHookPartWire {
         #[serde(
             default,
             rename = "type",
-            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+            deserialize_with = "deserialize_opt_string_lossy"
         )]
         kind: Option<String>,
-        #[serde(
-            default,
-            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-        )]
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
         text: Option<String>,
     }
 
@@ -425,44 +436,32 @@ fn apply_command_hook_payload(rendered: &mut String, payload: &serde_json::Value
         D: serde::Deserializer<'de>,
     {
         let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-        let Some(serde_json::Value::Array(values)) = value else {
+        let Some(value) = value else {
             return Ok(Vec::new());
         };
-        Ok(values
-            .into_iter()
-            .filter_map(|value| serde_json::from_value::<CommandHookPartWire>(value).ok())
-            .collect())
+        Ok(serde_json::from_value::<Vec<CommandHookPartWire>>(value).unwrap_or_default())
     }
 
-    #[derive(Debug, Default, Deserialize)]
+    #[derive(Debug, Deserialize, Default)]
     struct CommandHookPayloadWire {
-        #[serde(
-            default,
-            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-        )]
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
         output: Option<String>,
-        #[serde(
-            default,
-            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-        )]
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
         template: Option<String>,
         #[serde(default, deserialize_with = "deserialize_parts_lossy")]
         parts: Vec<CommandHookPartWire>,
     }
 
-    let wire = serde_json::to_value(object)
-        .ok()
-        .and_then(|value| serde_json::from_value::<CommandHookPayloadWire>(value).ok())
-        .unwrap_or_default();
+    let Some(parsed) = parse_hook_payload::<CommandHookPayloadWire>(payload) else {
+        return;
+    };
 
-    if let Some(text) = wire.output.or(wire.template) {
-        if !text.is_empty() {
-            *rendered = text;
-        }
+    if let Some(text) = parsed.output.or(parsed.template) {
+        *rendered = text;
         return;
     }
 
-    let text = wire
+    let text = parsed
         .parts
         .into_iter()
         .filter(|part| part.kind.as_deref() == Some("text"))

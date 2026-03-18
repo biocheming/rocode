@@ -3,11 +3,6 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use rocode_core::bus::{Bus, BusEventDef};
-use rocode_core::contracts::events::BusEventName;
-use rocode_core::contracts::plugin_hooks;
-use rocode_core::contracts::session::keys as session_keys;
-use rocode_core::contracts::tools::BuiltinToolName;
-use rocode_core::contracts::wire::keys as wire_keys;
 use rocode_orchestrator::compaction_request;
 use rocode_orchestrator::runtime::events::CancelToken as RuntimeCancelToken;
 use rocode_orchestrator::runtime::events::LoopRequest;
@@ -20,13 +15,14 @@ use crate::message_v2::{
     AssistantTime, AssistantTokens, CacheTokens, CompletedTime, MessageInfo, MessagePath,
     MessageWithParts, ModelRef, Part, TextTime, ToolState, UserTime,
 };
+use crate::prompt::hooks::parse_hook_payload;
 use rocode_provider::{Content, ContentPart, ImageUrl, Message, Provider, Role};
 
 const COMPACTION_BUFFER: u64 = 20_000;
 const PRUNE_MINIMUM: u64 = 20_000;
 const PRUNE_PROTECT: u64 = 40_000;
 
-const PRUNE_PROTECTED_TOOLS: &[&str] = &[BuiltinToolName::Skill.as_str()];
+const PRUNE_PROTECTED_TOOLS: &[&str] = &["skill"];
 
 fn new_compaction_model_caller(
     provider: Arc<dyn Provider>,
@@ -53,7 +49,7 @@ impl RuntimeCancelToken for CompactionAbortToken {
 }
 
 /// Bus event definition for session.compacted (mirrors TS Event.Compacted).
-pub const EVENT_COMPACTED: BusEventDef = BusEventDef::new(BusEventName::SessionCompacted.as_str());
+pub const EVENT_COMPACTED: BusEventDef = BusEventDef::new("session.compacted");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactionConfig {
@@ -591,7 +587,7 @@ When constructing the summary, try to stick to this template:
         if let Some(ops) = session_ops {
             let now_part = Utc::now().timestamp_millis();
             let mut metadata = HashMap::new();
-            metadata.insert(session_keys::SUMMARY.to_string(), serde_json::json!(true));
+            metadata.insert("summary".to_string(), serde_json::json!(true));
 
             let summary_part = Part::Text {
                 id: rocode_core::id::create(rocode_core::id::Prefix::Part, false, None),
@@ -672,7 +668,7 @@ When constructing the summary, try to stick to this template:
         if let Some(ref bus) = self.bus {
             bus.publish(
                 &EVENT_COMPACTED,
-                serde_json::json!({ wire_keys::SESSION_ID: input.session_id }),
+                serde_json::json!({ "sessionID": input.session_id }),
             )
             .await;
         }
@@ -859,44 +855,75 @@ pub fn generate_continue_message() -> String {
 }
 
 fn parse_compaction_hook_payload(payload: &serde_json::Value) -> (Option<String>, Vec<String>) {
-    let source = payload
-        .get(plugin_hooks::keys::DATA)
-        .filter(|value| value.is_object())
-        .unwrap_or(payload);
-
-    let prompt = source
-        .get(plugin_hooks::keys::PROMPT)
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .or_else(|| {
-            source
-                .as_str()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string)
-        });
-
-    let mut context = Vec::new();
-    if let Some(value) = source.get(plugin_hooks::keys::CONTEXT) {
-        if let Some(values) = value.as_array() {
-            context.extend(values.iter().filter_map(|item| {
-                item.as_str()
-                    .map(str::trim)
-                    .filter(|text| !text.is_empty())
-                    .map(ToString::to_string)
-            }));
-        } else if let Some(item) = value
-            .as_str()
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
-        {
-            context.push(item.to_string());
-        }
+    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::String(value)) => Some(value),
+            _ => None,
+        })
     }
 
-    (prompt, context)
+    fn deserialize_vec_string_lossy<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        let mut out = Vec::new();
+        match value {
+            Some(serde_json::Value::Array(values)) => {
+                for item in values {
+                    if let Some(item) = item.as_str().map(str::trim).filter(|text| !text.is_empty())
+                    {
+                        out.push(item.to_string());
+                    }
+                }
+            }
+            Some(serde_json::Value::String(value)) => {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    out.push(trimmed.to_string());
+                }
+            }
+            _ => {}
+        }
+        Ok(out)
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct CompactionHookStructuredWire {
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        prompt: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_vec_string_lossy")]
+        context: Vec<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(untagged)]
+    enum CompactionHookSourceWire {
+        Structured(CompactionHookStructuredWire),
+        Text(String),
+    }
+
+    let parsed = parse_hook_payload::<CompactionHookSourceWire>(payload);
+    match parsed {
+        Some(CompactionHookSourceWire::Text(text)) => {
+            let prompt = text.trim();
+            ((!prompt.is_empty()).then(|| prompt.to_string()), Vec::new())
+        }
+        Some(CompactionHookSourceWire::Structured(structured)) => {
+            let prompt = structured
+                .prompt
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string);
+            (prompt, structured.context)
+        }
+        None => (None, Vec::new()),
+    }
 }
 
 fn resolve_compaction_prompt(
@@ -1582,7 +1609,7 @@ mod tests {
         assert_eq!(
             metadata
                 .as_ref()
-                .and_then(|map| map.get(session_keys::SUMMARY))
+                .and_then(|map| map.get("summary"))
                 .and_then(|value| value.as_bool()),
             Some(true)
         );

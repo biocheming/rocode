@@ -1,10 +1,10 @@
 use async_trait::async_trait;
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
 use crate::path_guard::{resolve_user_path, RootPathFallbackPolicy};
 use crate::{Metadata, Tool, ToolContext, ToolError, ToolResult};
-use rocode_types::WriteToolInput;
 
 #[cfg(feature = "lsp")]
 const MAX_DIAGNOSTICS_PER_FILE: usize = 20;
@@ -61,13 +61,18 @@ impl Tool for WriteTool {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let input = WriteToolInput::from_value(&args);
-        let file_path = input.file_path.ok_or_else(|| {
-            ToolError::InvalidArguments("file_path (or filePath) is required".into())
-        })?;
-        let content = input
-            .content
-            .ok_or_else(|| ToolError::InvalidArguments("content is required".into()))?;
+        #[derive(Debug, Deserialize)]
+        struct WriteInput {
+            #[serde(alias = "filePath")]
+            file_path: String,
+            content: String,
+        }
+
+        let input: WriteInput =
+            serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
+
+        let file_path = input.file_path.trim().to_string();
+        let content = input.content;
 
         let base_dir = if ctx.directory.is_empty() {
             &self.directory

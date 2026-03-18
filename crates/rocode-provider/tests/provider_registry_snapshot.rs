@@ -15,13 +15,13 @@ fn test_provider_registry_snapshot() {
         registry.list().iter().map(|p| p.id().to_string()).collect();
     registered_ids.sort();
 
-    // With no explicit config or auth store entries, the custom-loader-backed
-    // opencode provider should always autoload.
+    // With no explicit config/auth, the custom-loader-backed `opencode` provider
+    // must always be available.
     //
-    // Note: The registry may still include additional providers when the test
-    // process inherits provider credentials via environment variables.
+    // Other providers may also appear if the test environment has credentials
+    // set via environment variables (for example on developer machines).
     assert!(
-        registered_ids.iter().any(|id| id == "opencode"),
-        "expected opencode provider to be registered; got {registered_ids:?}"
+        registered_ids.contains(&"opencode".to_string()),
+        "expected registry to include `opencode`, got: {registered_ids:?}"
     );
 }

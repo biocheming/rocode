@@ -2,24 +2,19 @@ use crate::stage_protocol::{parse_step_limit_from_budget, StageStatus, StageSumm
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockTone {
     Title,
+    Normal,
     Muted,
     Success,
     Warning,
     Error,
-    #[default]
-    #[serde(other)]
-    Normal,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusBlock {
-    #[serde(default)]
     pub tone: BlockTone,
-    #[serde(default)]
     pub text: String,
 }
 
@@ -67,32 +62,24 @@ impl StatusBlock {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageRole {
     User,
-    System,
-    #[default]
-    #[serde(other)]
     Assistant,
+    System,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessagePhase {
     Start,
+    Delta,
     End,
     Full,
-    #[default]
-    #[serde(other)]
-    Delta,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReasoningBlock {
-    #[serde(default)]
     pub phase: MessagePhase,
-    #[serde(default)]
     pub text: String,
 }
 
@@ -126,13 +113,10 @@ impl ReasoningBlock {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageBlock {
-    #[serde(default)]
     pub role: MessageRole,
-    #[serde(default)]
     pub phase: MessagePhase,
-    #[serde(default)]
     pub text: String,
 }
 
@@ -170,20 +154,15 @@ impl MessageBlock {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolPhase {
     Start,
-    #[serde(alias = "result")]
+    Running,
     Done,
     Error,
-    #[default]
-    #[serde(other)]
-    Running,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolStructuredDetail {
     FileEdit {
         file_path: String,
@@ -211,23 +190,14 @@ pub enum ToolStructuredDetail {
         matches: Option<u64>,
         truncated: bool,
     },
-    #[serde(other)]
     Generic,
 }
 
-fn default_tool_block_name() -> String {
-    "tool".to_string()
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolBlock {
-    #[serde(default = "default_tool_block_name")]
     pub name: String,
-    #[serde(default)]
     pub phase: ToolPhase,
-    #[serde(default)]
     pub detail: Option<String>,
-    #[serde(default)]
     pub structured: Option<ToolStructuredDetail>,
 }
 
@@ -307,37 +277,20 @@ pub struct SchedulerDecisionBlock {
     pub sections: Vec<SchedulerDecisionSection>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionEventField {
-    #[serde(default)]
     pub label: String,
-    #[serde(default)]
     pub value: String,
-    #[serde(default)]
     pub tone: Option<String>,
 }
 
-fn default_session_event_name() -> String {
-    "event".to_string()
-}
-
-fn default_session_event_title() -> String {
-    "Session Event".to_string()
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionEventBlock {
-    #[serde(default = "default_session_event_name")]
     pub event: String,
-    #[serde(default = "default_session_event_title")]
     pub title: String,
-    #[serde(default)]
     pub status: Option<String>,
-    #[serde(default)]
     pub summary: Option<String>,
-    #[serde(default)]
     pub fields: Vec<SessionEventField>,
-    #[serde(default)]
     pub body: Option<String>,
 }
 
@@ -380,11 +333,8 @@ pub struct SchedulerStageBlock {
     pub available_skill_count: Option<u64>,
     pub available_agent_count: Option<u64>,
     pub available_category_count: Option<u64>,
-    #[serde(default)]
     pub active_skills: Vec<String>,
-    #[serde(default)]
     pub active_agents: Vec<String>,
-    #[serde(default)]
     pub active_categories: Vec<String>,
     #[serde(default)]
     pub done_agent_count: u32,
@@ -399,20 +349,79 @@ pub struct SchedulerStageBlock {
     pub child_session_id: Option<String>,
 }
 
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        _ => None,
+    })
+}
+
+fn deserialize_opt_u64_lossy<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Number(value)) => value.as_u64(),
+        Some(serde_json::Value::String(raw)) => raw.trim().parse::<u64>().ok(),
+        _ => None,
+    })
+}
+
+fn deserialize_u32_lossy_default<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Number(value)) => value.as_u64().unwrap_or(0) as u32,
+        Some(serde_json::Value::String(raw)) => raw.trim().parse::<u32>().unwrap_or(0),
+        _ => 0,
+    })
+}
+
+fn deserialize_string_vec_lossy<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    match value {
+        serde_json::Value::Array(items) => Ok(items
+            .into_iter()
+            .filter_map(|value| match value {
+                serde_json::Value::String(value) => Some(value),
+                _ => None,
+            })
+            .collect()),
+        _ => Ok(Vec::new()),
+    }
+}
+
 impl SchedulerStageBlock {
     pub fn from_metadata(
         text: &str,
         metadata: &HashMap<String, serde_json::Value>,
     ) -> Option<Self> {
-        #[derive(Debug, Default, Deserialize)]
+        #[derive(Debug, Deserialize, Default)]
         struct SchedulerStageMetadataWire {
-            #[serde(default, deserialize_with = "deserialize_opt_string_trimmed")]
-            scheduler_stage: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_opt_string_trimmed")]
+            #[serde(
+                default,
+                rename = "scheduler_stage",
+                deserialize_with = "deserialize_opt_string_lossy"
+            )]
+            stage: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
             scheduler_stage_id: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_opt_string_trimmed")]
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
             resolved_scheduler_profile: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_opt_string_trimmed")]
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
             scheduler_profile: Option<String>,
             #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
             scheduler_stage_index: Option<u64>,
@@ -420,17 +429,17 @@ impl SchedulerStageBlock {
             scheduler_stage_total: Option<u64>,
             #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
             scheduler_stage_step: Option<u64>,
-            #[serde(default, deserialize_with = "deserialize_opt_string_trimmed")]
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
             scheduler_stage_status: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_opt_string_trimmed")]
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
             scheduler_stage_focus: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_opt_string_trimmed")]
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
             scheduler_stage_last_event: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_opt_string_trimmed")]
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
             scheduler_stage_waiting_on: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_opt_string_trimmed")]
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
             scheduler_stage_activity: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_opt_string_trimmed")]
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
             scheduler_stage_loop_budget: Option<String>,
             #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
             scheduler_stage_prompt_tokens: Option<u64>,
@@ -442,105 +451,73 @@ impl SchedulerStageBlock {
             scheduler_stage_cache_read_tokens: Option<u64>,
             #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
             scheduler_stage_cache_write_tokens: Option<u64>,
-            #[serde(default, deserialize_with = "deserialize_opt_string_trimmed")]
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
             scheduler_stage_child_session_id: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_vec_string_lossy")]
+
+            #[serde(default, deserialize_with = "deserialize_string_vec_lossy")]
             scheduler_stage_active_skills: Vec<String>,
-            #[serde(default, deserialize_with = "deserialize_vec_string_lossy")]
+            #[serde(default, deserialize_with = "deserialize_string_vec_lossy")]
             scheduler_stage_active_agents: Vec<String>,
-            #[serde(default, deserialize_with = "deserialize_vec_string_lossy")]
+            #[serde(default, deserialize_with = "deserialize_string_vec_lossy")]
             scheduler_stage_active_categories: Vec<String>,
+
             #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
             scheduler_stage_available_skill_count: Option<u64>,
             #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
             scheduler_stage_available_agent_count: Option<u64>,
             #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
             scheduler_stage_available_category_count: Option<u64>,
-            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
-            scheduler_stage_done_agent_count: Option<u64>,
-            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
-            scheduler_stage_total_agent_count: Option<u64>,
+            #[serde(default, deserialize_with = "deserialize_u32_lossy_default")]
+            scheduler_stage_done_agent_count: u32,
+            #[serde(default, deserialize_with = "deserialize_u32_lossy_default")]
+            scheduler_stage_total_agent_count: u32,
         }
 
-        fn deserialize_opt_string_trimmed<'de, D>(
-            deserializer: D,
-        ) -> Result<Option<String>, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-            Ok(match value {
-                None | Some(serde_json::Value::Null) => None,
-                Some(serde_json::Value::String(value)) => {
-                    let trimmed = value.trim();
-                    (!trimmed.is_empty()).then(|| trimmed.to_string())
-                }
-                Some(serde_json::Value::Number(value)) => Some(value.to_string()),
-                Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
-                _ => None,
-            })
-        }
+        let map: serde_json::Map<String, serde_json::Value> = metadata
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        let parsed: SchedulerStageMetadataWire =
+            serde_json::from_value(serde_json::Value::Object(map)).ok()?;
 
-        fn deserialize_opt_u64_lossy<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-            Ok(match value {
-                None | Some(serde_json::Value::Null) => None,
-                Some(serde_json::Value::Number(value)) => value.as_u64(),
-                Some(serde_json::Value::String(value)) => value.trim().parse().ok(),
-                _ => None,
-            })
-        }
+        let stage = parsed.stage?;
+        let stage_id = parsed.scheduler_stage_id;
+        let profile = parsed
+            .resolved_scheduler_profile
+            .or(parsed.scheduler_profile);
+        let stage_index = parsed.scheduler_stage_index;
+        let stage_total = parsed.scheduler_stage_total;
+        let step = parsed.scheduler_stage_step;
+        let status = parsed.scheduler_stage_status;
+        let focus = parsed
+            .scheduler_stage_focus
+            .filter(|s| !s.trim().is_empty());
+        let last_event = parsed
+            .scheduler_stage_last_event
+            .filter(|s| !s.trim().is_empty());
+        let waiting_on = parsed.scheduler_stage_waiting_on;
+        let activity = parsed
+            .scheduler_stage_activity
+            .filter(|s| !s.trim().is_empty());
+        let loop_budget = parsed.scheduler_stage_loop_budget;
+        let prompt_tokens = parsed.scheduler_stage_prompt_tokens;
+        let completion_tokens = parsed.scheduler_stage_completion_tokens;
+        let reasoning_tokens = parsed.scheduler_stage_reasoning_tokens;
+        let cache_read_tokens = parsed.scheduler_stage_cache_read_tokens;
+        let cache_write_tokens = parsed.scheduler_stage_cache_write_tokens;
+        let child_session_id = parsed
+            .scheduler_stage_child_session_id
+            .filter(|s| !s.trim().is_empty());
 
-        fn deserialize_vec_string_lossy<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-            let Some(serde_json::Value::Array(values)) = value else {
-                return Ok(Vec::new());
-            };
-            Ok(values
-                .into_iter()
-                .filter_map(|value| value.as_str().map(String::from))
-                .collect())
-        }
+        let active_skills = parsed.scheduler_stage_active_skills;
+        let active_agents = parsed.scheduler_stage_active_agents;
+        let active_categories = parsed.scheduler_stage_active_categories;
 
-        let wire = serde_json::to_value(metadata)
-            .ok()
-            .and_then(|value| serde_json::from_value::<SchedulerStageMetadataWire>(value).ok())
-            .unwrap_or_default();
-
-        let stage = wire.scheduler_stage?;
-        let stage_id = wire.scheduler_stage_id;
-        let profile = wire.resolved_scheduler_profile.or(wire.scheduler_profile);
-        let stage_index = wire.scheduler_stage_index;
-        let stage_total = wire.scheduler_stage_total;
-        let step = wire.scheduler_stage_step;
-        let status = wire.scheduler_stage_status;
-        let focus = wire.scheduler_stage_focus;
-        let last_event = wire.scheduler_stage_last_event;
-        let waiting_on = wire.scheduler_stage_waiting_on;
-        let activity = wire.scheduler_stage_activity;
-        let loop_budget = wire.scheduler_stage_loop_budget;
-        let prompt_tokens = wire.scheduler_stage_prompt_tokens;
-        let completion_tokens = wire.scheduler_stage_completion_tokens;
-        let reasoning_tokens = wire.scheduler_stage_reasoning_tokens;
-        let cache_read_tokens = wire.scheduler_stage_cache_read_tokens;
-        let cache_write_tokens = wire.scheduler_stage_cache_write_tokens;
-        let child_session_id = wire.scheduler_stage_child_session_id;
-
-        let active_skills = wire.scheduler_stage_active_skills;
-        let active_agents = wire.scheduler_stage_active_agents;
-        let active_categories = wire.scheduler_stage_active_categories;
-
-        let available_skill_count = wire.scheduler_stage_available_skill_count;
-        let available_agent_count = wire.scheduler_stage_available_agent_count;
-        let available_category_count = wire.scheduler_stage_available_category_count;
-        let done_agent_count = wire.scheduler_stage_done_agent_count.unwrap_or(0) as u32;
-        let total_agent_count = wire.scheduler_stage_total_agent_count.unwrap_or(0) as u32;
+        let available_skill_count = parsed.scheduler_stage_available_skill_count;
+        let available_agent_count = parsed.scheduler_stage_available_agent_count;
+        let available_category_count = parsed.scheduler_stage_available_category_count;
+        let done_agent_count = parsed.scheduler_stage_done_agent_count;
+        let total_agent_count = parsed.scheduler_stage_total_agent_count;
 
         let (title, body) = if let Some(rest) = text.trim().strip_prefix("## ") {
             if let Some((heading, after)) = rest.split_once('\n') {
@@ -613,17 +590,14 @@ impl SchedulerStageBlock {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InspectBlock {
-    #[serde(default)]
     pub stage_ids: Vec<String>,
-    #[serde(default)]
     pub events: Vec<InspectEventRow>,
-    #[serde(default)]
     pub filter_stage_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InspectEventRow {
     pub ts: i64,
     pub event_type: String,
@@ -641,60 +615,4 @@ pub enum OutputBlock {
     QueueItem(QueueItemBlock),
     SchedulerStage(Box<SchedulerStageBlock>),
     Inspect(InspectBlock),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum OutputBlockWire {
-    Status {
-        #[serde(flatten)]
-        block: StatusBlock,
-    },
-    Message {
-        #[serde(flatten)]
-        block: MessageBlock,
-    },
-    Reasoning {
-        #[serde(flatten)]
-        block: ReasoningBlock,
-    },
-    Tool {
-        #[serde(flatten)]
-        block: ToolBlock,
-    },
-    SessionEvent {
-        #[serde(flatten)]
-        block: SessionEventBlock,
-    },
-    QueueItem {
-        #[serde(flatten)]
-        block: QueueItemBlock,
-    },
-    SchedulerStage {
-        #[serde(flatten)]
-        block: SchedulerStageBlock,
-    },
-    Inspect {
-        #[serde(flatten)]
-        block: InspectBlock,
-    },
-}
-
-impl<'de> Deserialize<'de> for OutputBlock {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let wire = OutputBlockWire::deserialize(deserializer)?;
-        Ok(match wire {
-            OutputBlockWire::Status { block } => Self::Status(block),
-            OutputBlockWire::Message { block } => Self::Message(block),
-            OutputBlockWire::Reasoning { block } => Self::Reasoning(block),
-            OutputBlockWire::Tool { block } => Self::Tool(block),
-            OutputBlockWire::SessionEvent { block } => Self::SessionEvent(block),
-            OutputBlockWire::QueueItem { block } => Self::QueueItem(block),
-            OutputBlockWire::SchedulerStage { block } => Self::SchedulerStage(Box::new(block)),
-            OutputBlockWire::Inspect { block } => Self::Inspect(block),
-        })
-    }
 }

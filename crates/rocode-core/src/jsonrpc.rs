@@ -114,45 +114,44 @@ pub enum JsonRpcMessage {
 #[error("invalid JSON-RPC message: missing both 'id' (response) and 'method' (notification)")]
 pub struct InvalidJsonRpcMessage;
 
+#[derive(Debug, Default, Deserialize)]
+struct JsonRpcMessageProbeWire {
+    #[serde(default)]
+    id: Option<Value>,
+    #[serde(default)]
+    method: Option<String>,
+}
+
 impl JsonRpcMessage {
     /// Parse a [`serde_json::Value`] into a typed [`JsonRpcMessage`].
     ///
     /// This is the canonical discrimination algorithm — adapters must not
     /// reimplement it.
     pub fn from_value(value: Value) -> Result<Self, JsonRpcError> {
-        let kind = match &value {
-            Value::Object(map) => {
-                if map.contains_key("id") {
-                    Some("response")
-                } else if map.contains_key("method") {
-                    Some("notification")
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
-
-        match kind {
-            Some("response") => serde_json::from_value(value)
+        let probe =
+            serde_json::from_value::<JsonRpcMessageProbeWire>(value.clone()).unwrap_or_default();
+        if probe.id.is_some() {
+            serde_json::from_value(value)
                 .map(JsonRpcMessage::Response)
                 .map_err(|e| JsonRpcError {
                     code: -32700,
                     message: format!("Failed to parse response: {e}"),
                     data: None,
-                }),
-            Some("notification") => serde_json::from_value(value)
+                })
+        } else if probe.method.is_some() {
+            serde_json::from_value(value)
                 .map(JsonRpcMessage::Notification)
                 .map_err(|e| JsonRpcError {
                     code: -32700,
                     message: format!("Failed to parse notification: {e}"),
                     data: None,
-                }),
-            _ => Err(JsonRpcError {
+                })
+        } else {
+            Err(JsonRpcError {
                 code: -32600,
                 message: "Invalid JSON-RPC message: missing both 'id' and 'method'".into(),
                 data: None,
-            }),
+            })
         }
     }
 
@@ -257,9 +256,8 @@ mod tests {
         // The "id" inside params is fine — we check that there's no `"id":` at the top level
         // by verifying the struct fields (notification has: jsonrpc, method, params only).
         let parsed: Value = serde_json::from_str(&json).unwrap();
-        let has_top_level_id = matches!(&parsed, Value::Object(map) if map.contains_key("id"));
         assert!(
-            !has_top_level_id,
+            parsed.get("id").is_none(),
             "notification must not have top-level 'id'"
         );
     }

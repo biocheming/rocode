@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::{Mutex, RwLock};
 
@@ -434,11 +435,16 @@ impl PluginLoader {
                 .ok_or(PluginSubprocessError::NotRunning)?
         };
 
+        #[derive(Debug, Deserialize, Default)]
+        struct ToolInvokeContextTracking {
+            #[serde(default, alias = "callId", alias = "call_id")]
+            call_id: Option<String>,
+        }
+
         // Extract call_id for tracking before moving context into invoke_tool.
-        let call_id = context
-            .get("call_id")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
+        let call_id = serde_json::from_value::<ToolInvokeContextTracking>(context.clone())
+            .ok()
+            .and_then(|tracking| tracking.call_id);
         let plugin_name = client.plugin_id().to_string();
 
         // The on_sent callback registers tracking AFTER the RPC request is
@@ -583,10 +589,14 @@ impl PluginLoader {
         // Read existing deps if present
         if pkg_json.exists() {
             if let Ok(content) = std::fs::read_to_string(&pkg_json) {
-                if let Ok(existing) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(obj) = existing.get("dependencies").and_then(|d| d.as_object()) {
-                        deps = obj.clone();
-                    }
+                #[derive(Debug, Deserialize, Default)]
+                struct PackageJson {
+                    #[serde(default)]
+                    dependencies: serde_json::Map<String, serde_json::Value>,
+                }
+
+                if let Ok(existing) = serde_json::from_str::<PackageJson>(&content) {
+                    deps = existing.dependencies;
                 }
             }
         }

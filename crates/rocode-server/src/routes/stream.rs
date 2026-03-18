@@ -4,9 +4,7 @@ use axum::{
     Json,
 };
 use futures::stream::Stream;
-use rocode_core::contracts::scheduler::keys as scheduler_keys;
-use rocode_core::contracts::session::keys as session_keys;
-use rocode_core::contracts::wire::keys as wire_keys;
+use serde::Deserialize;
 use std::convert::Infallible;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
@@ -57,6 +55,51 @@ pub(crate) async fn send_stream_usage_event(
         message_id,
     };
     send_sse_server_event(tx, &event).await;
+}
+
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+        Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct StreamSessionMetadataWire {
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    model_variant: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct StreamEventTypeWire {
+    #[serde(
+        rename = "type",
+        default,
+        deserialize_with = "deserialize_opt_string_lossy"
+    )]
+    event_type: Option<String>,
+}
+
+fn stream_session_metadata_wire(
+    metadata: &std::collections::HashMap<String, serde_json::Value>,
+) -> StreamSessionMetadataWire {
+    serde_json::from_value::<StreamSessionMetadataWire>(serde_json::Value::Object(
+        metadata.clone().into_iter().collect(),
+    ))
+    .unwrap_or_default()
+}
+
+fn stream_event_name(payload: &serde_json::Value) -> String {
+    serde_json::from_value::<StreamEventTypeWire>(payload.clone())
+        .unwrap_or_default()
+        .event_type
+        .unwrap_or_else(|| "question.event".to_string())
 }
 
 async fn emit_latest_assistant_usage(
@@ -124,12 +167,12 @@ pub(crate) async fn stream_message(
         let session = sessions
             .get(&session_id)
             .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
+        let metadata_wire = stream_session_metadata_wire(&session.metadata);
         req.variant.clone().or_else(|| {
-            session
-                .metadata
-                .get(session_keys::MODEL_VARIANT)
-                .and_then(|value| value.as_str())
-                .map(|value| value.to_string())
+            metadata_wire
+                .model_variant
+                .as_ref()
+                .map(ToString::to_string)
         })
     };
 
@@ -169,51 +212,48 @@ pub(crate) async fn stream_message(
 
         let selected_variant = request_variant.clone();
         if let Some(variant) = selected_variant.as_deref() {
-            session.metadata.insert(
-                session_keys::MODEL_VARIANT.to_string(),
-                serde_json::json!(variant),
-            );
+            session
+                .metadata
+                .insert("model_variant".to_string(), serde_json::json!(variant));
         } else {
-            session.metadata.remove(session_keys::MODEL_VARIANT);
+            session.metadata.remove("model_variant");
         }
         session.metadata.insert(
-            session_keys::MODEL_PROVIDER.to_string(),
+            "model_provider".to_string(),
             serde_json::json!(provider_id.clone()),
         );
-        session.metadata.insert(
-            session_keys::MODEL_ID.to_string(),
-            serde_json::json!(model_id.clone()),
-        );
+        session
+            .metadata
+            .insert("model_id".to_string(), serde_json::json!(model_id.clone()));
         if let Some(agent) = resolved_agent.as_ref().map(|agent| agent.name.as_str()) {
             session
                 .metadata
-                .insert(session_keys::AGENT.to_string(), serde_json::json!(agent));
+                .insert("agent".to_string(), serde_json::json!(agent));
         } else {
-            session.metadata.remove(session_keys::AGENT);
+            session.metadata.remove("agent");
         }
         session.metadata.insert(
-            session_keys::SCHEDULER_APPLIED.to_string(),
+            "scheduler_applied".to_string(),
             serde_json::json!(scheduler_applied),
         );
         session.metadata.insert(
-            session_keys::SCHEDULER_SKILL_TREE_APPLIED.to_string(),
+            "scheduler_skill_tree_applied".to_string(),
             serde_json::json!(scheduler_skill_tree_applied),
         );
         if let Some(profile) = scheduler_profile_name.as_deref() {
-            session.metadata.insert(
-                scheduler_keys::PROFILE.to_string(),
-                serde_json::json!(profile),
-            );
+            session
+                .metadata
+                .insert("scheduler_profile".to_string(), serde_json::json!(profile));
         } else {
-            session.metadata.remove(scheduler_keys::PROFILE);
+            session.metadata.remove("scheduler_profile");
         }
         if let Some(root_agent) = scheduler_root_agent.as_deref() {
             session.metadata.insert(
-                session_keys::SCHEDULER_ROOT_AGENT.to_string(),
+                "scheduler_root_agent".to_string(),
                 serde_json::json!(root_agent),
             );
         } else {
-            session.metadata.remove(session_keys::SCHEDULER_ROOT_AGENT);
+            session.metadata.remove("scheduler_root_agent");
         }
         session.touch();
 
@@ -294,11 +334,7 @@ pub(crate) async fn stream_message(
                 let sse_tx = sse_tx.clone();
                 let event_hook: QuestionEventHook = Arc::new(move |payload| {
                     let sse_tx = sse_tx.clone();
-                    let event_name = payload
-                        .get(wire_keys::TYPE)
-                        .and_then(|value| value.as_str())
-                        .unwrap_or("question.event")
-                        .to_string();
+                    let event_name = stream_event_name(&payload);
                     tokio::spawn(async move {
                         if let Ok(event) = Event::default().event(&event_name).json_data(payload) {
                             let _ = sse_tx.send(Ok(event)).await;
@@ -377,22 +413,20 @@ pub(crate) async fn stream_message(
             assistant
                 .metadata
                 .insert("error".to_string(), serde_json::json!(error.to_string()));
+            assistant
+                .metadata
+                .insert("finish_reason".to_string(), serde_json::json!("error"));
             assistant.metadata.insert(
-                session_keys::FINISH_REASON.to_string(),
-                serde_json::json!("error"),
-            );
-            assistant.metadata.insert(
-                session_keys::MODEL_PROVIDER.to_string(),
+                "model_provider".to_string(),
                 serde_json::json!(&stream_provider_id),
             );
-            assistant.metadata.insert(
-                session_keys::MODEL_ID.to_string(),
-                serde_json::json!(&stream_model_id),
-            );
+            assistant
+                .metadata
+                .insert("model_id".to_string(), serde_json::json!(&stream_model_id));
             if let Some(agent) = stream_agent.as_ref().map(|agent| agent.name.as_str()) {
                 assistant
                     .metadata
-                    .insert(session_keys::AGENT.to_string(), serde_json::json!(agent));
+                    .insert("agent".to_string(), serde_json::json!(agent));
             }
             assistant.add_text(format!("Provider error: {}", error));
             let _ = update_tx.send(session.clone());

@@ -1,16 +1,11 @@
 use async_trait::async_trait;
+use serde::Deserialize;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use rocode_agent::{AgentInfo, AgentMode, AgentRegistry};
 use rocode_command::output_blocks::{MessageBlock, MessageRole as OutputMessageRole, OutputBlock};
 use rocode_config::{Config as AppConfig, SkillTreeNodeConfig};
-use rocode_core::contracts::agent_tasks::bus_keys as agent_task_bus_keys;
-use rocode_core::contracts::events::BusEventName;
-use rocode_core::contracts::plugin_hooks;
-use rocode_core::contracts::provider::ProviderFinishReasonWire;
-use rocode_core::contracts::scheduler::keys as scheduler_keys;
-use rocode_core::contracts::session::keys as session_keys;
 use rocode_orchestrator::output_metadata::output_usage;
 use rocode_orchestrator::{
     resolve_skill_markdown_repo, scheduler_orchestrator_from_profile, scheduler_plan_from_profile,
@@ -387,11 +382,33 @@ impl SessionSchedulerToolExecutor {
                 }
             }
         });
-        base_ctx.call_id = exec_ctx
-            .metadata
-            .get(plugin_hooks::aliases::CALL_ID_SNAKE)
-            .and_then(|value| value.as_str())
-            .map(str::to_string);
+
+        fn deserialize_opt_string_lossy<'de, D>(
+            deserializer: D,
+        ) -> std::result::Result<Option<String>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+            Ok(match value {
+                Some(serde_json::Value::String(value)) => Some(value),
+                _ => None,
+            })
+        }
+
+        #[derive(Debug, Default, Deserialize)]
+        struct OrchestratorExecutionMetadataWire {
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            call_id: Option<String>,
+        }
+
+        let wire = serde_json::to_value(&exec_ctx.metadata)
+            .ok()
+            .and_then(|value| {
+                serde_json::from_value::<OrchestratorExecutionMetadataWire>(value).ok()
+            })
+            .unwrap_or_default();
+        base_ctx.call_id = wire.call_id;
         base_ctx.extra = exec_ctx.metadata.clone();
         Self::with_agent_task_publish_bus(base_ctx, self.state.clone())
     }
@@ -408,20 +425,13 @@ impl SessionSchedulerToolExecutor {
             let state = state.clone();
             let session_id = session_id.clone();
             async move {
-                match BusEventName::parse(event_type.as_str()) {
-                    Some(BusEventName::AgentTaskRegistered) => {
-                        let task_id = properties
-                            .get(agent_task_bus_keys::TASK_ID)
-                            .and_then(|value| value.as_str())
-                            .unwrap_or_default();
-                        let agent_name = properties
-                            .get(agent_task_bus_keys::AGENT_NAME)
-                            .and_then(|value| value.as_str())
-                            .unwrap_or_default();
-                        let parent_tool_call_id = properties
-                            .get(agent_task_bus_keys::PARENT_TOOL_CALL_ID)
-                            .and_then(|value| value.as_str())
-                            .map(crate::runtime_control::RuntimeControlRegistry::tool_call_execution_id);
+                match event_type.as_str() {
+                    "agent_task.registered" => {
+                        let task_id = properties["task_id"].as_str().unwrap_or_default();
+                        let agent_name = properties["agent_name"].as_str().unwrap_or_default();
+                        let parent_tool_call_id = properties["parent_tool_call_id"].as_str().map(
+                            crate::runtime_control::RuntimeControlRegistry::tool_call_execution_id,
+                        );
                         // Resolve stage_id from the parent execution's record.
                         let stage_id = if let Some(ref pid) = parent_tool_call_id {
                             state.runtime_control.resolve_stage_id(pid).await
@@ -443,11 +453,8 @@ impl SessionSchedulerToolExecutor {
                             update_stage_agent_counts(&state, &session_id, sid).await;
                         }
                     }
-                    Some(BusEventName::AgentTaskCompleted) => {
-                        let task_id = properties
-                            .get(agent_task_bus_keys::TASK_ID)
-                            .and_then(|value| value.as_str())
-                            .unwrap_or_default();
+                    "agent_task.completed" => {
+                        let task_id = properties["task_id"].as_str().unwrap_or_default();
                         // Resolve stage_id before finishing (record still exists).
                         let exec_id =
                             crate::runtime_control::RuntimeControlRegistry::agent_task_execution_id(
@@ -482,11 +489,11 @@ async fn update_stage_agent_counts(
     // The stage_id is also used as the message_id for the stage message.
     if let Some(message) = session.get_message_mut(stage_id) {
         message.metadata.insert(
-            scheduler_keys::DONE_AGENT_COUNT.to_string(),
+            "scheduler_stage_done_agent_count".to_string(),
             serde_json::json!(done),
         );
         message.metadata.insert(
-            scheduler_keys::TOTAL_AGENT_COUNT.to_string(),
+            "scheduler_stage_total_agent_count".to_string(),
             serde_json::json!(total),
         );
         session.touch();
@@ -906,32 +913,31 @@ pub async fn run_local_scheduler_prompt(
     set_session_run_status(&state, &session_id, SessionRunStatus::Busy).await;
 
     session.metadata.insert(
-        session_keys::MODEL_PROVIDER.to_string(),
+        "model_provider".to_string(),
         serde_json::json!(&provider_id),
     );
+    session
+        .metadata
+        .insert("model_id".to_string(), serde_json::json!(&model_id));
     session.metadata.insert(
-        session_keys::MODEL_ID.to_string(),
-        serde_json::json!(&model_id),
-    );
-    session.metadata.insert(
-        session_keys::SCHEDULER_APPLIED.to_string(),
+        "scheduler_applied".to_string(),
         serde_json::json!(scheduler_applied),
     );
     session.metadata.insert(
-        session_keys::SCHEDULER_SKILL_TREE_APPLIED.to_string(),
+        "scheduler_skill_tree_applied".to_string(),
         serde_json::json!(scheduler_skill_tree_applied),
     );
     session.metadata.insert(
-        scheduler_keys::PROFILE.to_string(),
+        "scheduler_profile".to_string(),
         serde_json::json!(profile_name.clone()),
     );
     if let Some(root_agent) = scheduler_root_agent.as_deref() {
         session.metadata.insert(
-            session_keys::SCHEDULER_ROOT_AGENT.to_string(),
+            "scheduler_root_agent".to_string(),
             serde_json::json!(root_agent),
         );
     } else {
-        session.metadata.remove(session_keys::SCHEDULER_ROOT_AGENT);
+        session.metadata.remove("scheduler_root_agent");
     }
 
     let mode_kind = scheduler_mode_kind(&profile_name);
@@ -939,27 +945,27 @@ pub async fn run_local_scheduler_prompt(
     let user_message_id = {
         let user_message = session.add_user_message(req.display_prompt_text.clone());
         user_message.metadata.insert(
-            scheduler_keys::RESOLVED_PROFILE.to_string(),
+            "resolved_scheduler_profile".to_string(),
             serde_json::json!(profile_name.clone()),
         );
         user_message.metadata.insert(
-            session_keys::RESOLVED_EXECUTION_MODE_KIND.to_string(),
+            "resolved_execution_mode_kind".to_string(),
             serde_json::json!(mode_kind),
         );
         user_message.metadata.insert(
-            session_keys::RESOLVED_SYSTEM_PROMPT.to_string(),
+            "resolved_system_prompt".to_string(),
             serde_json::json!(resolved_system_prompt.clone()),
         );
         user_message.metadata.insert(
-            session_keys::RESOLVED_SYSTEM_PROMPT_PREVIEW.to_string(),
+            "resolved_system_prompt_preview".to_string(),
             serde_json::json!(resolved_system_prompt.clone()),
         );
         user_message.metadata.insert(
-            session_keys::RESOLVED_SYSTEM_PROMPT_APPLIED.to_string(),
+            "resolved_system_prompt_applied".to_string(),
             serde_json::json!(true),
         );
         user_message.metadata.insert(
-            session_keys::RESOLVED_USER_PROMPT.to_string(),
+            "resolved_user_prompt".to_string(),
             serde_json::json!(req.prompt_text.clone()),
         );
         user_message.id.clone()
@@ -1058,7 +1064,7 @@ pub async fn run_local_scheduler_prompt(
                 serde_json::json!(user_message_id.clone()),
             ),
             (
-                scheduler_keys::PROFILE.to_string(),
+                "scheduler_profile".to_string(),
                 serde_json::json!(profile_name.clone()),
             ),
         ]),
@@ -1113,31 +1119,29 @@ pub async fn run_local_scheduler_prompt(
     let mut cancelled = false;
     if let Some(assistant) = session.get_message_mut(&assistant_message_id) {
         assistant.metadata.insert(
-            session_keys::MODEL_PROVIDER.to_string(),
+            "model_provider".to_string(),
             serde_json::json!(&provider_id),
         );
+        assistant
+            .metadata
+            .insert("model_id".to_string(), serde_json::json!(&model_id));
         assistant.metadata.insert(
-            session_keys::MODEL_ID.to_string(),
-            serde_json::json!(&model_id),
-        );
-        assistant.metadata.insert(
-            scheduler_keys::PROFILE.to_string(),
+            "scheduler_profile".to_string(),
             serde_json::json!(profile_name.clone()),
         );
         assistant.metadata.insert(
-            scheduler_keys::RESOLVED_PROFILE.to_string(),
+            "resolved_scheduler_profile".to_string(),
             serde_json::json!(profile_name.clone()),
         );
         assistant.metadata.insert(
-            session_keys::RESOLVED_EXECUTION_MODE_KIND.to_string(),
+            "resolved_execution_mode_kind".to_string(),
             serde_json::json!(mode_kind),
         );
+        assistant
+            .metadata
+            .insert("mode".to_string(), serde_json::json!(profile_name.clone()));
         assistant.metadata.insert(
-            session_keys::MODE.to_string(),
-            serde_json::json!(profile_name.clone()),
-        );
-        assistant.metadata.insert(
-            session_keys::SCHEDULER_APPLIED.to_string(),
+            "scheduler_applied".to_string(),
             serde_json::json!(scheduler_applied),
         );
         match orchestrator_result {
@@ -1146,19 +1150,18 @@ pub async fn run_local_scheduler_prompt(
                 if cancelled {
                     let _ = finalize_active_scheduler_stage_cancelled(&state, &session_id).await;
                     assistant.finish = Some("cancelled".to_string());
-                    assistant.metadata.insert(
-                        session_keys::FINISH_REASON.to_string(),
-                        serde_json::json!("cancelled"),
-                    );
+                    assistant
+                        .metadata
+                        .insert("finish_reason".to_string(), serde_json::json!("cancelled"));
                 } else {
-                    assistant.finish = Some(ProviderFinishReasonWire::Stop.as_str().to_string());
+                    assistant.finish = Some("stop".to_string());
                 }
                 assistant.metadata.insert(
-                    scheduler_keys::SCHEDULER_STEPS.to_string(),
+                    "scheduler_steps".to_string(),
                     serde_json::json!(output.steps),
                 );
                 assistant.metadata.insert(
-                    scheduler_keys::SCHEDULER_TOOL_CALLS.to_string(),
+                    "scheduler_tool_calls".to_string(),
                     serde_json::json!(output.tool_calls_count),
                 );
                 if let Some(usage) = output_usage(&output.metadata) {
@@ -1190,17 +1193,15 @@ pub async fn run_local_scheduler_prompt(
                 if cancelled {
                     let _ = finalize_active_scheduler_stage_cancelled(&state, &session_id).await;
                     assistant.finish = Some("cancelled".to_string());
-                    assistant.metadata.insert(
-                        session_keys::FINISH_REASON.to_string(),
-                        serde_json::json!("cancelled"),
-                    );
+                    assistant
+                        .metadata
+                        .insert("finish_reason".to_string(), serde_json::json!("cancelled"));
                     assistant.add_text("Scheduler cancelled.");
                 } else {
-                    assistant.finish = Some(ProviderFinishReasonWire::Error.as_str().to_string());
-                    assistant.metadata.insert(
-                        session_keys::ERROR.to_string(),
-                        serde_json::json!(error.to_string()),
-                    );
+                    assistant.finish = Some("error".to_string());
+                    assistant
+                        .metadata
+                        .insert("error".to_string(), serde_json::json!(error.to_string()));
                     assistant.add_text(format!("Scheduler error: {}", error));
                 }
             }

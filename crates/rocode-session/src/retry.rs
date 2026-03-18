@@ -60,6 +60,17 @@ pub struct ApiErrorInfo {
     pub response_body: Option<String>,
 }
 
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        _ => None,
+    })
+}
+
 pub fn retryable(error: &crate::MessageError) -> Option<String> {
     match error {
         crate::MessageError::ContextOverflowError { .. } => None,
@@ -89,76 +100,57 @@ pub fn retryable(error: &crate::MessageError) -> Option<String> {
         }
         crate::MessageError::Unknown { message } => {
             #[derive(Debug, Deserialize, Default)]
-            struct UnknownErrorInnerWire {
+            struct UnknownErrorDetailWire {
                 #[serde(
                     default,
                     rename = "type",
-                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                    deserialize_with = "deserialize_opt_string_lossy"
                 )]
                 kind: Option<String>,
-                #[serde(
-                    default,
-                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-                )]
+                #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
                 code: Option<String>,
-            }
-
-            fn deserialize_opt_unknown_error_inner_wire<'de, D>(
-                deserializer: D,
-            ) -> Result<Option<UnknownErrorInnerWire>, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-                Ok(match value {
-                    None | Some(serde_json::Value::Null) => None,
-                    Some(value) => serde_json::from_value::<UnknownErrorInnerWire>(value).ok(),
-                })
             }
 
             #[derive(Debug, Deserialize, Default)]
-            struct UnknownErrorEnvelopeWire {
-                #[serde(
-                    default,
-                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-                )]
+            struct UnknownErrorWire {
+                #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
                 code: Option<String>,
                 #[serde(
                     default,
                     rename = "type",
-                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                    deserialize_with = "deserialize_opt_string_lossy"
                 )]
                 kind: Option<String>,
-                #[serde(default, deserialize_with = "deserialize_opt_unknown_error_inner_wire")]
-                error: Option<UnknownErrorInnerWire>,
+                #[serde(default)]
+                error: Option<UnknownErrorDetailWire>,
             }
 
-            let envelope: UnknownErrorEnvelopeWire = match serde_json::from_str(message) {
-                Ok(envelope) => envelope,
-                Err(_) => return None,
-            };
+            if let Ok(parsed) = serde_json::from_str::<UnknownErrorWire>(message) {
+                let code = parsed.code.as_deref().unwrap_or("");
 
-            let code = envelope.code.as_deref().unwrap_or("");
-            if envelope.kind.as_deref() == Some("error") {
-                if let Some(error) = envelope.error.as_ref() {
-                    if error.kind.as_deref() == Some("too_many_requests") {
-                        return Some("Too Many Requests".to_string());
-                    }
-                    if error
-                        .code
-                        .as_deref()
-                        .is_some_and(|code| code.contains("rate_limit"))
-                    {
-                        return Some("Rate Limited".to_string());
+                if parsed.kind.as_deref() == Some("error") {
+                    if let Some(error_obj) = parsed.error {
+                        if error_obj.kind.as_deref() == Some("too_many_requests") {
+                            return Some("Too Many Requests".to_string());
+                        }
+                        if error_obj
+                            .code
+                            .as_deref()
+                            .map(|c| c.contains("rate_limit"))
+                            .unwrap_or(false)
+                        {
+                            return Some("Rate Limited".to_string());
+                        }
                     }
                 }
-            }
 
-            if code.contains("exhausted") || code.contains("unavailable") {
-                return Some("Provider is overloaded".to_string());
-            }
+                if code.contains("exhausted") || code.contains("unavailable") {
+                    return Some("Provider is overloaded".to_string());
+                }
 
-            Some(message.clone())
+                return Some(message.clone());
+            }
+            None
         }
         _ => None,
     }

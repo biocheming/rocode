@@ -1,5 +1,6 @@
 use super::*;
 use rocode_command::ResolvedUiCommand;
+use serde::Deserialize;
 
 fn mode_matches_action_argument(mode: &Agent, action_id: UiActionId, value: &str) -> bool {
     let needle = value.trim().to_ascii_lowercase();
@@ -245,20 +246,24 @@ impl App {
                                 );
                             }
                             Ok(value) => {
-                                let message = value
-                                    .get("target")
-                                    .and_then(|value| value.as_str())
-                                    .map(|target| match target {
-                                        "stage" => {
-                                            let stage = value
-                                                .get("stage")
-                                                .and_then(|value| value.as_str())
-                                                .unwrap_or("current stage");
-                                            format!("Stage cancellation requested: {}", stage)
-                                        }
-                                        _ => "Run cancellation requested".to_string(),
-                                    })
-                                    .unwrap_or_else(|| "Run cancellation requested".to_string());
+                                #[derive(Debug, Deserialize, Default)]
+                                struct AbortSessionResponse {
+                                    #[serde(default)]
+                                    target: Option<String>,
+                                    #[serde(default)]
+                                    stage: Option<String>,
+                                }
+
+                                let parsed = serde_json::from_value::<AbortSessionResponse>(value)
+                                    .unwrap_or_default();
+                                let message = match parsed.target.as_deref() {
+                                    Some("stage") => {
+                                        let stage =
+                                            parsed.stage.as_deref().unwrap_or("current stage");
+                                        format!("Stage cancellation requested: {}", stage)
+                                    }
+                                    Some(_) | None => "Run cancellation requested".to_string(),
+                                };
                                 self.toast.show(ToastVariant::Info, &message, 3000);
                             }
                         }

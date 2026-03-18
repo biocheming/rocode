@@ -1,6 +1,4 @@
 use async_trait::async_trait;
-use rocode_core::contracts::output_blocks::keys as output_keys;
-use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use serde::{Deserialize, Serialize};
 use std::io::{self, BufRead, Write};
 
@@ -16,23 +14,27 @@ impl QuestionTool {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct QuestionInput {
+    #[serde(rename = "questions", deserialize_with = "deserialize_questions")]
     questions: Vec<QuestionDef>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct QuestionDef {
+    #[serde(rename = "question")]
     question: String,
+    #[serde(rename = "header")]
     header: Option<String>,
-    #[serde(default)]
+    #[serde(rename = "options", default)]
     options: Vec<QuestionOption>,
-    #[serde(default)]
+    #[serde(rename = "multiple", default)]
     multiple: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct QuestionOption {
+    #[serde(rename = "label")]
     label: String,
-    #[serde(default)]
+    #[serde(rename = "description", default)]
     description: Option<String>,
 }
 
@@ -44,7 +46,7 @@ struct QuestionResponse {
 #[async_trait]
 impl Tool for QuestionTool {
     fn id(&self) -> &str {
-        BuiltinToolName::Question.as_str()
+        "question"
     }
 
     fn description(&self) -> &str {
@@ -55,16 +57,16 @@ impl Tool for QuestionTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                (tool_arg_keys::QUESTIONS): {
+                "questions": {
                     "type": "array",
                     "items": {
                         "type": "object",
                         "properties": {
-                            (tool_arg_keys::QUESTION): {
+                            "question": {
                                 "type": "string",
                                 "description": "The complete question to ask"
                             },
-                            (tool_arg_keys::HEADER): {
+                            "header": {
                                 "type": "string",
                                 "description": "Short label for the question (max 30 chars)"
                             },
@@ -73,24 +75,24 @@ impl Tool for QuestionTool {
                                 "default": false,
                                 "description": "Allow selecting multiple options"
                             },
-                            (tool_arg_keys::OPTIONS): {
+                            "options": {
                                 "type": "array",
                                 "items": {
                                     "type": "object",
                                     "properties": {
                                         "label": {"type": "string"},
-                                        (tool_arg_keys::DESCRIPTION): {"type": "string"}
+                                        "description": {"type": "string"}
                                     },
                                     "required": ["label"]
                                 },
                                 "description": "Available choices for the user"
                             }
                         },
-                        "required": [tool_arg_keys::QUESTION]
+                        "required": ["question"]
                     }
                 }
             },
-            "required": [tool_arg_keys::QUESTIONS]
+            "required": ["questions"]
         })
     }
 
@@ -139,16 +141,10 @@ impl Tool for QuestionTool {
             let answers = answers_by_question.get(idx).cloned().unwrap_or_default();
             let answer_text = answers.join(", ");
             all_answers.extend(answers);
-            display_fields.push(serde_json::Value::Object(serde_json::Map::from_iter([
-                (
-                    output_keys::DISPLAY_FIELD_KEY.to_string(),
-                    serde_json::json!(q.question),
-                ),
-                (
-                    output_keys::DISPLAY_FIELD_VALUE.to_string(),
-                    serde_json::json!(answer_text),
-                ),
-            ])));
+            display_fields.push(serde_json::json!({
+                "key": q.question,
+                "value": answer_text,
+            }));
         }
 
         let response = QuestionResponse {
@@ -162,7 +158,7 @@ impl Tool for QuestionTool {
         let mut metadata = std::collections::HashMap::new();
 
         metadata.insert(
-            output_keys::DISPLAY_FIELDS.to_string(),
+            "display.fields".to_string(),
             serde_json::Value::Array(display_fields),
         );
 
@@ -173,7 +169,7 @@ impl Tool for QuestionTool {
             format!("{} questions answered", input.questions.len())
         };
         metadata.insert(
-            output_keys::DISPLAY_SUMMARY.to_string(),
+            "display.summary".to_string(),
             serde_json::Value::String(summary),
         );
 
@@ -276,19 +272,17 @@ impl Default for QuestionTool {
     }
 }
 
-fn parse_question_input(args: serde_json::Value) -> Result<QuestionInput, ToolError> {
-    if let Ok(input) = serde_json::from_value::<QuestionInput>(args.clone()) {
-        return Ok(input);
-    }
+fn deserialize_questions<'de, D>(deserializer: D) -> Result<Vec<QuestionDef>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    parse_questions_value(&value).map_err(serde::de::Error::custom)
+}
 
-    let obj = args
-        .as_object()
-        .ok_or_else(|| ToolError::InvalidArguments("question input must be an object".into()))?;
-    let questions_value = obj
-        .get(tool_arg_keys::QUESTIONS)
-        .ok_or_else(|| ToolError::InvalidArguments("questions is required".into()))?;
-    let questions = parse_questions_value(questions_value).map_err(ToolError::InvalidArguments)?;
-    Ok(QuestionInput { questions })
+fn parse_question_input(args: serde_json::Value) -> Result<QuestionInput, ToolError> {
+    serde_json::from_value::<QuestionInput>(args)
+        .map_err(|e| ToolError::InvalidArguments(e.to_string()))
 }
 
 fn parse_questions_value(value: &serde_json::Value) -> Result<Vec<QuestionDef>, String> {
@@ -316,7 +310,7 @@ fn parse_questions_value(value: &serde_json::Value) -> Result<Vec<QuestionDef>, 
 
 #[cfg(test)]
 mod tests {
-    use super::{output_keys, parse_question_input, QuestionInput, QuestionTool};
+    use super::{parse_question_input, QuestionInput, QuestionTool};
     use crate::{Tool, ToolContext};
 
     #[test]
@@ -387,7 +381,7 @@ mod tests {
         assert_eq!(
             result
                 .metadata
-                .get(output_keys::DISPLAY_SUMMARY)
+                .get("display.summary")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default(),
             "1 question answered"

@@ -2,9 +2,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use base64::Engine;
-use rocode_core::contracts::{
-    patch::keys as patch_keys, session::keys as session_keys, tools::arg_keys as tool_arg_keys,
-};
+use serde::Deserialize;
 
 use crate::system::SystemPrompt;
 use crate::SessionMessage;
@@ -136,7 +134,7 @@ impl SessionPrompt {
         if let Some(text) = Self::decode_data_url_text(raw_url, mime) {
             msg.add_text(format!(
                 "Called the Read tool with the following input: {}",
-                serde_json::json!({ (patch_keys::FILE_PATH): filename })
+                serde_json::json!({ "filePath": filename })
             ));
             msg.add_text(text);
         }
@@ -187,7 +185,7 @@ impl SessionPrompt {
             let listing = Self::read_directory_preview(&file_path).await;
             msg.add_text(format!(
                 "Called the Read tool with the following input: {}",
-                serde_json::json!({ (patch_keys::FILE_PATH): file_path.display().to_string() })
+                serde_json::json!({ "filePath": file_path.display().to_string() })
             ));
             msg.add_text(listing);
             msg.add_file(
@@ -223,16 +221,16 @@ impl SessionPrompt {
 
         let mut text = String::from_utf8_lossy(&bytes).to_string();
         let mut read_args = serde_json::json!({
-            (patch_keys::FILE_PATH): file_path.display().to_string(),
+            "filePath": file_path.display().to_string(),
         });
 
         if let Some((start, end)) = self.resolve_file_line_window(&file_path, &parsed).await {
             text = Self::slice_lines(&text, start, end);
             if let Some(obj) = read_args.as_object_mut() {
-                obj.insert(tool_arg_keys::OFFSET.to_string(), serde_json::json!(start));
+                obj.insert("offset".to_string(), serde_json::json!(start));
                 if let Some(end) = end {
                     obj.insert(
-                        tool_arg_keys::LIMIT.to_string(),
+                        "limit".to_string(),
                         serde_json::json!(end.saturating_sub(start).saturating_add(1)),
                     );
                 }
@@ -274,16 +272,43 @@ impl SessionPrompt {
     }
 
     pub(super) fn loaded_instruction_paths(msg: &SessionMessage) -> HashSet<String> {
-        msg.metadata
-            .get(session_keys::LOADED_INSTRUCTION_FILES)
-            .and_then(|value| value.as_array())
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| item.as_str().map(ToString::to_string))
-                    .collect()
+        fn deserialize_vec_string_lossy<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+            let Some(value) = value else {
+                return Ok(Vec::new());
+            };
+
+            Ok(match value {
+                serde_json::Value::Array(values) => values
+                    .into_iter()
+                    .filter_map(|value| value.as_str().map(|value| value.to_string()))
+                    .collect(),
+                serde_json::Value::String(value) => {
+                    let trimmed = value.trim();
+                    if trimmed.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![trimmed.to_string()]
+                    }
+                }
+                _ => Vec::new(),
             })
-            .unwrap_or_default()
+        }
+
+        #[derive(Debug, Default, Deserialize)]
+        struct LoadedInstructionPathsWire {
+            #[serde(default, deserialize_with = "deserialize_vec_string_lossy")]
+            loaded_instruction_files: Vec<String>,
+        }
+
+        let Ok(value) = serde_json::to_value(&msg.metadata) else {
+            return HashSet::new();
+        };
+        let wire = serde_json::from_value::<LoadedInstructionPathsWire>(value).unwrap_or_default();
+        wire.loaded_instruction_files.into_iter().collect()
     }
 
     pub(super) fn store_loaded_instruction_paths(
@@ -297,7 +322,7 @@ impl SessionPrompt {
         let mut paths: Vec<String> = loaded.into_iter().collect();
         paths.sort();
         msg.metadata.insert(
-            session_keys::LOADED_INSTRUCTION_FILES.to_string(),
+            "loaded_instruction_files".to_string(),
             serde_json::json!(paths),
         );
     }

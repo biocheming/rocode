@@ -1,16 +1,28 @@
 use async_trait::async_trait;
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use walkdir::WalkDir;
 
 use crate::path_guard::{resolve_user_path, RootPathFallbackPolicy};
 use crate::{Metadata, Tool, ToolContext, ToolError, ToolResult};
-use rocode_types::ReadToolInput;
 
 const DEFAULT_READ_LIMIT: usize = 2000;
 const MAX_LINE_LENGTH: usize = 2000;
 const MAX_BYTES: usize = 50 * 1024;
 const DESCRIPTION: &str = include_str!("read.txt");
+
+fn deserialize_opt_u64_lossy<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Number(number)) => number.as_u64(),
+        Some(serde_json::Value::String(raw)) => raw.parse::<u64>().ok(),
+        _ => None,
+    })
+}
 
 const INSTRUCTION_FILES: &[&str] = &[
     "AGENTS.md",
@@ -83,13 +95,28 @@ impl Tool for ReadTool {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let input = ReadToolInput::from_value(&args);
-        let file_path = input
+        #[derive(Debug, Deserialize)]
+        struct ReadInput {
+            #[serde(default, alias = "filePath", alias = "filepath", alias = "path")]
+            file_path: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+            offset: Option<u64>,
+            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
+            limit: Option<u64>,
+        }
+
+        let input: ReadInput = serde_json::from_value(args.clone())
+            .map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
+
+        let file_path: String = input
             .file_path
-            .ok_or_else(|| ToolError::InvalidArguments(format!(
-                "file_path is required. Got args: {}. If you are unsure of the correct path, use glob first.",
-                serde_json::to_string(&args).unwrap_or_else(|_| format!("{:?}", args))
-            )))?;
+            .ok_or_else(|| {
+                ToolError::InvalidArguments(format!(
+                    "file_path is required. Got args: {}. If you are unsure of the correct path, use glob first.",
+                    serde_json::to_string(&args).unwrap_or_else(|_| format!("{:?}", args))
+                ))
+            })?
+            .to_string();
         let file_path = file_path.trim().to_string();
         if file_path.is_empty() {
             return Err(ToolError::InvalidArguments(

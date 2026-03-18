@@ -3,12 +3,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use serde::Deserialize;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use rocode_core::contracts::{
-    plugin_hooks, session::keys as session_keys, tools::arg_keys as tool_arg_keys,
-};
 use rocode_orchestrator::inline_subtask_request_defaults;
 use rocode_provider::{Provider, ToolDefinition};
 
@@ -32,6 +30,68 @@ struct ToolExecutionOptions {
     provider_id: String,
     model_id: String,
     hooks: PromptHooks,
+}
+
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        _ => None,
+    })
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct McpToolWire {
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    description: Option<String>,
+    #[serde(default)]
+    parameters: Option<serde_json::Value>,
+}
+
+fn deserialize_vec_mcp_tools_lossy<'de, D>(deserializer: D) -> Result<Vec<McpToolWire>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    Ok(serde_json::from_value::<Vec<McpToolWire>>(value).unwrap_or_default())
+}
+
+fn deserialize_subsessions_lossy<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, PersistedSubsession>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(HashMap::new());
+    };
+    Ok(serde_json::from_value::<HashMap<String, PersistedSubsession>>(value).unwrap_or_default())
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ToolExecutionSessionMetadataWire {
+    #[serde(default, deserialize_with = "deserialize_vec_mcp_tools_lossy")]
+    mcp_tools: Vec<McpToolWire>,
+    #[serde(default, deserialize_with = "deserialize_subsessions_lossy")]
+    subsessions: HashMap<String, PersistedSubsession>,
+}
+
+fn tool_execution_session_metadata_wire(
+    metadata: &HashMap<String, serde_json::Value>,
+) -> ToolExecutionSessionMetadataWire {
+    let Ok(value) = serde_json::to_value(metadata) else {
+        return ToolExecutionSessionMetadataWire::default();
+    };
+    serde_json::from_value::<ToolExecutionSessionMetadataWire>(value).unwrap_or_default()
 }
 
 #[derive(Clone)]
@@ -409,10 +469,8 @@ impl SessionPrompt {
         };
         let msg = session.add_synthetic_user_message(text, &attachments);
         if let Some(agent) = message.agent {
-            msg.metadata.insert(
-                session_keys::SYNTHETIC_AGENT.to_string(),
-                serde_json::json!(agent),
-            );
+            msg.metadata
+                .insert("synthetic_agent".to_string(), serde_json::json!(agent));
         }
     }
 
@@ -446,46 +504,31 @@ impl SessionPrompt {
     }
 
     pub(super) fn mcp_tools_from_session(session: &Session) -> Vec<ToolDefinition> {
-        session
-            .metadata
-            .get(session_keys::MCP_TOOLS)
-            .and_then(|v| v.as_array())
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| {
-                        let name = item
-                            .get(tool_arg_keys::NAME)
-                            .and_then(|v| v.as_str())?
-                            .to_string();
-                        let description = item
-                            .get(plugin_hooks::keys::DESCRIPTION)
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
-                        let parameters = item
-                            .get(plugin_hooks::keys::PARAMETERS)
-                            .cloned()
-                            .unwrap_or_else(|| serde_json::json!({"type":"object"}));
-                        Some(ToolDefinition {
-                            name,
-                            description,
-                            parameters,
-                        })
-                    })
-                    .collect()
+        let wire = tool_execution_session_metadata_wire(&session.metadata);
+        let tools = wire.mcp_tools;
+
+        tools
+            .into_iter()
+            .filter_map(|tool| {
+                let name = tool.name?.trim().to_string();
+                if name.is_empty() {
+                    return None;
+                }
+                Some(ToolDefinition {
+                    name,
+                    description: tool.description,
+                    parameters: tool
+                        .parameters
+                        .unwrap_or_else(|| serde_json::json!({"type":"object"})),
+                })
             })
-            .unwrap_or_default()
+            .collect()
     }
 
     pub(super) fn load_persisted_subsessions(
         session: &Session,
     ) -> HashMap<String, PersistedSubsession> {
-        session
-            .metadata
-            .get(session_keys::SUBSESSIONS)
-            .cloned()
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default()
+        tool_execution_session_metadata_wire(&session.metadata).subsessions
     }
 
     pub(super) fn save_persisted_subsessions(
@@ -493,13 +536,11 @@ impl SessionPrompt {
         subsessions: &HashMap<String, PersistedSubsession>,
     ) {
         if subsessions.is_empty() {
-            session.metadata.remove(session_keys::SUBSESSIONS);
+            session.metadata.remove("subsessions");
             return;
         }
         if let Ok(value) = serde_json::to_value(subsessions) {
-            session
-                .metadata
-                .insert(session_keys::SUBSESSIONS.to_string(), value);
+            session.metadata.insert("subsessions".to_string(), value);
         }
     }
 
@@ -1029,7 +1070,7 @@ mod tests {
         assert_eq!(
             synthetic_msg
                 .metadata
-                .get(rocode_core::contracts::session::keys::SYNTHETIC_AGENT)
+                .get("synthetic_agent")
                 .and_then(|value| value.as_str()),
             Some("docs-researcher")
         );
@@ -1101,11 +1142,11 @@ mod tests {
     fn mcp_tools_from_session_reads_runtime_metadata() {
         let mut session = Session::new("proj", ".");
         session.metadata.insert(
-            rocode_core::contracts::session::keys::MCP_TOOLS.to_string(),
+            "mcp_tools".to_string(),
             serde_json::json!([{
-                rocode_core::contracts::tools::arg_keys::NAME: "repo_search",
-                rocode_core::contracts::plugin_hooks::keys::DESCRIPTION: "Search repository",
-                rocode_core::contracts::plugin_hooks::keys::PARAMETERS: {"type":"object","properties":{"q":{"type":"string"}}}
+                "name": "repo_search",
+                "description": "Search repository",
+                "parameters": {"type":"object","properties":{"q":{"type":"string"}}}
             }]),
         );
 

@@ -1,6 +1,5 @@
 use reqwest::blocking::Client;
 use rocode_config::Config as AppConfig;
-use rocode_core::contracts::tools::arg_keys as tool_arg_keys;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -548,18 +547,6 @@ pub struct RevertResponse {
     pub success: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct DeleteSessionResponse {
-    #[serde(default)]
-    deleted: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SuccessResponse {
-    #[serde(default)]
-    success: Option<bool>,
-}
-
 /// Server-side todo item returned by `/session/{id}/todo`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiTodoItem {
@@ -772,7 +759,7 @@ impl ApiClient {
         answers: Vec<Vec<String>>,
     ) -> anyhow::Result<()> {
         let url = format!("{}/question/{}/reply", self.base_url, question_id);
-        let body = serde_json::json!({ (tool_arg_keys::ANSWERS): answers });
+        let body = serde_json::json!({ "answers": answers });
         let response = self.client.post(&url).json(&body).send()?;
         if !response.status().is_success() {
             let status = response.status();
@@ -876,8 +863,21 @@ impl ApiClient {
                 text
             );
         }
-        let body = response.json::<DeleteSessionResponse>()?;
-        Ok(body.deleted.unwrap_or(true))
+        #[derive(Debug, Deserialize)]
+        #[serde(untagged)]
+        enum DeleteSessionResponse {
+            Bool(bool),
+            Object {
+                #[serde(default)]
+                deleted: Option<bool>,
+            },
+        }
+
+        let parsed: DeleteSessionResponse = response.json()?;
+        Ok(match parsed {
+            DeleteSessionResponse::Bool(value) => value,
+            DeleteSessionResponse::Object { deleted } => deleted.unwrap_or(true),
+        })
     }
 
     pub fn send_prompt(
@@ -1151,8 +1151,21 @@ impl ApiClient {
                 text
             );
         }
-        let body = response.json::<SuccessResponse>()?;
-        Ok(body.success.unwrap_or(true))
+        #[derive(Debug, Deserialize)]
+        #[serde(untagged)]
+        enum SuccessResponse {
+            Bool(bool),
+            Object {
+                #[serde(default)]
+                success: Option<bool>,
+            },
+        }
+
+        let parsed: SuccessResponse = response.json()?;
+        Ok(match parsed {
+            SuccessResponse::Bool(value) => value,
+            SuccessResponse::Object { success } => success.unwrap_or(true),
+        })
     }
 
     pub fn connect_mcp(&self, name: &str) -> anyhow::Result<bool> {
@@ -1266,8 +1279,21 @@ impl ApiClient {
                 text
             );
         }
-        let body = response.json::<SuccessResponse>()?;
-        Ok(body.success.unwrap_or(true))
+        #[derive(Debug, Deserialize)]
+        #[serde(untagged)]
+        enum SuccessResponse {
+            Bool(bool),
+            Object {
+                #[serde(default)]
+                success: Option<bool>,
+            },
+        }
+
+        let parsed: SuccessResponse = response.json()?;
+        Ok(match parsed {
+            SuccessResponse::Bool(value) => value,
+            SuccessResponse::Object { success } => success.unwrap_or(true),
+        })
     }
 
     pub fn compact_session(&self, session_id: &str) -> anyhow::Result<CompactResponse> {

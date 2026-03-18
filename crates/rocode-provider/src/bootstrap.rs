@@ -1596,11 +1596,7 @@ impl ProviderBootstrapState {
                         return provider.models.get(*global_match).cloned();
                     }
 
-                    let region = provider
-                        .options
-                        .get("region")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let region = provider_option_string(provider, &["region"]).unwrap_or_default();
                     let region_prefix = region.split('-').next().unwrap_or("");
                     if region_prefix == "us" || region_prefix == "eu" {
                         if let Some(regional) = candidates
@@ -2235,19 +2231,42 @@ fn default_secret_env_for_provider(provider_id: &str, protocol: Protocol) -> Vec
 }
 
 fn collect_provider_headers(provider: &ProviderState) -> HashMap<String, String> {
+    fn deserialize_header_map_lossy<'de, D>(
+        deserializer: D,
+    ) -> Result<HashMap<String, String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        let Some(serde_json::Value::Object(entries)) = value else {
+            return Ok(HashMap::new());
+        };
+        let mut headers = HashMap::new();
+        for (key, value) in entries {
+            if let serde_json::Value::String(value) = value {
+                headers.insert(key, value);
+            }
+        }
+        Ok(headers)
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct ProviderHeadersWire {
+        #[serde(default, deserialize_with = "deserialize_header_map_lossy")]
+        headers: HashMap<String, String>,
+    }
+
     let mut headers = HashMap::new();
 
     for model in provider.models.values() {
         headers.extend(model.headers.clone());
     }
 
-    if let Some(serde_json::Value::Object(map)) = provider.options.get("headers") {
-        for (key, value) in map {
-            if let Some(s) = value.as_str() {
-                headers.insert(key.clone(), s.to_string());
-            }
-        }
-    }
+    let options_wire = serde_json::from_value::<ProviderHeadersWire>(serde_json::Value::Object(
+        provider.options.clone().into_iter().collect(),
+    ))
+    .unwrap_or_default();
+    headers.extend(options_wire.headers);
 
     headers
 }

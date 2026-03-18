@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use rocode_types::{ServerEvent, SessionRunStatus, SessionRunStatusWire, ToolCallPhase};
+use serde::Deserialize;
 use tokio::sync::mpsc;
 
 use crate::util::server_url;
@@ -65,7 +65,7 @@ pub enum CliServerEvent {
     OutputBlock {
         session_id: String,
         id: Option<String>,
-        payload: serde_json::Value,
+        block_json: serde_json::Value,
     },
     /// An error event from the server.
     Error {
@@ -86,6 +86,301 @@ pub enum CliServerEvent {
         event: String,
         data: serde_json::Value,
     },
+}
+
+// ── Wire parsing (serde) ──────────────────────────────────────────────
+
+fn default_empty_array() -> serde_json::Value {
+    serde_json::Value::Array(Vec::new())
+}
+
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        _ => None,
+    })
+}
+
+fn deserialize_u64_lossy<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Number(value)) => value.as_u64().unwrap_or(0),
+        Some(serde_json::Value::String(raw)) => raw.parse::<u64>().unwrap_or(0),
+        _ => 0,
+    })
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct TypeWire {
+    #[serde(default, rename = "type")]
+    kind: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+enum ServerEventWire {
+    #[serde(rename = "config.updated")]
+    ConfigUpdated,
+    #[serde(rename = "session.updated")]
+    SessionUpdated {
+        #[serde(
+            rename = "sessionID",
+            alias = "sessionId",
+            alias = "session_id",
+            default
+        )]
+        session_id: String,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        source: Option<String>,
+    },
+    #[serde(rename = "session.status")]
+    SessionStatus {
+        #[serde(
+            rename = "sessionID",
+            alias = "sessionId",
+            alias = "session_id",
+            default
+        )]
+        session_id: String,
+        status: SessionStatusWire,
+    },
+    #[serde(rename = "question.created")]
+    QuestionCreated(QuestionCreatedWire),
+    #[serde(rename = "question.resolved")]
+    QuestionResolved(QuestionResolvedWire),
+    #[serde(rename = "question.replied")]
+    QuestionReplied(QuestionResolvedWire),
+    #[serde(rename = "question.rejected")]
+    QuestionRejected(QuestionResolvedWire),
+    #[serde(rename = "permission.requested")]
+    PermissionRequested(PermissionRequestedWire),
+    #[serde(rename = "permission.resolved")]
+    PermissionResolved(PermissionResolvedWire),
+    #[serde(rename = "permission.replied")]
+    PermissionReplied(PermissionResolvedWire),
+    #[serde(rename = "tool_call.lifecycle")]
+    ToolCallLifecycle(ToolCallLifecycleWire),
+    #[serde(rename = "tool_call.start")]
+    ToolCallStart(ToolCallStartWire),
+    #[serde(rename = "tool_call.complete")]
+    ToolCallComplete(ToolCallCompleteWire),
+    #[serde(rename = "child_session.attached")]
+    ChildSessionAttached(ChildSessionWire),
+    #[serde(rename = "child_session.detached")]
+    ChildSessionDetached(ChildSessionWire),
+    #[serde(rename = "output_block")]
+    OutputBlock(OutputBlockWire),
+    #[serde(rename = "error")]
+    Error(ErrorWire),
+    #[serde(rename = "usage")]
+    Usage(UsageWire),
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Deserialize)]
+struct QuestionCreatedWire {
+    #[serde(
+        rename = "sessionID",
+        alias = "sessionId",
+        alias = "session_id",
+        default
+    )]
+    session_id: String,
+    #[serde(
+        rename = "requestID",
+        alias = "requestId",
+        alias = "request_id",
+        alias = "id",
+        default
+    )]
+    request_id: String,
+    #[serde(default = "default_empty_array")]
+    questions: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct QuestionResolvedWire {
+    #[serde(
+        rename = "requestID",
+        alias = "requestId",
+        alias = "request_id",
+        alias = "id",
+        default
+    )]
+    request_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PermissionRequestedWire {
+    #[serde(
+        rename = "sessionID",
+        alias = "sessionId",
+        alias = "session_id",
+        default
+    )]
+    session_id: String,
+    #[serde(
+        rename = "permissionID",
+        alias = "permissionId",
+        alias = "requestID",
+        alias = "requestId",
+        alias = "id",
+        default
+    )]
+    permission_id: String,
+    #[serde(default)]
+    info: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct PermissionResolvedWire {
+    #[serde(
+        rename = "permissionID",
+        alias = "permissionId",
+        alias = "requestID",
+        alias = "requestId",
+        alias = "id",
+        default
+    )]
+    permission_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolCallLifecycleWire {
+    #[serde(
+        rename = "sessionID",
+        alias = "sessionId",
+        alias = "session_id",
+        default
+    )]
+    session_id: String,
+    #[serde(rename = "toolCallId", alias = "tool_call_id", default)]
+    tool_call_id: String,
+    #[serde(default)]
+    phase: String,
+    #[serde(rename = "toolName", alias = "tool_name", default)]
+    tool_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolCallStartWire {
+    #[serde(
+        rename = "sessionID",
+        alias = "sessionId",
+        alias = "session_id",
+        default
+    )]
+    session_id: String,
+    #[serde(rename = "toolCallId", alias = "tool_call_id", default)]
+    tool_call_id: String,
+    #[serde(rename = "toolName", alias = "tool_name", default)]
+    tool_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolCallCompleteWire {
+    #[serde(
+        rename = "sessionID",
+        alias = "sessionId",
+        alias = "session_id",
+        default
+    )]
+    session_id: String,
+    #[serde(rename = "toolCallId", alias = "tool_call_id", default)]
+    tool_call_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChildSessionWire {
+    #[serde(rename = "parentID", alias = "parentId", alias = "parent_id", default)]
+    parent_id: String,
+    #[serde(rename = "childID", alias = "childId", alias = "child_id", default)]
+    child_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OutputBlockWire {
+    #[serde(
+        rename = "sessionID",
+        alias = "sessionId",
+        alias = "session_id",
+        default
+    )]
+    session_id: String,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    id: Option<String>,
+    #[serde(default)]
+    block: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ErrorWire {
+    #[serde(
+        rename = "sessionID",
+        alias = "sessionId",
+        alias = "session_id",
+        default
+    )]
+    session_id: String,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    error: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    message: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    message_id: Option<String>,
+    #[serde(default)]
+    done: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UsageWire {
+    #[serde(
+        rename = "sessionID",
+        alias = "sessionId",
+        alias = "session_id",
+        default
+    )]
+    session_id: String,
+    #[serde(default, deserialize_with = "deserialize_u64_lossy")]
+    prompt_tokens: u64,
+    #[serde(default, deserialize_with = "deserialize_u64_lossy")]
+    completion_tokens: u64,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    message_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum SessionStatusWire {
+    Simple(String),
+    Object(SessionStatusObjectWire),
+}
+
+impl SessionStatusWire {
+    fn kind(&self) -> Option<&str> {
+        match self {
+            SessionStatusWire::Simple(kind) => Some(kind.as_str()),
+            SessionStatusWire::Object(obj) => obj.kind.as_deref(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct SessionStatusObjectWire {
+    #[serde(
+        rename = "type",
+        default,
+        deserialize_with = "deserialize_opt_string_lossy"
+    )]
+    kind: Option<String>,
 }
 
 // ── SSE subscriber ───────────────────────────────────────────────────
@@ -232,178 +527,124 @@ fn parse_event(
     json: &serde_json::Value,
     my_session_id: &str,
 ) -> Option<CliServerEvent> {
-    fn parse_server_event(event_name: &str, json: &serde_json::Value) -> Option<ServerEvent> {
-        if let Ok(event) = serde_json::from_value::<ServerEvent>(json.clone()) {
-            return Some(event);
-        }
-
-        // If the server used the SSE `event:` channel name but the payload is
-        // missing `"type"`, patch it in and try again.
-        if !event_name.is_empty() {
-            let Some(obj) = json.as_object() else {
-                return None;
-            };
-            if obj.contains_key("type") {
-                return None;
-            }
-
-            let mut patched = obj.clone();
-            patched.insert(
-                "type".to_string(),
-                serde_json::Value::String(event_name.to_string()),
-            );
-            return serde_json::from_value::<ServerEvent>(serde_json::Value::Object(patched)).ok();
-        }
-
-        None
-    }
-
-    let Some(event) = parse_server_event(event_name, json) else {
-        #[derive(Debug, serde::Deserialize)]
-        struct EventTypeOnly {
-            #[serde(rename = "type")]
-            event_type: Option<String>,
-        }
-
-        let event_type = if !event_name.is_empty() {
-            event_name.to_string()
-        } else {
-            serde_json::from_value::<EventTypeOnly>(json.clone())
-                .ok()
-                .and_then(|v| v.event_type)
-                .unwrap_or_default()
-        };
-
-        tracing::trace!("Unknown SSE event: {}", event_type);
-        return Some(CliServerEvent::Unknown {
-            event: event_type,
-            data: json.clone(),
-        });
+    let event_type = if !event_name.is_empty() {
+        event_name.to_string()
+    } else {
+        serde_json::from_value::<TypeWire>(json.clone())
+            .unwrap_or_default()
+            .kind
     };
 
-    match event {
-        ServerEvent::ConfigUpdated => Some(CliServerEvent::ConfigUpdated),
-        ServerEvent::SessionUpdated { session_id, source } => {
-            if session_id != my_session_id {
+    let mut value = json.clone();
+    if !event_name.is_empty() && !event_type.is_empty() {
+        if let serde_json::Value::Object(ref mut map) = value {
+            map.insert(
+                "type".to_string(),
+                serde_json::Value::String(event_type.clone()),
+            );
+        }
+    }
+
+    let parsed =
+        serde_json::from_value::<ServerEventWire>(value).unwrap_or(ServerEventWire::Unknown);
+
+    match parsed {
+        ServerEventWire::ConfigUpdated => Some(CliServerEvent::ConfigUpdated),
+        ServerEventWire::SessionUpdated { session_id, source } => {
+            if !session_id.is_empty() && session_id != my_session_id {
                 return None;
             }
-            Some(CliServerEvent::SessionUpdated {
-                session_id,
-                source: Some(source),
+            Some(CliServerEvent::SessionUpdated { session_id, source })
+        }
+        ServerEventWire::SessionStatus { session_id, status } => {
+            if !session_id.is_empty() && session_id != my_session_id {
+                return None;
+            }
+            match status.kind().unwrap_or("") {
+                "busy" => Some(CliServerEvent::SessionBusy { session_id }),
+                "idle" => Some(CliServerEvent::SessionIdle { session_id }),
+                "retry" => Some(CliServerEvent::SessionRetrying { session_id }),
+                _ => None,
+            }
+        }
+        ServerEventWire::QuestionCreated(event) => Some(CliServerEvent::QuestionCreated {
+            request_id: event.request_id,
+            session_id: event.session_id,
+            questions_json: event.questions,
+        }),
+        ServerEventWire::QuestionResolved(event)
+        | ServerEventWire::QuestionReplied(event)
+        | ServerEventWire::QuestionRejected(event) => Some(CliServerEvent::QuestionResolved {
+            request_id: event.request_id,
+        }),
+        ServerEventWire::PermissionRequested(event) => Some(CliServerEvent::PermissionRequested {
+            session_id: event.session_id,
+            permission_id: event.permission_id,
+            info_json: event.info,
+        }),
+        ServerEventWire::PermissionResolved(event) | ServerEventWire::PermissionReplied(event) => {
+            Some(CliServerEvent::PermissionResolved {
+                permission_id: event.permission_id,
             })
         }
-        ServerEvent::SessionStatus { session_id, status } => {
-            if session_id != my_session_id {
-                return None;
-            }
-            match status {
-                SessionRunStatusWire::Tagged(SessionRunStatus::Busy) => {
-                    Some(CliServerEvent::SessionBusy { session_id })
-                }
-                SessionRunStatusWire::Tagged(SessionRunStatus::Idle) => {
-                    Some(CliServerEvent::SessionIdle { session_id })
-                }
-                SessionRunStatusWire::Tagged(SessionRunStatus::Retry { .. }) => {
-                    Some(CliServerEvent::SessionRetrying { session_id })
-                }
-                SessionRunStatusWire::String(value) => match value.as_str() {
-                    "busy" => Some(CliServerEvent::SessionBusy { session_id }),
-                    "idle" => Some(CliServerEvent::SessionIdle { session_id }),
-                    "retry" => Some(CliServerEvent::SessionRetrying { session_id }),
-                    _ => None,
-                },
-            }
-        }
-        ServerEvent::QuestionCreated {
-            session_id,
-            request_id,
-            questions,
-        } => Some(CliServerEvent::QuestionCreated {
-            request_id,
-            session_id,
-            questions_json: questions,
-        }),
-        ServerEvent::QuestionResolved { request_id, .. } => {
-            Some(CliServerEvent::QuestionResolved { request_id })
-        }
-        ServerEvent::PermissionRequested {
-            session_id,
-            permission_id,
-            info,
-        } => Some(CliServerEvent::PermissionRequested {
-            session_id,
-            permission_id,
-            info_json: info,
-        }),
-        ServerEvent::PermissionResolved { permission_id, .. } => {
-            Some(CliServerEvent::PermissionResolved { permission_id })
-        }
-        ServerEvent::ToolCallLifecycle {
-            session_id,
-            tool_call_id,
-            phase,
-            tool_name,
-        } => match phase {
-            ToolCallPhase::Start => Some(CliServerEvent::ToolCallStarted {
-                session_id,
-                tool_call_id,
-                tool_name: tool_name.unwrap_or_default(),
+        ServerEventWire::ToolCallLifecycle(event) => match event.phase.as_str() {
+            "start" => Some(CliServerEvent::ToolCallStarted {
+                session_id: event.session_id,
+                tool_call_id: event.tool_call_id,
+                tool_name: event.tool_name,
             }),
-            ToolCallPhase::Complete => Some(CliServerEvent::ToolCallCompleted {
-                session_id,
-                tool_call_id,
+            "complete" => Some(CliServerEvent::ToolCallCompleted {
+                session_id: event.session_id,
+                tool_call_id: event.tool_call_id,
             }),
+            _ => None,
         },
-        ServerEvent::ChildSessionAttached {
-            parent_id,
-            child_id,
-        } => Some(CliServerEvent::ChildSessionAttached {
-            parent_id,
-            child_id,
+        ServerEventWire::ToolCallStart(event) => Some(CliServerEvent::ToolCallStarted {
+            session_id: event.session_id,
+            tool_call_id: event.tool_call_id,
+            tool_name: event.tool_name,
         }),
-        ServerEvent::ChildSessionDetached {
-            parent_id,
-            child_id,
-        } => Some(CliServerEvent::ChildSessionDetached {
-            parent_id,
-            child_id,
+        ServerEventWire::ToolCallComplete(event) => Some(CliServerEvent::ToolCallCompleted {
+            session_id: event.session_id,
+            tool_call_id: event.tool_call_id,
         }),
-        ServerEvent::OutputBlock {
-            session_id,
-            block,
-            id,
-        } => Some(CliServerEvent::OutputBlock {
-            session_id,
-            id,
-            payload: block,
+        ServerEventWire::ChildSessionAttached(event) => {
+            Some(CliServerEvent::ChildSessionAttached {
+                parent_id: event.parent_id,
+                child_id: event.child_id,
+            })
+        }
+        ServerEventWire::ChildSessionDetached(event) => {
+            Some(CliServerEvent::ChildSessionDetached {
+                parent_id: event.parent_id,
+                child_id: event.child_id,
+            })
+        }
+        ServerEventWire::OutputBlock(event) => Some(CliServerEvent::OutputBlock {
+            session_id: event.session_id,
+            id: event.id,
+            block_json: event.block.unwrap_or_else(|| json.clone()),
         }),
-        ServerEvent::Error {
-            session_id,
-            error,
-            message_id,
-            done,
-        } => Some(CliServerEvent::Error {
-            session_id: session_id.unwrap_or_default(),
-            error,
-            message_id,
-            done,
+        ServerEventWire::Error(event) => Some(CliServerEvent::Error {
+            session_id: event.session_id,
+            error: event
+                .error
+                .or(event.message)
+                .unwrap_or_else(|| "unknown error".to_string()),
+            message_id: event.message_id,
+            done: event.done,
         }),
-        ServerEvent::Usage {
-            session_id,
-            prompt_tokens,
-            completion_tokens,
-            message_id,
-        } => Some(CliServerEvent::Usage {
-            session_id: session_id.unwrap_or_default(),
-            prompt_tokens,
-            completion_tokens,
-            message_id,
+        ServerEventWire::Usage(event) => Some(CliServerEvent::Usage {
+            session_id: event.session_id,
+            prompt_tokens: event.prompt_tokens,
+            completion_tokens: event.completion_tokens,
+            message_id: event.message_id,
         }),
-        other => {
-            tracing::trace!("Unhandled SSE event: {:?}", other.event_name());
+        ServerEventWire::Unknown => {
+            tracing::trace!("Unknown SSE event: {}", event_type);
             Some(CliServerEvent::Unknown {
-                event: other.event_name().to_string(),
-                data: serde_json::to_value(other).unwrap_or(serde_json::Value::Null),
+                event: event_type,
+                data: json.clone(),
             })
         }
     }

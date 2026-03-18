@@ -27,12 +27,6 @@ use rocode_provider::Provider;
 use rocode_session::prompt::{OutputBlockEvent, OutputBlockHook};
 use rocode_session::snapshot::Snapshot;
 use rocode_session::{MessageRole, MessageUsage, PartType, Session, SessionMessage};
-use rocode_types::{
-    BatchToolInput, CommandToolInput, DisplayOverrideMetadata, FilePathToolInput, GlobToolInput,
-    GrepToolInput, LspToolInput, NotebookEditToolInput, QueryToolInput, QuestionToolInput,
-    SkillToolInput, TaskFlowToolInput, TaskToolInput, TodoListMetadata, TodoWriteToolInput,
-    UrlToolInput,
-};
 
 #[derive(Clone)]
 struct ActiveStageMessage {
@@ -390,122 +384,79 @@ where
     Some(result)
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct SessionMessageMetadataWire {
+    #[serde(default, deserialize_with = "deserialize_opt_bool_lossy")]
+    scheduler_stage_emitted: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_opt_bool_lossy")]
+    scheduler_stage_streaming: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    scheduler_stage_status: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    scheduler_stage_waiting_on: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    scheduler_stage_last_event: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    scheduler_stage_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    scheduler_profile: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    resolved_scheduler_profile: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    scheduler_stage: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_u32_lossy")]
+    scheduler_stage_index: Option<u32>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    step_start_snapshot: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    step_finish_snapshot: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    scheduler_decision_kind: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    scheduler_decision_title: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_decision_spec_lossy")]
+    scheduler_decision_spec: Option<SchedulerDecisionRenderSpec>,
+    #[serde(default, deserialize_with = "deserialize_decision_fields_lossy")]
+    scheduler_decision_fields: Vec<SchedulerDecisionField>,
+    #[serde(default, deserialize_with = "deserialize_decision_sections_lossy")]
+    scheduler_decision_sections: Vec<SchedulerDecisionSection>,
+}
+
+fn session_message_metadata_wire(
+    metadata: &std::collections::HashMap<String, serde_json::Value>,
+) -> SessionMessageMetadataWire {
+    let Ok(value) = serde_json::to_value(metadata) else {
+        return SessionMessageMetadataWire::default();
+    };
+    serde_json::from_value::<SessionMessageMetadataWire>(value).unwrap_or_default()
+}
+
 fn find_active_scheduler_stage_message_mut(session: &mut Session) -> Option<&mut SessionMessage> {
-    #[derive(Debug, Default, Deserialize)]
-    struct SchedulerStageStreamingMeta {
-        #[serde(default, deserialize_with = "deserialize_bool_lossy")]
-        scheduler_stage_emitted: bool,
-        #[serde(default, deserialize_with = "deserialize_bool_lossy")]
-        scheduler_stage_streaming: bool,
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-        scheduler_stage_status: Option<String>,
-    }
-
-    fn deserialize_bool_lossy<'de, D>(deserializer: D) -> Result<bool, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-        Ok(match value {
-            Some(serde_json::Value::Bool(value)) => value,
-            Some(serde_json::Value::Number(value)) => value.as_u64().unwrap_or(0) != 0,
-            Some(serde_json::Value::String(value)) => matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            ),
-            _ => false,
-        })
-    }
-
-    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-        Ok(match value {
-            None | Some(serde_json::Value::Null) => None,
-            Some(serde_json::Value::String(value)) => {
-                let trimmed = value.trim();
-                (!trimmed.is_empty()).then(|| trimmed.to_string())
-            }
-            Some(serde_json::Value::Number(value)) => Some(value.to_string()),
-            Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
-            _ => None,
-        })
-    }
-
-    fn parse_meta(
-        metadata: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> SchedulerStageStreamingMeta {
-        serde_json::to_value(metadata)
-            .ok()
-            .and_then(|value| serde_json::from_value::<SchedulerStageStreamingMeta>(value).ok())
-            .unwrap_or_default()
-    }
-
     session.messages.iter_mut().rev().find(|message| {
-        let meta = parse_meta(&message.metadata);
-        message.role == MessageRole::Assistant
-            && meta.scheduler_stage_emitted
-            && (meta.scheduler_stage_streaming
-                || matches!(
-                    meta.scheduler_stage_status.as_deref(),
-                    Some("running" | "waiting" | "cancelling")
-                ))
+        if message.role != MessageRole::Assistant {
+            return false;
+        }
+
+        let metadata = session_message_metadata_wire(&message.metadata);
+        if !metadata.scheduler_stage_emitted.unwrap_or(false) {
+            return false;
+        }
+
+        metadata.scheduler_stage_streaming.unwrap_or(false)
+            || matches!(
+                metadata.scheduler_stage_status.as_deref(),
+                Some("running" | "waiting" | "cancelling")
+            )
     })
 }
 
 fn scheduler_abort_info(message: &SessionMessage) -> SchedulerAbortInfo {
-    #[derive(Debug, Default, Deserialize)]
-    struct SchedulerAbortMeta {
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-        scheduler_stage_id: Option<String>,
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-        scheduler_profile: Option<String>,
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-        scheduler_stage: Option<String>,
-        #[serde(default, deserialize_with = "deserialize_opt_u32_lossy")]
-        scheduler_stage_index: Option<u32>,
-    }
-
-    fn deserialize_opt_u32_lossy<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-        Ok(match value {
-            Some(serde_json::Value::Number(value)) => value.as_u64().map(|value| value as u32),
-            Some(serde_json::Value::String(value)) => value.trim().parse::<u32>().ok(),
-            _ => None,
-        })
-    }
-
-    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-        Ok(match value {
-            None | Some(serde_json::Value::Null) => None,
-            Some(serde_json::Value::String(value)) => {
-                let trimmed = value.trim();
-                (!trimmed.is_empty()).then(|| trimmed.to_string())
-            }
-            Some(serde_json::Value::Number(value)) => Some(value.to_string()),
-            Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
-            _ => None,
-        })
-    }
-
-    let meta = serde_json::to_value(&message.metadata)
-        .ok()
-        .and_then(|value| serde_json::from_value::<SchedulerAbortMeta>(value).ok())
-        .unwrap_or_default();
+    let metadata = session_message_metadata_wire(&message.metadata);
     SchedulerAbortInfo {
-        execution_id: meta.scheduler_stage_id,
-        scheduler_profile: meta.scheduler_profile,
-        stage_name: meta.scheduler_stage,
-        stage_index: meta.scheduler_stage_index,
+        execution_id: metadata.scheduler_stage_id,
+        scheduler_profile: metadata.scheduler_profile,
+        stage_name: metadata.scheduler_stage,
+        stage_index: metadata.scheduler_stage_index,
     }
 }
 
@@ -821,33 +772,23 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
             let mut from_snapshot: Option<String> = None;
             let mut to_snapshot: Option<String> = None;
 
-            #[derive(Debug, Default, Deserialize)]
-            struct SnapshotHashesWire {
-                #[serde(
-                    default,
-                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-                )]
-                step_start_snapshot: Option<String>,
-                #[serde(
-                    default,
-                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-                )]
-                step_finish_snapshot: Option<String>,
-            }
-
             for msg in &session.messages {
-                let wire = serde_json::to_value(&msg.metadata)
-                    .ok()
-                    .and_then(|value| serde_json::from_value::<SnapshotHashesWire>(value).ok())
-                    .unwrap_or_default();
-
+                let metadata = session_message_metadata_wire(&msg.metadata);
                 if from_snapshot.is_none() {
-                    if let Some(s) = wire.step_start_snapshot {
-                        from_snapshot = Some(s);
+                    if let Some(s) = metadata
+                        .step_start_snapshot
+                        .as_deref()
+                        .filter(|s| !s.is_empty())
+                    {
+                        from_snapshot = Some(s.to_string());
                     }
                 }
-                if let Some(s) = wire.step_finish_snapshot {
-                    to_snapshot = Some(s);
+                if let Some(s) = metadata
+                    .step_finish_snapshot
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                {
+                    to_snapshot = Some(s.to_string());
                 }
             }
 
@@ -1511,42 +1452,19 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
 }
 
 fn stage_execution_patch_from_message(message: &SessionMessage) -> ExecutionPatch {
-    #[derive(Debug, Default, Deserialize)]
-    struct StageExecutionPatchWire {
-        #[serde(
-            default,
-            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-        )]
-        scheduler_stage_status: Option<String>,
-        #[serde(
-            default,
-            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-        )]
-        scheduler_stage_waiting_on: Option<String>,
-        #[serde(
-            default,
-            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-        )]
-        scheduler_stage_last_event: Option<String>,
-    }
-
-    let wire = serde_json::to_value(&message.metadata)
-        .ok()
-        .and_then(|value| serde_json::from_value::<StageExecutionPatchWire>(value).ok())
-        .unwrap_or_default();
-
+    let metadata = session_message_metadata_wire(&message.metadata);
     ExecutionPatch {
-        status: wire
+        status: metadata
             .scheduler_stage_status
             .as_deref()
             .and_then(runtime_execution_status_from_stage_status),
-        waiting_on: wire
+        waiting_on: metadata
             .scheduler_stage_waiting_on
             .as_deref()
             .filter(|value| *value != "none" && !value.is_empty())
             .map(|value| FieldUpdate::Set(value.to_string()))
             .unwrap_or(FieldUpdate::Clear),
-        recent_event: wire
+        recent_event: metadata
             .scheduler_stage_last_event
             .as_deref()
             .map(|value| FieldUpdate::Set(value.to_string()))
@@ -1675,13 +1593,33 @@ fn summarize_tool_result_activity(
 }
 
 fn summarize_question_args(tool_args: &serde_json::Value) -> Option<String> {
-    let input = QuestionToolInput::from_value(tool_args);
-    if input.questions.is_empty() {
+    #[derive(Debug, Deserialize)]
+    struct QuestionArguments {
+        #[serde(default)]
+        questions: Vec<QuestionDef>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct QuestionDef {
+        #[serde(default)]
+        header: Option<String>,
+        #[serde(default)]
+        question: String,
+    }
+
+    let args = serde_json::from_value::<QuestionArguments>(tool_args.clone()).ok()?;
+    if args.questions.is_empty() {
         return None;
     }
-    let mut lines = vec![format!("Question ({})", input.questions.len())];
-    for question in input.questions.iter().take(3) {
-        let header = question.header.as_deref().unwrap_or("Prompt");
+
+    let mut lines = vec![format!("Question ({})", args.questions.len())];
+    for question in args.questions.iter().take(3) {
+        let header = question
+            .header
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("Prompt");
         let text = question.question.trim();
         if !text.is_empty() {
             lines.push(format!("- {header}: {}", collapse_text(text, 96)));
@@ -1691,13 +1629,28 @@ fn summarize_question_args(tool_args: &serde_json::Value) -> Option<String> {
 }
 
 fn summarize_todo_args(tool_args: &serde_json::Value) -> Option<String> {
-    let input = TodoWriteToolInput::from_value(tool_args);
-    if input.todos.is_empty() {
+    #[derive(Debug, Deserialize)]
+    struct TodoArguments {
+        #[serde(default)]
+        todos: Vec<TodoItem>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct TodoItem {
+        #[serde(default)]
+        content: Option<String>,
+        #[serde(default)]
+        status: Option<String>,
+    }
+
+    let args = serde_json::from_value::<TodoArguments>(tool_args.clone()).ok()?;
+    if args.todos.is_empty() {
         return None;
     }
-    let mut lines = vec![format!("Todo list ({})", input.todos.len())];
-    for todo in input.todos.iter().take(5) {
-        let content = todo.content.trim();
+
+    let mut lines = vec![format!("Todo list ({})", args.todos.len())];
+    for todo in args.todos.iter().take(5) {
+        let content = todo.content.as_deref().map(str::trim).unwrap_or("");
         if content.is_empty() {
             continue;
         }
@@ -1708,17 +1661,31 @@ fn summarize_todo_args(tool_args: &serde_json::Value) -> Option<String> {
             collapse_text(content, 88)
         ));
     }
-    if lines.len() == 1 {
-        return None;
-    }
+
     Some(lines.join("\n"))
 }
 
 fn summarize_task_args(tool_args: &serde_json::Value) -> Option<String> {
-    let input = TaskToolInput::from_value(tool_args);
-    let agent = input.dispatch_label().unwrap_or("subagent");
-    let description = input.description.as_deref().unwrap_or_default();
-    let prompt = input.prompt.as_deref().unwrap_or_default();
+    #[derive(Debug, Deserialize, Default)]
+    struct TaskArguments {
+        #[serde(default, rename = "subagent_type", alias = "subagentType")]
+        subagent_type: Option<String>,
+        #[serde(default)]
+        category: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        prompt: Option<String>,
+    }
+
+    let args = serde_json::from_value::<TaskArguments>(tool_args.clone()).unwrap_or_default();
+    let agent = args
+        .subagent_type
+        .as_deref()
+        .or_else(|| args.category.as_deref())
+        .unwrap_or("subagent");
+    let description = args.description.as_deref().unwrap_or("");
+    let prompt = args.prompt.as_deref().unwrap_or("");
     let mut lines = vec![format!("Task → {}", prettify_token(agent))];
     if !description.is_empty() {
         lines.push(format!("- label: {}", collapse_text(description, 88)));
@@ -1730,26 +1697,46 @@ fn summarize_task_args(tool_args: &serde_json::Value) -> Option<String> {
 }
 
 fn summarize_task_flow_args(tool_args: &serde_json::Value) -> Option<String> {
-    let input = TaskFlowToolInput::from_value(tool_args);
-    let operation = input.operation.as_deref().unwrap_or("unknown");
+    #[derive(Debug, Deserialize, Default)]
+    struct TaskFlowArguments {
+        #[serde(default)]
+        operation: Option<String>,
+        #[serde(default)]
+        agent: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        prompt: Option<String>,
+        #[serde(default)]
+        todo_item: Option<TodoItem>,
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct TodoItem {
+        #[serde(default)]
+        content: Option<String>,
+    }
+
+    let args = serde_json::from_value::<TaskFlowArguments>(tool_args.clone()).unwrap_or_default();
+    let operation = args.operation.as_deref().unwrap_or("unknown");
     let mut lines = vec![format!("TaskFlow → {}", prettify_token(operation))];
-    if let Some(agent) = input.agent.as_deref() {
+    if let Some(agent) = args.agent.as_deref() {
         lines.push(format!("- agent: {}", prettify_token(agent)));
     }
-    if let Some(description) = input.description.as_deref() {
+    if let Some(description) = args.description.as_deref() {
         lines.push(format!("- label: {}", collapse_text(description, 88)));
     }
-    if let Some(prompt) = input.prompt.as_deref() {
+    if let Some(prompt) = args.prompt.as_deref() {
         lines.push(format!("- prompt: {}", collapse_text(prompt, 88)));
     }
-    if let Some(todo_item) = input.todo_item.as_ref() {
-        if let Some(content) = todo_item
-            .content
-            .as_deref()
-            .filter(|value| !value.is_empty())
-        {
-            lines.push(format!("- todo: {}", collapse_text(content, 88)));
-        }
+    if let Some(content) = args
+        .todo_item
+        .as_ref()
+        .and_then(|todo| todo.content.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        lines.push(format!("- todo: {}", collapse_text(content, 88)));
     }
     Some(lines.join("\n"))
 }
@@ -1783,13 +1770,8 @@ impl StageCapabilityActivityEvidence {
         push_unique_trimmed(&mut self.categories, value);
     }
 
-    fn push_skills(&mut self, values: Option<&[String]>) {
-        let Some(values) = values else {
-            return;
-        };
-        for skill in values {
-            push_unique_trimmed(&mut self.skills, Some(skill));
-        }
+    fn push_skill(&mut self, value: Option<&str>) {
+        push_unique_trimmed(&mut self.skills, value);
     }
 }
 
@@ -1813,76 +1795,114 @@ fn extract_stage_capability_activity(
     source: StageCapabilityActivitySource<'_>,
 ) -> StageCapabilityActivityEvidence {
     let mut evidence = StageCapabilityActivityEvidence::default();
-    let tool_name = tool_name.trim().to_ascii_lowercase();
 
     match source {
         StageCapabilityActivitySource::ToolArgs(args) => {
-            if !tool_supports_stage_capability_activity_args(&tool_name) {
+            if !tool_supports_stage_capability_activity_args(tool_name) {
                 return evidence;
             }
 
-            match tool_name.as_str() {
-                "task" => {
-                    let input = TaskToolInput::from_value(args);
-                    evidence.push_agent(input.subagent_type.as_deref());
-                    evidence.push_category(input.category.as_deref());
-                    evidence.push_skills(input.load_skills.as_deref());
+            #[derive(Debug, Deserialize, Default)]
+            struct CapabilityArgsWire {
+                #[serde(
+                    default,
+                    rename = "subagent_type",
+                    alias = "subagentType",
+                    deserialize_with = "deserialize_opt_string_lossy"
+                )]
+                subagent_type: Option<String>,
+                #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+                agent: Option<String>,
+                #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+                category: Option<String>,
+                #[serde(
+                    default,
+                    rename = "load_skills",
+                    alias = "loadedSkills",
+                    deserialize_with = "deserialize_opt_vec_string_lossy"
+                )]
+                load_skills: Option<Vec<String>>,
+            }
+
+            let wire =
+                serde_json::from_value::<CapabilityArgsWire>(args.clone()).unwrap_or_default();
+            evidence.push_agent(
+                wire.subagent_type
+                    .as_deref()
+                    .or_else(|| wire.agent.as_deref()),
+            );
+            evidence.push_category(wire.category.as_deref());
+            if let Some(skills) = wire.load_skills.as_ref() {
+                for skill in skills {
+                    evidence.push_skill(Some(skill.as_str()));
                 }
-                "task_flow" => {
-                    let input = TaskFlowToolInput::from_value(args);
-                    evidence.push_agent(input.agent.as_deref());
-                    evidence.push_category(input.category.as_deref());
-                    evidence.push_skills(input.load_skills.as_deref());
-                }
-                _ => {}
             }
         }
         StageCapabilityActivitySource::ToolOutput(tool_output) => {
             let Some(metadata) = tool_output.metadata.as_ref() else {
                 return evidence;
             };
-            if !tool_supports_stage_capability_activity_output(&tool_name, metadata) {
-                return evidence;
-            }
 
-            #[derive(Debug, Default, Deserialize)]
-            struct StageCapabilityMetadataWire {
-                #[serde(
-                    default,
-                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-                )]
+            #[derive(Debug, Deserialize, Default)]
+            struct CapabilityTaskMetadataWire {
+                #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
                 agent: Option<String>,
                 #[serde(
                     default,
-                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                    rename = "loadedSkills",
+                    deserialize_with = "deserialize_opt_vec_string_lossy"
                 )]
+                loaded_skills: Option<Vec<String>>,
+            }
+
+            #[derive(Debug, Deserialize, Default)]
+            struct CapabilityMetadataWire {
+                #[serde(default, deserialize_with = "deserialize_opt_bool_lossy")]
+                delegated: Option<bool>,
+                #[serde(default, rename = "agentTaskId")]
+                agent_task_id: Option<serde_json::Value>,
+                #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+                agent: Option<String>,
+                #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
                 category: Option<String>,
                 #[serde(
                     default,
-                    alias = "loadedSkills",
+                    rename = "loadedSkills",
                     alias = "load_skills",
-                    alias = "loadSkills",
-                    deserialize_with = "rocode_types::deserialize_opt_vec_string_lossy"
+                    deserialize_with = "deserialize_opt_vec_string_lossy"
                 )]
                 loaded_skills: Option<Vec<String>>,
                 #[serde(default)]
-                task: Option<Box<StageCapabilityMetadataWire>>,
+                task: Option<CapabilityTaskMetadataWire>,
             }
 
-            let wire = serde_json::from_value::<StageCapabilityMetadataWire>(metadata.clone())
+            let wire = serde_json::from_value::<CapabilityMetadataWire>(metadata.clone())
                 .unwrap_or_default();
+            let supports = matches!(tool_name, "task" | "task_flow")
+                || wire.delegated.unwrap_or(false)
+                || wire.agent_task_id.is_some()
+                || wire.task.is_some();
+            if !supports {
+                return evidence;
+            }
 
             evidence.push_agent(
                 wire.agent
                     .as_deref()
-                    .or_else(|| wire.task.as_deref().and_then(|task| task.agent.as_deref())),
+                    .or_else(|| wire.task.as_ref().and_then(|task| task.agent.as_deref())),
             );
             evidence.push_category(wire.category.as_deref());
-            evidence.push_skills(wire.loaded_skills.as_deref().or_else(|| {
-                wire.task
-                    .as_deref()
-                    .and_then(|task| task.loaded_skills.as_deref())
-            }));
+            if let Some(skills) = wire.loaded_skills.as_ref() {
+                for skill in skills {
+                    evidence.push_skill(Some(skill.as_str()));
+                }
+            } else if let Some(task) = wire.task.as_ref() {
+                if let Some(skills) = task.loaded_skills.as_ref() {
+                    for skill in skills {
+                        evidence.push_skill(Some(skill.as_str()));
+                    }
+                }
+            }
         }
     }
 
@@ -1893,33 +1913,97 @@ fn tool_supports_stage_capability_activity_args(tool_name: &str) -> bool {
     matches!(tool_name, "task" | "task_flow")
 }
 
-fn tool_supports_stage_capability_activity_output(
-    tool_name: &str,
-    metadata: &serde_json::Value,
-) -> bool {
-    if matches!(tool_name, "task" | "task_flow") {
-        return true;
-    }
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        _ => None,
+    })
+}
 
-    #[derive(Debug, Default, Deserialize)]
-    struct StageCapabilityOutputEvidenceWire {
-        #[serde(default, deserialize_with = "rocode_types::deserialize_opt_bool_lossy")]
-        delegated: Option<bool>,
-        #[serde(
-            default,
-            alias = "agentTaskId",
-            alias = "agent_task_id",
-            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-        )]
-        agent_task_id: Option<String>,
-        #[serde(default)]
-        task: Option<serde_json::Value>,
-    }
+fn deserialize_opt_bool_lossy<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Bool(value)) => Some(value),
+        _ => None,
+    })
+}
 
-    let wire = serde_json::from_value::<StageCapabilityOutputEvidenceWire>(metadata.clone())
-        .unwrap_or_default();
+fn deserialize_opt_u32_lossy<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Number(value)) => {
+            value.as_u64().and_then(|value| u32::try_from(value).ok())
+        }
+        Some(serde_json::Value::String(value)) => value.parse::<u32>().ok(),
+        _ => None,
+    })
+}
 
-    wire.delegated.unwrap_or(false) || wire.agent_task_id.is_some() || wire.task.is_some()
+fn deserialize_opt_decision_spec_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Option<SchedulerDecisionRenderSpec>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_value::<SchedulerDecisionRenderSpec>(value).ok())
+}
+
+fn deserialize_decision_fields_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Vec<SchedulerDecisionField>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    Ok(serde_json::from_value::<Vec<SchedulerDecisionField>>(value).unwrap_or_default())
+}
+
+fn deserialize_decision_sections_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Vec<SchedulerDecisionSection>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    Ok(serde_json::from_value::<Vec<SchedulerDecisionSection>>(value).unwrap_or_default())
+}
+
+fn deserialize_opt_vec_string_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Array(values)) => Some(
+            values
+                .into_iter()
+                .filter_map(|value| value.as_str().map(|value| value.to_string()))
+                .collect(),
+        ),
+        _ => None,
+    })
 }
 
 fn apply_stage_capability_activity_evidence(
@@ -2000,33 +2084,28 @@ fn summarize_generic_tool_args(tool_name: &str, tool_args: &serde_json::Value) -
 // ── Tool-specific activity summarizers ──────────────────────────────────
 
 fn summarize_bash_args(tool_args: &serde_json::Value) -> Option<String> {
-    let input = CommandToolInput::from_value(tool_args);
-    let command = input.command?;
+    let command = activity_extract_string(tool_args, &["command", "cmd", "script", "input"])?;
     Some(format!("Bash → $ {}", collapse_text(&command, 120)))
 }
 
 fn summarize_read_args(tool_args: &serde_json::Value) -> Option<String> {
-    let input = FilePathToolInput::from_value(tool_args);
-    let path = input.file_path?;
+    let path = activity_extract_string(tool_args, &["file_path", "filePath", "path", "file"])?;
     Some(format!("Read → {path}"))
 }
 
 fn summarize_write_args(tool_args: &serde_json::Value) -> Option<String> {
-    let input = FilePathToolInput::from_value(tool_args);
-    let path = input.file_path?;
+    let path = activity_extract_string(tool_args, &["file_path", "filePath", "path", "file"])?;
     Some(format!("Write ← {path}"))
 }
 
 fn summarize_edit_args(tool_args: &serde_json::Value) -> Option<String> {
-    let input = FilePathToolInput::from_value(tool_args);
-    let path = input.file_path?;
+    let path = activity_extract_string(tool_args, &["file_path", "filePath", "path", "file"])?;
     Some(format!("Edit ← {path}"))
 }
 
 fn summarize_glob_args(tool_args: &serde_json::Value) -> Option<String> {
-    let input = GlobToolInput::from_value(tool_args);
-    let pattern = input.pattern?;
-    let target = input.path;
+    let pattern = activity_extract_string(tool_args, &["pattern"])?;
+    let target = activity_extract_string(tool_args, &["path", "file_path", "filePath"]);
     let summary = match target {
         Some(path) => format!("Glob → \"{}\" in {}", pattern, path),
         None => format!("Glob → \"{}\"", pattern),
@@ -2035,9 +2114,8 @@ fn summarize_glob_args(tool_args: &serde_json::Value) -> Option<String> {
 }
 
 fn summarize_grep_args(tool_args: &serde_json::Value) -> Option<String> {
-    let input = GrepToolInput::from_value(tool_args);
-    let pattern = input.pattern?;
-    let target = input.path;
+    let pattern = activity_extract_string(tool_args, &["pattern", "query"])?;
+    let target = activity_extract_string(tool_args, &["path", "file_path", "filePath"]);
     let summary = match target {
         Some(path) => format!("Grep → \"{}\" in {}", pattern, path),
         None => format!("Grep → \"{}\"", pattern),
@@ -2046,22 +2124,19 @@ fn summarize_grep_args(tool_args: &serde_json::Value) -> Option<String> {
 }
 
 fn summarize_webfetch_args(tool_args: &serde_json::Value) -> Option<String> {
-    let input = UrlToolInput::from_value(tool_args);
-    let url = input.url?;
+    let url = activity_extract_string(tool_args, &["url"])?;
     Some(format!("Web Fetch → {url}"))
 }
 
 fn summarize_search_args(tool_name: &str, tool_args: &serde_json::Value) -> Option<String> {
-    let input = QueryToolInput::from_value(tool_args);
-    let query = input.query?;
+    let query = activity_extract_string(tool_args, &["query"])?;
     let name = pretty_scheduler_stage_name(tool_name);
     Some(format!("{name} → \"{query}\""))
 }
 
 fn summarize_lsp_args(tool_args: &serde_json::Value) -> Option<String> {
-    let input = LspToolInput::from_value(tool_args);
-    let operation = input.operation?;
-    let target = input.file_path;
+    let operation = activity_extract_string(tool_args, &["operation"])?;
+    let target = activity_extract_string(tool_args, &["filePath", "file_path", "path"]);
     let summary = match target {
         Some(path) => format!("LSP → {} {}", operation, path),
         None => format!("LSP → {}", operation),
@@ -2070,54 +2145,66 @@ fn summarize_lsp_args(tool_args: &serde_json::Value) -> Option<String> {
 }
 
 fn summarize_batch_args(tool_args: &serde_json::Value) -> Option<String> {
-    let input = BatchToolInput::from_value(tool_args);
-    if input.tool_calls.is_empty() {
-        return None;
+    #[derive(Debug, Deserialize)]
+    struct BatchArguments {
+        #[serde(rename = "toolCalls", alias = "tool_calls", default)]
+        tool_calls: Option<Vec<BatchToolCall>>,
     }
 
-    let count = input.tool_calls.len();
-    let mut seen = std::collections::HashSet::new();
-    let mut unique = Vec::new();
-    for call in &input.tool_calls {
-        let Some(name) = call
-            .tool_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-        else {
-            continue;
-        };
-        if seen.insert(name.to_string()) {
-            unique.push(name.to_string());
+    #[derive(Debug, Deserialize, Default)]
+    struct BatchToolCall {
+        #[serde(default)]
+        tool: Option<String>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        tool_name: Option<String>,
+    }
+
+    impl BatchToolCall {
+        fn display_name(&self) -> Option<&str> {
+            self.tool
+                .as_deref()
+                .or(self.name.as_deref())
+                .or(self.tool_name.as_deref())
         }
     }
 
-    if unique.is_empty() {
+    let args = serde_json::from_value::<BatchArguments>(tool_args.clone()).ok()?;
+    let calls = args.tool_calls?;
+    let count = calls.len();
+    let mut names: Vec<String> = calls
+        .iter()
+        .filter_map(|call| call.display_name().map(|name| name.to_string()))
+        .collect();
+    names.dedup();
+    if names.is_empty() {
         Some(format!("Batch → {} tools", count))
     } else {
-        Some(format!("Batch → {} tools ({})", count, unique.join(", ")))
+        Some(format!("Batch → {} tools ({})", count, names.join(", ")))
     }
 }
 
 fn summarize_skill_args(tool_args: &serde_json::Value) -> Option<String> {
-    let input = SkillToolInput::from_value(tool_args);
-    let name = input.name?;
+    let name = activity_extract_string(tool_args, &["name", "skill"])?;
     Some(format!("Skill → \"{}\"", name))
 }
 
 fn summarize_list_args(tool_args: &serde_json::Value) -> Option<String> {
-    let input = FilePathToolInput::from_value(tool_args);
-    input
-        .file_path
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .map(|path| format!("List → {path}"))
-        .or_else(|| Some("List → .".to_string()))
+    let path = activity_extract_string(tool_args, &["path", "file_path", "filePath"]);
+    match path {
+        Some(path) => Some(format!("List → {path}")),
+        None => Some("List → .".to_string()),
+    }
 }
 
 fn summarize_notebook_edit_args(tool_args: &serde_json::Value) -> Option<String> {
-    let input = NotebookEditToolInput::from_value(tool_args);
-    let summary = match (input.notebook_path, input.edit_mode) {
+    let path = activity_extract_string(
+        tool_args,
+        &["notebook_path", "notebookPath", "path", "file_path"],
+    );
+    let mode = activity_extract_string(tool_args, &["edit_mode", "editMode"]);
+    let summary = match (path, mode) {
         (Some(path), Some(mode)) => format!("Notebook Edit → {} {}", mode, path),
         (Some(path), None) => format!("Notebook Edit → {}", path),
         (None, Some(mode)) => format!("Notebook Edit → {}", mode),
@@ -2127,6 +2214,20 @@ fn summarize_notebook_edit_args(tool_args: &serde_json::Value) -> Option<String>
 }
 
 // ── Shared helpers ─────────────────────────────────────────────────────
+
+/// Extract the first non-empty string value for any of the given keys.
+fn activity_extract_string(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    let object = value.as_object()?;
+    for key in keys {
+        if let Some(content) = object.get(*key).and_then(|v| v.as_str()) {
+            let trimmed = content.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
 
 /// Format an object's primitive fields as `key=value` pairs, omitting large
 /// text blobs to keep the summary readable.
@@ -2172,15 +2273,31 @@ fn format_activity_primitive_args(
 }
 
 fn summarize_question_result(metadata: Option<&serde_json::Value>) -> Option<String> {
-    let display = DisplayOverrideMetadata::from_value(metadata?);
-    if display.fields.is_empty() {
+    #[derive(Debug, Deserialize, Default)]
+    struct QuestionResultMetadataWire {
+        #[serde(rename = "display.fields", default)]
+        fields: Vec<QuestionResultFieldWire>,
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct QuestionResultFieldWire {
+        #[serde(default)]
+        key: String,
+        #[serde(default)]
+        value: String,
+    }
+
+    let metadata = metadata?;
+    let wire = serde_json::from_value::<QuestionResultMetadataWire>(metadata.clone()).ok()?;
+    if wire.fields.is_empty() {
         return None;
     }
-    let mut lines = vec![format!("Answered ({})", display.fields.len())];
-    for field in display.fields.iter().take(3) {
+
+    let mut lines = vec![format!("Answered ({})", wire.fields.len())];
+    for field in wire.fields.iter().take(3) {
         let key = field.key.trim();
         let key = if key.is_empty() { "Question" } else { key };
-        let value = field.value.as_deref().unwrap_or("");
+        let value = field.value.as_str();
         lines.push(format!(
             "- {}: {}",
             collapse_text(key, 48),
@@ -2191,13 +2308,29 @@ fn summarize_question_result(metadata: Option<&serde_json::Value>) -> Option<Str
 }
 
 fn summarize_todo_result(metadata: Option<&serde_json::Value>) -> Option<String> {
-    let list = TodoListMetadata::from_value(metadata?);
-    if list.todos.is_empty() {
+    #[derive(Debug, Deserialize, Default)]
+    struct TodoResultMetadataWire {
+        #[serde(default)]
+        todos: Vec<TodoItemWire>,
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct TodoItemWire {
+        #[serde(default)]
+        content: Option<String>,
+        #[serde(default)]
+        status: Option<String>,
+    }
+
+    let metadata = metadata?;
+    let wire = serde_json::from_value::<TodoResultMetadataWire>(metadata.clone()).ok()?;
+    if wire.todos.is_empty() {
         return None;
     }
-    let mut lines = vec![format!("Todo list ({})", list.todos.len())];
-    for todo in list.todos.iter().take(5) {
-        let content = todo.content.trim();
+
+    let mut lines = vec![format!("Todo list ({})", wire.todos.len())];
+    for todo in wire.todos.iter().take(5) {
+        let content = todo.content.as_deref().map(str::trim).unwrap_or("");
         if content.is_empty() {
             continue;
         }
@@ -2207,9 +2340,6 @@ fn summarize_todo_result(metadata: Option<&serde_json::Value>) -> Option<String>
             prettify_token(status),
             collapse_text(content, 88)
         ));
-    }
-    if lines.len() == 1 {
-        return None;
     }
     Some(lines.join("\n"))
 }
@@ -2232,22 +2362,41 @@ fn collapse_text(input: &str, max_chars: usize) -> String {
 fn extract_todo_items_from_args(
     tool_args: &serde_json::Value,
 ) -> Option<Vec<rocode_session::TodoInfo>> {
-    let input = TodoWriteToolInput::from_value(tool_args);
-    if input.todos.is_empty() {
+    #[derive(Debug, Deserialize, Default)]
+    struct TodoWriteArguments {
+        #[serde(default)]
+        todos: Vec<TodoWire>,
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct TodoWire {
+        #[serde(default)]
+        content: Option<String>,
+        #[serde(default)]
+        status: Option<String>,
+        #[serde(default)]
+        priority: Option<String>,
+    }
+
+    let args = serde_json::from_value::<TodoWriteArguments>(tool_args.clone()).ok()?;
+    if args.todos.is_empty() {
         return None;
     }
-    let items = input
+
+    let items = args
         .todos
-        .iter()
+        .into_iter()
         .filter_map(|todo| {
-            let content = todo.content.trim();
+            let content = todo.content.map(|value| value.trim().to_string())?;
             if content.is_empty() {
                 return None;
             }
+            let status = todo.status.unwrap_or_else(|| "pending".to_string());
+            let priority = todo.priority.unwrap_or_else(|| "medium".to_string());
             Some(rocode_session::TodoInfo {
-                content: content.to_string(),
-                status: todo.status.as_deref().unwrap_or("pending").to_string(),
-                priority: todo.priority.as_deref().unwrap_or("medium").to_string(),
+                content,
+                status,
+                priority,
             })
         })
         .collect::<Vec<_>>();
@@ -2700,7 +2849,7 @@ pub fn scheduler_stage_block_from_message(message: &SessionMessage) -> Option<Sc
 
     // Override title when from_metadata() produced an empty title (no ## heading).
     if block.title.is_empty() {
-        block.title = pretty_scheduler_stage_title(block.profile.as_deref(), &block.stage);
+        block.title = pretty_scheduler_stage_title(metadata, &block.stage);
     }
 
     // Enrich with decision block (requires full text + stage for contextual parsing).
@@ -2720,119 +2869,20 @@ fn scheduler_decision_block(
 fn decision_from_metadata(
     metadata: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Option<SchedulerDecisionBlock> {
-    #[derive(Debug, Default, Deserialize)]
-    struct DecisionFieldWire {
-        #[serde(default)]
-        label: Option<String>,
-        #[serde(default)]
-        value: Option<String>,
-        #[serde(default)]
-        tone: Option<String>,
-    }
-
-    #[derive(Debug, Default, Deserialize)]
-    struct DecisionSectionWire {
-        #[serde(default)]
-        title: Option<String>,
-        #[serde(default)]
-        body: Option<String>,
-    }
-
-    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-        Ok(match value {
-            None | Some(serde_json::Value::Null) => None,
-            Some(serde_json::Value::String(value)) => {
-                let trimmed = value.trim();
-                (!trimmed.is_empty()).then(|| trimmed.to_string())
-            }
-            Some(serde_json::Value::Number(value)) => Some(value.to_string()),
-            Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
-            _ => None,
-        })
-    }
-
-    fn deserialize_vec_lossy<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-        T: serde::de::DeserializeOwned,
-    {
-        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-        let Some(serde_json::Value::Array(values)) = value else {
-            return Ok(Vec::new());
-        };
-        Ok(values
-            .into_iter()
-            .filter_map(|entry| serde_json::from_value::<T>(entry).ok())
-            .collect())
-    }
-
-    #[derive(Debug, Default, Deserialize)]
-    struct DecisionMetadataWire {
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-        scheduler_decision_kind: Option<String>,
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-        scheduler_decision_title: Option<String>,
-        #[serde(default, deserialize_with = "deserialize_vec_lossy")]
-        scheduler_decision_fields: Vec<DecisionFieldWire>,
-        #[serde(default, deserialize_with = "deserialize_vec_lossy")]
-        scheduler_decision_sections: Vec<DecisionSectionWire>,
-        #[serde(default)]
-        scheduler_decision_spec: Option<serde_json::Value>,
-    }
-
-    let wire = serde_json::to_value(metadata)
-        .ok()
-        .and_then(|value| serde_json::from_value::<DecisionMetadataWire>(value).ok())
-        .unwrap_or_default();
-
+    let wire = session_message_metadata_wire(metadata);
     let kind = wire.scheduler_decision_kind?;
     let title = wire
         .scheduler_decision_title
         .unwrap_or_else(|| "Decision".to_string());
 
-    let spec = wire
-        .scheduler_decision_spec
-        .and_then(|value| serde_json::from_value::<SchedulerDecisionRenderSpec>(value).ok())
-        .unwrap_or_else(default_decision_render_spec);
-
-    let fields = wire
-        .scheduler_decision_fields
-        .into_iter()
-        .filter_map(|field| {
-            Some(SchedulerDecisionField {
-                label: field.label?.trim().to_string(),
-                value: field.value?.trim().to_string(),
-                tone: field.tone.and_then(|value| {
-                    let trimmed = value.trim();
-                    (!trimmed.is_empty()).then(|| trimmed.to_string())
-                }),
-            })
-        })
-        .filter(|field| !field.label.is_empty() && !field.value.is_empty())
-        .collect::<Vec<_>>();
-
-    let sections = wire
-        .scheduler_decision_sections
-        .into_iter()
-        .filter_map(|section| {
-            Some(SchedulerDecisionSection {
-                title: section.title?.trim().to_string(),
-                body: section.body?.to_string(),
-            })
-        })
-        .filter(|section| !section.title.is_empty() && !section.body.is_empty())
-        .collect::<Vec<_>>();
-
     Some(SchedulerDecisionBlock {
         kind,
         title,
-        spec,
-        fields,
-        sections,
+        spec: wire
+            .scheduler_decision_spec
+            .unwrap_or_else(default_decision_render_spec),
+        fields: wire.scheduler_decision_fields,
+        sections: wire.scheduler_decision_sections,
     })
 }
 
@@ -2980,11 +3030,19 @@ fn scheduler_stage_body(text: &str) -> String {
     trimmed.to_string()
 }
 
-fn pretty_scheduler_stage_title(profile: Option<&str>, stage: &str) -> String {
+fn pretty_scheduler_stage_title(
+    metadata: &std::collections::HashMap<String, serde_json::Value>,
+    stage: &str,
+) -> String {
     let stage_title = prettify_decision_value(stage);
-    match profile.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(profile) => format!("{profile} · {stage_title}"),
-        None => stage_title,
+    let wire = session_message_metadata_wire(metadata);
+    match wire
+        .resolved_scheduler_profile
+        .as_deref()
+        .or_else(|| wire.scheduler_profile.as_deref())
+    {
+        Some(profile) if !profile.is_empty() => format!("{profile} · {stage_title}"),
+        _ => stage_title,
     }
 }
 
@@ -4021,12 +4079,13 @@ mod tests {
         let fields = message
             .metadata
             .get("scheduler_decision_fields")
-            .and_then(|value| value.as_array())
+            .and_then(|value| {
+                serde_json::from_value::<Vec<SchedulerDecisionField>>(value.clone()).ok()
+            })
             .expect("decision fields should exist");
-        assert!(fields.iter().any(|field| {
-            field.get("label").and_then(|value| value.as_str()) == Some("Outcome")
-                && field.get("value").and_then(|value| value.as_str()) == Some("Orchestrate")
-        }));
+        assert!(fields
+            .iter()
+            .any(|field| field.label == "Outcome" && field.value == "Orchestrate"));
     }
 
     #[tokio::test]

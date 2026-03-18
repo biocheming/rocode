@@ -49,9 +49,6 @@ impl OpenAIResponsesLanguageModel {
     pub async fn get_args(&self, options: &GenerateOptions) -> Result<PreparedArgs, ProviderError> {
         let model_config = get_responses_model_config(&self.model_id);
         let provider_options = options.provider_options.clone().unwrap_or_default();
-        let supports_reasoning = model_config.is_reasoning_model
-            || provider_options.reasoning_effort.is_some()
-            || provider_options.reasoning_summary.is_some();
         let mut warnings = validate_responses_settings(ResponsesSettingsValidation {
             model_config: &model_config,
             options: &provider_options,
@@ -161,7 +158,7 @@ impl OpenAIResponsesLanguageModel {
                 Value::Number(max_output_tokens.into()),
             );
         }
-        if !supports_reasoning {
+        if !model_config.is_reasoning_model {
             if let Some(temperature) = options.temperature {
                 obj.insert("temperature".to_string(), json!(temperature));
             }
@@ -209,7 +206,7 @@ impl OpenAIResponsesLanguageModel {
             obj.insert("text".to_string(), Value::Object(text_obj));
         }
 
-        if supports_reasoning {
+        if model_config.is_reasoning_model {
             let mut reasoning = serde_json::Map::new();
             if let Some(effort) = provider_options.reasoning_effort.clone() {
                 reasoning.insert("effort".to_string(), Value::String(effort));
@@ -325,78 +322,112 @@ impl OpenAIResponsesLanguageModel {
             });
         }
 
-        let body: Value = serde_json::from_str(&raw)
-            .map_err(|e| ProviderError::ApiError(format!("invalid responses payload: {}", e)))?;
-
-        fn deserialize_vec_value_lossy<'de, D>(deserializer: D) -> Result<Vec<Value>, D::Error>
+        fn deserialize_opt_string_lossy<'de, D>(
+            deserializer: D,
+        ) -> std::result::Result<Option<String>, D::Error>
         where
             D: serde::Deserializer<'de>,
         {
             let value = Option::<Value>::deserialize(deserializer)?;
             Ok(match value {
-                None | Some(Value::Null) => Vec::new(),
-                Some(Value::Array(values)) => values,
-                Some(other) => vec![other],
+                Some(Value::String(value)) => Some(value),
+                _ => None,
             })
+        }
+
+        fn deserialize_opt_u64_lossy<'de, D>(
+            deserializer: D,
+        ) -> std::result::Result<Option<u64>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = Option::<Value>::deserialize(deserializer)?;
+            Ok(match value {
+                Some(Value::Number(value)) => value.as_u64(),
+                Some(Value::String(value)) => value.parse::<u64>().ok(),
+                _ => None,
+            })
+        }
+
+        fn deserialize_vec_value_lossy<'de, D>(
+            deserializer: D,
+        ) -> std::result::Result<Vec<Value>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = Option::<Value>::deserialize(deserializer)?;
+            Ok(match value {
+                Some(Value::Array(values)) => values,
+                _ => Vec::new(),
+            })
+        }
+
+        fn deserialize_usage_lossy<'de, D>(
+            deserializer: D,
+        ) -> std::result::Result<ResponsesUsage, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = Option::<Value>::deserialize(deserializer)?;
+            let Some(value) = value else {
+                return Ok(ResponsesUsage::default());
+            };
+            Ok(serde_json::from_value::<ResponsesUsage>(value).unwrap_or_default())
+        }
+
+        fn deserialize_incomplete_details_lossy<'de, D>(
+            deserializer: D,
+        ) -> std::result::Result<Option<IncompleteDetailsWire>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = Option::<Value>::deserialize(deserializer)?;
+            let Some(value) = value else {
+                return Ok(None);
+            };
+            Ok(serde_json::from_value::<IncompleteDetailsWire>(value).ok())
         }
 
         #[derive(Debug, Default, Deserialize)]
         struct IncompleteDetailsWire {
-            #[serde(default)]
-            reason: String,
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            reason: Option<String>,
         }
 
         #[derive(Debug, Default, Deserialize)]
         struct ResponsesBodyWire {
             #[serde(default, deserialize_with = "deserialize_vec_value_lossy")]
             output: Vec<Value>,
-            #[serde(default)]
-            usage: Option<Value>,
-            #[serde(default)]
+            #[serde(default, deserialize_with = "deserialize_usage_lossy")]
+            usage: ResponsesUsage,
+            #[serde(default, deserialize_with = "deserialize_incomplete_details_lossy")]
             incomplete_details: Option<IncompleteDetailsWire>,
-            #[serde(default)]
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
             id: Option<String>,
-            #[serde(default)]
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
             model: Option<String>,
-            #[serde(default)]
+            #[serde(default, deserialize_with = "deserialize_opt_u64_lossy")]
             created_at: Option<u64>,
-            #[serde(default)]
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
             service_tier: Option<String>,
         }
 
-        let wire = serde_json::from_value::<ResponsesBodyWire>(body).unwrap_or_default();
-        let ResponsesBodyWire {
-            output,
-            usage,
-            incomplete_details,
-            id,
-            model,
-            created_at,
-            service_tier,
-        } = wire;
+        let body: ResponsesBodyWire = serde_json::from_str(&raw)
+            .map_err(|e| ProviderError::ApiError(format!("invalid responses payload: {}", e)))?;
 
-        let (parts, has_function_call, logprobs) = parse_output_items(&output);
-
-        let usage = usage
-            .and_then(|v| serde_json::from_value::<ResponsesUsage>(v).ok())
-            .unwrap_or_default();
-
-        let incomplete_reason = incomplete_details
+        let (parts, has_function_call, logprobs) = parse_output_items(&body.output);
+        let incomplete_reason = body
+            .incomplete_details
             .as_ref()
-            .map(|details| details.reason.as_str())
-            .filter(|reason| !reason.trim().is_empty());
+            .and_then(|details| details.reason.as_deref());
         let finish_reason = map_openai_response_finish_reason(incomplete_reason, has_function_call);
 
         let metadata = ResponseMetadata {
-            response_id: id,
-            model_id: model,
-            timestamp: created_at,
-            service_tier,
-            logprobs: if logprobs.is_empty() {
-                None
-            } else {
-                Some(logprobs)
-            },
+            response_id: body.id,
+            model_id: body.model,
+            timestamp: body.created_at,
+            service_tier: body.service_tier,
+            logprobs: (!logprobs.is_empty()).then_some(logprobs),
         };
 
         let message = Message {
@@ -413,7 +444,7 @@ impl OpenAIResponsesLanguageModel {
         Ok(ResponsesGenerateResult {
             message,
             finish_reason,
-            usage,
+            usage: body.usage,
             metadata,
             warnings: prepared.warnings,
         })

@@ -1,7 +1,5 @@
 use chrono::Utc;
-use rocode_core::contracts::provider::ProviderFinishReasonWire;
-use rocode_core::contracts::scheduler::keys as scheduler_keys;
-use rocode_core::contracts::session::keys as session_keys;
+use serde::Deserialize;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -30,6 +28,26 @@ const MESSAGE_BLOCK_RIGHT_PADDING: usize = 1;
 const SIDEBAR_CLOSE_BUTTON_WIDTH: u16 = 3;
 const SIDEBAR_OPEN_BUTTON_WIDTH: u16 = 3;
 const SEMANTIC_HIGHLIGHT_MAX_CHARS: usize = 8_000;
+
+fn has_resolved_system_prompt(metadata: &HashMap<String, serde_json::Value>) -> bool {
+    #[derive(Debug, Deserialize, Default)]
+    struct SystemPromptMetadata {
+        #[serde(default)]
+        resolved_system_prompt_preview: Option<String>,
+        #[serde(default)]
+        resolved_system_prompt: Option<String>,
+    }
+
+    let parsed = serde_json::to_value(metadata)
+        .ok()
+        .and_then(|value| serde_json::from_value::<SystemPromptMetadata>(value).ok())
+        .unwrap_or_default();
+    parsed
+        .resolved_system_prompt_preview
+        .or(parsed.resolved_system_prompt)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
 
 struct ThinkingToggleHit {
     line_index: usize,
@@ -621,14 +639,7 @@ impl SessionView {
                         && msg
                             .metadata
                             .as_ref()
-                            .and_then(|metadata| {
-                                metadata
-                                    .get(session_keys::RESOLVED_SYSTEM_PROMPT_PREVIEW)
-                                    .or_else(|| metadata.get(session_keys::RESOLVED_SYSTEM_PROMPT))
-                            })
-                            .and_then(|value| value.as_str())
-                            .map(|value| !value.trim().is_empty())
-                            .unwrap_or(false);
+                            .is_some_and(has_resolved_system_prompt);
                     let user_lines = super::session_message::render_user_message(
                         msg,
                         &theme,
@@ -1501,7 +1512,7 @@ fn assistant_footer(
         .mode
         .as_deref()
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| assistant_metadata_text(message, scheduler_keys::PROFILE))
+        .or_else(|| assistant_metadata_text(message, "scheduler_profile"))
         .or_else(|| {
             message
                 .agent
@@ -1588,13 +1599,10 @@ fn assistant_duration(
 }
 
 fn is_assistant_final(message: &Message) -> bool {
-    let Some(raw) = message.finish.as_deref() else {
-        return false;
-    };
-    match ProviderFinishReasonWire::parse(raw) {
-        Some(ProviderFinishReasonWire::ToolCalls | ProviderFinishReasonWire::Unknown) => false,
-        _ => true,
-    }
+    matches!(
+        message.finish.as_deref(),
+        Some(reason) if reason != "tool-calls" && reason != "unknown"
+    )
 }
 
 fn is_assistant_interrupted(message: &Message) -> bool {

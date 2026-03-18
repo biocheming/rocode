@@ -194,6 +194,22 @@ pub enum ParsedStreamError {
     },
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct StreamErrorBodyWire {
+    #[serde(rename = "type", default)]
+    error_type: String,
+    #[serde(default)]
+    error: Option<StreamErrorWire>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct StreamErrorWire {
+    #[serde(default)]
+    code: String,
+    #[serde(default)]
+    message: Option<String>,
+}
+
 pub fn parse_api_call_error(provider_id: &str, error: &ProviderError) -> ParsedAPICallError {
     let message = format_error_message(provider_id, error);
     let standard_code = crate::error_classification::classify_provider_error(error);
@@ -257,29 +273,14 @@ fn is_openai_error_retryable(status: u16) -> bool {
 
 pub fn parse_stream_error(data: &str) -> Option<ParsedStreamError> {
     let body: serde_json::Value = serde_json::from_str(data).ok()?;
+    let parsed = serde_json::from_value::<StreamErrorBodyWire>(body.clone()).ok()?;
 
-    #[derive(Debug, Default, serde::Deserialize)]
-    struct StreamErrorWire {
-        #[serde(rename = "type", default)]
-        event_type: String,
-        #[serde(default)]
-        error: Option<StreamErrorDetailWire>,
-    }
-
-    #[derive(Debug, Default, serde::Deserialize)]
-    struct StreamErrorDetailWire {
-        #[serde(default)]
-        code: Option<String>,
-        #[serde(default)]
-        message: Option<String>,
-    }
-
-    let wire = serde_json::from_value::<StreamErrorWire>(body.clone()).ok()?;
-    if wire.event_type != "error" {
+    if parsed.error_type != "error" {
         return None;
     }
-    let error = wire.error?;
-    let code = error.code.as_deref()?;
+
+    let error = parsed.error?;
+    let code = error.code.as_str();
     let response_body = serde_json::to_string(&body).unwrap_or_default();
 
     match code {
@@ -298,10 +299,7 @@ pub fn parse_stream_error(data: &str) -> Option<ParsedStreamError> {
             response_body,
         }),
         "invalid_prompt" => {
-            let msg = error
-                .message
-                .filter(|m| !m.trim().is_empty())
-                .unwrap_or_else(|| "Invalid prompt.".to_string());
+            let msg = error.message.unwrap_or_else(|| "Invalid prompt.".to_string());
             Some(ParsedStreamError::ApiError {
                 message: msg,
                 is_retryable: false,

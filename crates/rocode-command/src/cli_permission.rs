@@ -112,6 +112,39 @@ fn format_permission_summary(
     metadata: &std::collections::HashMap<String, serde_json::Value>,
     style: &CliStyle,
 ) -> String {
+    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::String(value)) => Some(value),
+            _ => None,
+        })
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct PermissionRequestMetadataWire {
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        command: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        filepath: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        diff: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        query: Option<String>,
+    }
+
+    fn permission_request_metadata_wire(
+        metadata: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> PermissionRequestMetadataWire {
+        let Ok(value) = serde_json::to_value(metadata) else {
+            return PermissionRequestMetadataWire::default();
+        };
+        serde_json::from_value::<PermissionRequestMetadataWire>(value).unwrap_or_default()
+    }
+
+    let metadata = permission_request_metadata_wire(metadata);
     let mut lines = Vec::new();
     let metadata = PermissionMetadata::from_map(metadata);
 

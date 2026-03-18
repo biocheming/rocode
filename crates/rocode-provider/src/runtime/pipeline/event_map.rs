@@ -2,118 +2,6 @@ use crate::driver::StreamingEvent;
 use crate::protocol_loader::{ProtocolManifest, StreamingConfig};
 use serde::Deserialize;
 
-#[derive(Debug, Default, Deserialize)]
-struct OpenAiDeltaWire {
-    #[serde(default)]
-    reasoning_content: Option<String>,
-    #[serde(default)]
-    reasoning_text: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct OpenAiToolCallWire {
-    #[serde(default)]
-    index: Option<u64>,
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    function: Option<OpenAiFunctionWire>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct OpenAiFunctionWire {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    arguments: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct AnthropicEventWire {
-    #[serde(rename = "type", default)]
-    event_type: String,
-    #[serde(default)]
-    index: Option<u32>,
-    #[serde(default)]
-    delta: Option<AnthropicDeltaWire>,
-    #[serde(default)]
-    content_block: Option<AnthropicContentBlockWire>,
-    #[serde(default)]
-    message: Option<AnthropicMessageWire>,
-    #[serde(default)]
-    error: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct AnthropicDeltaWire {
-    #[serde(default)]
-    text: Option<String>,
-    #[serde(default)]
-    partial_json: Option<String>,
-    #[serde(default)]
-    stop_reason: Option<String>,
-    #[serde(default)]
-    thinking: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct AnthropicContentBlockWire {
-    #[serde(rename = "type", default)]
-    block_type: String,
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    name: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct AnthropicMessageWire {
-    #[serde(default)]
-    usage: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct GeminiLikeFrameWire {
-    #[serde(default)]
-    candidates: Vec<GeminiLikeCandidateWire>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct GeminiLikeCandidateWire {
-    #[serde(default, alias = "finishReason")]
-    finish_reason: Option<String>,
-}
-
-fn tool_arguments_delta(value: serde_json::Value) -> Option<String> {
-    match value {
-        serde_json::Value::Null => None,
-        serde_json::Value::String(raw) => {
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(raw)
-            }
-        }
-        serde_json::Value::Number(value) => Some(value.to_string()),
-        serde_json::Value::Bool(value) => Some(value.to_string()),
-        serde_json::Value::Object(map) => {
-            if map.is_empty() {
-                None
-            } else {
-                Some(serde_json::Value::Object(map).to_string())
-            }
-        }
-        serde_json::Value::Array(values) => {
-            if values.is_empty() {
-                None
-            } else {
-                Some(serde_json::Value::Array(values).to_string())
-            }
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MapperKind {
     OpenAi,
@@ -221,21 +109,47 @@ impl PathEventMapper {
     fn map_openai(&self, frame: &serde_json::Value) -> Vec<StreamingEvent> {
         let mut events = Vec::new();
 
+        #[derive(Debug, Deserialize, Default)]
+        struct OpenAiFrame {
+            #[serde(default)]
+            choices: Vec<OpenAiChoice>,
+        }
+
+        #[derive(Debug, Deserialize, Default)]
+        struct OpenAiChoice {
+            #[serde(default)]
+            delta: Option<OpenAiDelta>,
+            #[serde(default)]
+            finish_reason: Option<String>,
+        }
+
+        #[derive(Debug, Deserialize, Default)]
+        struct OpenAiDelta {
+            #[serde(default)]
+            reasoning_content: Option<String>,
+            #[serde(default, rename = "reasoning_text")]
+            reasoning_text: Option<String>,
+        }
+
+        let parsed: OpenAiFrame = serde_json::from_value(frame.clone()).unwrap_or_default();
+
         // OpenAI-compatible reasoning: reasoning_content or reasoning_text in delta
-        if let Some(delta_value) = resolve_path(frame, "$.choices[0].delta") {
-            let delta = serde_json::from_value::<OpenAiDeltaWire>(delta_value.clone())
-                .ok()
-                .unwrap_or_default();
-            let reasoning = delta
-                .reasoning_content
-                .or(delta.reasoning_text)
-                .unwrap_or_default();
-            if !reasoning.is_empty() {
-                events.push(StreamingEvent::ThinkingDelta {
-                    thinking: reasoning,
-                    tool_consideration: None,
-                });
-            }
+        let reasoning = parsed
+            .choices
+            .get(0)
+            .and_then(|choice| choice.delta.as_ref())
+            .and_then(|delta| {
+                delta
+                    .reasoning_content
+                    .as_deref()
+                    .or(delta.reasoning_text.as_deref())
+            })
+            .unwrap_or("");
+        if !reasoning.is_empty() {
+            events.push(StreamingEvent::ThinkingDelta {
+                thinking: reasoning.to_string(),
+                tool_consideration: None,
+            });
         }
 
         if let Some(content) = resolve_path(frame, &self.content_path).and_then(|v| v.as_str()) {
@@ -247,40 +161,56 @@ impl PathEventMapper {
             }
         }
 
-        if let Some(tool_calls) =
-            resolve_path(frame, &self.tool_call_path).and_then(|v| v.as_array())
-        {
-            for tool_call in tool_calls {
-                let tool_call = serde_json::from_value::<OpenAiToolCallWire>(tool_call.clone())
-                    .ok()
-                    .unwrap_or_default();
+        if let Some(tool_calls_value) = resolve_path(frame, &self.tool_call_path).cloned() {
+            #[derive(Debug, Deserialize, Default)]
+            struct OpenAiToolCall {
+                #[serde(default)]
+                index: Option<u32>,
+                #[serde(default)]
+                id: Option<String>,
+                #[serde(default)]
+                function: Option<OpenAiToolCallFunction>,
+            }
 
-                let index = tool_call.index.map(|i| i as u32);
+            #[derive(Debug, Deserialize, Default)]
+            struct OpenAiToolCallFunction {
+                #[serde(default)]
+                name: Option<String>,
+                #[serde(default)]
+                arguments: Option<String>,
+            }
+
+            let tool_calls: Vec<OpenAiToolCall> =
+                serde_json::from_value(tool_calls_value).unwrap_or_default();
+            for tool_call in tool_calls {
+                let index = tool_call.index;
                 let tool_call_id = tool_call
                     .id
-                    .filter(|id| !id.trim().is_empty())
                     .unwrap_or_else(|| format!("tool-call-{}", index.unwrap_or(0)));
 
-                if let Some(function) = tool_call.function {
-                    if let Some(name) = function.name.filter(|name| !name.trim().is_empty()) {
+                if let Some(name) = tool_call
+                    .function
+                    .as_ref()
+                    .and_then(|function| function.name.as_deref())
+                {
+                    if !name.is_empty() {
                         events.push(StreamingEvent::ToolCallStarted {
                             tool_call_id: tool_call_id.clone(),
-                            tool_name: name,
+                            tool_name: name.to_string(),
                             index,
                         });
                     }
+                }
 
-                    if let Some(arguments) = function
-                        .arguments
-                        .and_then(tool_arguments_delta)
-                        .filter(|args| {
-                            // Avoid emitting a delta for the empty arguments sentinel.
-                            args.trim() != "{}"
-                        })
-                    {
+                if let Some(arguments) = tool_call
+                    .function
+                    .as_ref()
+                    .and_then(|function| function.arguments.as_deref())
+                {
+                    if !arguments.is_empty() {
                         events.push(StreamingEvent::PartialToolCall {
                             tool_call_id: tool_call_id.clone(),
-                            arguments,
+                            arguments: arguments.to_string(),
                             index,
                             is_complete: None,
                         });
@@ -290,9 +220,10 @@ impl PathEventMapper {
         }
 
         let usage = resolve_path(frame, &self.usage_path).cloned();
-        let finish_reason = resolve_path(frame, "$.choices[0].finish_reason")
-            .and_then(|value| value.as_str())
-            .map(ToString::to_string);
+        let finish_reason = parsed
+            .choices
+            .get(0)
+            .and_then(|choice| choice.finish_reason.clone());
 
         if usage.is_some() || finish_reason.is_some() {
             events.push(StreamingEvent::Metadata {
@@ -311,30 +242,97 @@ impl PathEventMapper {
 
     fn map_anthropic(&self, frame: &serde_json::Value) -> Vec<StreamingEvent> {
         let mut events = Vec::new();
-        let wire = serde_json::from_value::<AnthropicEventWire>(frame.clone())
-            .ok()
-            .unwrap_or_default();
-        let event_type = wire.event_type.as_str();
+        #[derive(Debug, Deserialize, Default)]
+        struct AnthropicContentBlock {
+            #[serde(default, rename = "type")]
+            block_type: Option<String>,
+            #[serde(default)]
+            id: Option<String>,
+            #[serde(default)]
+            name: Option<String>,
+        }
 
-        match event_type {
-            "content_block_start" => {
-                let Some(block) = wire.content_block else {
-                    return events;
-                };
+        #[derive(Debug, Deserialize, Default)]
+        struct AnthropicDelta {
+            #[serde(default)]
+            thinking: Option<String>,
+            #[serde(default)]
+            text: Option<String>,
+            #[serde(default)]
+            partial_json: Option<String>,
+        }
 
-                if block.block_type == "thinking" {
+        #[derive(Debug, Deserialize, Default)]
+        struct AnthropicMessageDelta {
+            #[serde(default)]
+            stop_reason: Option<String>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[serde(tag = "type")]
+        enum AnthropicFrame {
+            #[serde(rename = "content_block_start")]
+            ContentBlockStart {
+                #[serde(default)]
+                index: Option<u32>,
+                #[serde(default)]
+                content_block: Option<AnthropicContentBlock>,
+            },
+            #[serde(rename = "content_block_delta")]
+            ContentBlockDelta {
+                #[serde(default)]
+                index: Option<u32>,
+                #[serde(default)]
+                content_block: Option<AnthropicContentBlock>,
+                #[serde(default)]
+                delta: Option<AnthropicDelta>,
+            },
+            #[serde(rename = "message_start")]
+            MessageStart,
+            #[serde(rename = "message_delta")]
+            MessageDelta {
+                #[serde(default)]
+                delta: Option<AnthropicMessageDelta>,
+            },
+            #[serde(rename = "message_stop")]
+            MessageStop,
+            #[serde(rename = "error")]
+            Error {
+                #[serde(default)]
+                error: Option<serde_json::Value>,
+            },
+            #[serde(other)]
+            Other,
+        }
+
+        let parsed: AnthropicFrame =
+            serde_json::from_value(frame.clone()).unwrap_or(AnthropicFrame::Other);
+
+        match parsed {
+            AnthropicFrame::ContentBlockStart {
+                index,
+                content_block,
+            } => {
+                let block_type = content_block
+                    .as_ref()
+                    .and_then(|block| block.block_type.as_deref())
+                    .unwrap_or_default();
+                if block_type == "thinking" {
                     events.push(StreamingEvent::ThinkingDelta {
                         thinking: String::new(),
                         tool_consideration: None,
                     });
                 }
-                if block.block_type == "tool_use" {
-                    let index = wire.index;
-                    let tool_call_id = block
-                        .id
-                        .filter(|id| !id.trim().is_empty())
+                if block_type == "tool_use" {
+                    let tool_call_id = content_block
+                        .as_ref()
+                        .and_then(|block| block.id.clone())
                         .unwrap_or_else(|| format!("tool-call-{}", index.unwrap_or(0)));
-                    let tool_name = block.name.unwrap_or_default();
+                    let tool_name = content_block
+                        .as_ref()
+                        .and_then(|block| block.name.as_deref())
+                        .unwrap_or_default()
+                        .to_string();
                     events.push(StreamingEvent::ToolCallStarted {
                         tool_call_id,
                         tool_name,
@@ -342,30 +340,37 @@ impl PathEventMapper {
                     });
                 }
             }
-            "content_block_delta" => {
-                if let Some(delta) = wire.delta.as_ref() {
-                    if let Some(thinking) = delta.thinking.as_deref().filter(|t| !t.is_empty()) {
+            AnthropicFrame::ContentBlockDelta {
+                index,
+                content_block,
+                delta,
+            } => {
+                if let Some(thinking) = delta.as_ref().and_then(|delta| delta.thinking.as_deref()) {
+                    if !thinking.is_empty() {
                         events.push(StreamingEvent::ThinkingDelta {
                             thinking: thinking.to_string(),
                             tool_consideration: None,
                         });
                     }
-                    if let Some(text) = delta.text.as_deref().filter(|t| !t.is_empty()) {
+                }
+
+                if let Some(text) = delta.as_ref().and_then(|delta| delta.text.as_deref()) {
+                    if !text.is_empty() {
                         events.push(StreamingEvent::PartialContentDelta {
                             content: text.to_string(),
                             sequence_id: None,
                         });
                     }
-                    if let Some(partial_json) =
-                        delta.partial_json.as_deref().filter(|t| !t.is_empty())
-                    {
-                        let index = wire.index;
-                        let tool_call_id = wire
-                            .content_block
+                }
+
+                if let Some(partial_json) = delta
+                    .as_ref()
+                    .and_then(|delta| delta.partial_json.as_deref())
+                {
+                    if !partial_json.is_empty() {
+                        let tool_call_id = content_block
                             .as_ref()
-                            .and_then(|block| block.id.as_deref())
-                            .filter(|id| !id.trim().is_empty())
-                            .map(ToString::to_string)
+                            .and_then(|block| block.id.clone())
                             .unwrap_or_else(|| format!("tool-call-{}", index.unwrap_or(0)));
                         events.push(StreamingEvent::PartialToolCall {
                             tool_call_id,
@@ -376,10 +381,8 @@ impl PathEventMapper {
                     }
                 }
             }
-            "message_start" => {
-                let usage = resolve_path(frame, &self.usage_path)
-                    .cloned()
-                    .or_else(|| wire.message.as_ref().and_then(|m| m.usage.clone()));
+            AnthropicFrame::MessageStart => {
+                let usage = resolve_path(frame, &self.usage_path).cloned();
                 if usage.is_some() {
                     events.push(StreamingEvent::Metadata {
                         usage,
@@ -388,12 +391,8 @@ impl PathEventMapper {
                     });
                 }
             }
-            "message_delta" => {
-                let stop_reason = wire
-                    .delta
-                    .as_ref()
-                    .and_then(|delta| delta.stop_reason.clone())
-                    .filter(|reason| !reason.trim().is_empty());
+            AnthropicFrame::MessageDelta { delta } => {
+                let stop_reason = delta.and_then(|delta| delta.stop_reason);
                 if stop_reason.is_some() {
                     events.push(StreamingEvent::Metadata {
                         usage: None,
@@ -405,21 +404,21 @@ impl PathEventMapper {
                     });
                 }
             }
-            "message_stop" => {
+            AnthropicFrame::MessageStop => {
                 events.push(StreamingEvent::StreamEnd {
                     finish_reason: None,
                 });
             }
-            "error" => {
-                if let Some(error) = wire.error {
+            AnthropicFrame::Error { error } => {
+                if let Some(error) = error {
                     events.push(StreamingEvent::StreamError {
                         error,
                         event_id: None,
                     });
                 }
             }
-            _ => {}
-        }
+            AnthropicFrame::Other => {}
+        };
 
         events
     }
@@ -436,17 +435,28 @@ impl PathEventMapper {
             }
         }
 
+        #[derive(Debug, Deserialize, Default)]
+        struct GeminiFrame {
+            #[serde(default)]
+            usage_metadata: Option<serde_json::Value>,
+            #[serde(default)]
+            candidates: Vec<GeminiCandidate>,
+        }
+
+        #[derive(Debug, Deserialize, Default)]
+        struct GeminiCandidate {
+            #[serde(default, alias = "finishReason")]
+            finish_reason: Option<String>,
+        }
+
+        let parsed: GeminiFrame = serde_json::from_value(frame.clone()).unwrap_or_default();
         let usage = resolve_path(frame, &self.usage_path)
             .cloned()
-            .or_else(|| resolve_path(frame, "$.usage_metadata").cloned());
-        let finish_reason = serde_json::from_value::<GeminiLikeFrameWire>(frame.clone())
-            .ok()
-            .and_then(|wire| {
-                wire.candidates
-                    .into_iter()
-                    .next()
-                    .and_then(|candidate| candidate.finish_reason)
-            });
+            .or(parsed.usage_metadata);
+        let finish_reason = parsed
+            .candidates
+            .get(0)
+            .and_then(|candidate| candidate.finish_reason.clone());
 
         if usage.is_some() || finish_reason.is_some() {
             events.push(StreamingEvent::Metadata {

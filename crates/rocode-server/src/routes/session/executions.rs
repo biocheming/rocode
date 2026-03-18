@@ -4,11 +4,8 @@ use axum::extract::{Path, State};
 use axum::Json;
 
 use rocode_core::agent_task_registry::{global_task_registry, AgentTask, AgentTaskStatus};
-use rocode_core::contracts::agent_tasks::bus_keys as agent_task_bus_keys;
-use rocode_core::contracts::tools::BuiltinToolName;
-use rocode_core::contracts::tools::ToolCallStatusWire;
-use rocode_core::contracts::wire::fields as wire_fields;
 use rocode_session::{PartType, Session, ToolCallStatus};
+use serde::Deserialize;
 
 use crate::runtime_control::SessionExecutionTopology;
 use crate::{ApiError, Result, ServerState};
@@ -158,10 +155,10 @@ pub(super) fn collect_active_tool_execution_records(
                     "input": input,
                     "message_id": message.id,
                     "status": match status {
-                        ToolCallStatus::Pending => ToolCallStatusWire::Pending.as_str(),
-                        ToolCallStatus::Running => ToolCallStatusWire::Running.as_str(),
-                        ToolCallStatus::Completed => ToolCallStatusWire::Completed.as_str(),
-                        ToolCallStatus::Error => ToolCallStatusWire::Error.as_str(),
+                        ToolCallStatus::Pending => "pending",
+                        ToolCallStatus::Running => "running",
+                        ToolCallStatus::Completed => "completed",
+                        ToolCallStatus::Error => "error",
                     },
                 })),
             });
@@ -238,8 +235,8 @@ fn agent_task_execution_record(
         started_at: task.started_at.saturating_mul(1000),
         updated_at: chrono::Utc::now().timestamp_millis(),
         metadata: Some(serde_json::json!({
-            (agent_task_bus_keys::TASK_ID): task.id,
-            (agent_task_bus_keys::AGENT_NAME): task.agent_name,
+            "task_id": task.id,
+            "agent_name": task.agent_name,
             "prompt": task.prompt,
             "max_steps": task.max_steps,
             "step": step,
@@ -257,21 +254,41 @@ fn select_active_tool_parent_id(
 fn select_active_agent_task_parent_id(
     records: &[crate::runtime_control::ExecutionRecord],
 ) -> Option<String> {
+    fn deserialize_opt_string_lossy<'de, D>(
+        deserializer: D,
+    ) -> std::result::Result<Option<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::String(value)) => Some(value),
+            _ => None,
+        })
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct ToolCallMetadataWire {
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        tool_name: Option<String>,
+    }
+
+    fn tool_call_name(metadata: Option<&serde_json::Value>) -> Option<String> {
+        let Some(metadata) = metadata else {
+            return None;
+        };
+        serde_json::from_value::<ToolCallMetadataWire>(metadata.clone())
+            .ok()
+            .and_then(|wire| wire.tool_name)
+    }
+
     records
         .iter()
         .filter(|record| matches!(record.kind, crate::runtime_control::ExecutionKind::ToolCall))
         .filter(|record| {
-            record
-                .metadata
-                .as_ref()
-                .and_then(|value| value.get(wire_fields::TOOL_NAME_SNAKE))
-                .and_then(|value| value.as_str())
-                .map(|name| {
-                    matches!(
-                        BuiltinToolName::parse(name),
-                        Some(BuiltinToolName::Task | BuiltinToolName::TaskFlow)
-                    )
-                })
+            tool_call_name(record.metadata.as_ref())
+                .as_deref()
+                .map(|name| matches!(name, "task" | "task_flow"))
                 .unwrap_or(false)
         })
         .max_by_key(|record| record.updated_at)

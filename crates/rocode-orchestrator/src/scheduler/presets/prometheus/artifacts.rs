@@ -7,23 +7,18 @@ use crate::{ExecutionContext, ToolExecError};
 use super::super::runtime_enforcement::{
     validate_runtime_artifact_path, validate_runtime_orchestration_tool, RuntimeArtifactPolicy,
 };
-use rocode_core::contracts::patch::keys as patch_keys;
-use rocode_core::contracts::tools::BuiltinToolName;
 
 pub const PROMETHEUS_PLANNING_STAGE_TOOLS: &[&str] = &[
-    BuiltinToolName::Read.as_str(),
-    BuiltinToolName::Glob.as_str(),
-    BuiltinToolName::Grep.as_str(),
-    BuiltinToolName::Ls.as_str(),
-    BuiltinToolName::AstGrepSearch.as_str(),
-    BuiltinToolName::Question.as_str(),
-    BuiltinToolName::Write.as_str(),
-    BuiltinToolName::Edit.as_str(),
+    "read",
+    "glob",
+    "grep",
+    "ls",
+    "ast_grep_search",
+    "question",
+    "write",
+    "edit",
 ];
-pub const PROMETHEUS_RUNTIME_ORCHESTRATION_TOOLS: &[&str] = &[
-    BuiltinToolName::Question.as_str(),
-    BuiltinToolName::TodoWrite.as_str(),
-];
+pub const PROMETHEUS_RUNTIME_ORCHESTRATION_TOOLS: &[&str] = &["question", "todowrite"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrometheusArtifactKind {
@@ -85,7 +80,7 @@ pub fn validate_prometheus_planning_tool_call(
                     "tool `{tool_name}` requires a file_path when used in Prometheus planning stages"
                 ))
             })?;
-            validate_prometheus_artifact_path(raw_path, exec_ctx)
+            validate_prometheus_artifact_path(raw_path.as_str(), exec_ctx)
         }
         _ => Ok(()),
     }
@@ -132,12 +127,17 @@ pub fn compose_prometheus_planning_artifact(input: SchedulerPlanningArtifactInpu
     })
 }
 
-fn extract_tool_file_path(arguments: &serde_json::Value) -> Option<&str> {
-    arguments
-        .get(patch_keys::FILE_PATH_SNAKE)
-        .or_else(|| arguments.get(patch_keys::FILE_PATH))
-        .and_then(|value| value.as_str())
-        .map(str::trim)
+fn extract_tool_file_path(arguments: &serde_json::Value) -> Option<String> {
+    #[derive(Debug, serde::Deserialize, Default)]
+    struct ToolFilePathArgsWire {
+        #[serde(default, alias = "filePath")]
+        file_path: Option<String>,
+    }
+
+    let parsed = serde_json::from_value::<ToolFilePathArgsWire>(arguments.clone()).ok()?;
+    parsed
+        .file_path
+        .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
 }
 

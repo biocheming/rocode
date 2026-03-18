@@ -1,22 +1,23 @@
 use crate::{MessageRole, SessionMessage};
-use rocode_core::contracts::{
-    plugin_hooks,
-    session::MessageRoleWire,
-    wire::{self, fields as wire_fields},
-};
 
-pub(crate) fn hook_payload_object(
-    payload: &serde_json::Value,
-) -> Option<&serde_json::Map<String, serde_json::Value>> {
-    payload
-        .get(plugin_hooks::keys::OUTPUT)
-        .and_then(|value| value.as_object())
-        .or_else(|| payload.as_object())
-        .or_else(|| {
-            payload
-                .get(plugin_hooks::keys::DATA)
-                .and_then(|value| value.as_object())
-        })
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
+
+pub(crate) fn parse_hook_payload<T: DeserializeOwned>(payload: &serde_json::Value) -> Option<T> {
+    #[derive(Debug, Deserialize)]
+    #[serde(untagged)]
+    enum HookEnvelope<T> {
+        Output { output: T },
+        Data { data: T },
+        Direct(T),
+    }
+
+    let envelope: HookEnvelope<T> = serde_json::from_value(payload.clone()).ok()?;
+    Some(match envelope {
+        HookEnvelope::Output { output } => output,
+        HookEnvelope::Data { data } => data,
+        HookEnvelope::Direct(value) => value,
+    })
 }
 
 pub(crate) fn session_message_hook_payload(message: &SessionMessage) -> serde_json::Value {
@@ -26,11 +27,11 @@ pub(crate) fn session_message_hook_payload(message: &SessionMessage) -> serde_js
     };
 
     object.insert(
-        plugin_hooks::keys::INFO.to_string(),
+        "info".to_string(),
         serde_json::json!({
-            plugin_hooks::keys::ID: message.id,
-            wire::keys::SESSION_ID: message.session_id,
-            wire_fields::ROLE: hook_message_role(&message.role),
+            "id": message.id,
+            "sessionID": message.session_id,
+            "role": hook_message_role(&message.role),
             "time": { "created": message.created_at.timestamp_millis() },
         }),
     );
@@ -40,10 +41,10 @@ pub(crate) fn session_message_hook_payload(message: &SessionMessage) -> serde_js
 
 pub(crate) fn hook_message_role(role: &MessageRole) -> &'static str {
     match role {
-        MessageRole::User => MessageRoleWire::User.as_str(),
-        MessageRole::Assistant => MessageRoleWire::Assistant.as_str(),
-        MessageRole::System => MessageRoleWire::System.as_str(),
-        MessageRole::Tool => MessageRoleWire::Tool.as_str(),
+        MessageRole::User => "user",
+        MessageRole::Assistant => "assistant",
+        MessageRole::System => "system",
+        MessageRole::Tool => "tool",
     }
 }
 
@@ -51,23 +52,33 @@ pub(crate) fn apply_chat_messages_hook_outputs(
     messages: &mut Vec<SessionMessage>,
     hook_outputs: Vec<rocode_plugin::HookOutput>,
 ) {
+    fn deserialize_opt_session_messages_lossy<'de, D>(
+        deserializer: D,
+    ) -> Result<Option<Vec<SessionMessage>>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        let Some(value) = value else {
+            return Ok(None);
+        };
+        Ok(serde_json::from_value::<Vec<SessionMessage>>(value).ok())
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct ChatMessagesHookWire {
+        #[serde(default, deserialize_with = "deserialize_opt_session_messages_lossy")]
+        messages: Option<Vec<SessionMessage>>,
+    }
+
     for output in hook_outputs {
         let Some(payload) = output.payload.as_ref() else {
             continue;
         };
-        let Some(object) = hook_payload_object(payload) else {
+        let Some(parsed) = parse_hook_payload::<ChatMessagesHookWire>(payload) else {
             continue;
         };
-        let Some(next_messages) = object
-            .get(plugin_hooks::keys::MESSAGES)
-            .and_then(|value| value.as_array())
-        else {
-            continue;
-        };
-        let parsed = serde_json::from_value::<Vec<SessionMessage>>(serde_json::Value::Array(
-            next_messages.clone(),
-        ));
-        if let Ok(next) = parsed {
+        if let Some(next) = parsed.messages {
             *messages = next;
         }
     }
@@ -77,28 +88,52 @@ pub(crate) fn apply_chat_message_hook_outputs(
     message: &mut SessionMessage,
     hook_outputs: Vec<rocode_plugin::HookOutput>,
 ) {
+    fn deserialize_opt_session_message_lossy<'de, D>(
+        deserializer: D,
+    ) -> Result<Option<SessionMessage>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        let Some(value) = value else {
+            return Ok(None);
+        };
+        Ok(serde_json::from_value::<SessionMessage>(value).ok())
+    }
+
+    fn deserialize_opt_message_parts_lossy<'de, D>(
+        deserializer: D,
+    ) -> Result<Option<Vec<crate::MessagePart>>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        let Some(value) = value else {
+            return Ok(None);
+        };
+        Ok(serde_json::from_value::<Vec<crate::MessagePart>>(value).ok())
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct ChatMessageHookWire {
+        #[serde(default, deserialize_with = "deserialize_opt_session_message_lossy")]
+        message: Option<SessionMessage>,
+        #[serde(default, deserialize_with = "deserialize_opt_message_parts_lossy")]
+        parts: Option<Vec<crate::MessagePart>>,
+    }
+
     for output in hook_outputs {
         let Some(payload) = output.payload.as_ref() else {
             continue;
         };
-        let Some(object) = hook_payload_object(payload) else {
+        let Some(parsed) = parse_hook_payload::<ChatMessageHookWire>(payload) else {
             continue;
         };
-        if let Some(next_message) = object.get(plugin_hooks::keys::MESSAGE) {
-            if let Ok(parsed) = serde_json::from_value::<SessionMessage>(next_message.clone()) {
-                *message = parsed;
-            }
+        if let Some(next_message) = parsed.message {
+            *message = next_message;
         }
-        if let Some(next_parts) = object
-            .get(plugin_hooks::keys::PARTS)
-            .and_then(|value| value.as_array())
-        {
-            let parsed = serde_json::from_value::<Vec<crate::MessagePart>>(
-                serde_json::Value::Array(next_parts.clone()),
-            );
-            if let Ok(parts) = parsed {
-                message.parts = parts;
-            }
+        if let Some(next_parts) = parsed.parts {
+            message.parts = next_parts;
         }
     }
 }

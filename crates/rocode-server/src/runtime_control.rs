@@ -1,12 +1,73 @@
 use chrono::Utc;
 use rocode_command::stage_protocol::{ExecutionNode, ExecutionNodeKind, ExecutionNodeStatus};
-use rocode_core::contracts::agent_tasks::bus_keys as agent_task_bus_keys;
-use rocode_core::contracts::scheduler::keys as scheduler_keys;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
+
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+        Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
+fn deserialize_opt_u32_lossy<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Number(value)) => {
+            value.as_u64().and_then(|value| u32::try_from(value).ok())
+        }
+        Some(serde_json::Value::String(value)) => value.parse::<u32>().ok(),
+        _ => None,
+    })
+}
+
+fn deserialize_opt_i64_lossy<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Number(value)) => value.as_i64(),
+        Some(serde_json::Value::String(value)) => value.parse::<i64>().ok(),
+        _ => None,
+    })
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ExecutionRecordMetadataWire {
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    scheduler_stage_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    child_session_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_u32_lossy")]
+    attempt: Option<u32>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    message: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_i64_lossy")]
+    next: Option<i64>,
+}
+
+fn execution_record_metadata_wire(
+    metadata: Option<&serde_json::Value>,
+) -> ExecutionRecordMetadataWire {
+    let Some(metadata) = metadata else {
+        return ExecutionRecordMetadataWire::default();
+    };
+
+    serde_json::from_value::<ExecutionRecordMetadataWire>(metadata.clone()).unwrap_or_default()
+}
 
 /// Metadata about the execution record that triggered a topology change.
 #[derive(Debug, Clone)]
@@ -73,17 +134,15 @@ impl ExecutionRecord {
     /// The protocol shape is defined in `rocode-command::stage_protocol` so
     /// that CLI, TUI, and Web can consume it without depending on server internals.
     pub fn to_node(&self) -> ExecutionNode {
+        let metadata_wire = execution_record_metadata_wire(self.metadata.as_ref());
         ExecutionNode {
             execution_id: self.id.clone(),
             parent_execution_id: self.parent_id.clone(),
             // Prefer first-class field; fall back to metadata for backward compat.
-            stage_id: self.stage_id.clone().or_else(|| {
-                self.metadata
-                    .as_ref()
-                    .and_then(|m| m.get(scheduler_keys::STAGE_ID))
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-            }),
+            stage_id: self
+                .stage_id
+                .clone()
+                .or_else(|| metadata_wire.scheduler_stage_id.clone()),
             kind: match self.kind {
                 ExecutionKind::SchedulerStage => ExecutionNodeKind::Stage,
                 ExecutionKind::AgentTask => ExecutionNodeKind::Agent,
@@ -104,12 +163,7 @@ impl ExecutionRecord {
             started_at: self.started_at,
             updated_at: self.updated_at,
             session_id: self.session_id.clone(),
-            child_session_id: self
-                .metadata
-                .as_ref()
-                .and_then(|m| m.get("child_session_id"))
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            child_session_id: metadata_wire.child_session_id.clone(),
         }
     }
 }
@@ -169,7 +223,19 @@ pub(crate) enum FieldUpdate<T> {
     Clear,
 }
 
-pub use rocode_types::SessionRunStatus;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+#[derive(Default)]
+pub enum SessionRunStatus {
+    #[default]
+    Idle,
+    Busy,
+    Retry {
+        attempt: u32,
+        message: String,
+        next: i64,
+    },
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuestionOptionInfo {
@@ -309,22 +375,11 @@ impl RuntimeControlRegistry {
                     | ExecutionStatus::Waiting
                     | ExecutionStatus::Cancelling => SessionRunStatus::Busy,
                     ExecutionStatus::Retry => {
-                        let metadata = record.metadata.as_ref();
+                        let metadata = execution_record_metadata_wire(record.metadata.as_ref());
                         SessionRunStatus::Retry {
-                            attempt: metadata
-                                .and_then(|value| value.get("attempt"))
-                                .and_then(|value| value.as_u64())
-                                .map(|value| value as u32)
-                                .unwrap_or(1),
-                            message: metadata
-                                .and_then(|value| value.get("message"))
-                                .and_then(|value| value.as_str())
-                                .unwrap_or_default()
-                                .to_string(),
-                            next: metadata
-                                .and_then(|value| value.get("next"))
-                                .and_then(|value| value.as_i64())
-                                .unwrap_or_default(),
+                            attempt: metadata.attempt.unwrap_or(1),
+                            message: metadata.message.unwrap_or_default(),
+                            next: metadata.next.unwrap_or_default(),
                         }
                     }
                     // Done is filtered out above, but satisfy exhaustiveness.
@@ -564,8 +619,8 @@ impl RuntimeControlRegistry {
             started_at: now_millis(),
             updated_at: now_millis(),
             metadata: Some(serde_json::json!({
-                (agent_task_bus_keys::TASK_ID): task_id,
-                (agent_task_bus_keys::AGENT_NAME): agent_name,
+                "task_id": task_id,
+                "agent_name": agent_name,
             })),
         })
         .await;
@@ -1103,7 +1158,6 @@ fn question_record_to_info(record: &ExecutionRecord) -> Option<QuestionInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocode_core::contracts::tools::BuiltinToolName;
 
     #[tokio::test]
     async fn prompt_status_roundtrip_uses_single_registry() {
@@ -1184,19 +1238,11 @@ mod tests {
                 "ses_1",
                 "msg_stage_1".to_string(),
                 "Coordination Gate".to_string(),
-                {
-                    let mut meta = serde_json::Map::new();
-                    meta.insert(
-                        scheduler_keys::PROFILE.to_string(),
-                        serde_json::json!("atlas"),
-                    );
-                    meta.insert(
-                        "stage_name".to_string(),
-                        serde_json::json!("coordination-gate"),
-                    );
-                    meta.insert("stage_index".to_string(), serde_json::json!(2));
-                    serde_json::Value::Object(meta)
-                },
+                serde_json::json!({
+                    "scheduler_profile": "atlas",
+                    "stage_name": "coordination-gate",
+                    "stage_index": 2
+                }),
             )
             .await;
 
@@ -1559,7 +1605,7 @@ mod tests {
             .register_tool_call(
                 "tc_1",
                 "ses_1",
-                BuiltinToolName::Bash.as_str(),
+                "bash",
                 Some("stage_x".to_string()),
                 Some("stage_x".to_string()),
             )
@@ -1693,18 +1739,10 @@ mod tests {
             recent_event: Some("tool_call".to_string()),
             started_at: 1710000000000,
             updated_at: 1710000001000,
-            metadata: Some({
-                let mut meta = serde_json::Map::new();
-                meta.insert(
-                    scheduler_keys::STAGE_ID.to_string(),
-                    serde_json::json!("stage_xyz"),
-                );
-                meta.insert(
-                    "child_session_id".to_string(),
-                    serde_json::json!("child_001"),
-                );
-                serde_json::Value::Object(meta)
-            }),
+            metadata: Some(serde_json::json!({
+                "scheduler_stage_id": "stage_xyz",
+                "child_session_id": "child_001"
+            })),
         };
 
         let node = record.to_node();

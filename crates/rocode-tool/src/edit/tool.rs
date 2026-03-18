@@ -1,11 +1,11 @@
 use async_trait::async_trait;
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
 use super::replacers::CompositeReplacer;
 use crate::path_guard::{resolve_user_path, RootPathFallbackPolicy};
 use crate::{with_file_lock, Metadata, Tool, ToolContext, ToolError, ToolResult};
-use rocode_types::EditToolInput;
 
 #[cfg(feature = "lsp")]
 const MAX_DIAGNOSTICS_PER_FILE: usize = 20;
@@ -68,21 +68,25 @@ impl Tool for EditTool {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let input = EditToolInput::from_value(&args);
+        #[derive(Debug, Deserialize)]
+        struct EditInput {
+            #[serde(alias = "filePath")]
+            file_path: String,
+            #[serde(alias = "oldString")]
+            old_string: String,
+            #[serde(alias = "newString")]
+            new_string: String,
+            #[serde(default, alias = "replaceAll")]
+            replace_all: bool,
+        }
 
-        let file_path = input.file_path.ok_or_else(|| {
-            ToolError::InvalidArguments("file_path (or filePath) is required".into())
-        })?;
+        let input: EditInput =
+            serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
 
-        let old_string = input.old_string.ok_or_else(|| {
-            ToolError::InvalidArguments("old_string (or oldString) is required".into())
-        })?;
-
-        let new_string = input.new_string.ok_or_else(|| {
-            ToolError::InvalidArguments("new_string (or newString) is required".into())
-        })?;
-
-        let replace_all = input.replace_all.unwrap_or(false);
+        let file_path = input.file_path.trim().to_string();
+        let old_string = input.old_string;
+        let new_string = input.new_string;
+        let replace_all = input.replace_all;
 
         let base_dir = if ctx.directory.is_empty() {
             &self.directory

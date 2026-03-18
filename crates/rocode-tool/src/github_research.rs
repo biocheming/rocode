@@ -2421,13 +2421,69 @@ fn ensure_git_available() -> Result<(), ToolError> {
     crate::git_runtime::ensure_git_available()
 }
 
+fn value_as_string_lossy(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(value) => Some(value.clone()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        serde_json::Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn value_as_string_map(value: &serde_json::Value) -> HashMap<String, String> {
+    let serde_json::Value::Object(entries) = value else {
+        return HashMap::new();
+    };
+    let mut result = HashMap::new();
+    for (key, value) in entries {
+        if let Some(value) = value_as_string_lossy(value) {
+            result.insert(key.clone(), value);
+        }
+    }
+    result
+}
+
+fn value_as_nested_string_map(
+    value: &serde_json::Value,
+) -> HashMap<String, HashMap<String, String>> {
+    let serde_json::Value::Object(entries) = value else {
+        return HashMap::new();
+    };
+    let mut result = HashMap::new();
+    for (key, value) in entries {
+        let nested = value_as_string_map(value);
+        if !nested.is_empty() {
+            result.insert(key.clone(), nested);
+        }
+    }
+    result
+}
+
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.as_ref().and_then(value_as_string_lossy))
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GitHubResearchContextWire {
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    github_research_cache_root: Option<String>,
+}
+
+fn github_research_context_wire(ctx: &ToolContext) -> GitHubResearchContextWire {
+    serde_json::from_value::<GitHubResearchContextWire>(serde_json::Value::Object(
+        ctx.extra.clone().into_iter().collect(),
+    ))
+    .unwrap_or_default()
+}
+
 fn configured_repo_override(ctx: &ToolContext, key: &str, repo: &str) -> Option<String> {
-    ctx.extra
-        .get(key)
-        .and_then(|value| value.as_object())
-        .and_then(|map| map.get(repo))
-        .and_then(|value| value.as_str())
-        .map(ToOwned::to_owned)
+    let raw = ctx.extra.get(key)?;
+    let overrides = value_as_string_map(raw);
+    overrides.get(repo).cloned()
 }
 
 fn configured_repo_ref_override(
@@ -2436,14 +2492,12 @@ fn configured_repo_ref_override(
     repo: &str,
     reference: &str,
 ) -> Option<String> {
-    ctx.extra
-        .get(key)
-        .and_then(|value| value.as_object())
-        .and_then(|repos| repos.get(repo))
-        .and_then(|value| value.as_object())
+    let raw = ctx.extra.get(key)?;
+    let ref_overrides = value_as_nested_string_map(raw);
+    ref_overrides
+        .get(repo)
         .and_then(|refs| refs.get(reference))
-        .and_then(|value| value.as_str())
-        .map(ToOwned::to_owned)
+        .cloned()
 }
 
 fn remote_url_for_repo(repo: &str, ctx: &ToolContext) -> String {
@@ -2452,9 +2506,9 @@ fn remote_url_for_repo(repo: &str, ctx: &ToolContext) -> String {
 }
 
 fn local_repo_root(ctx: &ToolContext) -> PathBuf {
-    ctx.extra
-        .get("github_research_cache_root")
-        .and_then(|value| value.as_str())
+    github_research_context_wire(ctx)
+        .github_research_cache_root
+        .as_deref()
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             dirs::cache_dir()

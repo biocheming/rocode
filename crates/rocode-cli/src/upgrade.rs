@@ -1,6 +1,8 @@
 use std::io::{self, Write};
 use std::process::Command as ProcessCommand;
 
+use serde::Deserialize;
+
 use crate::util::parse_http_json;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,52 +107,88 @@ async fn latest_version(method: InstallMethod) -> anyhow::Result<String> {
 
     match method {
         InstallMethod::Brew => {
+            #[derive(Debug, Deserialize)]
+            struct BrewFormulaWire {
+                versions: BrewVersionsWire,
+            }
+
+            #[derive(Debug, Deserialize)]
+            struct BrewVersionsWire {
+                stable: Option<String>,
+            }
+
             let response = client
                 .get("https://formulae.brew.sh/api/formula/rocode.json")
                 .send()
                 .await?;
             let json: serde_json::Value = parse_http_json(response).await?;
-            let version = json
-                .get("versions")
-                .and_then(|v| v.get("stable"))
-                .and_then(|v| v.as_str())
+            let parsed = serde_json::from_value::<BrewFormulaWire>(json).map_err(|error| {
+                anyhow::anyhow!("Unable to parse brew stable version: {}", error)
+            })?;
+            let version = parsed
+                .versions
+                .stable
+                .and_then(|value| (!value.trim().is_empty()).then_some(value))
                 .ok_or_else(|| anyhow::anyhow!("Unable to parse brew stable version"))?;
-            Ok(version.to_string())
+            Ok(version)
         }
         InstallMethod::Npm | InstallMethod::Pnpm | InstallMethod::Bun => {
+            #[derive(Debug, Deserialize)]
+            struct NpmLatestWire {
+                version: Option<String>,
+            }
+
             let response = client
                 .get("https://registry.npmjs.org/rocode-ai/latest")
                 .send()
                 .await?;
             let json: serde_json::Value = parse_http_json(response).await?;
-            let version = json
-                .get("version")
-                .and_then(|v| v.as_str())
+            let parsed = serde_json::from_value::<NpmLatestWire>(json).map_err(|error| {
+                anyhow::anyhow!("Unable to parse npm latest version: {}", error)
+            })?;
+            let version = parsed
+                .version
+                .and_then(|value| (!value.trim().is_empty()).then_some(value))
                 .ok_or_else(|| anyhow::anyhow!("Unable to parse npm latest version"))?;
-            Ok(version.to_string())
+            Ok(version)
         }
         InstallMethod::Scoop => {
+            #[derive(Debug, Deserialize)]
+            struct ScoopManifestWire {
+                version: Option<String>,
+            }
+
             let response = client
                 .get("https://raw.githubusercontent.com/ScoopInstaller/Main/master/bucket/rocode.json")
                 .send()
                 .await?;
             let json: serde_json::Value = parse_http_json(response).await?;
-            let version = json
-                .get("version")
-                .and_then(|v| v.as_str())
+            let parsed = serde_json::from_value::<ScoopManifestWire>(json)
+                .map_err(|error| anyhow::anyhow!("Unable to parse scoop version: {}", error))?;
+            let version = parsed
+                .version
+                .and_then(|value| (!value.trim().is_empty()).then_some(value))
                 .ok_or_else(|| anyhow::anyhow!("Unable to parse scoop version"))?;
-            Ok(version.to_string())
+            Ok(version)
         }
         _ => {
+            #[derive(Debug, Deserialize)]
+            struct GithubReleaseWire {
+                tag_name: Option<String>,
+            }
+
             let response = client
                 .get("https://api.github.com/repos/anomalyco/rocode/releases/latest")
                 .header("User-Agent", "rocode-cli-rust")
                 .send()
                 .await?;
             let json: serde_json::Value = parse_http_json(response).await?;
-            let tag = json
-                .get("tag_name")
-                .and_then(|v| v.as_str())
+            let parsed = serde_json::from_value::<GithubReleaseWire>(json).map_err(|error| {
+                anyhow::anyhow!("Unable to parse latest GitHub release: {}", error)
+            })?;
+            let tag = parsed
+                .tag_name
+                .and_then(|value| (!value.trim().is_empty()).then_some(value))
                 .ok_or_else(|| anyhow::anyhow!("Unable to parse latest GitHub release"))?;
             Ok(tag.trim_start_matches('v').to_string())
         }

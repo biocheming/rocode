@@ -6,6 +6,44 @@ use std::collections::HashMap;
 pub const CONTINUATION_TARGETS_METADATA_KEY: &str = "continuationTargets";
 pub const OUTPUT_USAGE_METADATA_KEY: &str = "usage";
 
+fn deserialize_opt_trimmed_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(Value::String(value)) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        Some(Value::Number(value)) => Some(value.to_string()),
+        Some(Value::Bool(value)) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ContinuationToolMetadataWire {
+    #[serde(
+        rename = "sessionId",
+        alias = "session_id",
+        default,
+        deserialize_with = "deserialize_opt_trimmed_string_lossy"
+    )]
+    session_id: Option<String>,
+    #[serde(
+        rename = "agentTaskId",
+        alias = "agent_task_id",
+        default,
+        deserialize_with = "deserialize_opt_trimmed_string_lossy"
+    )]
+    agent_task_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContinuationTarget {
     #[serde(rename = "sessionId")]
@@ -89,44 +127,7 @@ pub fn continuation_target_from_tool_metadata(
     metadata: Option<&Value>,
 ) -> Option<ContinuationTarget> {
     let metadata = metadata?;
-
-    #[derive(Debug, Default, Deserialize)]
-    struct ContinuationTargetWire {
-        #[serde(
-            default,
-            alias = "sessionId",
-            alias = "session_id",
-            deserialize_with = "deserialize_opt_string_trimmed"
-        )]
-        session_id: Option<String>,
-        #[serde(
-            default,
-            alias = "agentTaskId",
-            alias = "agent_task_id",
-            deserialize_with = "deserialize_opt_string_trimmed"
-        )]
-        agent_task_id: Option<String>,
-    }
-
-    fn deserialize_opt_string_trimmed<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = Option::<Value>::deserialize(deserializer)?;
-        Ok(match value {
-            None | Some(Value::Null) => None,
-            Some(Value::String(value)) => {
-                let trimmed = value.trim();
-                (!trimmed.is_empty()).then(|| trimmed.to_string())
-            }
-            Some(Value::Number(value)) => Some(value.to_string()),
-            Some(Value::Bool(value)) => Some(value.to_string()),
-            _ => None,
-        })
-    }
-
-    let wire =
-        serde_json::from_value::<ContinuationTargetWire>(metadata.clone()).unwrap_or_default();
+    let wire = serde_json::from_value::<ContinuationToolMetadataWire>(metadata.clone()).ok()?;
     let session_id = wire.session_id?;
 
     Some(ContinuationTarget {

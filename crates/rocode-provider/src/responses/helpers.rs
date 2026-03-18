@@ -467,68 +467,154 @@ pub(super) fn process_stream_chunk(
 pub(super) fn parse_output_items(
     output: &[Value],
 ) -> (Vec<ContentPart>, bool, Vec<Vec<LogprobEntry>>) {
-    fn deserialize_vec_value_lossy<'de, D>(deserializer: D) -> Result<Vec<Value>, D::Error>
+    fn deserialize_opt_string_lossy<'de, D>(
+        deserializer: D,
+    ) -> std::result::Result<Option<String>, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         let value = Option::<Value>::deserialize(deserializer)?;
         Ok(match value {
-            None | Some(Value::Null) => Vec::new(),
-            Some(Value::Array(values)) => values,
-            Some(other) => vec![other],
+            Some(Value::String(value)) => Some(value),
+            _ => None,
         })
     }
 
-    #[derive(Debug, Default, Deserialize)]
-    struct OutputItemWire {
-        #[serde(rename = "type", default)]
-        item_type: String,
-        #[serde(default)]
-        id: String,
-        #[serde(default)]
-        call_id: String,
-        #[serde(default)]
-        name: String,
-        #[serde(default)]
-        arguments: Option<Value>,
-        #[serde(default)]
-        encrypted_content: Option<String>,
-        #[serde(default, deserialize_with = "deserialize_vec_value_lossy")]
-        summary: Vec<Value>,
-        #[serde(default, deserialize_with = "deserialize_vec_value_lossy")]
-        content: Vec<Value>,
-        #[serde(default)]
-        action: Option<Value>,
-        #[serde(default)]
-        queries: Option<Value>,
-        #[serde(default)]
-        results: Option<Value>,
-        #[serde(default)]
-        code: Option<Value>,
-        #[serde(default)]
-        container_id: Option<Value>,
-        #[serde(default)]
-        outputs: Option<Value>,
-        #[serde(default)]
-        result: Option<Value>,
-        #[serde(default)]
-        status: Option<Value>,
+    fn deserialize_opt_logprobs_lossy<'de, D>(
+        deserializer: D,
+    ) -> std::result::Result<Option<Vec<LogprobEntry>>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<Value>::deserialize(deserializer)?;
+        let Some(value) = value else {
+            return Ok(None);
+        };
+        Ok(serde_json::from_value::<Vec<LogprobEntry>>(value).ok())
+    }
+
+    fn deserialize_vec_reasoning_summary_lossy<'de, D>(
+        deserializer: D,
+    ) -> std::result::Result<Vec<ReasoningSummaryPartWire>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<Value>::deserialize(deserializer)?;
+        let Some(value) = value else {
+            return Ok(Vec::new());
+        };
+        Ok(serde_json::from_value::<Vec<ReasoningSummaryPartWire>>(value).unwrap_or_default())
+    }
+
+    fn deserialize_vec_message_content_lossy<'de, D>(
+        deserializer: D,
+    ) -> std::result::Result<Vec<MessageContentWire>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<Value>::deserialize(deserializer)?;
+        let Some(value) = value else {
+            return Ok(Vec::new());
+        };
+        Ok(serde_json::from_value::<Vec<MessageContentWire>>(value).unwrap_or_default())
     }
 
     #[derive(Debug, Default, Deserialize)]
-    struct SummaryTextWire {
-        #[serde(default)]
-        text: String,
+    struct ReasoningSummaryPartWire {
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        text: Option<String>,
     }
 
-    #[derive(Debug, Default, Deserialize)]
-    struct MessageContentWire {
-        #[serde(rename = "type", default)]
-        content_type: String,
-        #[serde(default)]
-        text: String,
-        #[serde(default)]
-        logprobs: Option<Value>,
+    #[derive(Debug, Deserialize)]
+    #[serde(tag = "type")]
+    enum MessageContentWire {
+        #[serde(rename = "output_text")]
+        OutputText {
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            text: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_logprobs_lossy")]
+            logprobs: Option<Vec<LogprobEntry>>,
+        },
+        #[serde(other)]
+        Other,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(tag = "type")]
+    enum OutputItemWire {
+        #[serde(rename = "reasoning")]
+        Reasoning {
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            id: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            encrypted_content: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_vec_reasoning_summary_lossy")]
+            summary: Vec<ReasoningSummaryPartWire>,
+        },
+        #[serde(rename = "message")]
+        Message {
+            #[serde(default, deserialize_with = "deserialize_vec_message_content_lossy")]
+            content: Vec<MessageContentWire>,
+        },
+        #[serde(rename = "function_call")]
+        FunctionCall {
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            call_id: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            name: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            arguments: Option<String>,
+        },
+        #[serde(rename = "web_search_call")]
+        WebSearchCall {
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            id: Option<String>,
+            #[serde(default)]
+            action: Option<Value>,
+        },
+        #[serde(rename = "file_search_call")]
+        FileSearchCall {
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            id: Option<String>,
+            #[serde(default)]
+            queries: Option<Value>,
+            #[serde(default)]
+            results: Option<Value>,
+        },
+        #[serde(rename = "code_interpreter_call")]
+        CodeInterpreterCall {
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            id: Option<String>,
+            #[serde(default)]
+            code: Option<Value>,
+            #[serde(default)]
+            container_id: Option<Value>,
+            #[serde(default)]
+            outputs: Option<Value>,
+        },
+        #[serde(rename = "image_generation_call")]
+        ImageGenerationCall {
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            id: Option<String>,
+            #[serde(default)]
+            result: Option<Value>,
+        },
+        #[serde(rename = "local_shell_call")]
+        LocalShellCall {
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            call_id: Option<String>,
+            #[serde(default)]
+            action: Option<Value>,
+        },
+        #[serde(rename = "computer_call")]
+        ComputerCall {
+            #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+            id: Option<String>,
+            #[serde(default)]
+            status: Option<Value>,
+        },
+        #[serde(other)]
+        Other,
     }
 
     let mut parts = Vec::new();
@@ -536,29 +622,27 @@ pub(super) fn parse_output_items(
     let mut logprobs = Vec::new();
 
     for item in output {
-        let mut wire = match serde_json::from_value::<OutputItemWire>(item.clone()) {
-            Ok(wire) => wire,
-            Err(_) => continue,
+        let Ok(parsed) = serde_json::from_value::<OutputItemWire>(item.clone()) else {
+            continue;
         };
-
-        let item_type = std::mem::take(&mut wire.item_type);
-
-        match item_type.as_str() {
-            "reasoning" => {
-                let summary = wire
-                    .summary
+        match parsed {
+            OutputItemWire::Reasoning {
+                id,
+                encrypted_content,
+                summary,
+            } => {
+                let id = id.unwrap_or_default();
+                let summary = summary
                     .into_iter()
-                    .filter_map(|entry| serde_json::from_value::<SummaryTextWire>(entry).ok())
-                    .map(|entry| entry.text)
-                    .filter(|text| !text.trim().is_empty())
+                    .filter_map(|part| part.text)
                     .collect::<Vec<_>>()
                     .join("\n");
 
                 let mut provider_options = HashMap::new();
-                if !wire.id.is_empty() {
-                    provider_options.insert("itemId".to_string(), Value::String(wire.id));
+                if !id.is_empty() {
+                    provider_options.insert("itemId".to_string(), Value::String(id));
                 }
-                if let Some(encrypted) = wire.encrypted_content {
+                if let Some(encrypted) = encrypted_content.filter(|value| !value.is_empty()) {
                     provider_options
                         .insert("encryptedContent".to_string(), Value::String(encrypted));
                 }
@@ -566,115 +650,113 @@ pub(super) fn parse_output_items(
                 parts.push(ContentPart {
                     content_type: "reasoning".to_string(),
                     text: Some(summary),
-                    provider_options: if provider_options.is_empty() {
-                        None
-                    } else {
-                        Some(provider_options)
-                    },
+                    provider_options: (!provider_options.is_empty()).then_some(provider_options),
                     ..Default::default()
                 });
             }
-            "message" => {
-                for content in wire.content {
-                    let Ok(content) = serde_json::from_value::<MessageContentWire>(content) else {
+            OutputItemWire::Message { content } => {
+                for content in content {
+                    let MessageContentWire::OutputText { text, logprobs: lp } = content else {
                         continue;
                     };
-                    if content.content_type != "output_text" {
-                        continue;
-                    }
-                    if !content.text.is_empty() {
+
+                    if let Some(text) = text.filter(|value| !value.is_empty()) {
                         parts.push(ContentPart {
                             content_type: "text".to_string(),
-                            text: Some(content.text),
+                            text: Some(text),
                             ..Default::default()
                         });
                     }
-                    if let Some(logprobs_value) = content.logprobs {
-                        if let Ok(parsed) =
-                            serde_json::from_value::<Vec<LogprobEntry>>(logprobs_value)
-                        {
-                            if !parsed.is_empty() {
-                                logprobs.push(parsed);
-                            }
-                        }
+
+                    if let Some(parsed) = lp.filter(|lp| !lp.is_empty()) {
+                        logprobs.push(parsed);
                     }
                 }
             }
-            "function_call" => {
-                let arguments = match wire.arguments {
-                    Some(Value::String(raw)) => parse_json_or_string(raw),
-                    Some(other) => other,
-                    None => json!({}),
-                };
+            OutputItemWire::FunctionCall {
+                call_id,
+                name,
+                arguments,
+            } => {
+                let call_id = call_id.unwrap_or_default();
+                let name = name.unwrap_or_default();
+                let arguments = arguments.unwrap_or_else(|| "{}".to_string());
                 parts.push(ContentPart {
                     content_type: "tool_use".to_string(),
                     tool_use: Some(ToolUse {
-                        id: wire.call_id,
-                        name: wire.name,
-                        input: arguments,
+                        id: call_id,
+                        name,
+                        input: parse_json_or_string(arguments),
                     }),
                     ..Default::default()
                 });
                 has_function_call = true;
             }
-            "web_search_call" => {
-                let id = wire.id;
-                let action = wire.action.unwrap_or_else(|| json!({}));
+            OutputItemWire::WebSearchCall { id, action } => {
                 parts.push(provider_executed_tool_parts(
-                    id,
+                    id.unwrap_or_default(),
                     "web_search_call",
-                    action.clone(),
-                    action,
+                    action.clone().unwrap_or_else(|| json!({})),
+                    action.unwrap_or_else(|| json!({})),
                 ));
                 has_function_call = true;
             }
-            "file_search_call" => {
+            OutputItemWire::FileSearchCall {
+                id,
+                queries,
+                results,
+            } => {
                 let output = json!({
-                    "queries": wire.queries.unwrap_or_else(|| json!([])),
-                    "results": wire.results.unwrap_or(Value::Null),
+                    "queries": queries.unwrap_or_else(|| json!([])),
+                    "results": results.unwrap_or(Value::Null),
                 });
                 parts.push(provider_executed_tool_parts(
-                    wire.id,
+                    id.unwrap_or_default(),
                     "file_search_call",
                     json!({}),
                     output,
                 ));
                 has_function_call = true;
             }
-            "code_interpreter_call" => {
+            OutputItemWire::CodeInterpreterCall {
+                id,
+                code,
+                container_id,
+                outputs,
+            } => {
                 let input = json!({
-                    "code": wire.code.unwrap_or(Value::Null),
-                    "container_id": wire.container_id.unwrap_or(Value::Null),
+                    "code": code.unwrap_or(Value::Null),
+                    "container_id": container_id.unwrap_or(Value::Null),
                 });
                 let output = json!({
-                    "outputs": wire.outputs.unwrap_or(Value::Null),
+                    "outputs": outputs.unwrap_or(Value::Null),
                 });
                 parts.push(provider_executed_tool_parts(
-                    wire.id,
+                    id.unwrap_or_default(),
                     "code_interpreter_call",
                     input,
                     output,
                 ));
                 has_function_call = true;
             }
-            "image_generation_call" => {
+            OutputItemWire::ImageGenerationCall { id, result } => {
                 let output = json!({
-                    "result": wire.result.unwrap_or(Value::Null),
+                    "result": result.unwrap_or(Value::Null),
                 });
                 parts.push(provider_executed_tool_parts(
-                    wire.id,
+                    id.unwrap_or_default(),
                     "image_generation_call",
                     json!({}),
                     output,
                 ));
                 has_function_call = true;
             }
-            "local_shell_call" => {
-                let action = wire.action.unwrap_or_else(|| json!({}));
+            OutputItemWire::LocalShellCall { call_id, action } => {
+                let action = action.unwrap_or_else(|| json!({}));
                 parts.push(ContentPart {
                     content_type: "tool_use".to_string(),
                     tool_use: Some(ToolUse {
-                        id: wire.call_id,
+                        id: call_id.unwrap_or_default(),
                         name: "local_shell".to_string(),
                         input: json!({ "action": action }),
                     }),
@@ -682,19 +764,19 @@ pub(super) fn parse_output_items(
                 });
                 has_function_call = true;
             }
-            "computer_call" => {
+            OutputItemWire::ComputerCall { id, status } => {
                 let output = json!({
-                    "status": wire.status.unwrap_or(Value::Null),
+                    "status": status.unwrap_or(Value::Null),
                 });
                 parts.push(provider_executed_tool_parts(
-                    wire.id,
+                    id.unwrap_or_default(),
                     "computer_call",
                     json!({}),
                     output,
                 ));
                 has_function_call = true;
             }
-            _ => {}
+            OutputItemWire::Other => {}
         }
     }
 

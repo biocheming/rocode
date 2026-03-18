@@ -3,8 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use rocode_core::contracts::session::keys as session_keys;
-
 use crate::session::{FileDiff as SessionFileDiff, Session, SessionManager};
 use crate::snapshot::Snapshot;
 
@@ -49,6 +47,38 @@ impl From<SessionFileDiff> for FileDiff {
 
 pub struct RevertManager {
     worktree: PathBuf,
+}
+
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+        Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct SnapshotMetadataWire {
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    step_start_snapshot: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    step_finish_snapshot: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    snapshot: Option<String>,
+}
+
+fn snapshot_metadata_wire(
+    metadata: &std::collections::HashMap<String, serde_json::Value>,
+) -> SnapshotMetadataWire {
+    let Ok(value) = serde_json::to_value(metadata) else {
+        return SnapshotMetadataWire::default();
+    };
+    serde_json::from_value::<SnapshotMetadataWire>(value).unwrap_or_default()
 }
 
 impl RevertManager {
@@ -213,8 +243,7 @@ impl RevertManager {
     ///
     /// Mirrors the TS `SessionSummary.computeDiff` behavior:
     /// 1. Scans messages for snapshot hashes stored in metadata
-    ///    (keys `session_keys::STEP_START_SNAPSHOT` /
-    ///    `session_keys::STEP_FINISH_SNAPSHOT`).
+    ///    (keys `"step_start_snapshot"` / `"step_finish_snapshot"`).
     ///    If both an earliest "from" and a latest "to" snapshot are found,
     ///    delegates to `Snapshot::diff_full` (git diff between two refs).
     /// 2. Falls back to aggregating `Patch` parts by filepath, counting
@@ -225,34 +254,36 @@ impl RevertManager {
         let mut to_snapshot: Option<String> = None;
 
         for msg in messages {
+            let metadata = snapshot_metadata_wire(&msg.metadata);
             // Check message-level metadata for snapshot hashes
             if from_snapshot.is_none() {
-                if let Some(serde_json::Value::String(s)) =
-                    msg.metadata.get(session_keys::STEP_START_SNAPSHOT)
+                if let Some(s) = metadata
+                    .step_start_snapshot
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
                 {
-                    if !s.is_empty() {
-                        from_snapshot = Some(s.clone());
-                    }
+                    from_snapshot = Some(s.to_string());
                 }
             }
-            if let Some(serde_json::Value::String(s)) =
-                msg.metadata.get(session_keys::STEP_FINISH_SNAPSHOT)
+            if let Some(s) = metadata
+                .step_finish_snapshot
+                .as_deref()
+                .filter(|value| !value.is_empty())
             {
-                if !s.is_empty() {
-                    to_snapshot = Some(s.clone());
-                }
+                to_snapshot = Some(s.to_string());
             }
 
             // Also scan parts: StepStart / StepFinish carry id+name / id+output,
             // but the metadata on the *message* is the canonical place for snapshots
             // in the v1 format. We also check part-level metadata stored in the
-            // message metadata under `session_keys::SNAPSHOT` as a generic key.
+            // message metadata under "snapshot" as a generic key.
             if from_snapshot.is_none() {
-                if let Some(serde_json::Value::String(s)) = msg.metadata.get(session_keys::SNAPSHOT)
+                if let Some(s) = metadata
+                    .snapshot
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
                 {
-                    if !s.is_empty() {
-                        from_snapshot = Some(s.clone());
-                    }
+                    from_snapshot = Some(s.to_string());
                 }
             }
         }

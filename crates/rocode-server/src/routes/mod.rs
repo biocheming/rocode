@@ -48,7 +48,6 @@ use crate::session_runtime::events::{broadcast_config_updated, ServerEvent};
 use crate::web;
 use crate::{ApiError, Result, ServerState};
 use rocode_agent::{AgentMode, AgentRegistry};
-use rocode_command::output_blocks::{MessagePhase, MessageRole, OutputBlock, ReasoningBlock};
 use rocode_command::{CommandRegistry, ResolvedUiCommand};
 use rocode_config::Config as AppConfig;
 use rocode_orchestrator::{SchedulerConfig, SchedulerPresetKind};
@@ -210,30 +209,24 @@ pub(crate) fn stream_server_events(
         };
 
         // Same check but for raw JSON strings that failed to parse as ServerEvent.
-        // Extract session identifiers from JSON to apply filter.
-        #[derive(Debug, Deserialize)]
-        struct RawSessionFilterIds {
-            #[serde(rename = "sessionID", alias = "sessionId", alias = "session_id")]
-            session_id: Option<String>,
-            #[serde(rename = "parentID", alias = "parentId", alias = "parent_id")]
-            parent_id: Option<String>,
-        }
-
+        // Extract "sessionID" from JSON to apply filter.
         let raw_matches_filter = |raw: &str| -> bool {
             let Some(ref filter) = session_filter else {
                 return true;
             };
-            let Ok(ids) = serde_json::from_str::<RawSessionFilterIds>(raw) else {
+            // Fast-path: if no "sessionID" key, treat as global.
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
                 return true;
             };
-
-            // Prefer sessionID if present; fall back to parentID (for child_session events).
-            match ids.session_id.as_deref() {
+            match json_object_field_str(&value, "sessionID") {
                 Some(sid) => sid == filter.as_str(),
-                None => match ids.parent_id.as_deref() {
-                    Some(pid) => pid == filter.as_str(),
-                    None => true,
-                },
+                None => {
+                    // Also check "parentID" for child_session events.
+                    match json_object_field_str(&value, "parentID") {
+                        Some(pid) => pid == filter.as_str(),
+                        None => true, // global event
+                    }
+                }
             }
         };
 
@@ -338,27 +331,12 @@ fn parse_server_event(raw: &str) -> Option<ServerEvent> {
     serde_json::from_str(raw).ok()
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum MergeableOutputDelta {
-    Message { role: MessageRole, text: String },
-    Reasoning { text: String },
-}
-
-fn parse_mergeable_output_delta(block: &serde_json::Value) -> Option<MergeableOutputDelta> {
-    let parsed: OutputBlock = serde_json::from_value(block.clone()).ok()?;
-    match parsed {
-        OutputBlock::Message(message) if message.phase == MessagePhase::Delta => {
-            Some(MergeableOutputDelta::Message {
-                role: message.role,
-                text: message.text,
-            })
-        }
-        OutputBlock::Reasoning(ReasoningBlock {
-            phase: MessagePhase::Delta,
-            text,
-        }) => Some(MergeableOutputDelta::Reasoning { text }),
-        _ => None,
-    }
+fn json_object_field_str<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    let object = value.as_object()?;
+    object
+        .iter()
+        .find_map(|(candidate, value)| (candidate == key).then_some(value))
+        .and_then(|value| value.as_str())
 }
 
 fn is_mergeable_output_delta(event: &ServerEvent) -> bool {
@@ -368,7 +346,13 @@ fn is_mergeable_output_delta(event: &ServerEvent) -> bool {
     if id.as_deref().is_none_or(str::is_empty) {
         return false;
     }
-    parse_mergeable_output_delta(block).is_some()
+    matches!(
+        (
+            json_object_field_str(block, "kind"),
+            json_object_field_str(block, "phase"),
+        ),
+        (Some("message"), Some("delta")) | (Some("reasoning"), Some("delta"))
+    )
 }
 
 fn merge_output_block_delta(current: &mut ServerEvent, next: &ServerEvent) -> bool {
@@ -392,35 +376,38 @@ fn merge_output_block_delta(current: &mut ServerEvent, next: &ServerEvent) -> bo
         return false;
     }
 
-    let Some(current_delta) = parse_mergeable_output_delta(current_block) else {
+    let current_kind = json_object_field_str(current_block, "kind");
+    let next_kind = json_object_field_str(next_block, "kind");
+    let current_phase = json_object_field_str(current_block, "phase");
+    let next_phase = json_object_field_str(next_block, "phase");
+    if current_kind != next_kind || current_phase != Some("delta") || next_phase != Some("delta") {
+        return false;
+    }
+    if current_kind == Some("message")
+        && json_object_field_str(current_block, "role") != json_object_field_str(next_block, "role")
+    {
+        return false;
+    }
+
+    let Some(next_text) = json_object_field_str(next_block, "text") else {
         return false;
     };
-    let Some(next_delta) = parse_mergeable_output_delta(next_block) else {
+    let Some(current_text) = json_object_field_str(current_block, "text") else {
         return false;
     };
 
-    let merged = match (current_delta, next_delta) {
-        (
-            MergeableOutputDelta::Message {
-                role: current_role,
-                text: current_text,
-            },
-            MergeableOutputDelta::Message {
-                role: next_role,
-                text: next_text,
-            },
-        ) if current_role == next_role => format!("{current_text}{next_text}"),
-        (
-            MergeableOutputDelta::Reasoning { text: current_text },
-            MergeableOutputDelta::Reasoning { text: next_text },
-        ) => format!("{current_text}{next_text}"),
-        _ => return false,
-    };
-
-    let Some(map) = current_block.as_object_mut() else {
+    let merged = format!("{current_text}{next_text}");
+    let Some(object) = current_block.as_object_mut() else {
         return false;
     };
-    map.insert("text".to_string(), serde_json::Value::String(merged));
+    if let Some((_, text)) = object
+        .iter_mut()
+        .find(|(candidate, _)| candidate.as_str() == "text")
+    {
+        *text = serde_json::Value::String(merged);
+    } else {
+        object.insert("text".to_string(), serde_json::Value::String(merged));
+    }
     true
 }
 
@@ -956,25 +943,14 @@ fn parse_auth_info_payload(payload: serde_json::Value) -> Option<AuthInfo> {
     }
 
     #[derive(Debug, Deserialize)]
-    struct AuthKeyPayload {
-        #[serde(default)]
-        api_key: Option<String>,
-        #[serde(default, rename = "apiKey")]
-        api_key_camel: Option<String>,
-        #[serde(default)]
-        token: Option<String>,
-        #[serde(default)]
-        key: Option<String>,
+    struct ApiKeyAuthPayload {
+        #[serde(alias = "api_key", alias = "apiKey", alias = "token", alias = "key")]
+        key: String,
     }
 
-    let keys = serde_json::from_value::<AuthKeyPayload>(payload).ok()?;
-    let key = keys
-        .api_key
-        .or(keys.api_key_camel)
-        .or(keys.token)
-        .or(keys.key)?;
-
-    Some(AuthInfo::Api { key })
+    serde_json::from_value::<ApiKeyAuthPayload>(payload)
+        .ok()
+        .map(|payload| AuthInfo::Api { key: payload.key })
 }
 
 // ===========================================================================

@@ -1,15 +1,9 @@
 use async_trait::async_trait;
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, PtySize};
-use rocode_core::contracts::patch::keys as patch_keys;
-use rocode_core::contracts::permission::PermissionTypeWire;
-use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
-use rocode_core::contracts::wire::aliases as wire_aliases;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read as _, Write as _};
 use std::sync::{Arc, Mutex, OnceLock};
-use strum::IntoEnumIterator;
-use strum_macros::{Display, EnumIter, EnumString, IntoStaticStr};
 use tokio::sync::{Notify, RwLock};
 
 use crate::bash::authorize_bash_command;
@@ -32,33 +26,14 @@ Phase 1 operations:
 This tool is the structured authority for interactive shell state.
 It complements the one-shot `bash` tool rather than replacing it."#;
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Serialize,
-    Deserialize,
-    PartialEq,
-    Eq,
-    Display,
-    EnumIter,
-    EnumString,
-    IntoStaticStr,
-)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 enum ShellSessionOperation {
     Start,
     Write,
     Read,
     Status,
     Terminate,
-}
-
-impl ShellSessionOperation {
-    fn as_str(self) -> &'static str {
-        self.into()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -85,11 +60,13 @@ struct ShellSessionInput {
     env: HashMap<String, String>,
     #[serde(default)]
     input: Option<String>,
-    #[serde(default, alias = "appendNewline")]
+    #[serde(default)]
+    #[serde(alias = "appendNewline")]
     append_newline: bool,
     #[serde(default)]
     cursor: Option<u64>,
-    #[serde(default, alias = "waitMs")]
+    #[serde(default)]
+    #[serde(alias = "waitMs")]
     wait_ms: Option<u64>,
     #[serde(default)]
     cols: Option<u16>,
@@ -383,7 +360,7 @@ impl ShellSessionTool {
         Ok(ToolResult {
             title: "Shell Session Started".to_string(),
             output,
-            metadata: shell_metadata(ShellSessionOperation::Start, &session),
+            metadata: shell_metadata("start", &session),
             truncated: false,
         })
     }
@@ -425,8 +402,8 @@ impl ShellSessionTool {
             ToolError::ExecutionError(format!("failed to join shell write task: {}", e))
         })??;
         let session_view = session.view().await;
-        let mut metadata = shell_metadata(ShellSessionOperation::Write, &session_view);
-        metadata.insert(patch_keys::BYTES.to_string(), serde_json::json!(byte_len));
+        let mut metadata = shell_metadata("write", &session_view);
+        metadata.insert("bytes".to_string(), serde_json::json!(byte_len));
         Ok(ToolResult {
             title: "Shell Session Write".to_string(),
             output: format!("Sent {} bytes to shell session {}.", byte_len, session_id),
@@ -467,25 +444,16 @@ impl ShellSessionTool {
         };
         let output = String::from_utf8_lossy(&bytes).to_string();
         let session_view = session.view().await;
-        let mut metadata = shell_metadata(ShellSessionOperation::Read, &session_view);
+        let mut metadata = shell_metadata("read", &session_view);
         metadata.insert(
-            tool_arg_keys::REQUESTED_CURSOR.to_string(),
+            "requestedCursor".to_string(),
             serde_json::json!(requested_cursor),
         );
+        metadata.insert("bufferStart".to_string(), serde_json::json!(buffer_start));
+        metadata.insert("startCursor".to_string(), serde_json::json!(start_cursor));
+        metadata.insert("endCursor".to_string(), serde_json::json!(cursor));
         metadata.insert(
-            tool_arg_keys::BUFFER_START.to_string(),
-            serde_json::json!(buffer_start),
-        );
-        metadata.insert(
-            tool_arg_keys::START_CURSOR.to_string(),
-            serde_json::json!(start_cursor),
-        );
-        metadata.insert(
-            tool_arg_keys::END_CURSOR.to_string(),
-            serde_json::json!(cursor),
-        );
-        metadata.insert(
-            tool_arg_keys::TRUNCATED_REPLAY.to_string(),
+            "truncatedReplay".to_string(),
             serde_json::json!(requested_cursor < buffer_start),
         );
         Ok(ToolResult {
@@ -507,7 +475,7 @@ impl ShellSessionTool {
         Ok(ToolResult {
             title: "Shell Session Status".to_string(),
             output,
-            metadata: shell_metadata(ShellSessionOperation::Status, &session_view),
+            metadata: shell_metadata("status", &session_view),
             truncated: false,
         })
     }
@@ -529,7 +497,7 @@ impl ShellSessionTool {
         Ok(ToolResult {
             title: "Shell Session Terminating".to_string(),
             output: format!("Termination requested for shell session {}.", session_id),
-            metadata: shell_metadata(ShellSessionOperation::Terminate, &session_view),
+            metadata: shell_metadata("terminate", &session_view),
             truncated: false,
         })
     }
@@ -544,7 +512,7 @@ impl Default for ShellSessionTool {
 #[async_trait]
 impl Tool for ShellSessionTool {
     fn id(&self) -> &str {
-        BuiltinToolName::ShellSession.as_str()
+        "shell_session"
     }
 
     fn description(&self) -> &str {
@@ -552,18 +520,15 @@ impl Tool for ShellSessionTool {
     }
 
     fn parameters(&self) -> serde_json::Value {
-        let operations: Vec<&'static str> = ShellSessionOperation::iter()
-            .map(ShellSessionOperation::as_str)
-            .collect();
         serde_json::json!({
             "type": "object",
             "properties": {
-                (tool_arg_keys::OPERATION): {
+                "operation": {
                     "type": "string",
-                    "enum": operations,
+                    "enum": ["start", "write", "read", "status", "terminate"],
                     "description": "Which shell session operation to execute"
                 },
-                (wire_aliases::SESSION_ID_SNAKE): {
+                "session_id": {
                     "type": "string",
                     "description": "Existing shell session id for write/read/status/terminate"
                 },
@@ -618,7 +583,7 @@ impl Tool for ShellSessionTool {
                     "description": "Human-readable description for permission review on start/write"
                 }
             },
-            "required": [tool_arg_keys::OPERATION]
+            "required": ["operation"]
         })
     }
 
@@ -692,10 +657,10 @@ async fn authorize_cwd(cwd: &str, ctx: &ToolContext) -> Result<(), ToolError> {
         .map(|path| path.to_string_lossy().to_string())
         .unwrap_or_else(|| cwd.to_string());
     ctx.ask_permission(
-        PermissionRequest::new(PermissionTypeWire::ExternalDirectory.as_str())
+        PermissionRequest::new("external_directory")
             .with_pattern(format!("{}/*", parent))
-            .with_metadata(patch_keys::FILEPATH, serde_json::json!(cwd))
-            .with_metadata(tool_arg_keys::PARENT_DIR, serde_json::json!(parent)),
+            .with_metadata("filepath", serde_json::json!(cwd))
+            .with_metadata("parentDir", serde_json::json!(parent)),
     )
     .await
 }
@@ -758,14 +723,11 @@ fn validate_input(input: &ShellSessionInput) -> Result<(), ToolError> {
     Ok(())
 }
 
-fn shell_metadata(operation: ShellSessionOperation, session: &ShellSessionView) -> Metadata {
+fn shell_metadata(operation: &str, session: &ShellSessionView) -> Metadata {
     let mut metadata = Metadata::new();
+    metadata.insert("operation".to_string(), serde_json::json!(operation));
     metadata.insert(
-        tool_arg_keys::OPERATION.to_string(),
-        serde_json::json!(operation.as_str()),
-    );
-    metadata.insert(
-        tool_arg_keys::SESSION.to_string(),
+        "session".to_string(),
         serde_json::to_value(session).unwrap(),
     );
     metadata
@@ -829,71 +791,13 @@ fn spawn_shell(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::future::Future;
-    use std::sync::Arc;
-    use std::time::Duration;
-    use tempfile::tempdir;
-    use tokio::sync::Mutex as AsyncMutex;
-
-    const SHELL_TEST_TIMEOUT: Duration = Duration::from_secs(10);
 
     fn should_skip_pty_test(err: &ToolError) -> bool {
         matches!(err, ToolError::ExecutionError(message) if message.contains("failed to create PTY") || message.contains("failed to openpty"))
     }
-
-    async fn run_shell_test<F>(name: &str, future: F)
-    where
-        F: Future<Output = ()>,
-    {
-        match tokio::time::timeout(SHELL_TEST_TIMEOUT, future).await {
-            Ok(()) => {}
-            Err(_) => panic!(
-                "shell session test `{}` exceeded {:?}; PTY tests must fail fast instead of hanging",
-                name, SHELL_TEST_TIMEOUT
-            ),
-        }
-    }
-
-    fn test_exit_script(marker: &str) -> String {
-        #[cfg(windows)]
-        {
-            format!("echo {marker}\r\nexit\r\n")
-        }
-        #[cfg(not(windows))]
-        {
-            format!("printf '{marker}\\n'\nexit\n")
-        }
-    }
-
-    async fn wait_for_session_state(
-        ctx: ToolContext,
-        session_id: &serde_json::Value,
-        expected: &str,
-    ) -> ToolResult {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
-        loop {
-            let status = ShellSessionTool::new()
-                .execute(
-                    serde_json::json!({
-                        "operation": "status",
-                        "session_id": session_id
-                    }),
-                    ctx.clone(),
-                )
-                .await
-                .expect("status should succeed");
-            if status.metadata["session"]["state"] == serde_json::json!(expected) {
-                return status;
-            }
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "shell session did not reach `{}` before timeout; last state was {}",
-                expected,
-                status.metadata["session"]["state"]
-            );
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    }
+    use std::sync::Arc;
+    use tempfile::tempdir;
+    use tokio::sync::Mutex as AsyncMutex;
 
     #[test]
     fn schema_exposes_shell_session_operations() {
@@ -910,155 +814,165 @@ mod tests {
 
     #[tokio::test]
     async fn shell_session_roundtrip_start_write_read_status() {
-        run_shell_test("shell_session_roundtrip_start_write_read_status", async {
-            let dir = tempdir().expect("tempdir");
-            let permissions = Arc::new(AsyncMutex::new(Vec::<String>::new()));
-            let permissions_clone = permissions.clone();
-            let ctx = ToolContext::new(
-                "session-1".into(),
-                "message-1".into(),
-                dir.path().to_string_lossy().to_string(),
+        let dir = tempdir().expect("tempdir");
+        let permissions = Arc::new(AsyncMutex::new(Vec::<String>::new()));
+        let permissions_clone = permissions.clone();
+        let ctx = ToolContext::new(
+            "session-1".into(),
+            "message-1".into(),
+            dir.path().to_string_lossy().to_string(),
+        )
+        .with_ask(move |req| {
+            let permissions_clone = permissions_clone.clone();
+            async move {
+                permissions_clone.lock().await.push(req.permission);
+                Ok(())
+            }
+        });
+
+        let start = match ShellSessionTool::new()
+            .execute(
+                serde_json::json!({
+                    "operation": "start",
+                    "command": "sh",
+                    "args": ["-i"],
+                    "description": "Start shell for structured tool testing"
+                }),
+                ctx.clone(),
             )
-            .with_ask(move |req| {
-                let permissions_clone = permissions_clone.clone();
-                async move {
-                    permissions_clone.lock().await.push(req.permission);
-                    Ok(())
-                }
-            });
+            .await
+        {
+            Ok(result) => result,
+            Err(err) if should_skip_pty_test(&err) => {
+                eprintln!(
+                    "skipping PTY integration test in current environment: {}",
+                    err
+                );
+                return;
+            }
+            Err(err) => panic!("shell session start should succeed: {}", err),
+        };
+        let session_id = start.metadata["session"]["id"]
+            .as_str()
+            .expect("session id")
+            .to_string();
 
-            let start = match ShellSessionTool::new()
-                .execute(
-                    serde_json::json!({
-                        "operation": "start",
-                        "description": "Start shell for structured tool testing"
-                    }),
-                    ctx.clone(),
-                )
-                .await
-            {
-                Ok(result) => result,
-                Err(err) if should_skip_pty_test(&err) => {
-                    eprintln!(
-                        "skipping PTY integration test in current environment: {}",
-                        err
-                    );
-                    return;
-                }
-                Err(err) => panic!("shell session start should succeed: {}", err),
-            };
-            let session_id = start.metadata["session"]["id"]
-                .as_str()
-                .expect("session id")
-                .to_string();
+        ShellSessionTool::new()
+            .execute(
+                serde_json::json!({
+                    "operation": "write",
+                    "session_id": session_id,
+                    "input": "printf 'hello-shell\\n'\nexit\n",
+                    "description": "Emit a marker and exit"
+                }),
+                ctx.clone(),
+            )
+            .await
+            .expect("write should succeed");
 
-            let marker = "hello-shell";
-            ShellSessionTool::new()
-                .execute(
-                    serde_json::json!({
-                        "operation": "write",
-                        "session_id": session_id,
-                        "input": test_exit_script(marker),
-                        "description": "Emit a marker and exit"
-                    }),
-                    ctx.clone(),
-                )
-                .await
-                .expect("write should succeed");
+        let read = ShellSessionTool::new()
+            .execute(
+                serde_json::json!({
+                    "operation": "read",
+                    "session_id": start.metadata["session"]["id"],
+                    "cursor": 0,
+                    "wait_ms": 2000
+                }),
+                ctx.clone(),
+            )
+            .await
+            .expect("read should succeed");
+        assert!(
+            read.output.contains("hello-shell"),
+            "output was: {}",
+            read.output
+        );
 
-            let read = ShellSessionTool::new()
-                .execute(
-                    serde_json::json!({
-                        "operation": "read",
-                        "session_id": start.metadata["session"]["id"],
-                        "cursor": 0,
-                        "wait_ms": 2_000
-                    }),
-                    ctx.clone(),
-                )
-                .await
-                .expect("read should succeed");
-            assert!(read.output.contains(marker), "output was: {}", read.output);
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let status = ShellSessionTool::new()
+            .execute(
+                serde_json::json!({
+                    "operation": "status",
+                    "session_id": start.metadata["session"]["id"]
+                }),
+                ctx,
+            )
+            .await
+            .expect("status should succeed");
+        assert_eq!(
+            status.metadata["session"]["state"],
+            serde_json::json!("exited")
+        );
 
-            let status =
-                wait_for_session_state(ctx, &start.metadata["session"]["id"], "exited").await;
-            assert_eq!(
-                status.metadata["session"]["state"],
-                serde_json::json!("exited")
-            );
-
-            let permissions = permissions.lock().await;
-            assert!(
-                permissions
-                    .iter()
-                    .filter(|item| item.as_str() == BuiltinToolName::Bash.as_str())
-                    .count()
-                    >= 2
-            );
-        })
-        .await;
+        let permissions = permissions.lock().await;
+        assert!(
+            permissions
+                .iter()
+                .filter(|item| item.as_str() == "bash")
+                .count()
+                >= 2
+        );
     }
 
     #[tokio::test]
     async fn shell_session_terminate_stops_running_process() {
-        run_shell_test("shell_session_terminate_stops_running_process", async {
-            let dir = tempdir().expect("tempdir");
-            let ctx = ToolContext::new(
-                "session-2".into(),
-                "message-2".into(),
-                dir.path().to_string_lossy().to_string(),
-            );
-            let start = match ShellSessionTool::new()
-                .execute(
-                    serde_json::json!({
-                        "operation": "start"
-                    }),
-                    ctx.clone(),
-                )
-                .await
-            {
-                Ok(result) => result,
-                Err(err) if should_skip_pty_test(&err) => {
-                    eprintln!(
-                        "skipping PTY integration test in current environment: {}",
-                        err
-                    );
-                    return;
-                }
-                Err(err) => panic!("start should succeed: {}", err),
-            };
-            let session_id = start.metadata["session"]["id"]
-                .as_str()
-                .expect("session id")
-                .to_string();
+        let dir = tempdir().expect("tempdir");
+        let ctx = ToolContext::new(
+            "session-2".into(),
+            "message-2".into(),
+            dir.path().to_string_lossy().to_string(),
+        );
+        let start = match ShellSessionTool::new()
+            .execute(
+                serde_json::json!({
+                    "operation": "start",
+                    "command": "sh",
+                    "args": ["-i"]
+                }),
+                ctx.clone(),
+            )
+            .await
+        {
+            Ok(result) => result,
+            Err(err) if should_skip_pty_test(&err) => {
+                eprintln!(
+                    "skipping PTY integration test in current environment: {}",
+                    err
+                );
+                return;
+            }
+            Err(err) => panic!("start should succeed: {}", err),
+        };
+        let session_id = start.metadata["session"]["id"]
+            .as_str()
+            .expect("session id")
+            .to_string();
 
-            ShellSessionTool::new()
-                .execute(
-                    serde_json::json!({
-                        "operation": "terminate",
-                        "session_id": session_id
-                    }),
-                    ctx.clone(),
-                )
-                .await
-                .expect("terminate should succeed");
+        ShellSessionTool::new()
+            .execute(
+                serde_json::json!({
+                    "operation": "terminate",
+                    "session_id": session_id
+                }),
+                ctx.clone(),
+            )
+            .await
+            .expect("terminate should succeed");
 
-            tokio::time::sleep(Duration::from_millis(250)).await;
-            let status = ShellSessionTool::new()
-                .execute(
-                    serde_json::json!({
-                        "operation": "status",
-                        "session_id": start.metadata["session"]["id"]
-                    }),
-                    ctx,
-                )
-                .await
-                .expect("status should succeed");
-            assert_ne!(
-                status.metadata["session"]["state"],
-                serde_json::json!("running")
-            );
-        })
-        .await;
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        let status = ShellSessionTool::new()
+            .execute(
+                serde_json::json!({
+                    "operation": "status",
+                    "session_id": start.metadata["session"]["id"]
+                }),
+                ctx,
+            )
+            .await
+            .expect("status should succeed");
+        assert_ne!(
+            status.metadata["session"]["state"],
+            serde_json::json!("running")
+        );
     }
 }

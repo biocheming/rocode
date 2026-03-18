@@ -215,325 +215,227 @@ pub(crate) fn github_comment_type(event_name: &str) -> Option<&'static str> {
     }
 }
 
-// PLACEHOLDER_CHUNK_2
-
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct GithubUserWire {
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
+    #[serde(default)]
     login: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    name: Option<String>,
-}
-
-impl GithubUserWire {
-    fn label(&self) -> &str {
-        self.login
-            .as_deref()
-            .or(self.name.as_deref())
-            .unwrap_or_default()
-    }
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct GithubIssueWire {
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    title: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    body: Option<String>,
-    #[serde(default)]
-    user: Option<GithubUserWire>,
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    created_at: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    state: Option<String>,
-    #[serde(default)]
-    pull_request: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct GithubIssueCommentWire {
-    #[serde(default, deserialize_with = "rocode_types::deserialize_opt_u64_lossy")]
-    id: Option<u64>,
-    #[serde(default)]
-    user: Option<GithubUserWire>,
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    created_at: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    body: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    path: Option<String>,
-    #[serde(default, deserialize_with = "rocode_types::deserialize_opt_u64_lossy")]
-    line: Option<u64>,
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    diff_hunk: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct GithubRepoFullNameWire {
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    full_name: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct GithubBranchRefWire {
-    #[serde(
-        default,
-        rename = "ref",
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    ref_name: Option<String>,
-    #[serde(default)]
-    repo: Option<GithubRepoFullNameWire>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct GithubPullRequestWire {
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    title: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    body: Option<String>,
-    #[serde(default)]
-    user: Option<GithubUserWire>,
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    created_at: Option<String>,
-    #[serde(default)]
-    base: Option<GithubBranchRefWire>,
-    #[serde(default)]
-    head: Option<GithubBranchRefWire>,
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    state: Option<String>,
-    #[serde(default, deserialize_with = "rocode_types::deserialize_opt_u64_lossy")]
-    additions: Option<u64>,
-    #[serde(default, deserialize_with = "rocode_types::deserialize_opt_u64_lossy")]
-    deletions: Option<u64>,
-    #[serde(default, deserialize_with = "rocode_types::deserialize_opt_u64_lossy")]
-    changed_files: Option<u64>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct GithubPullRequestFileWire {
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    filename: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    status: Option<String>,
-    #[serde(default, deserialize_with = "rocode_types::deserialize_opt_u64_lossy")]
-    additions: Option<u64>,
-    #[serde(default, deserialize_with = "rocode_types::deserialize_opt_u64_lossy")]
-    deletions: Option<u64>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct GithubPullRequestReviewWire {
-    #[serde(default, deserialize_with = "rocode_types::deserialize_opt_u64_lossy")]
-    id: Option<u64>,
-    #[serde(default)]
-    user: Option<GithubUserWire>,
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    submitted_at: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    body: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct GithubPullRequestReviewCommentWire {
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    path: Option<String>,
-    #[serde(default, deserialize_with = "rocode_types::deserialize_opt_u64_lossy")]
-    line: Option<u64>,
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    body: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct GithubReactionWire {
-    #[serde(default, deserialize_with = "rocode_types::deserialize_opt_u64_lossy")]
-    id: Option<u64>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct GithubRepoInfoWire {
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    default_branch: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct GithubPermissionWire {
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    permission: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct GithubCreatePrWire {
-    #[serde(default, deserialize_with = "rocode_types::deserialize_opt_u64_lossy")]
-    number: Option<u64>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct GithubActorWire {
-    #[serde(default)]
-    sender: Option<GithubUserWire>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct GithubCommentEventWire {
-    #[serde(default)]
-    comment: Option<GithubIssueCommentWire>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct GithubIssueCommentEventWire {
-    #[serde(default)]
-    issue: Option<GithubIssueWire>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-enum GithubOwnerFieldWire {
+enum GithubOwnerWire {
     String(String),
-    Object(GithubUserWire),
+    Object(GithubOwnerObjectWire),
 }
 
-impl GithubOwnerFieldWire {
-    fn resolve(&self) -> Option<String> {
+#[derive(Debug, Deserialize, Default)]
+struct GithubOwnerObjectWire {
+    #[serde(default)]
+    login: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+impl GithubOwnerWire {
+    fn login_or_name(&self) -> Option<&str> {
         match self {
-            Self::String(value) => {
-                let trimmed = value.trim();
-                (!trimmed.is_empty()).then(|| trimmed.to_string())
-            }
-            Self::Object(user) => {
-                let label = user.label().trim();
-                (!label.is_empty()).then(|| label.to_string())
+            GithubOwnerWire::String(value) => Some(value.as_str()),
+            GithubOwnerWire::Object(value) => {
+                value.login.as_deref().or_else(|| value.name.as_deref())
             }
         }
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct GithubRepositoryWire {
     #[serde(default)]
-    owner: Option<GithubOwnerFieldWire>,
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
+    owner: Option<GithubOwnerWire>,
+    #[serde(default)]
     name: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
+    #[serde(default)]
     repo: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct GithubRepositoryContainerWire {
-    #[serde(default)]
-    repository: Option<GithubRepositoryWire>,
-    #[serde(default)]
-    repo: Option<GithubRepositoryWire>,
+impl GithubRepositoryWire {
+    fn owner_login(&self) -> Option<&str> {
+        self.owner.as_ref().and_then(|value| value.login_or_name())
+    }
+
+    fn repo_name(&self) -> Option<&str> {
+        self.name.as_deref().or_else(|| self.repo.as_deref())
+    }
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct GithubEventWire {
+#[derive(Debug, Deserialize, Default)]
+struct GithubApiIssue {
     #[serde(default)]
-    payload: Option<serde_json::Value>,
+    title: Option<String>,
     #[serde(default)]
-    repo: Option<GithubRepositoryWire>,
+    body: Option<String>,
+    #[serde(default)]
+    user: Option<GithubUserWire>,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct MockEventWire {
-    #[serde(
-        default,
-        alias = "eventName",
-        alias = "event_name",
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    event_name: Option<String>,
+#[derive(Debug, Deserialize, Default)]
+struct GithubApiIssueComment {
+    #[serde(default)]
+    id: Option<u64>,
+    #[serde(default)]
+    user: Option<GithubUserWire>,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
 }
+
+#[derive(Debug, Deserialize, Default)]
+struct GithubApiRepo {
+    #[serde(default)]
+    full_name: Option<String>,
+    #[serde(default)]
+    default_branch: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct GithubApiPullRequestBranch {
+    #[serde(rename = "ref", default)]
+    reference: Option<String>,
+    #[serde(default)]
+    repo: Option<GithubApiRepo>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct GithubApiPullRequest {
+    #[serde(default)]
+    number: Option<u64>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default)]
+    user: Option<GithubUserWire>,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    base: Option<GithubApiPullRequestBranch>,
+    #[serde(default)]
+    head: Option<GithubApiPullRequestBranch>,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    additions: Option<u64>,
+    #[serde(default)]
+    deletions: Option<u64>,
+    #[serde(default)]
+    changed_files: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct GithubApiPullRequestFile {
+    #[serde(default)]
+    filename: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    additions: Option<u64>,
+    #[serde(default)]
+    deletions: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct GithubApiPullRequestReview {
+    #[serde(default)]
+    id: Option<u64>,
+    #[serde(default)]
+    user: Option<GithubUserWire>,
+    #[serde(default)]
+    submitted_at: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct GithubApiPullRequestReviewComment {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    line: Option<u64>,
+    #[serde(default)]
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct GithubApiCollaboratorPermission {
+    #[serde(default)]
+    permission: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct GithubApiReaction {
+    #[serde(default)]
+    id: Option<u64>,
+}
+
+// PLACEHOLDER_CHUNK_2
 
 pub(crate) fn github_actor(payload: &serde_json::Value) -> Option<String> {
-    let wire = serde_json::from_value::<GithubActorWire>(payload.clone()).unwrap_or_default();
-    wire.sender.and_then(|user| user.login).or_else(|| {
-        std::env::var("GITHUB_ACTOR")
-            .ok()
-            .filter(|v| !v.trim().is_empty())
-    })
+    #[derive(Debug, Deserialize, Default)]
+    struct ActorPayloadWire {
+        #[serde(default)]
+        sender: Option<GithubUserWire>,
+    }
+
+    serde_json::from_value::<ActorPayloadWire>(payload.clone())
+        .ok()
+        .and_then(|payload| payload.sender.and_then(|sender| sender.login))
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var("GITHUB_ACTOR")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
 }
 
 pub(crate) fn github_issue_number(event_name: &str, payload: &serde_json::Value) -> Option<u64> {
     match event_name {
-        "issue_comment" | "issues" => github_u64(payload, &["issue", "number"]),
+        "issue_comment" | "issues" => {
+            #[derive(Debug, Deserialize, Default)]
+            struct IssueNumberPayloadWire {
+                #[serde(default)]
+                issue: Option<IssueWire>,
+            }
+
+            #[derive(Debug, Deserialize, Default)]
+            struct IssueWire {
+                #[serde(default)]
+                number: Option<u64>,
+            }
+
+            serde_json::from_value::<IssueNumberPayloadWire>(payload.clone())
+                .ok()
+                .and_then(|payload| payload.issue.and_then(|issue| issue.number))
+        }
         "pull_request" | "pull_request_review_comment" => {
-            github_u64(payload, &["pull_request", "number"])
+            #[derive(Debug, Deserialize, Default)]
+            struct PrNumberPayloadWire {
+                #[serde(default, rename = "pull_request")]
+                pull_request: Option<PullRequestWire>,
+            }
+
+            #[derive(Debug, Deserialize, Default)]
+            struct PullRequestWire {
+                #[serde(default)]
+                number: Option<u64>,
+            }
+
+            serde_json::from_value::<PrNumberPayloadWire>(payload.clone())
+                .ok()
+                .and_then(|payload| payload.pull_request.and_then(|pr| pr.number))
         }
         _ => None,
     }
@@ -543,9 +445,22 @@ pub(crate) fn github_is_pr_context(event_name: &str, payload: &serde_json::Value
     match event_name {
         "pull_request" | "pull_request_review_comment" => true,
         "issue_comment" => {
-            let wire = serde_json::from_value::<GithubIssueCommentEventWire>(payload.clone())
-                .unwrap_or_default();
-            wire.issue.and_then(|issue| issue.pull_request).is_some()
+            #[derive(Debug, Deserialize, Default)]
+            struct IssueCommentPayloadWire {
+                #[serde(default)]
+                issue: Option<IssueWire>,
+            }
+
+            #[derive(Debug, Deserialize, Default)]
+            struct IssueWire {
+                #[serde(default)]
+                pull_request: Option<serde_json::Value>,
+            }
+
+            serde_json::from_value::<IssueCommentPayloadWire>(payload.clone())
+                .ok()
+                .and_then(|payload| payload.issue.and_then(|issue| issue.pull_request))
+                .is_some()
         }
         _ => false,
     }
@@ -561,36 +476,34 @@ pub(crate) fn github_mentions() -> Vec<String> {
 }
 
 pub(crate) fn normalize_github_event_payload(raw: serde_json::Value) -> serde_json::Value {
-    let wire = serde_json::from_value::<GithubEventWire>(raw.clone()).unwrap_or_default();
-    let Some(payload) = wire.payload else {
+    #[derive(Debug, Deserialize, Default)]
+    struct RawEventWrapperWire {
+        #[serde(default)]
+        payload: Option<serde_json::Map<String, serde_json::Value>>,
+        #[serde(default)]
+        repo: Option<GithubRepositoryWire>,
+    }
+
+    let Ok(wrapper) = serde_json::from_value::<RawEventWrapperWire>(raw.clone()) else {
         return raw;
     };
-    let serde_json::Value::Object(mut map) = payload else {
+    let Some(mut map) = wrapper.payload else {
         return raw;
     };
 
     if !map.contains_key("repository") {
-        let owner = wire
-            .repo
-            .as_ref()
-            .and_then(|repo| repo.owner.as_ref())
-            .and_then(|owner| owner.resolve())
-            .unwrap_or_default();
-        let name = wire
-            .repo
-            .as_ref()
-            .and_then(|repo| repo.repo.as_deref().or(repo.name.as_deref()))
-            .unwrap_or_default()
-            .to_string();
-
-        if !owner.is_empty() && !name.is_empty() {
-            map.insert(
-                "repository".to_string(),
-                serde_json::json!({
-                    "owner": { "login": owner },
-                    "name": name
-                }),
-            );
+        if let Some(repo) = wrapper.repo {
+            let owner = repo.owner_login().unwrap_or_default().trim();
+            let name = repo.repo_name().unwrap_or_default().trim();
+            if !owner.is_empty() && !name.is_empty() {
+                map.insert(
+                    "repository".to_string(),
+                    serde_json::json!({
+                        "owner": { "login": owner },
+                        "name": name
+                    }),
+                );
+            }
         }
     }
 
@@ -641,11 +554,8 @@ pub(crate) fn build_prompt_data_for_issue(
     let issue_endpoint = format!("repos/{owner}/{repo}/issues/{issue_number}");
     let comments_endpoint =
         format!("repos/{owner}/{repo}/issues/{issue_number}/comments?per_page=100");
-    let issue_value = gh_api_json("GET", &issue_endpoint, None, token)?;
-    let issue = serde_json::from_value::<GithubIssueWire>(issue_value).unwrap_or_default();
-    let comments_value = gh_api_json("GET", &comments_endpoint, None, token)?;
-    let comments =
-        serde_json::from_value::<Vec<GithubIssueCommentWire>>(comments_value).unwrap_or_default();
+    let issue: GithubApiIssue = gh_api("GET", &issue_endpoint, None, token)?;
+    let comments: Vec<GithubApiIssueComment> = gh_api("GET", &comments_endpoint, None, token)?;
 
     let mut lines = github_action_context_lines();
     lines.push(String::new());
@@ -655,7 +565,7 @@ pub(crate) fn build_prompt_data_for_issue(
     lines.push(format!("Body: {}", github_inline(issue.body.as_deref())));
     lines.push(format!(
         "Author: {}",
-        github_inline(issue.user.as_ref().map(|user| user.label()))
+        github_inline(issue.user.as_ref().and_then(|user| user.login.as_deref()))
     ));
     lines.push(format!(
         "Created At: {}",
@@ -670,7 +580,7 @@ pub(crate) fn build_prompt_data_for_issue(
         if trigger_comment_id.is_some() && item.id == trigger_comment_id {
             continue;
         }
-        let author = github_inline(item.user.as_ref().map(|user| user.label()));
+        let author = github_inline(item.user.as_ref().and_then(|user| user.login.as_deref()));
         let created_at = github_inline(item.created_at.as_deref());
         let body = github_inline(item.body.as_deref());
         comment_lines.push(format!("  - {} at {}: {}", author, created_at, body));
@@ -698,18 +608,11 @@ pub(crate) fn build_prompt_data_for_pr(
     let files_endpoint = format!("repos/{owner}/{repo}/pulls/{pr_number}/files?per_page=100");
     let reviews_endpoint = format!("repos/{owner}/{repo}/pulls/{pr_number}/reviews?per_page=100");
 
-    let pr_value = gh_api_json("GET", &pr_endpoint, None, token)?;
-    let pr = serde_json::from_value::<GithubPullRequestWire>(pr_value).unwrap_or_default();
-    let issue_comments_value = gh_api_json("GET", &issue_comments_endpoint, None, token)?;
-    let issue_comments =
-        serde_json::from_value::<Vec<GithubIssueCommentWire>>(issue_comments_value)
-            .unwrap_or_default();
-    let files_value = gh_api_json("GET", &files_endpoint, None, token)?;
-    let files =
-        serde_json::from_value::<Vec<GithubPullRequestFileWire>>(files_value).unwrap_or_default();
-    let reviews_value = gh_api_json("GET", &reviews_endpoint, None, token)?;
-    let reviews = serde_json::from_value::<Vec<GithubPullRequestReviewWire>>(reviews_value)
-        .unwrap_or_default();
+    let pr: GithubApiPullRequest = gh_api("GET", &pr_endpoint, None, token)?;
+    let issue_comments: Vec<GithubApiIssueComment> =
+        gh_api("GET", &issue_comments_endpoint, None, token)?;
+    let files: Vec<GithubApiPullRequestFile> = gh_api("GET", &files_endpoint, None, token)?;
+    let reviews: Vec<GithubApiPullRequestReview> = gh_api("GET", &reviews_endpoint, None, token)?;
 
     // PLACEHOLDER_CHUNK_5
 
@@ -721,7 +624,7 @@ pub(crate) fn build_prompt_data_for_pr(
     lines.push(format!("Body: {}", github_inline(pr.body.as_deref())));
     lines.push(format!(
         "Author: {}",
-        github_inline(pr.user.as_ref().map(|user| user.label()))
+        github_inline(pr.user.as_ref().and_then(|user| user.login.as_deref()))
     ));
     lines.push(format!(
         "Created At: {}",
@@ -729,11 +632,11 @@ pub(crate) fn build_prompt_data_for_pr(
     ));
     lines.push(format!(
         "Base Branch: {}",
-        github_inline(pr.base.as_ref().and_then(|base| base.ref_name.as_deref()))
+        github_inline(pr.base.as_ref().and_then(|base| base.reference.as_deref()))
     ));
     lines.push(format!(
         "Head Branch: {}",
-        github_inline(pr.head.as_ref().and_then(|head| head.ref_name.as_deref()))
+        github_inline(pr.head.as_ref().and_then(|head| head.reference.as_deref()))
     ));
     lines.push(format!("State: {}", github_inline(pr.state.as_deref())));
     lines.push(format!("Additions: {}", pr.additions.unwrap_or(0)));
@@ -750,7 +653,7 @@ pub(crate) fn build_prompt_data_for_pr(
         if trigger_comment_id.is_some() && item.id == trigger_comment_id {
             continue;
         }
-        let author = github_inline(item.user.as_ref().map(|user| user.label()));
+        let author = github_inline(item.user.as_ref().and_then(|user| user.login.as_deref()));
         let created_at = github_inline(item.created_at.as_deref());
         let body = github_inline(item.body.as_deref());
         comment_lines.push(format!("- {} at {}: {}", author, created_at, body));
@@ -782,7 +685,7 @@ pub(crate) fn build_prompt_data_for_pr(
 
     let mut review_blocks = Vec::new();
     for item in reviews {
-        let author = github_inline(item.user.as_ref().map(|user| user.label()));
+        let author = github_inline(item.user.as_ref().and_then(|user| user.login.as_deref()));
         let submitted_at = github_inline(item.submitted_at.as_deref());
         let body = github_inline(item.body.as_deref());
         let mut block = vec![
@@ -794,17 +697,15 @@ pub(crate) fn build_prompt_data_for_pr(
             let endpoint = format!(
                 "repos/{owner}/{repo}/pulls/{pr_number}/reviews/{review_id}/comments?per_page=100"
             );
-            if let Ok(review_comments) = gh_api_json("GET", &endpoint, None, token) {
+            if let Ok(review_comments) =
+                gh_api::<Vec<GithubApiPullRequestReviewComment>>("GET", &endpoint, None, token)
+            {
                 let mut review_comment_lines = Vec::new();
-                let review_comments = serde_json::from_value::<
-                    Vec<GithubPullRequestReviewCommentWire>,
-                >(review_comments)
-                .unwrap_or_default();
                 for comment in review_comments {
                     let path = github_inline(comment.path.as_deref());
                     let line = comment
                         .line
-                        .map(|v| v.to_string())
+                        .map(|value| value.to_string())
                         .unwrap_or_else(|| "?".to_string());
                     let body = github_inline(comment.body.as_deref());
                     review_comment_lines.push(format!("{}:{}: {}", path, line, body));
@@ -856,11 +757,30 @@ pub(crate) fn prompt_from_github_context(
     }
 
     if github_is_comment_event(event_name) {
-        let wire =
-            serde_json::from_value::<GithubCommentEventWire>(payload.clone()).unwrap_or_default();
-        let comment = wire
+        #[derive(Debug, Deserialize, Default)]
+        struct CommentEventPayloadWire {
+            #[serde(default)]
+            comment: Option<CommentWire>,
+        }
+
+        #[derive(Debug, Deserialize, Default)]
+        struct CommentWire {
+            #[serde(default)]
+            body: Option<String>,
+            #[serde(default)]
+            path: Option<String>,
+            #[serde(default)]
+            line: Option<u64>,
+            #[serde(default)]
+            diff_hunk: Option<String>,
+        }
+
+        let payload_wire =
+            serde_json::from_value::<CommentEventPayloadWire>(payload.clone()).unwrap_or_default();
+        let comment = payload_wire
             .comment
             .ok_or_else(|| anyhow::anyhow!("Comment payload is missing `comment` object."))?;
+
         let body = comment.body.unwrap_or_default().trim().to_string();
         let body_lower = body.to_ascii_lowercase();
         let mentions = github_mentions();
@@ -873,7 +793,7 @@ pub(crate) fn prompt_from_github_context(
             let file = comment.path.unwrap_or_else(|| "<unknown-file>".to_string());
             let line = comment
                 .line
-                .map(|v| v.to_string())
+                .map(|value| value.to_string())
                 .unwrap_or_else(|| "?".to_string());
             let diff_hunk = comment.diff_hunk.unwrap_or_default();
             Some((file, line, diff_hunk))
@@ -931,15 +851,24 @@ pub(crate) fn ensure_gh_available() -> anyhow::Result<()> {
 }
 
 pub(crate) fn github_repo_from_payload(payload: &serde_json::Value) -> Option<(String, String)> {
-    let wire = serde_json::from_value::<GithubRepositoryContainerWire>(payload.clone())
-        .unwrap_or_default();
-    let repo = wire.repository.or(wire.repo)?;
-    let owner = repo.owner.and_then(|owner| owner.resolve())?;
-    let name = repo.name.or(repo.repo)?;
-    if owner.trim().is_empty() || name.trim().is_empty() {
+    #[derive(Debug, Deserialize, Default)]
+    struct RepoPayloadWire {
+        #[serde(default)]
+        repository: Option<GithubRepositoryWire>,
+        #[serde(default)]
+        repo: Option<GithubRepositoryWire>,
+    }
+
+    let repo = serde_json::from_value::<RepoPayloadWire>(payload.clone())
+        .ok()
+        .and_then(|payload| payload.repository.or(payload.repo))?;
+
+    let owner = repo.owner_login()?.trim();
+    let name = repo.repo_name()?.trim();
+    if owner.is_empty() || name.is_empty() {
         return None;
     }
-    Some((owner, name))
+    Some((owner.to_string(), name.to_string()))
 }
 
 // PLACEHOLDER_CHUNK_10
@@ -963,14 +892,6 @@ pub(crate) fn github_repo_from_env_or_git() -> anyhow::Result<(String, String)> 
     let remote_url = String::from_utf8_lossy(&remote.stdout).trim().to_string();
     parse_github_remote(&remote_url)
         .ok_or_else(|| anyhow::anyhow!("Unsupported GitHub remote URL format: {}", remote_url))
-}
-
-pub(crate) fn github_u64(payload: &serde_json::Value, path: &[&str]) -> Option<u64> {
-    let mut cursor = payload;
-    for key in path {
-        cursor = cursor.get(*key)?;
-    }
-    cursor.as_u64()
 }
 
 pub(crate) fn gh_api_json(
@@ -1028,6 +949,26 @@ pub(crate) fn gh_api_json(
     Ok(parsed)
 }
 
+fn gh_api<T>(
+    method: &str,
+    endpoint: &str,
+    body: Option<&serde_json::Value>,
+    token: Option<&str>,
+) -> anyhow::Result<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let value = gh_api_json(method, endpoint, body, token)?;
+    serde_json::from_value::<T>(value).map_err(|error| {
+        anyhow::anyhow!(
+            "gh api {} {} returned unexpected JSON payload: {}",
+            method,
+            endpoint,
+            error
+        )
+    })
+}
+
 pub(crate) fn github_assert_write_permission(
     owner: &str,
     repo: &str,
@@ -1035,9 +976,8 @@ pub(crate) fn github_assert_write_permission(
     token: Option<&str>,
 ) -> anyhow::Result<()> {
     let endpoint = format!("repos/{owner}/{repo}/collaborators/{actor}/permission");
-    let value = gh_api_json("GET", &endpoint, None, token)?;
-    let wire = serde_json::from_value::<GithubPermissionWire>(value).unwrap_or_default();
-    let permission = wire.permission.unwrap_or_default();
+    let permission: GithubApiCollaboratorPermission = gh_api("GET", &endpoint, None, token)?;
+    let permission = permission.permission.unwrap_or_default();
     if permission != "admin" && permission != "write" {
         anyhow::bail!("User {} does not have write permissions", actor);
     }
@@ -1079,8 +1019,8 @@ pub(crate) fn github_add_reaction(
         token,
     )
     .ok()?;
-    let wire = serde_json::from_value::<GithubReactionWire>(reaction).unwrap_or_default();
-    let reaction_id = wire.id?;
+    let reaction: GithubApiReaction = serde_json::from_value(reaction).ok()?;
+    let reaction_id = reaction.id?;
     Some(GithubReactionHandle {
         delete_endpoint: format!("{}/{}", create_endpoint, reaction_id),
     })
@@ -1162,12 +1102,10 @@ pub(crate) fn github_default_branch(
     token: Option<&str>,
 ) -> anyhow::Result<String> {
     let endpoint = format!("repos/{owner}/{repo}");
-    let value = gh_api_json("GET", &endpoint, None, token)?;
-    let wire = serde_json::from_value::<GithubRepoInfoWire>(value).unwrap_or_default();
-    let branch = wire
+    let repo: GithubApiRepo = gh_api("GET", &endpoint, None, token)?;
+    let branch = repo
         .default_branch
-        .as_deref()
-        .unwrap_or("main")
+        .unwrap_or_else(|| "main".to_string())
         .trim()
         .to_string();
     Ok(if branch.is_empty() {
@@ -1186,30 +1124,29 @@ pub(crate) fn github_fetch_pr_runtime_info(
     token: Option<&str>,
 ) -> anyhow::Result<GithubPrRuntimeInfo> {
     let endpoint = format!("repos/{owner}/{repo}/pulls/{pr_number}");
-    let value = gh_api_json("GET", &endpoint, None, token)?;
-    let pr = serde_json::from_value::<GithubPullRequestWire>(value).unwrap_or_default();
+    let value: GithubApiPullRequest = gh_api("GET", &endpoint, None, token)?;
 
-    let head_ref = pr
+    let head_ref = value
         .head
         .as_ref()
-        .and_then(|head| head.ref_name.as_deref())
+        .and_then(|head| head.reference.as_deref())
         .ok_or_else(|| anyhow::anyhow!("PR {} is missing head.ref", pr_number))?
         .to_string();
 
-    let fallback = format!("{owner}/{repo}");
-    let head_repo_full_name = pr
+    let fallback_repo = format!("{owner}/{repo}");
+    let head_repo_full_name = value
         .head
         .as_ref()
         .and_then(|head| head.repo.as_ref())
         .and_then(|repo| repo.full_name.as_deref())
-        .unwrap_or(fallback.as_str())
+        .unwrap_or(fallback_repo.as_str())
         .to_string();
-    let base_repo_full_name = pr
+    let base_repo_full_name = value
         .base
         .as_ref()
         .and_then(|base| base.repo.as_ref())
         .and_then(|repo| repo.full_name.as_deref())
-        .unwrap_or(fallback.as_str())
+        .unwrap_or(fallback_repo.as_str())
         .to_string();
 
     Ok(GithubPrRuntimeInfo {
@@ -1330,15 +1267,13 @@ pub(crate) fn github_create_pr(
 ) -> anyhow::Result<u64> {
     let endpoint =
         format!("repos/{owner}/{repo}/pulls?state=open&head={owner}:{head}&base={base}&per_page=1");
-    let existing_value = gh_api_json("GET", &endpoint, None, token)?;
-    let existing =
-        serde_json::from_value::<Vec<GithubCreatePrWire>>(existing_value).unwrap_or_default();
+    let existing: Vec<GithubApiPullRequest> = gh_api("GET", &endpoint, None, token)?;
     if let Some(number) = existing.first().and_then(|pr| pr.number) {
         return Ok(number);
     }
 
     let endpoint = format!("repos/{owner}/{repo}/pulls");
-    let created_value = gh_api_json(
+    let created: GithubApiPullRequest = gh_api(
         "POST",
         &endpoint,
         Some(&serde_json::json!({
@@ -1349,7 +1284,6 @@ pub(crate) fn github_create_pr(
         })),
         token,
     )?;
-    let created = serde_json::from_value::<GithubCreatePrWire>(created_value).unwrap_or_default();
     created
         .number
         .ok_or_else(|| anyhow::anyhow!("Failed to parse created PR number from GitHub response."))
@@ -1519,9 +1453,16 @@ pub(crate) async fn handle_github_command(action: GithubCommands) -> anyhow::Res
 
             let (event_name, payload) = if let Some(event) = event {
                 let raw = load_mock_event(&event)?;
-                let wire = serde_json::from_value::<MockEventWire>(raw.clone()).unwrap_or_default();
-                let event_name = wire
-                    .event_name
+                #[derive(Debug, Deserialize, Default)]
+                struct MockEventNameWire {
+                    #[serde(default, rename = "eventName", alias = "event_name")]
+                    event_name: Option<String>,
+                }
+
+                let event_name = serde_json::from_value::<MockEventNameWire>(raw.clone())
+                    .ok()
+                    .and_then(|payload| payload.event_name)
+                    .filter(|name| !name.trim().is_empty())
                     .unwrap_or_else(|| "issue_comment".to_string());
                 (event_name, normalize_github_event_payload(raw))
             } else {
@@ -1559,7 +1500,21 @@ pub(crate) async fn handle_github_command(action: GithubCommands) -> anyhow::Res
                 github_repo_from_payload(&payload).or_else(|| github_repo_from_env_or_git().ok());
             let issue_number = github_issue_number(&event_name, &payload);
             let comment_id = if is_comment_event {
-                github_u64(&payload, &["comment", "id"])
+                #[derive(Debug, Deserialize, Default)]
+                struct CommentIdPayloadWire {
+                    #[serde(default)]
+                    comment: Option<CommentWire>,
+                }
+
+                #[derive(Debug, Deserialize, Default)]
+                struct CommentWire {
+                    #[serde(default)]
+                    id: Option<u64>,
+                }
+
+                serde_json::from_value::<CommentIdPayloadWire>(payload.clone())
+                    .ok()
+                    .and_then(|payload| payload.comment.and_then(|comment| comment.id))
             } else {
                 None
             };

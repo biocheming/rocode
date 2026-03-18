@@ -41,6 +41,7 @@ use rocode_command::interactive::{parse_interactive_command, InteractiveCommand}
 use rocode_command::output_blocks::{BlockTone, StatusBlock};
 use rocode_command::{CommandRegistry, UiActionId};
 use rocode_core::agent_task_registry::{global_task_registry, AgentTaskStatus};
+use serde::Deserialize;
 
 use crate::api::{
     ApiClient, ExecutionModeInfo, ExecutionStatus as ApiExecutionStatus, McpStatusInfo,
@@ -683,25 +684,29 @@ impl App {
                                         );
                                     }
                                     Ok(value) => {
-                                        let message = value
-                                            .get("target")
-                                            .and_then(|value| value.as_str())
-                                            .map(|target| match target {
-                                                "stage" => {
-                                                    let stage = value
-                                                        .get("stage")
-                                                        .and_then(|value| value.as_str())
-                                                        .unwrap_or("current stage");
-                                                    format!(
-                                                        "Stage cancellation requested: {}",
-                                                        stage
-                                                    )
-                                                }
-                                                _ => "Run cancellation requested".to_string(),
-                                            })
-                                            .unwrap_or_else(|| {
+                                        #[derive(Debug, Deserialize, Default)]
+                                        struct AbortSessionResponse {
+                                            #[serde(default)]
+                                            target: Option<String>,
+                                            #[serde(default)]
+                                            stage: Option<String>,
+                                        }
+
+                                        let parsed =
+                                            serde_json::from_value::<AbortSessionResponse>(value)
+                                                .unwrap_or_default();
+                                        let message = match parsed.target.as_deref() {
+                                            Some("stage") => {
+                                                let stage = parsed
+                                                    .stage
+                                                    .as_deref()
+                                                    .unwrap_or("current stage");
+                                                format!("Stage cancellation requested: {}", stage)
+                                            }
+                                            Some(_) | None => {
                                                 "Run cancellation requested".to_string()
-                                            });
+                                            }
+                                        };
                                         self.toast.show(ToastVariant::Info, &message, 3000);
                                     }
                                 }
@@ -1318,10 +1323,6 @@ impl App {
                 }) => {
                     let current_session = self.current_session_id();
                     let is_active_session = current_session.as_deref() == Some(session_id.as_str());
-                    let is_scheduler_stage = matches!(
-                        &payload,
-                        rocode_command::output_blocks::OutputBlock::SchedulerStage(_)
-                    );
                     let current_is_parent_of_target =
                         current_session.as_deref().is_some_and(|active| {
                             let session_ctx = self.context.session.read();
@@ -1337,13 +1338,22 @@ impl App {
                         session_ctx.apply_output_block_incremental(
                             session_id,
                             id.as_deref(),
-                            &payload,
+                            payload,
                         );
                     }
 
                     if let Route::Session { session_id: active } = self.context.current_route() {
                         if active == *session_id {
-                            if is_scheduler_stage {
+                            #[derive(Debug, Deserialize)]
+                            struct OutputBlockKind {
+                                #[serde(default)]
+                                kind: Option<String>,
+                            }
+
+                            let kind = serde_json::from_value::<OutputBlockKind>(payload.clone())
+                                .ok()
+                                .and_then(|payload| payload.kind);
+                            if kind.as_deref() == Some("scheduler_stage") {
                                 self.refresh_child_sessions();
                             }
                             self.event_caused_change = true;

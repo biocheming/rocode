@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::message::{Content, ContentPart, Message, Role};
@@ -384,25 +385,47 @@ fn is_local_shell_tool_name(name: &str) -> bool {
     )
 }
 
+fn deserialize_string_vec_lossy<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    let Some(Value::Array(values)) = value else {
+        return Ok(Vec::new());
+    };
+    Ok(values
+        .into_iter()
+        .filter_map(|value| match value {
+            Value::String(value) => Some(value),
+            Value::Number(value) => Some(value.to_string()),
+            Value::Bool(value) => Some(value.to_string()),
+            _ => None,
+        })
+        .collect())
+}
+
 fn local_shell_action_from_input(input: &Value) -> LocalShellAction {
-    if let Some(action) = input.get("action") {
-        if let Ok(parsed) = serde_json::from_value::<LocalShellAction>(action.clone()) {
-            return parsed;
-        }
+    #[derive(Debug, Deserialize)]
+    struct LocalShellActionEnvelopeWire {
+        action: LocalShellAction,
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct LocalShellActionCommandWire {
+        #[serde(default, deserialize_with = "deserialize_string_vec_lossy")]
+        command: Vec<String>,
+    }
+
+    if let Ok(parsed) = serde_json::from_value::<LocalShellActionEnvelopeWire>(input.clone()) {
+        return parsed.action;
     }
 
     if let Ok(parsed) = serde_json::from_value::<LocalShellAction>(input.clone()) {
         return parsed;
     }
 
-    let command = input
-        .get("command")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(ToString::to_string))
-                .collect::<Vec<_>>()
-        })
+    let command = serde_json::from_value::<LocalShellActionCommandWire>(input.clone())
+        .map(|wire| wire.command)
         .unwrap_or_default();
 
     LocalShellAction {

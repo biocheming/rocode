@@ -1,14 +1,16 @@
 use futures::StreamExt;
 use rocode_command::cli_style::CliStyle;
-use rocode_command::output_blocks::{render_cli_block_rich, OutputBlock};
+use rocode_command::output_blocks::{
+    render_cli_block_rich, BlockTone, MessageBlock, MessagePhase, MessageRole, OutputBlock,
+    QueueItemBlock, ReasoningBlock, SchedulerStageBlock, SessionEventBlock, SessionEventField,
+    StatusBlock, ToolBlock, ToolPhase,
+};
 use rocode_config::schema::ShareMode;
 use rocode_config::Config;
 use serde::Deserialize;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-
-use rocode_types::ServerEvent;
 
 use crate::cli::RunOutputFormat;
 use crate::util::{parse_bool_env, parse_http_json, server_url};
@@ -54,8 +56,220 @@ async fn fetch_remote_config(client: &reqwest::Client, base_url: &str) -> anyhow
     parse_http_json(client.get(config_endpoint).send().await?).await
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind")]
+enum RemoteOutputBlockFrame {
+    #[serde(rename = "status")]
+    Status(StatusWire),
+    #[serde(rename = "message")]
+    Message(MessageWire),
+    #[serde(rename = "tool")]
+    Tool(ToolWire),
+    #[serde(rename = "reasoning")]
+    Reasoning(ReasoningWire),
+    #[serde(rename = "session_event")]
+    SessionEvent(SessionEventWire),
+    #[serde(rename = "queue_item")]
+    QueueItem(QueueItemWire),
+    #[serde(rename = "scheduler_stage")]
+    SchedulerStage(SchedulerStageBlock),
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct StatusWire {
+    #[serde(default)]
+    tone: Option<String>,
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct MessageWire {
+    #[serde(default)]
+    role: Option<String>,
+    #[serde(default)]
+    phase: Option<String>,
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ToolWire {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    phase: Option<String>,
+    #[serde(default)]
+    detail: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ReasoningWire {
+    #[serde(default)]
+    phase: Option<String>,
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct SessionEventWire {
+    #[serde(default)]
+    event: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    summary: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_session_event_fields_lossy")]
+    fields: Vec<SessionEventFieldWire>,
+    #[serde(default)]
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionEventFieldWire {
+    label: String,
+    value: String,
+    #[serde(default)]
+    tone: Option<String>,
+}
+
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        _ => None,
+    })
+}
+
+fn deserialize_session_event_fields_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Vec<SessionEventFieldWire>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    Ok(serde_json::from_value::<Vec<SessionEventFieldWire>>(value).unwrap_or_default())
+}
+
+fn default_queue_position() -> usize {
+    1
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct QueueItemWire {
+    #[serde(default = "default_queue_position")]
+    position: usize,
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RemoteSseEnvelope {
+    #[serde(default, rename = "type")]
+    event_type: Option<String>,
+    #[serde(default)]
+    block: Option<serde_json::Value>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    error: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    message: Option<String>,
+}
+
 pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBlock> {
-    serde_json::from_value(payload.clone()).ok()
+    let frame: RemoteOutputBlockFrame = serde_json::from_value(payload.clone()).ok()?;
+    match frame {
+        RemoteOutputBlockFrame::Status(payload) => {
+            let tone = match payload.tone.as_deref().unwrap_or("normal") {
+                "title" => BlockTone::Title,
+                "muted" => BlockTone::Muted,
+                "success" => BlockTone::Success,
+                "warning" => BlockTone::Warning,
+                "error" => BlockTone::Error,
+                _ => BlockTone::Normal,
+            };
+            let text = payload.text;
+            Some(OutputBlock::Status(StatusBlock { tone, text }))
+        }
+        RemoteOutputBlockFrame::Message(payload) => {
+            let role = match payload.role.as_deref().unwrap_or("assistant") {
+                "user" => MessageRole::User,
+                "system" => MessageRole::System,
+                _ => MessageRole::Assistant,
+            };
+            let phase = match payload.phase.as_deref().unwrap_or("delta") {
+                "start" => MessagePhase::Start,
+                "end" => MessagePhase::End,
+                "full" => MessagePhase::Full,
+                _ => MessagePhase::Delta,
+            };
+            let text = payload.text;
+            Some(OutputBlock::Message(MessageBlock { role, phase, text }))
+        }
+        RemoteOutputBlockFrame::Tool(payload) => {
+            let name = payload.name.unwrap_or_else(|| "tool".to_string());
+            let phase = match payload.phase.as_deref().unwrap_or("running") {
+                "start" => ToolPhase::Start,
+                "done" | "result" => ToolPhase::Done,
+                "error" => ToolPhase::Error,
+                _ => ToolPhase::Running,
+            };
+            let detail = payload.detail;
+            Some(OutputBlock::Tool(ToolBlock {
+                name,
+                phase,
+                detail,
+                structured: None,
+            }))
+        }
+        RemoteOutputBlockFrame::Reasoning(payload) => {
+            let phase = match payload.phase.as_deref().unwrap_or("delta") {
+                "start" => MessagePhase::Start,
+                "end" => MessagePhase::End,
+                "full" => MessagePhase::Full,
+                _ => MessagePhase::Delta,
+            };
+            let text = payload.text;
+            Some(OutputBlock::Reasoning(ReasoningBlock { phase, text }))
+        }
+        RemoteOutputBlockFrame::SessionEvent(payload) => {
+            Some(OutputBlock::SessionEvent(SessionEventBlock {
+                event: payload.event.unwrap_or_else(|| "event".to_string()),
+                title: payload.title.unwrap_or_else(|| "Session Event".to_string()),
+                status: payload.status,
+                summary: payload.summary,
+                fields: payload
+                    .fields
+                    .into_iter()
+                    .map(|field| SessionEventField {
+                        label: field.label,
+                        value: field.value,
+                        tone: field.tone,
+                    })
+                    .collect(),
+                body: payload.body,
+            }))
+        }
+        RemoteOutputBlockFrame::QueueItem(payload) => {
+            Some(OutputBlock::QueueItem(QueueItemBlock {
+                position: payload.position,
+                text: payload.text,
+            }))
+        }
+        RemoteOutputBlockFrame::SchedulerStage(payload) => {
+            Some(OutputBlock::SchedulerStage(Box::new(payload)))
+        }
+        RemoteOutputBlockFrame::Unknown => None,
+    }
 }
 
 pub(crate) async fn resolve_remote_session(
@@ -215,45 +429,19 @@ async fn dispatch_remote_sse_event(
 
     let parsed: serde_json::Value =
         serde_json::from_str(&data).unwrap_or_else(|_| serde_json::json!({ "raw": data }));
-    let server_event = {
-        if let Ok(event) = serde_json::from_value::<ServerEvent>(parsed.clone()) {
-            Some(event)
-        } else if let (Some(event_name), Some(obj)) = (event_name.as_deref(), parsed.as_object()) {
-            if obj.contains_key("type") {
-                None
-            } else {
-                let mut patched = obj.clone();
-                patched.insert(
-                    "type".to_string(),
-                    serde_json::Value::String(event_name.to_string()),
-                );
-                serde_json::from_value::<ServerEvent>(serde_json::Value::Object(patched)).ok()
-            }
-        } else {
-            None
-        }
-    };
+    let envelope = serde_json::from_value::<RemoteSseEnvelope>(parsed.clone()).unwrap_or_default();
+    let RemoteSseEnvelope {
+        event_type: envelope_type,
+        block,
+        error,
+        message,
+    } = envelope;
+    let event_type = event_name
+        .filter(|name| !name.trim().is_empty())
+        .or(envelope_type)
+        .unwrap_or_else(|| "message".to_string());
 
-    #[derive(Debug, serde::Deserialize)]
-    struct EventTypeOnly {
-        #[serde(rename = "type")]
-        event_type: Option<String>,
-    }
-
-    let event_type = if let Some(name) = event_name.as_deref().filter(|s| !s.is_empty()) {
-        name.to_string()
-    } else if let Some(ref event) = server_event {
-        event.event_name().to_string()
-    } else {
-        serde_json::from_value::<EventTypeOnly>(parsed.clone())
-            .ok()
-            .and_then(|v| v.event_type)
-            .unwrap_or_else(|| "message".to_string())
-    };
-
-    if matches!(server_event.as_ref(), Some(ServerEvent::ConfigUpdated))
-        || event_type.as_str() == "config.updated"
-    {
+    if event_type == "config.updated" {
         if let Ok(config) = fetch_remote_config(client, base_url).await {
             if let Some(enabled) = remote_show_thinking_from_config(&config) {
                 show_thinking.store(enabled, Ordering::SeqCst);
@@ -290,14 +478,8 @@ async fn dispatch_remote_sse_event(
     }
 
     if event_type == "output_block" {
-        let payload = server_event
-            .as_ref()
-            .and_then(|event| match event {
-                ServerEvent::OutputBlock { block, .. } => Some(block.clone()),
-                _ => None,
-            })
-            .unwrap_or_else(|| parsed.clone());
-        if let Some(block) = parse_output_block(&payload) {
+        let payload = block.as_ref().unwrap_or(&parsed);
+        if let Some(block) = parse_output_block(payload) {
             if matches!(block, OutputBlock::Reasoning(_)) && !show_thinking.load(Ordering::SeqCst) {
                 return Ok(());
             }
@@ -309,24 +491,10 @@ async fn dispatch_remote_sse_event(
     }
 
     if event_type.as_str() == "error" {
-        if let Some(ServerEvent::Error { error, .. }) = server_event.as_ref() {
-            eprintln!("\nError: {}", error);
-            return Ok(());
-        }
-
-        #[derive(Debug, serde::Deserialize)]
-        struct ErrorLike {
-            #[serde(default)]
-            error: Option<String>,
-            #[serde(default)]
-            message: Option<String>,
-        }
-
-        let message = serde_json::from_value::<ErrorLike>(parsed.clone())
-            .ok()
-            .and_then(|err| err.error.or(err.message))
+        let message = error
+            .or(message)
             .unwrap_or_else(|| "unknown remote stream error".to_string());
-        eprintln!("\nError: {}", message);
+        eprintln!("\nError: {message}");
     }
     Ok(())
 }

@@ -1,42 +1,25 @@
 use std::collections::HashSet;
 
 use crate::components::{PermissionRequest, PermissionType};
-use rocode_core::contracts::patch::keys as patch_keys;
-use rocode_core::contracts::permission::keys as permission_keys;
-use rocode_core::contracts::permission::PermissionTypeWire;
-use rocode_core::contracts::tools::BuiltinToolName;
+use serde::Deserialize;
 
 use super::App;
 
 impl App {
     fn permission_type_from_name(name: &str) -> PermissionType {
-        if let Some(permission) = PermissionTypeWire::parse(name) {
-            return match permission {
-                PermissionTypeWire::ExternalDirectory => PermissionType::ExternalDirectory,
-                PermissionTypeWire::List => PermissionType::List,
-                PermissionTypeWire::DoomLoop => PermissionType::ExecuteCommand,
-            };
-        }
-
-        match BuiltinToolName::parse(name) {
-            Some(BuiltinToolName::Read) => PermissionType::ReadFile,
-            Some(BuiltinToolName::Write) => PermissionType::WriteFile,
-            Some(
-                BuiltinToolName::Edit
-                | BuiltinToolName::MultiEdit
-                | BuiltinToolName::ApplyPatch,
-            ) => PermissionType::Edit,
-            Some(BuiltinToolName::Bash | BuiltinToolName::ShellSession) => PermissionType::Bash,
-            Some(BuiltinToolName::Glob) => PermissionType::Glob,
-            Some(BuiltinToolName::Grep) => PermissionType::Grep,
-            Some(BuiltinToolName::Task | BuiltinToolName::TaskFlow) => PermissionType::Task,
-            Some(BuiltinToolName::WebFetch | BuiltinToolName::BrowserSession) => {
-                PermissionType::WebFetch
-            }
-            Some(BuiltinToolName::WebSearch) => PermissionType::WebSearch,
-            Some(BuiltinToolName::CodeSearch | BuiltinToolName::GitHubResearch) => {
-                PermissionType::CodeSearch
-            }
+        match name {
+            "read" => PermissionType::ReadFile,
+            "write" => PermissionType::WriteFile,
+            "edit" => PermissionType::Edit,
+            "bash" => PermissionType::Bash,
+            "glob" => PermissionType::Glob,
+            "grep" => PermissionType::Grep,
+            "list" => PermissionType::List,
+            "task" | "task_flow" => PermissionType::Task,
+            "webfetch" => PermissionType::WebFetch,
+            "websearch" => PermissionType::WebSearch,
+            "codesearch" => PermissionType::CodeSearch,
+            "external_directory" => PermissionType::ExternalDirectory,
             _ => PermissionType::ExecuteCommand,
         }
     }
@@ -44,30 +27,59 @@ impl App {
     fn permission_request_to_prompt(
         permission: &crate::api::PermissionRequestInfo,
     ) -> PermissionRequest {
-        let input = permission.input.as_object().cloned().unwrap_or_default();
+        #[derive(Debug, Deserialize, Default)]
+        struct PermissionInput {
+            #[serde(default)]
+            permission: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_patterns_lossy")]
+            patterns: Vec<String>,
+            #[serde(default)]
+            metadata: Option<PermissionMetadata>,
+        }
+
+        #[derive(Debug, Deserialize, Default)]
+        struct PermissionMetadata {
+            #[serde(default)]
+            command: Option<String>,
+            #[serde(default)]
+            filepath: Option<String>,
+            #[serde(default)]
+            path: Option<String>,
+        }
+
+        fn deserialize_patterns_lossy<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+            let Some(value) = value else {
+                return Ok(Vec::new());
+            };
+            match value {
+                serde_json::Value::Array(values) => Ok(values
+                    .into_iter()
+                    .filter_map(|value| value.as_str().map(str::to_string))
+                    .collect()),
+                _ => Ok(Vec::new()),
+            }
+        }
+
+        let input =
+            serde_json::from_value::<PermissionInput>(permission.input.clone()).unwrap_or_default();
         let permission_name = input
-            .get(permission_keys::REQUEST_PERMISSION)
-            .and_then(|value| value.as_str())
+            .permission
+            .as_deref()
             .unwrap_or(permission.tool.as_str());
-        let resource = input
-            .get(permission_keys::REQUEST_PATTERNS)
-            .and_then(|value| value.as_array())
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(|value| value.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .filter(|value| !value.is_empty())
+
+        let resource = (!input.patterns.is_empty())
+            .then(|| input.patterns.join(", "))
             .or_else(|| {
-                input.get(permission_keys::REQUEST_METADATA).and_then(|value| {
-                    value
-                        .get(permission_keys::COMMAND)
-                        .and_then(|item| item.as_str())
-                        .or_else(|| value.get(patch_keys::FILEPATH).and_then(|item| item.as_str()))
-                        .or_else(|| value.get(patch_keys::LEGACY_PATH).and_then(|item| item.as_str()))
-                        .map(str::to_string)
+                input.metadata.and_then(|meta| {
+                    meta.command
+                        .or(meta.filepath)
+                        .or(meta.path)
+                        .map(|value| value.trim().to_string())
+                        .filter(|value| !value.is_empty())
                 })
             })
             .unwrap_or_else(|| permission.message.clone());

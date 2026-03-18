@@ -5,6 +5,71 @@ use rocode_plugin::subprocess::PluginLoader;
 use rocode_provider::{AuthError, AuthInfo, AuthManager, AuthMethodType, Authorization};
 use serde::{Deserialize, Serialize};
 
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        _ => None,
+    })
+}
+
+fn deserialize_opt_i64_lossy<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Number(value)) => value.as_i64(),
+        Some(serde_json::Value::String(raw)) => raw.trim().parse::<i64>().ok(),
+        _ => None,
+    })
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct OauthCallbackWire {
+    #[serde(
+        default,
+        rename = "type",
+        deserialize_with = "deserialize_opt_string_lossy"
+    )]
+    kind: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    provider: Option<String>,
+
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    key: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_opt_string_lossy",
+        alias = "apiKey"
+    )]
+    api_key: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    token: Option<String>,
+
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    access: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    refresh: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_i64_lossy")]
+    expires: Option<i64>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_opt_string_lossy",
+        alias = "accountId"
+    )]
+    account_id: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_opt_string_lossy",
+        alias = "enterpriseUrl"
+    )]
+    enterprise_url: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthMethodInfo {
     #[serde(rename = "type")]
@@ -14,53 +79,6 @@ pub struct AuthMethodInfo {
 
 pub struct ProviderAuth {
     auth_manager: Arc<AuthManager>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-struct AuthCallbackWire {
-    #[serde(
-        default,
-        rename = "type",
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    kind: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    provider: Option<String>,
-    #[serde(
-        default,
-        alias = "apiKey",
-        alias = "token",
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    key: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    access: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    refresh: Option<String>,
-    #[serde(default, deserialize_with = "rocode_types::deserialize_opt_i64_lossy")]
-    expires: Option<i64>,
-    #[serde(
-        default,
-        alias = "accountId",
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    account_id: Option<String>,
-    #[serde(
-        default,
-        alias = "enterpriseUrl",
-        alias = "enterpriseURL",
-        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-    )]
-    enterprise_url: Option<String>,
 }
 
 impl ProviderAuth {
@@ -128,29 +146,23 @@ impl ProviderAuth {
             .await
             .map_err(|_| AuthError::OauthCallbackFailed)?;
 
-        let wire: AuthCallbackWire = serde_json::from_value(result).unwrap_or_default();
-
-        if wire.kind.as_deref() != Some("success") {
+        let parsed = serde_json::from_value::<OauthCallbackWire>(result).unwrap_or_default();
+        if parsed.kind.as_deref().unwrap_or("") != "success" {
             return Err(AuthError::OauthCallbackFailed);
         }
 
         // Plugin callback can override target provider (e.g. copilot enterprise).
-        let target_provider = wire.provider.as_deref().unwrap_or(provider_id);
+        let target_provider = parsed.provider.as_deref().unwrap_or(provider_id);
 
-        if let Some(key) = wire.key.as_deref() {
+        if let Some(key) = parsed.key.or(parsed.api_key).or(parsed.token) {
             self.auth_manager
-                .set(
-                    target_provider,
-                    AuthInfo::Api {
-                        key: key.to_string(),
-                    },
-                )
+                .set(target_provider, AuthInfo::Api { key })
                 .await;
             return Ok(());
         }
 
-        let access = wire.access.unwrap_or_default();
-        let refresh = wire.refresh.unwrap_or_default();
+        let access = parsed.access.unwrap_or_default();
+        let refresh = parsed.refresh.unwrap_or_default();
 
         if access.is_empty() && refresh.is_empty() {
             return Err(AuthError::OauthCallbackFailed);
@@ -162,9 +174,9 @@ impl ProviderAuth {
                 AuthInfo::OAuth {
                     access,
                     refresh,
-                    expires: wire.expires,
-                    account_id: wire.account_id,
-                    enterprise_url: wire.enterprise_url,
+                    expires: parsed.expires,
+                    account_id: parsed.account_id,
+                    enterprise_url: parsed.enterprise_url,
                 },
             )
             .await;

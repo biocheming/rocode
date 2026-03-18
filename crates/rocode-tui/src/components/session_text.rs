@@ -5,17 +5,23 @@ use ratatui::{
     text::{Line, Span},
 };
 use rocode_command::output_blocks::SchedulerStageBlock;
-use rocode_orchestrator::{
-    parse_execution_gate_decision, parse_route_decision, DirectKind, RouteDecision, RouteMode,
-    SchedulerExecutionGateDecision, SchedulerExecutionGateStatus,
-};
-use serde::Deserialize;
+use rocode_orchestrator::parse_execution_gate_decision;
+use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::Value;
 
 use super::markdown::MarkdownRenderer;
 use crate::{context::Message, theme::Theme};
 
 pub const ASSISTANT_MARKER: &str = "▶ ";
+
+fn parse_metadata<T>(metadata: &HashMap<String, Value>) -> Option<T>
+where
+    T: DeserializeOwned,
+{
+    serde_json::to_value(metadata)
+        .ok()
+        .and_then(|value| serde_json::from_value(value).ok())
+}
 
 pub struct MessageTextRender {
     pub lines: Vec<Line<'static>>,
@@ -32,7 +38,8 @@ pub fn render_message_text_part(
     let metadata = message.metadata.as_ref();
 
     if let Some(stage) = scheduler_stage(metadata) {
-        if let Some(lines) = render_decision_stage_part(text, &stage, metadata, theme, marker_color)
+        let stage = stage.as_str();
+        if let Some(lines) = render_decision_stage_part(text, stage, metadata, theme, marker_color)
         {
             return MessageTextRender {
                 lines,
@@ -41,7 +48,7 @@ pub fn render_message_text_part(
             };
         }
 
-        let lines = render_scheduler_stage_part(text, &stage, metadata, theme, marker_color);
+        let lines = render_scheduler_stage_part(text, stage, metadata, theme, marker_color);
         return MessageTextRender {
             lines,
             allow_semantic_highlighting: false,
@@ -669,20 +676,21 @@ fn apply_assistant_marker(lines: Vec<Line<'static>>, marker_color: Color) -> Vec
 }
 
 fn scheduler_stage(metadata: Option<&HashMap<String, Value>>) -> Option<String> {
-    #[derive(Debug, Default, Deserialize)]
-    struct SchedulerStageWire {
-        #[serde(
-            default,
-            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-        )]
+    #[derive(Debug, Deserialize, Default)]
+    struct SchedulerMeta {
+        #[serde(default)]
         scheduler_stage: Option<String>,
     }
 
-    let metadata = metadata?;
-    serde_json::to_value(metadata)
-        .ok()
-        .and_then(|value| serde_json::from_value::<SchedulerStageWire>(value).ok())
-        .and_then(|wire| wire.scheduler_stage)
+    let stage = metadata
+        .and_then(parse_metadata::<SchedulerMeta>)
+        .and_then(|meta| meta.scheduler_stage)?;
+    let trimmed = stage.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 fn split_stage_heading(text: &str) -> (Option<&str>, &str) {
@@ -698,6 +706,42 @@ fn split_stage_heading(text: &str) -> (Option<&str>, &str) {
     (None, text)
 }
 
+fn parse_route_decision_value(text: &str) -> Option<Value> {
+    let candidate = extract_json_candidate(text)?;
+    serde_json::from_str(candidate).ok()
+}
+
+fn extract_json_candidate(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Some(json_block) = extract_fenced_json_block(trimmed) {
+        return Some(json_block);
+    }
+
+    if trimmed.starts_with('{') && trimmed.ends_with('}') {
+        return Some(trimmed);
+    }
+
+    let start = trimmed.find('{')?;
+    let end = trimmed.rfind('}')?;
+    (start < end).then_some(&trimmed[start..=end])
+}
+
+fn extract_fenced_json_block(text: &str) -> Option<&str> {
+    for fence in ["```json", "```JSON", "```"] {
+        if let Some(start) = text.find(fence) {
+            let rest = &text[start + fence.len()..];
+            if let Some(end) = rest.find("```") {
+                return Some(rest[..end].trim());
+            }
+        }
+    }
+    None
+}
+
 fn decision_card_from_message(
     stage: &str,
     text: &str,
@@ -707,105 +751,79 @@ fn decision_card_from_message(
 }
 
 fn decision_card_from_metadata(metadata: &HashMap<String, Value>) -> Option<DecisionCard> {
-    #[derive(Debug, Default, Deserialize)]
+    #[derive(Debug, Deserialize, Default)]
+    struct DecisionCardMeta {
+        #[serde(rename = "scheduler_decision_title", default)]
+        title: Option<String>,
+        #[serde(rename = "scheduler_decision_spec", default)]
+        spec: Option<DecisionSpecWire>,
+        #[serde(rename = "scheduler_decision_fields", default)]
+        fields: Vec<DecisionFieldWire>,
+        #[serde(rename = "scheduler_decision_sections", default)]
+        sections: Vec<DecisionSectionWire>,
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct DecisionSpecWire {
+        #[serde(default)]
+        show_header_divider: Option<bool>,
+        #[serde(default)]
+        field_label_emphasis: Option<String>,
+        #[serde(default)]
+        section_spacing: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
     struct DecisionFieldWire {
-        #[serde(default)]
-        label: Option<String>,
-        #[serde(default)]
-        value: Option<String>,
+        label: String,
+        value: String,
         #[serde(default)]
         tone: Option<String>,
     }
 
-    #[derive(Debug, Default, Deserialize)]
+    #[derive(Debug, Deserialize)]
     struct DecisionSectionWire {
-        #[serde(default)]
-        title: Option<String>,
-        #[serde(default)]
-        body: Option<String>,
+        title: String,
+        body: String,
     }
 
-    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = Option::<Value>::deserialize(deserializer)?;
-        Ok(match value {
-            None | Some(Value::Null) => None,
-            Some(Value::String(value)) => {
-                let trimmed = value.trim();
-                (!trimmed.is_empty()).then(|| trimmed.to_string())
-            }
-            Some(Value::Number(value)) => Some(value.to_string()),
-            Some(Value::Bool(value)) => Some(value.to_string()),
-            _ => None,
+    let meta = parse_metadata::<DecisionCardMeta>(metadata).unwrap_or_default();
+    let title = meta
+        .title
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())?;
+
+    let spec = meta
+        .spec
+        .map(|spec| DecisionRenderSpec {
+            show_header_divider: spec.show_header_divider.unwrap_or(true),
+            field_label_emphasis: spec
+                .field_label_emphasis
+                .unwrap_or_else(|| "bold".to_string()),
+            section_spacing: spec.section_spacing.unwrap_or_else(|| "loose".to_string()),
         })
-    }
-
-    fn deserialize_vec_lossy<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-        T: serde::de::DeserializeOwned,
-    {
-        let value = Option::<Value>::deserialize(deserializer)?;
-        let Some(Value::Array(values)) = value else {
-            return Ok(Vec::new());
-        };
-        Ok(values
-            .into_iter()
-            .filter_map(|entry| serde_json::from_value::<T>(entry).ok())
-            .collect())
-    }
-
-    #[derive(Debug, Default, Deserialize)]
-    struct DecisionMetadataWire {
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-        scheduler_decision_title: Option<String>,
-        #[serde(default, deserialize_with = "deserialize_vec_lossy")]
-        scheduler_decision_fields: Vec<DecisionFieldWire>,
-        #[serde(default, deserialize_with = "deserialize_vec_lossy")]
-        scheduler_decision_sections: Vec<DecisionSectionWire>,
-    }
-
-    let wire = serde_json::to_value(metadata)
-        .ok()
-        .and_then(|value| serde_json::from_value::<DecisionMetadataWire>(value).ok())
-        .unwrap_or_default();
-
-    let title = wire.scheduler_decision_title?;
-    let spec = decision_spec_from_metadata(metadata).unwrap_or_else(default_decision_render_spec);
-    let fields = wire
-        .scheduler_decision_fields
-        .into_iter()
-        .filter_map(|field| {
-            Some(DecisionField {
-                label: field.label?.trim().to_string(),
-                value: field.value?.trim().to_string(),
-                tone: field.tone.and_then(|tone| {
-                    let trimmed = tone.trim();
-                    (!trimmed.is_empty()).then(|| trimmed.to_string())
-                }),
-            })
-        })
-        .filter(|field| !field.label.is_empty() && !field.value.is_empty())
-        .collect::<Vec<_>>();
-    let sections = wire
-        .scheduler_decision_sections
-        .into_iter()
-        .filter_map(|section| {
-            Some(DecisionSection {
-                title: section.title?.trim().to_string(),
-                body: section.body?.to_string(),
-            })
-        })
-        .filter(|section| !section.title.is_empty() && !section.body.is_empty())
-        .collect::<Vec<_>>();
+        .unwrap_or_else(default_decision_render_spec);
 
     Some(DecisionCard {
         title,
         spec,
-        fields,
-        sections,
+        fields: meta
+            .fields
+            .into_iter()
+            .map(|field| DecisionField {
+                label: field.label,
+                value: field.value,
+                tone: field.tone,
+            })
+            .collect(),
+        sections: meta
+            .sections
+            .into_iter()
+            .map(|section| DecisionSection {
+                title: section.title,
+                body: section.body,
+            })
+            .collect(),
     })
 }
 
@@ -817,29 +835,70 @@ fn decision_card_from_text(
     let (_title, body) = split_stage_heading(text);
     match stage {
         "route" => {
-            let decision = parse_route_decision(body.trim())?;
-            let outcome_label = route_outcome_label(&decision);
+            #[derive(Debug, Deserialize, Default)]
+            struct RouteDecision {
+                #[serde(default)]
+                mode: Option<String>,
+                #[serde(default)]
+                direct_kind: Option<String>,
+                #[serde(default)]
+                preset: Option<String>,
+                #[serde(default)]
+                review_mode: Option<String>,
+                #[serde(default)]
+                insert_plan_stage: Option<bool>,
+                #[serde(default)]
+                rationale_summary: Option<String>,
+                #[serde(default)]
+                context_append: Option<String>,
+                #[serde(default)]
+                direct_response: Option<String>,
+            }
+
+            fn normalized(value: Option<&str>) -> Option<String> {
+                value
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            }
+
+            fn route_outcome_label_from_decision(decision: &RouteDecision) -> String {
+                match decision.mode.as_deref() {
+                    Some("direct") => match decision.direct_kind.as_deref() {
+                        Some("reply") => "Direct Reply".to_string(),
+                        Some("clarify") => "Direct Clarification".to_string(),
+                        _ => "Direct".to_string(),
+                    },
+                    Some("orchestrate") => "Orchestrate".to_string(),
+                    _ => "Unknown".to_string(),
+                }
+            }
+
+            let decision_value = parse_route_decision_value(body.trim())?;
+            let decision =
+                serde_json::from_value::<RouteDecision>(decision_value).unwrap_or_default();
+            let outcome_label = route_outcome_label_from_decision(&decision);
             let mut fields = vec![DecisionField {
                 label: "Outcome".to_string(),
                 value: outcome_label,
-                tone: Some(match decision.mode {
-                    RouteMode::Direct => "warning".to_string(),
-                    RouteMode::Orchestrate => "success".to_string(),
+                tone: Some(match decision.mode.as_deref() {
+                    Some("direct") => "warning".to_string(),
+                    Some("orchestrate") => "success".to_string(),
+                    _ => "info".to_string(),
                 }),
             }];
-            if let Some(preset) = decision.preset.as_deref().filter(|value| !value.is_empty()) {
+            if let Some(preset) = normalized(decision.preset.as_deref()) {
                 fields.push(DecisionField {
                     label: "Preset".to_string(),
-                    value: prettify_token(preset),
+                    value: prettify_token(&preset),
                     tone: Some("info".to_string()),
                 });
             }
-            if let Some(review_mode) = decision.review_mode {
-                let raw = format!("{:?}", review_mode).to_ascii_lowercase();
+            if let Some(review_mode) = normalized(decision.review_mode.as_deref()) {
                 fields.push(DecisionField {
                     label: "Review".to_string(),
-                    value: prettify_token(&raw),
-                    tone: Some(if raw == "skip" {
+                    value: prettify_token(&review_mode),
+                    tone: Some(if review_mode == "skip" {
                         "warning".to_string()
                     } else {
                         "success".to_string()
@@ -857,34 +916,24 @@ fn decision_card_from_text(
                     }),
                 });
             }
-            if !decision.rationale_summary.trim().is_empty() {
+            if let Some(reason) = normalized(decision.rationale_summary.as_deref()) {
                 fields.push(DecisionField {
                     label: "Why".to_string(),
-                    value: decision.rationale_summary.trim().to_string(),
+                    value: reason,
                     tone: None,
                 });
             }
             let mut sections = Vec::new();
-            if let Some(context) = decision
-                .context_append
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
+            if let Some(context) = normalized(decision.context_append.as_deref()) {
                 sections.push(DecisionSection {
                     title: "Appended Context".to_string(),
-                    body: context.to_string(),
+                    body: context,
                 });
             }
-            if let Some(response) = decision
-                .direct_response
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
+            if let Some(response) = normalized(decision.direct_response.as_deref()) {
                 sections.push(DecisionSection {
                     title: "Response".to_string(),
-                    body: response.to_string(),
+                    body: response,
                 });
             }
             Some(DecisionCard {
@@ -895,48 +944,43 @@ fn decision_card_from_text(
             })
         }
         "coordination-gate" | "autonomous-gate" => {
-            #[derive(Debug, Default, Deserialize)]
-            struct GateDecisionWire {
-                #[serde(
-                    default,
-                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-                )]
-                scheduler_gate_status: Option<String>,
-                #[serde(
-                    default,
-                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-                )]
-                scheduler_gate_summary: Option<String>,
-                #[serde(
-                    default,
-                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-                )]
-                scheduler_gate_next_input: Option<String>,
-                #[serde(
-                    default,
-                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-                )]
-                scheduler_gate_final_response: Option<String>,
+            #[derive(Debug, Deserialize, Default)]
+            struct GateMeta {
+                #[serde(rename = "scheduler_gate_status", default)]
+                status: Option<String>,
+                #[serde(rename = "scheduler_gate_summary", default)]
+                summary: Option<String>,
+                #[serde(rename = "scheduler_gate_next_input", default)]
+                next_input: Option<String>,
+                #[serde(rename = "scheduler_gate_final_response", default)]
+                final_response: Option<String>,
             }
 
-            let wire = serde_json::to_value(metadata)
-                .ok()
-                .and_then(|value| serde_json::from_value::<GateDecisionWire>(value).ok())
-                .unwrap_or_default();
-
-            let decision = wire
-                .scheduler_gate_status
+            let meta = parse_metadata::<GateMeta>(metadata).unwrap_or_default();
+            let GateMeta {
+                status,
+                summary,
+                next_input,
+                final_response,
+            } = meta;
+            let decision = status
                 .as_deref()
-                .map(|status| SchedulerExecutionGateDecision {
-                    status: match status {
-                        "done" => SchedulerExecutionGateStatus::Done,
-                        "continue" => SchedulerExecutionGateStatus::Continue,
-                        _ => SchedulerExecutionGateStatus::Blocked,
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(
+                    |status| rocode_orchestrator::SchedulerExecutionGateDecision {
+                        status: match status {
+                            "done" => rocode_orchestrator::SchedulerExecutionGateStatus::Done,
+                            "continue" => {
+                                rocode_orchestrator::SchedulerExecutionGateStatus::Continue
+                            }
+                            _ => rocode_orchestrator::SchedulerExecutionGateStatus::Blocked,
+                        },
+                        summary: summary.unwrap_or_default(),
+                        next_input,
+                        final_response,
                     },
-                    summary: wire.scheduler_gate_summary.unwrap_or_default(),
-                    next_input: wire.scheduler_gate_next_input,
-                    final_response: wire.scheduler_gate_final_response,
-                })
+                )
                 .or_else(|| parse_execution_gate_decision(body.trim()))?;
             let status = format!("{:?}", decision.status).to_ascii_lowercase();
             let mut fields = vec![DecisionField {
@@ -993,17 +1037,6 @@ fn prettify_token(raw: &str) -> String {
         .join(" ")
 }
 
-fn route_outcome_label(decision: &RouteDecision) -> String {
-    match decision.mode {
-        RouteMode::Direct => match decision.direct_kind {
-            Some(DirectKind::Reply) => "Direct Reply".to_string(),
-            Some(DirectKind::Clarify) => "Direct Clarification".to_string(),
-            None => "Direct".to_string(),
-        },
-        RouteMode::Orchestrate => "Orchestrate".to_string(),
-    }
-}
-
 fn gate_outcome_label_from_status(status: &str) -> String {
     match status {
         "continue" => "Continue".to_string(),
@@ -1011,31 +1044,6 @@ fn gate_outcome_label_from_status(status: &str) -> String {
         "blocked" => "Blocked".to_string(),
         other => prettify_token(other),
     }
-}
-
-fn decision_spec_from_metadata(metadata: &HashMap<String, Value>) -> Option<DecisionRenderSpec> {
-    #[derive(Debug, Default, Deserialize)]
-    struct DecisionRenderSpecWire {
-        show_header_divider: bool,
-        field_label_emphasis: String,
-        section_spacing: String,
-    }
-
-    #[derive(Debug, Default, Deserialize)]
-    struct SpecWrapper {
-        scheduler_decision_spec: Option<DecisionRenderSpecWire>,
-    }
-
-    let wrapper = serde_json::to_value(metadata)
-        .ok()
-        .and_then(|value| serde_json::from_value::<SpecWrapper>(value).ok())
-        .unwrap_or_default();
-    let wire = wrapper.scheduler_decision_spec?;
-    Some(DecisionRenderSpec {
-        show_header_divider: wire.show_header_divider,
-        field_label_emphasis: wire.field_label_emphasis,
-        section_spacing: wire.section_spacing,
-    })
 }
 
 fn default_decision_render_spec() -> DecisionRenderSpec {

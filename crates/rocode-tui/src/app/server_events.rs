@@ -1,6 +1,5 @@
 use super::*;
-use rocode_command::output_blocks::OutputBlock as WireOutputBlock;
-use rocode_types::{DiffEntry, ServerEvent, SessionRunStatus, SessionRunStatusWire, ToolCallPhase};
+use serde::Deserialize;
 use std::sync::{Arc, Mutex as StdMutex};
 
 pub(super) fn env_var_enabled(name: &str) -> bool {
@@ -172,6 +171,261 @@ fn consume_server_event_stream(
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+enum ServerEvent {
+    #[serde(rename = "session.updated")]
+    SessionUpdated {
+        #[serde(rename = "sessionID", alias = "sessionId")]
+        session_id: String,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        source: Option<String>,
+    },
+    #[serde(rename = "config.updated")]
+    ConfigUpdated,
+    #[serde(rename = "session.status")]
+    SessionStatus {
+        #[serde(rename = "sessionID", alias = "sessionId")]
+        session_id: String,
+        status: SessionStatus,
+    },
+    #[serde(rename = "question.created")]
+    QuestionCreated(QuestionEvent),
+    #[serde(rename = "question.resolved")]
+    QuestionResolved(QuestionEvent),
+    #[serde(rename = "question.replied")]
+    QuestionReplied(QuestionEvent),
+    #[serde(rename = "question.rejected")]
+    QuestionRejected(QuestionEvent),
+    #[serde(rename = "permission.requested")]
+    PermissionRequested {
+        #[serde(rename = "sessionID", alias = "sessionId")]
+        session_id: String,
+        info: crate::api::PermissionRequestInfo,
+    },
+    #[serde(rename = "permission.resolved")]
+    PermissionResolved(PermissionResolvedEvent),
+    #[serde(rename = "permission.replied")]
+    PermissionReplied(PermissionResolvedEvent),
+    #[serde(rename = "tool_call.lifecycle")]
+    ToolCallLifecycle(ToolCallLifecycleEvent),
+    #[serde(rename = "tool_call.start")]
+    ToolCallStart(ToolCallStartEvent),
+    #[serde(rename = "tool_call.complete")]
+    ToolCallComplete(ToolCallCompleteEvent),
+    #[serde(rename = "execution.topology.changed")]
+    TopologyChanged {
+        #[serde(rename = "sessionID", alias = "sessionId")]
+        session_id: String,
+    },
+    #[serde(rename = "diff.updated")]
+    DiffUpdated(DiffEvent),
+    #[serde(rename = "session.diff")]
+    SessionDiff(DiffEvent),
+    #[serde(rename = "output_block")]
+    OutputBlock(OutputBlockEvent),
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Deserialize)]
+struct QuestionEvent {
+    #[serde(rename = "sessionID", alias = "sessionId")]
+    session_id: String,
+    #[serde(rename = "requestID", alias = "requestId")]
+    request_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum PermissionResolvedEvent {
+    PermissionId {
+        #[serde(rename = "sessionID", alias = "sessionId")]
+        session_id: String,
+        #[serde(rename = "permissionID", alias = "permissionId")]
+        permission_id: String,
+    },
+    RequestId {
+        #[serde(rename = "sessionID", alias = "sessionId")]
+        session_id: String,
+        #[serde(rename = "requestID", alias = "requestId")]
+        permission_id: String,
+    },
+}
+
+impl PermissionResolvedEvent {
+    fn session_id(&self) -> &str {
+        match self {
+            PermissionResolvedEvent::PermissionId { session_id, .. }
+            | PermissionResolvedEvent::RequestId { session_id, .. } => session_id,
+        }
+    }
+
+    fn permission_id(&self) -> &str {
+        match self {
+            PermissionResolvedEvent::PermissionId { permission_id, .. }
+            | PermissionResolvedEvent::RequestId { permission_id, .. } => permission_id,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum SessionStatus {
+    Simple(String),
+    Object(SessionStatusObject),
+}
+
+impl SessionStatus {
+    fn kind(&self) -> Option<&str> {
+        match self {
+            SessionStatus::Simple(kind) => Some(kind.as_str()),
+            SessionStatus::Object(obj) => obj.kind.as_deref(),
+        }
+    }
+
+    fn retry_attempt(&self) -> u32 {
+        match self {
+            SessionStatus::Object(obj) => obj.attempt.unwrap_or(0),
+            _ => 0,
+        }
+    }
+
+    fn retry_message(&self) -> String {
+        match self {
+            SessionStatus::Object(obj) => obj.message.clone().unwrap_or_default(),
+            _ => String::new(),
+        }
+    }
+
+    fn retry_next(&self) -> i64 {
+        match self {
+            SessionStatus::Object(obj) => obj.next.unwrap_or_default(),
+            _ => 0,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct SessionStatusObject {
+    #[serde(
+        rename = "type",
+        default,
+        deserialize_with = "deserialize_opt_string_lossy"
+    )]
+    kind: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_u32_lossy")]
+    attempt: Option<u32>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    message: Option<String>,
+    #[serde(default)]
+    next: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolCallLifecycleEvent {
+    #[serde(rename = "sessionID", alias = "sessionId")]
+    session_id: String,
+    #[serde(rename = "toolCallId")]
+    tool_call_id: Option<String>,
+    phase: Option<String>,
+    #[serde(rename = "toolName")]
+    tool_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolCallStartEvent {
+    #[serde(rename = "sessionID", alias = "sessionId")]
+    session_id: String,
+    #[serde(rename = "toolCallId")]
+    tool_call_id: Option<String>,
+    #[serde(rename = "toolName")]
+    tool_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolCallCompleteEvent {
+    #[serde(rename = "sessionID", alias = "sessionId")]
+    session_id: String,
+    #[serde(rename = "toolCallId")]
+    tool_call_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiffEvent {
+    #[serde(rename = "sessionID", alias = "sessionId")]
+    session_id: String,
+    #[serde(default, deserialize_with = "deserialize_diff_entries_lossy")]
+    diff: Vec<DiffEntryWire>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiffEntryWire {
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    path: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_u32_lossy")]
+    additions: u32,
+    #[serde(default, deserialize_with = "deserialize_u32_lossy")]
+    deletions: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct OutputBlockEvent {
+    #[serde(rename = "sessionID", alias = "sessionId")]
+    session_id: String,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    id: Option<String>,
+    block: serde_json::Value,
+}
+
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        _ => None,
+    })
+}
+
+fn deserialize_opt_u32_lossy<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Number(number)) => {
+            number.as_u64().and_then(|v| u32::try_from(v).ok())
+        }
+        Some(serde_json::Value::String(raw)) => raw.parse::<u32>().ok(),
+        _ => None,
+    })
+}
+
+fn deserialize_u32_lossy<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(deserialize_opt_u32_lossy(deserializer)?.unwrap_or(0))
+}
+
+fn deserialize_diff_entries_lossy<'de, D>(deserializer: D) -> Result<Vec<DiffEntryWire>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    Ok(match value {
+        serde_json::Value::Array(_) => {
+            serde_json::from_value::<Vec<DiffEntryWire>>(value).unwrap_or_default()
+        }
+        _ => Vec::new(),
+    })
+}
+
 fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
     if data_lines.is_empty() {
         return;
@@ -180,14 +434,10 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
     let Ok(event) = serde_json::from_str::<ServerEvent>(&payload) else {
         return;
     };
-
     match event {
         ServerEvent::SessionUpdated { session_id, source } => {
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
-                StateChange::SessionUpdated {
-                    session_id,
-                    source: Some(source),
-                },
+                StateChange::SessionUpdated { session_id, source },
             ))));
         }
         ServerEvent::ConfigUpdated => {
@@ -195,175 +445,167 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
                 StateChange::ConfigUpdated,
             ))));
         }
-        ServerEvent::SessionStatus { session_id, status } => match status {
-            SessionRunStatusWire::Tagged(SessionRunStatus::Busy) => {
+        ServerEvent::SessionStatus { session_id, status } => match status.kind() {
+            Some("busy") => {
                 let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                     StateChange::SessionStatusBusy(session_id),
                 ))));
             }
-            SessionRunStatusWire::Tagged(SessionRunStatus::Idle) => {
+            Some("idle") => {
                 let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                     StateChange::SessionStatusIdle(session_id),
                 ))));
             }
-            SessionRunStatusWire::Tagged(SessionRunStatus::Retry {
-                attempt,
-                message,
-                next,
-            }) => {
+            Some("retry") => {
                 let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                     StateChange::SessionStatusRetrying {
                         session_id,
-                        attempt,
-                        message,
-                        next,
+                        attempt: status.retry_attempt(),
+                        message: status.retry_message(),
+                        next: status.retry_next(),
                     },
                 ))));
             }
-            SessionRunStatusWire::String(kind) => match kind.as_str() {
-                "busy" => {
-                    let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
-                        StateChange::SessionStatusBusy(session_id),
-                    ))));
-                }
-                "idle" => {
-                    let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
-                        StateChange::SessionStatusIdle(session_id),
-                    ))));
-                }
-                "retry" => {
-                    let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
-                        StateChange::SessionStatusRetrying {
-                            session_id,
-                            attempt: 0,
-                            message: String::new(),
-                            next: 0,
-                        },
-                    ))));
-                }
-                _ => {}
-            },
+            _ => {}
         },
-        ServerEvent::QuestionCreated {
-            session_id,
-            request_id,
-            ..
-        } => {
+        ServerEvent::QuestionCreated(event) => {
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                 StateChange::QuestionCreated {
-                    session_id,
-                    request_id,
+                    session_id: event.session_id,
+                    request_id: event.request_id,
                 },
             ))));
         }
-        ServerEvent::QuestionResolved {
-            session_id,
-            request_id,
-            ..
-        } => {
+        ServerEvent::QuestionResolved(event)
+        | ServerEvent::QuestionReplied(event)
+        | ServerEvent::QuestionRejected(event) => {
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                 StateChange::QuestionResolved {
-                    session_id,
-                    request_id,
+                    session_id: event.session_id,
+                    request_id: event.request_id,
                 },
             ))));
         }
-        ServerEvent::PermissionRequested {
-            session_id, info, ..
-        } => {
-            let Ok(permission) = serde_json::from_value::<crate::api::PermissionRequestInfo>(info)
-            else {
-                return;
-            };
+        ServerEvent::PermissionRequested { session_id, info } => {
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                 StateChange::PermissionRequested {
                     session_id,
-                    permission,
+                    permission: info,
                 },
             ))));
         }
-        ServerEvent::PermissionResolved {
-            session_id,
-            permission_id,
-            ..
-        } => {
+        ServerEvent::PermissionResolved(event) | ServerEvent::PermissionReplied(event) => {
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                 StateChange::PermissionResolved {
-                    session_id,
-                    permission_id,
+                    session_id: event.session_id().to_string(),
+                    permission_id: event.permission_id().to_string(),
                 },
             ))));
         }
-        ServerEvent::ToolCallLifecycle {
-            session_id,
-            tool_call_id,
-            phase,
-            tool_name,
-        } => match phase {
-            ToolCallPhase::Start => {
-                let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
-                    StateChange::ToolCallStarted {
-                        session_id,
-                        tool_call_id,
-                        tool_name: tool_name.unwrap_or_default(),
-                    },
-                ))));
+        ServerEvent::ToolCallLifecycle(event) => {
+            let Some(tool_call_id) = event.tool_call_id.as_deref() else {
+                tracing::warn!("tool_call.lifecycle missing toolCallId");
+                return;
+            };
+            match event.phase.as_deref() {
+                Some("start") => {
+                    let Some(tool_name) = event.tool_name.as_deref() else {
+                        tracing::warn!("tool_call.lifecycle start missing toolName");
+                        return;
+                    };
+                    let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
+                        StateChange::ToolCallStarted {
+                            session_id: event.session_id,
+                            tool_call_id: tool_call_id.to_string(),
+                            tool_name: tool_name.to_string(),
+                        },
+                    ))));
+                }
+                Some("complete") => {
+                    let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
+                        StateChange::ToolCallCompleted {
+                            session_id: event.session_id,
+                            tool_call_id: tool_call_id.to_string(),
+                        },
+                    ))));
+                }
+                Some(other) => {
+                    tracing::debug!(phase = other, "ignoring unknown tool_call.lifecycle phase");
+                }
+                None => {
+                    tracing::warn!("tool_call.lifecycle missing phase");
+                }
             }
-            ToolCallPhase::Complete => {
-                let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
-                    StateChange::ToolCallCompleted {
-                        session_id,
-                        tool_call_id,
-                    },
-                ))));
-            }
-        },
-        ServerEvent::TopologyChanged { session_id, .. } => {
+        }
+        ServerEvent::ToolCallStart(event) => {
+            tracing::info!("Received tool_call.start event");
+            let Some(tool_call_id) = event.tool_call_id.as_deref() else {
+                tracing::warn!("tool_call.start missing toolCallId");
+                return;
+            };
+            let Some(tool_name) = event.tool_name.as_deref() else {
+                tracing::warn!("tool_call.start missing toolName");
+                return;
+            };
+            tracing::info!(
+                "Sending ToolCallStarted: id={}, name={}",
+                tool_call_id,
+                tool_name
+            );
+            let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
+                StateChange::ToolCallStarted {
+                    session_id: event.session_id,
+                    tool_call_id: tool_call_id.to_string(),
+                    tool_name: tool_name.to_string(),
+                },
+            ))));
+        }
+        ServerEvent::ToolCallComplete(event) => {
+            let Some(tool_call_id) = event.tool_call_id.as_deref() else {
+                return;
+            };
+            let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
+                StateChange::ToolCallCompleted {
+                    session_id: event.session_id,
+                    tool_call_id: tool_call_id.to_string(),
+                },
+            ))));
+        }
+        ServerEvent::TopologyChanged { session_id } => {
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                 StateChange::TopologyChanged { session_id },
             ))));
         }
-        ServerEvent::DiffUpdated { session_id, diff } => {
-            let diffs = diff
+        ServerEvent::DiffUpdated(event) | ServerEvent::SessionDiff(event) => {
+            let diffs = event
+                .diff
                 .into_iter()
-                .map(
-                    |DiffEntry {
-                         path,
-                         additions,
-                         deletions,
-                     }| crate::context::DiffEntry {
+                .filter_map(|entry| {
+                    let path = entry.path?;
+                    Some(crate::context::DiffEntry {
                         file: path,
-                        additions: additions as u32,
-                        deletions: deletions as u32,
-                    },
-                )
+                        additions: entry.additions,
+                        deletions: entry.deletions,
+                    })
+                })
                 .collect::<Vec<_>>();
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
-                StateChange::DiffUpdated { session_id, diffs },
-            ))));
-        }
-        ServerEvent::OutputBlock {
-            session_id,
-            block,
-            id,
-            ..
-        } => {
-            let block = match serde_json::from_value::<WireOutputBlock>(block) {
-                Ok(block) => block,
-                Err(err) => {
-                    tracing::debug!(%err, session_id, "failed to parse output block payload");
-                    return;
-                }
-            };
-            let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
-                StateChange::OutputBlock {
-                    id,
-                    session_id,
-                    payload: block,
+                StateChange::DiffUpdated {
+                    session_id: event.session_id,
+                    diffs,
                 },
             ))));
         }
-        _ => {}
+        ServerEvent::OutputBlock(event) => {
+            let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
+                StateChange::OutputBlock {
+                    session_id: event.session_id,
+                    id: event.id,
+                    payload: event.block,
+                },
+            ))));
+        }
+        ServerEvent::Unknown => {}
     }
 }
 
@@ -372,7 +614,6 @@ mod tests {
     use super::forward_server_event;
     use crate::event::{CustomEvent, StateChange};
     use crate::Event;
-    use rocode_command::output_blocks::{MessagePhase, OutputBlock};
     use std::sync::mpsc::channel;
 
     #[test]
@@ -408,13 +649,9 @@ mod tests {
 
         assert_eq!(session_id, "session-1");
         assert_eq!(id.as_deref(), Some("message-1"));
-        match payload {
-            OutputBlock::Reasoning(block) => {
-                assert_eq!(block.phase, MessagePhase::Delta);
-                assert_eq!(block.text, "thinking");
-            }
-            other => panic!("expected reasoning block, got {other:?}"),
-        }
+        assert_eq!(payload["kind"], "reasoning");
+        assert_eq!(payload["phase"], "delta");
+        assert_eq!(payload["text"], "thinking");
     }
 
     #[test]

@@ -47,6 +47,34 @@ pub struct ProtocolLoader {
     base_path: Option<PathBuf>,
 }
 
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+        Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ProtocolLoaderOptionsWire {
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    protocol_path: Option<String>,
+}
+
+fn protocol_loader_options_wire(
+    options: &HashMap<String, serde_json::Value>,
+) -> ProtocolLoaderOptionsWire {
+    serde_json::from_value::<ProtocolLoaderOptionsWire>(serde_json::Value::Object(
+        options.clone().into_iter().collect(),
+    ))
+    .unwrap_or_default()
+}
+
 impl Default for ProtocolLoader {
     fn default() -> Self {
         Self::new()
@@ -68,7 +96,8 @@ impl ProtocolLoader {
         provider_id: &str,
         options: &HashMap<String, serde_json::Value>,
     ) -> Option<ProtocolManifest> {
-        if let Some(path) = options.get("protocol_path").and_then(|v| v.as_str()) {
+        let options_wire = protocol_loader_options_wire(options);
+        if let Some(path) = options_wire.protocol_path.as_deref() {
             if let Ok(manifest) = self.load_from_file(Path::new(path)) {
                 return Some(manifest);
             }
