@@ -6,8 +6,9 @@ use rocode_core::agent_task_registry::{global_task_registry, AgentTask, AgentTas
 use rocode_core::contracts::agent_tasks::bus_keys as agent_task_bus_keys;
 use rocode_core::contracts::agent_tasks::AgentTaskStatusKind;
 use rocode_core::contracts::output_blocks::keys as output_keys;
-use rocode_core::contracts::tools::BuiltinToolName;
 use rocode_core::contracts::todo::{TodoPriority, TodoStatus};
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
+use rocode_core::contracts::wire::aliases as wire_aliases;
 
 use crate::task::TaskTool;
 use crate::todo::TodoWriteTool;
@@ -29,16 +30,7 @@ Phase 1 status:
 "#;
 
 #[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    Display,
-    EnumString,
-    IntoStaticStr,
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, EnumString, IntoStaticStr,
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case", ascii_case_insensitive)]
@@ -249,22 +241,27 @@ impl Tool for TaskFlowTool {
         validate_input(&input)?;
 
         let mut permission = PermissionRequest::new(BuiltinToolName::TaskFlow.as_str())
-            .with_metadata("operation", serde_json::json!(input.operation.as_str()))
+            .with_metadata(
+                tool_arg_keys::OPERATION,
+                serde_json::json!(input.operation.as_str()),
+            )
             .always_allow();
         if let Some(task_id) = input.task_id.as_ref() {
             permission =
                 permission.with_metadata(agent_task_bus_keys::TASK_ID, serde_json::json!(task_id));
         }
         if let Some(agent) = input.agent.as_ref() {
-            permission = permission.with_metadata("agent", serde_json::json!(agent));
+            permission = permission.with_metadata(tool_arg_keys::AGENT, serde_json::json!(agent));
         }
         if let Some(status_filter) = input.status_filter.as_ref() {
-            permission =
-                permission.with_metadata("status_filter", serde_json::json!(status_filter));
+            permission = permission.with_metadata(
+                tool_arg_keys::STATUS_FILTER,
+                serde_json::json!(status_filter),
+            );
         }
         permission = permission
-            .with_metadata("limit", serde_json::json!(input.limit))
-            .with_metadata("sync_todo", serde_json::json!(input.sync_todo));
+            .with_metadata(tool_arg_keys::LIMIT, serde_json::json!(input.limit))
+            .with_metadata(tool_arg_keys::SYNC_TODO, serde_json::json!(input.sync_todo));
         ctx.ask_permission(permission).await?;
 
         match input.operation {
@@ -291,15 +288,21 @@ async fn execute_delegate(
     let todo_ctx = build_todo_projection_context(&ctx);
 
     let mut task_args = serde_json::Map::new();
-    task_args.insert("subagent_type".to_string(), serde_json::json!(agent));
-    task_args.insert("prompt".to_string(), serde_json::json!(prompt));
+    task_args.insert(
+        tool_arg_keys::SUBAGENT_TYPE.to_string(),
+        serde_json::json!(agent),
+    );
+    task_args.insert(tool_arg_keys::PROMPT.to_string(), serde_json::json!(prompt));
     if let Some(description) = input
         .description
         .as_deref()
         .map(str::trim)
         .filter(|v| !v.is_empty())
     {
-        task_args.insert("description".to_string(), serde_json::json!(description));
+        task_args.insert(
+            tool_arg_keys::DESCRIPTION.to_string(),
+            serde_json::json!(description),
+        );
     }
     if let Some(task_id) = input
         .task_id
@@ -318,21 +321,32 @@ async fn execute_delegate(
         .map(str::trim)
         .filter(|v| !v.is_empty())
     {
-        task_args.insert("command".to_string(), serde_json::json!(command));
+        task_args.insert(
+            tool_arg_keys::COMMAND.to_string(),
+            serde_json::json!(command),
+        );
     }
     if let Some(load_skills) = input.load_skills.as_ref() {
-        task_args.insert("load_skills".to_string(), serde_json::json!(load_skills));
+        task_args.insert(
+            tool_arg_keys::LOAD_SKILLS.to_string(),
+            serde_json::json!(load_skills),
+        );
     }
     if input.run_in_background {
-        task_args.insert("run_in_background".to_string(), serde_json::json!(true));
+        task_args.insert(
+            tool_arg_keys::RUN_IN_BACKGROUND.to_string(),
+            serde_json::json!(true),
+        );
     }
 
     let delegated = TaskTool::new()
         .execute(serde_json::Value::Object(task_args), ctx)
         .await?;
 
-    let agent_task_id = delegated_metadata_string(&delegated.metadata, "agentTaskId")?;
-    let session_id = delegated_metadata_string(&delegated.metadata, "sessionId")?;
+    let agent_task_id =
+        delegated_metadata_string(&delegated.metadata, tool_arg_keys::AGENT_TASK_ID)?;
+    let session_id =
+        delegated_metadata_string(&delegated.metadata, wire_aliases::SESSION_ID_CAMEL)?;
     let has_text_output = delegated
         .metadata
         .get("hasTextOutput")
@@ -353,23 +367,38 @@ async fn execute_delegate(
 
     let mut metadata = Metadata::new();
     metadata.insert(
-        "operation".to_string(),
+        tool_arg_keys::OPERATION.to_string(),
         serde_json::json!(operation.as_str()),
     );
-    metadata.insert("delegated".to_string(), serde_json::json!(true));
-    metadata.insert("agentTaskId".to_string(), serde_json::json!(agent_task_id));
-    metadata.insert("sessionId".to_string(), serde_json::json!(session_id));
+    metadata.insert(
+        tool_arg_keys::DELEGATED.to_string(),
+        serde_json::json!(true),
+    );
+    metadata.insert(
+        tool_arg_keys::AGENT_TASK_ID.to_string(),
+        serde_json::json!(agent_task_id),
+    );
+    metadata.insert(
+        wire_aliases::SESSION_ID_CAMEL.to_string(),
+        serde_json::json!(session_id),
+    );
     metadata.insert(
         "hasTextOutput".to_string(),
         serde_json::json!(has_text_output),
     );
     metadata.insert("todoSynced".to_string(), serde_json::json!(todo_synced));
-    metadata.insert("task".to_string(), serde_json::to_value(&view).unwrap());
+    metadata.insert(
+        tool_arg_keys::TASK.to_string(),
+        serde_json::to_value(&view).unwrap(),
+    );
     if let Some(model) = delegated.metadata.get("model").and_then(parse_model_view) {
         metadata.insert("model".to_string(), serde_json::to_value(model).unwrap());
     }
-    if let Some(loaded_skills) = delegated.metadata.get("loadedSkills") {
-        metadata.insert("loadedSkills".to_string(), loaded_skills.clone());
+    if let Some(loaded_skills) = delegated.metadata.get(tool_arg_keys::LOADED_SKILLS) {
+        metadata.insert(
+            tool_arg_keys::LOADED_SKILLS.to_string(),
+            loaded_skills.clone(),
+        );
     }
     if let Some(loaded_skill_count) = delegated.metadata.get("loadedSkillCount") {
         metadata.insert("loadedSkillCount".to_string(), loaded_skill_count.clone());
@@ -379,8 +408,12 @@ async fn execute_delegate(
         serde_json::json!(format!(
             "Delegated {} task {} via session {}",
             operation.as_str(),
-            metadata["agentTaskId"].as_str().unwrap_or_default(),
-            metadata["sessionId"].as_str().unwrap_or_default()
+            metadata[tool_arg_keys::AGENT_TASK_ID]
+                .as_str()
+                .unwrap_or_default(),
+            metadata[wire_aliases::SESSION_ID_CAMEL]
+                .as_str()
+                .unwrap_or_default()
         )),
     );
 
@@ -388,12 +421,18 @@ async fn execute_delegate(
         title: format!(
             "{} Task {}",
             title_case(operation.as_str()),
-            metadata["agentTaskId"].as_str().unwrap_or_default()
+            metadata[tool_arg_keys::AGENT_TASK_ID]
+                .as_str()
+                .unwrap_or_default()
         ),
         output: render_delegated_task_output(
             operation.as_str(),
-            metadata["agentTaskId"].as_str().unwrap_or_default(),
-            metadata["sessionId"].as_str().unwrap_or_default(),
+            metadata[tool_arg_keys::AGENT_TASK_ID]
+                .as_str()
+                .unwrap_or_default(),
+            metadata[wire_aliases::SESSION_ID_CAMEL]
+                .as_str()
+                .unwrap_or_default(),
             &view.status,
             &delegated.output,
         ),
@@ -525,9 +564,9 @@ fn task_status_to_todo_status(status: &str) -> TodoStatus {
     match AgentTaskStatusKind::parse(status).unwrap_or(AgentTaskStatusKind::Pending) {
         AgentTaskStatusKind::Running => TodoStatus::InProgress,
         AgentTaskStatusKind::Completed => TodoStatus::Completed,
-        AgentTaskStatusKind::Pending | AgentTaskStatusKind::Cancelled | AgentTaskStatusKind::Failed => {
-            TodoStatus::Pending
-        }
+        AgentTaskStatusKind::Pending
+        | AgentTaskStatusKind::Cancelled
+        | AgentTaskStatusKind::Failed => TodoStatus::Pending,
     }
 }
 
@@ -665,7 +704,12 @@ fn task_to_view(task: &AgentTask, include_detail: bool) -> TaskFlowTaskView {
 
 fn status_fields(
     status: &AgentTaskStatus,
-) -> (AgentTaskStatusKind, Option<u32>, Option<u32>, Option<String>) {
+) -> (
+    AgentTaskStatusKind,
+    Option<u32>,
+    Option<u32>,
+    Option<String>,
+) {
     match status {
         AgentTaskStatus::Pending => (status.kind(), None, None, None),
         AgentTaskStatus::Running { step } => (status.kind(), Some(*step), None, None),
@@ -1097,8 +1141,8 @@ mod tests {
 
         assert_eq!(views.len(), 1);
         assert!(truncated);
-        let kind =
-            AgentTaskStatusKind::parse(&views[0].status).expect("filtered view status should parse");
+        let kind = AgentTaskStatusKind::parse(&views[0].status)
+            .expect("filtered view status should parse");
         assert!(matches!(
             kind,
             AgentTaskStatusKind::Running | AgentTaskStatusKind::Completed

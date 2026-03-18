@@ -2,7 +2,9 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use base64::Engine;
-use rocode_core::contracts::patch::keys as patch_keys;
+use rocode_core::contracts::{
+    patch::keys as patch_keys, session::keys as session_keys, tools::arg_keys as tool_arg_keys,
+};
 
 use crate::system::SystemPrompt;
 use crate::SessionMessage;
@@ -227,10 +229,10 @@ impl SessionPrompt {
         if let Some((start, end)) = self.resolve_file_line_window(&file_path, &parsed).await {
             text = Self::slice_lines(&text, start, end);
             if let Some(obj) = read_args.as_object_mut() {
-                obj.insert("offset".to_string(), serde_json::json!(start));
+                obj.insert(tool_arg_keys::OFFSET.to_string(), serde_json::json!(start));
                 if let Some(end) = end {
                     obj.insert(
-                        "limit".to_string(),
+                        tool_arg_keys::LIMIT.to_string(),
                         serde_json::json!(end.saturating_sub(start).saturating_add(1)),
                     );
                 }
@@ -273,7 +275,7 @@ impl SessionPrompt {
 
     pub(super) fn loaded_instruction_paths(msg: &SessionMessage) -> HashSet<String> {
         msg.metadata
-            .get("loaded_instruction_files")
+            .get(session_keys::LOADED_INSTRUCTION_FILES)
             .and_then(|value| value.as_array())
             .map(|items| {
                 items
@@ -295,7 +297,7 @@ impl SessionPrompt {
         let mut paths: Vec<String> = loaded.into_iter().collect();
         paths.sort();
         msg.metadata.insert(
-            "loaded_instruction_files".to_string(),
+            session_keys::LOADED_INSTRUCTION_FILES.to_string(),
             serde_json::json!(paths),
         );
     }

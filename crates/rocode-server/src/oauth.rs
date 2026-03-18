@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use rocode_core::contracts::provider::auth_keys;
 use rocode_plugin::subprocess::PluginLoader;
 use rocode_provider::{AuthError, AuthInfo, AuthManager, AuthMethodType, Authorization};
 use serde::{Deserialize, Serialize};
@@ -81,22 +82,29 @@ impl ProviderAuth {
             .await
             .map_err(|_| AuthError::OauthCallbackFailed)?;
 
-        let auth_type = result.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        if auth_type != "success" {
+        let auth_type = result
+            .get(auth_keys::TYPE)
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if auth_type != auth_keys::SUCCESS {
             return Err(AuthError::OauthCallbackFailed);
         }
 
         // Plugin callback can override target provider (e.g. copilot enterprise).
         let target_provider = result
-            .get("provider")
+            .get(auth_keys::PROVIDER)
             .and_then(|v| v.as_str())
             .unwrap_or(provider_id);
 
         if let Some(key) = result
-            .get("key")
+            .get(auth_keys::KEY)
             .and_then(|v| v.as_str())
-            .or_else(|| result.get("apiKey").and_then(|v| v.as_str()))
-            .or_else(|| result.get("token").and_then(|v| v.as_str()))
+            .or_else(|| {
+                result
+                    .get(auth_keys::API_KEY_CAMEL)
+                    .and_then(|v| v.as_str())
+            })
+            .or_else(|| result.get(auth_keys::TOKEN).and_then(|v| v.as_str()))
         {
             self.auth_manager
                 .set(
@@ -110,12 +118,12 @@ impl ProviderAuth {
         }
 
         let access = result
-            .get("access")
+            .get(auth_keys::ACCESS)
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string();
         let refresh = result
-            .get("refresh")
+            .get(auth_keys::REFRESH)
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string();
@@ -130,13 +138,13 @@ impl ProviderAuth {
                 AuthInfo::OAuth {
                     access,
                     refresh,
-                    expires: result.get("expires").and_then(|v| v.as_i64()),
+                    expires: result.get(auth_keys::EXPIRES).and_then(|v| v.as_i64()),
                     account_id: result
-                        .get("accountId")
+                        .get(auth_keys::ACCOUNT_ID)
                         .and_then(|v| v.as_str())
                         .map(str::to_string),
                     enterprise_url: result
-                        .get("enterpriseUrl")
+                        .get(auth_keys::ENTERPRISE_URL)
                         .and_then(|v| v.as_str())
                         .map(str::to_string),
                 },

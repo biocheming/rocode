@@ -2,6 +2,8 @@ use strum_macros::EnumString;
 
 /// Shared metadata keys used for structured output blocks and UI rendering.
 pub mod keys {
+    /// Generic identifier key for block-like records.
+    pub const ID: &str = "id";
     /// Output block discriminant key.
     pub const KIND: &str = "kind";
     /// Output block tone key.
@@ -34,6 +36,16 @@ pub mod keys {
     pub const LABEL: &str = "label";
     /// Generic field value key for rendered key-value rows.
     pub const VALUE: &str = "value";
+    /// Optional nested display payload key.
+    pub const DISPLAY: &str = "display";
+    /// Display header key.
+    pub const HEADER: &str = "header";
+    /// Optional display preview payload key.
+    pub const PREVIEW: &str = "preview";
+    /// Optional typed structured detail payload key.
+    pub const STRUCTURED: &str = "structured";
+    /// Generic truncated flag key for preview payloads.
+    pub const TRUNCATED: &str = "truncated";
     /// Scheduler stage embedded decision payload key.
     pub const DECISION: &str = "decision";
 

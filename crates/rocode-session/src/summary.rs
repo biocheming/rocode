@@ -831,11 +831,11 @@ mod tests {
         assert_eq!(
             updated
                 .metadata
-                .get("summary_title")
+                .get(MESSAGE_SUMMARY_TITLE_KEY)
                 .and_then(|value| value.as_str()),
             Some("Summary Pipeline")
         );
-        assert!(updated.metadata.contains_key("summary_diffs"));
+        assert!(updated.metadata.contains_key(MESSAGE_SUMMARY_DIFFS_KEY));
     }
 
     #[tokio::test]
@@ -875,7 +875,7 @@ mod tests {
             .expect("message should still exist");
         let title = updated
             .metadata
-            .get("summary_title")
+            .get(MESSAGE_SUMMARY_TITLE_KEY)
             .and_then(|value| value.as_str())
             .expect("summary_title should be present");
         assert!(title.chars().count() <= 100);

@@ -52,7 +52,8 @@ use rocode_command::{CommandRegistry, ResolvedUiCommand};
 use rocode_config::Config as AppConfig;
 use rocode_core::contracts::{
     output_blocks::{keys as block_keys, MessagePhaseWire, OutputBlockKind},
-    wire::{keysets as wire_keysets, selectors as wire_selectors},
+    provider::auth_keys,
+    wire::{headers as wire_headers, keysets as wire_keysets, selectors as wire_selectors},
 };
 use rocode_orchestrator::{SchedulerConfig, SchedulerPresetKind};
 use rocode_permission::PermissionRuleset;
@@ -644,7 +645,7 @@ pub fn internal_token() -> &'static str {
 
 fn is_valid_internal_request(headers: &HeaderMap) -> bool {
     let Some(value) = headers
-        .get("x-rocode-plugin-internal")
+        .get(wire_headers::X_ROCODE_PLUGIN_INTERNAL)
         .and_then(|v| v.to_str().ok())
     else {
         return false;
@@ -655,7 +656,7 @@ fn is_valid_internal_request(headers: &HeaderMap) -> bool {
     }
     // Verify token
     let Some(token) = headers
-        .get("x-rocode-internal-token")
+        .get(wire_headers::X_ROCODE_INTERNAL_TOKEN)
         .and_then(|v| v.to_str().ok())
     else {
         tracing::warn!("internal request header present but missing token");
@@ -969,11 +970,15 @@ fn parse_auth_info_payload(payload: serde_json::Value) -> Option<AuthInfo> {
     }
 
     let key = payload
-        .get("api_key")
+        .get(auth_keys::API_KEY_SNAKE)
         .and_then(|v| v.as_str())
-        .or_else(|| payload.get("apiKey").and_then(|v| v.as_str()))
-        .or_else(|| payload.get("token").and_then(|v| v.as_str()))
-        .or_else(|| payload.get("key").and_then(|v| v.as_str()))
+        .or_else(|| {
+            payload
+                .get(auth_keys::API_KEY_CAMEL)
+                .and_then(|v| v.as_str())
+        })
+        .or_else(|| payload.get(auth_keys::TOKEN).and_then(|v| v.as_str()))
+        .or_else(|| payload.get(auth_keys::KEY).and_then(|v| v.as_str()))
         .map(str::to_string)?;
 
     Some(AuthInfo::Api { key })

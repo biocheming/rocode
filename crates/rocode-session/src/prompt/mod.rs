@@ -1330,18 +1330,18 @@ impl SessionPrompt {
                     msg.add_subtask(subtask_id.clone(), description.clone());
                     let mut pending = msg
                         .metadata
-                        .get("pending_subtasks")
+                        .get(session_keys::PENDING_SUBTASKS)
                         .and_then(|v| v.as_array())
                         .cloned()
                         .unwrap_or_default();
                     pending.push(serde_json::json!({
-                        "id": subtask_id,
-                        "agent": agent,
-                        "prompt": prompt,
-                        "description": description,
+                        wire_fields::ID: subtask_id,
+                        session_keys::SUBTASK_AGENT: agent,
+                        session_keys::SUBTASK_PROMPT: prompt,
+                        session_keys::SUBTASK_DESCRIPTION: description,
                     }));
                     msg.metadata.insert(
-                        "pending_subtasks".to_string(),
+                        session_keys::PENDING_SUBTASKS.to_string(),
                         serde_json::Value::Array(pending),
                     );
                 }
@@ -2232,25 +2232,28 @@ impl SessionPrompt {
     fn collect_pending_subtasks(message: &SessionMessage) -> Vec<PendingSubtask> {
         let metadata_by_id: HashMap<String, (String, String, String)> = message
             .metadata
-            .get("pending_subtasks")
+            .get(session_keys::PENDING_SUBTASKS)
             .and_then(|v| v.as_array())
             .map(|items| {
                 items
                     .iter()
                     .filter_map(|item| {
-                        let id = item.get("id").and_then(|v| v.as_str())?.to_string();
+                        let id = item
+                            .get(wire_fields::ID)
+                            .and_then(|v| v.as_str())?
+                            .to_string();
                         let agent = item
-                            .get("agent")
+                            .get(session_keys::SUBTASK_AGENT)
                             .and_then(|v| v.as_str())
                             .unwrap_or("general")
                             .to_string();
                         let prompt = item
-                            .get("prompt")
+                            .get(session_keys::SUBTASK_PROMPT)
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
                         let description = item
-                            .get("description")
+                            .get(session_keys::SUBTASK_DESCRIPTION)
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
@@ -2412,11 +2415,12 @@ impl SessionPrompt {
             }
 
             let assistant = session.add_assistant_message();
-            assistant
-                .metadata
-                .insert("subtask_id".to_string(), serde_json::json!(subtask_id));
             assistant.metadata.insert(
-                "subtask_status".to_string(),
+                session_keys::SUBTASK_ID.to_string(),
+                serde_json::json!(subtask_id),
+            );
+            assistant.metadata.insert(
+                session_keys::SUBTASK_STATUS.to_string(),
                 serde_json::json!(if is_error {
                     ToolCallStatusWire::Error.as_str()
                 } else {
@@ -3276,16 +3280,20 @@ mod tests {
         let msg = session.messages.last().expect("user message should exist");
         let pending = msg
             .metadata
-            .get("pending_subtasks")
+            .get(session_keys::PENDING_SUBTASKS)
             .and_then(|v| v.as_array())
             .expect("pending_subtasks metadata should exist");
         assert_eq!(pending.len(), 1);
         assert_eq!(
-            pending[0].get("agent").and_then(|v| v.as_str()),
+            pending[0]
+                .get(session_keys::SUBTASK_AGENT)
+                .and_then(|v| v.as_str()),
             Some("explore")
         );
         assert_eq!(
-            pending[0].get("prompt").and_then(|v| v.as_str()),
+            pending[0]
+                .get(session_keys::SUBTASK_PROMPT)
+                .and_then(|v| v.as_str()),
             Some("Inspect codegen path")
         );
         assert!(msg.parts.iter().any(|p| match &p.part_type {

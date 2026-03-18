@@ -5,7 +5,7 @@ use tokio::sync::RwLock;
 use crate::{Tool, ToolContext, ToolError, ToolResult};
 use rocode_core::contracts::patch::keys as patch_keys;
 use rocode_core::contracts::plugin_hooks::{aliases as hook_aliases, keys as hook_keys};
-use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use rocode_plugin::{HookContext, HookEvent};
 
 /// Tools that should not appear in suggestion lists when a tool is not found.
@@ -119,10 +119,10 @@ fn recover_write_args_from_jsonish(input: &str) -> Option<serde_json::Value> {
     fn recover_once(input: &str) -> Option<serde_json::Value> {
         let file_path = parse_jsonish_string_field(input, patch_keys::FILE_PATH_SNAKE)
             .or_else(|| parse_jsonish_string_field(input, patch_keys::FILE_PATH))?;
-        let content = parse_jsonish_string_field(input, "content").unwrap_or_default();
+        let content = parse_jsonish_string_field(input, patch_keys::CONTENT).unwrap_or_default();
         Some(serde_json::json!({
             (patch_keys::FILE_PATH_SNAKE): file_path,
-            "content": content
+            (patch_keys::CONTENT): content
         }))
     }
 
@@ -169,14 +169,17 @@ fn recover_bash_args_from_jsonish(input: &str) -> Option<serde_json::Value> {
     }
 
     fn recover_once(input: &str) -> Option<serde_json::Value> {
-        let command = parse_jsonish_string_field(input, "command")
-            .or_else(|| parse_jsonish_string_field(input, "cmd"))?;
-        let description = parse_jsonish_string_field(input, "description")
+        let command = parse_jsonish_string_field(input, tool_arg_keys::COMMAND)
+            .or_else(|| parse_jsonish_string_field(input, tool_arg_keys::CMD))?;
+        let description = parse_jsonish_string_field(input, tool_arg_keys::DESCRIPTION)
             .unwrap_or_else(|| "Execute shell command".to_string());
         let mut obj = serde_json::Map::new();
-        obj.insert("command".to_string(), serde_json::Value::String(command));
         obj.insert(
-            "description".to_string(),
+            tool_arg_keys::COMMAND.to_string(),
+            serde_json::Value::String(command),
+        );
+        obj.insert(
+            tool_arg_keys::DESCRIPTION.to_string(),
             serde_json::Value::String(description),
         );
         if let Some(workdir) = parse_jsonish_string_field(input, "workdir")
@@ -407,7 +410,10 @@ impl ToolRegistry {
             let hook_outputs = rocode_plugin::trigger_collect(
                 HookContext::new(HookEvent::ToolDefinition)
                     .with_data(hook_aliases::TOOL_ID_SNAKE, serde_json::json!(&schema.name))
-                    .with_data(hook_keys::DESCRIPTION, serde_json::json!(&schema.description))
+                    .with_data(
+                        hook_keys::DESCRIPTION,
+                        serde_json::json!(&schema.description),
+                    )
                     .with_data(hook_keys::PARAMETERS, schema.parameters.clone()),
             )
             .await;
@@ -555,7 +561,11 @@ fn hook_payload_object(
         .get(hook_keys::OUTPUT)
         .and_then(|value| value.as_object())
         .or_else(|| payload.as_object())
-        .or_else(|| payload.get(hook_keys::DATA).and_then(|value| value.as_object()))
+        .or_else(|| {
+            payload
+                .get(hook_keys::DATA)
+                .and_then(|value| value.as_object())
+        })
 }
 
 fn apply_tool_definition_payload(schema: &mut ToolSchema, payload: &serde_json::Value) {
@@ -586,7 +596,10 @@ fn apply_tool_after_payload(result: &mut ToolResult, payload: &serde_json::Value
     let Some(object) = hook_payload_object(payload) else {
         return;
     };
-    if let Some(title) = object.get(hook_keys::TITLE).and_then(|value| value.as_str()) {
+    if let Some(title) = object
+        .get(hook_keys::TITLE)
+        .and_then(|value| value.as_str())
+    {
         result.title = title.to_string();
     }
     if let Some(output) = object.get(hook_keys::OUTPUT) {
@@ -879,7 +892,11 @@ mod tests {
         );
 
         let result = registry
-            .execute(BuiltinToolName::Write.as_str(), malformed, test_tool_context())
+            .execute(
+                BuiltinToolName::Write.as_str(),
+                malformed,
+                test_tool_context(),
+            )
             .await
             .expect("tool should execute");
 
@@ -909,7 +926,11 @@ mod tests {
         );
 
         let result = registry
-            .execute(BuiltinToolName::Write.as_str(), malformed, test_tool_context())
+            .execute(
+                BuiltinToolName::Write.as_str(),
+                malformed,
+                test_tool_context(),
+            )
             .await
             .expect("tool should execute");
 
@@ -943,7 +964,11 @@ mod tests {
         );
 
         let result = registry
-            .execute(BuiltinToolName::Bash.as_str(), malformed, test_tool_context())
+            .execute(
+                BuiltinToolName::Bash.as_str(),
+                malformed,
+                test_tool_context(),
+            )
             .await
             .expect("tool should execute");
 

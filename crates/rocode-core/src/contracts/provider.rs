@@ -1,5 +1,52 @@
 use strum_macros::EnumString;
 
+/// Shared auth payload keys used by server/provider/CLI auth flows.
+pub mod auth_keys {
+    pub const TYPE: &str = "type";
+    pub const PROVIDER: &str = "provider";
+    pub const SUCCESS: &str = "success";
+
+    pub const API_KEY_SNAKE: &str = "api_key";
+    pub const API_KEY_CAMEL: &str = "apiKey";
+    pub const TOKEN: &str = "token";
+    pub const KEY: &str = "key";
+    pub const ACCESS: &str = "access";
+    pub const REFRESH: &str = "refresh";
+    pub const EXPIRES: &str = "expires";
+    pub const ACCOUNT_ID: &str = "accountId";
+    pub const ENTERPRISE_URL: &str = "enterpriseUrl";
+}
+
+/// Provider option-map keys (config/bootstrap/runtime state).
+pub mod option_keys {
+    pub const API_KEY: &str = "apiKey";
+    pub const API_KEY_SNAKE: &str = "api_key";
+    pub const API_KEY_LOWER: &str = "apikey";
+    pub const BASE_URL: &str = "baseURL";
+    pub const BASE_URL_CAMEL: &str = "baseUrl";
+    pub const URL: &str = "url";
+    pub const API: &str = "api";
+    pub const ACCOUNT_ID: &str = "accountId";
+}
+
+/// Reusable tolerant-reader key sets for provider options.
+pub mod option_keysets {
+    use super::option_keys;
+
+    pub const API_KEY_ANY: &[&str] = &[
+        option_keys::API_KEY,
+        option_keys::API_KEY_SNAKE,
+        option_keys::API_KEY_LOWER,
+    ];
+
+    pub const BASE_URL_ANY: &[&str] = &[
+        option_keys::BASE_URL,
+        option_keys::BASE_URL_CAMEL,
+        option_keys::URL,
+        option_keys::API,
+    ];
+}
+
 /// Canonical provider finish reason strings (wire format).
 ///
 /// These are **normalized** values surfaced across session/runtime layers, and
@@ -153,7 +200,10 @@ mod tests {
             ProviderToolCallNameWire::LocalShell,
         ];
         for value in cases {
-            assert_eq!(ProviderToolCallNameWire::parse(value.as_str()), Some(*value));
+            assert_eq!(
+                ProviderToolCallNameWire::parse(value.as_str()),
+                Some(*value)
+            );
             assert_eq!(value.to_string(), value.as_str());
         }
     }

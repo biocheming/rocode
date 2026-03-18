@@ -7,6 +7,7 @@ use rocode_core::agent_task_registry::{global_task_registry, AgentTask, AgentTas
 use rocode_core::contracts::agent_tasks::bus_keys as agent_task_bus_keys;
 use rocode_core::contracts::tools::BuiltinToolName;
 use rocode_core::contracts::tools::ToolCallStatusWire;
+use rocode_core::contracts::wire::fields as wire_fields;
 use rocode_session::{PartType, Session, ToolCallStatus};
 
 use crate::runtime_control::SessionExecutionTopology;
@@ -263,7 +264,7 @@ fn select_active_agent_task_parent_id(
             record
                 .metadata
                 .as_ref()
-                .and_then(|value| value.get("tool_name"))
+                .and_then(|value| value.get(wire_fields::TOOL_NAME_SNAKE))
                 .and_then(|value| value.as_str())
                 .map(|name| {
                     matches!(

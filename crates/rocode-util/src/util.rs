@@ -1,6 +1,6 @@
 pub mod json {
-    use rocode_core::contracts::tools::BuiltinToolName;
     use rocode_core::contracts::patch::keys as patch_keys;
+    use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 
     fn parse_json_object_with_recovery(input: &str) -> Option<serde_json::Value> {
         let cleaned = input.trim().trim_start_matches('\u{feff}').trim();
@@ -190,23 +190,26 @@ pub mod json {
     fn recover_write_args_from_jsonish_once(input: &str) -> Option<serde_json::Value> {
         let file_path = parse_jsonish_string_field(input, patch_keys::FILE_PATH_SNAKE)
             .or_else(|| parse_jsonish_string_field(input, patch_keys::FILE_PATH))?;
-        let content = parse_jsonish_string_field(input, "content").unwrap_or_default();
+        let content = parse_jsonish_string_field(input, patch_keys::CONTENT).unwrap_or_default();
         Some(serde_json::json!({
             (patch_keys::FILE_PATH_SNAKE): file_path,
-            "content": content
+            (patch_keys::CONTENT): content
         }))
     }
 
     fn recover_bash_args_from_jsonish_once(input: &str) -> Option<serde_json::Value> {
-        let command = parse_jsonish_string_field(input, "command")
-            .or_else(|| parse_jsonish_string_field(input, "cmd"))?;
-        let description = parse_jsonish_string_field(input, "description")
+        let command = parse_jsonish_string_field(input, tool_arg_keys::COMMAND)
+            .or_else(|| parse_jsonish_string_field(input, tool_arg_keys::CMD))?;
+        let description = parse_jsonish_string_field(input, tool_arg_keys::DESCRIPTION)
             .unwrap_or_else(|| "Execute shell command".to_string());
 
         let mut obj = serde_json::Map::new();
-        obj.insert("command".to_string(), serde_json::Value::String(command));
         obj.insert(
-            "description".to_string(),
+            tool_arg_keys::COMMAND.to_string(),
+            serde_json::Value::String(command),
+        );
+        obj.insert(
+            tool_arg_keys::DESCRIPTION.to_string(),
             serde_json::Value::String(description),
         );
         if let Some(workdir) = parse_jsonish_string_field(input, "workdir")
@@ -220,9 +223,9 @@ pub mod json {
     fn recover_edit_args_from_jsonish_once(input: &str) -> Option<serde_json::Value> {
         let file_path = parse_jsonish_string_field(input, patch_keys::FILE_PATH_SNAKE)
             .or_else(|| parse_jsonish_string_field(input, patch_keys::FILE_PATH))?;
-        let old_string = parse_jsonish_string_field(input, "old_string")
+        let old_string = parse_jsonish_string_field(input, patch_keys::OLD_STRING)
             .or_else(|| parse_jsonish_string_field(input, "oldString"));
-        let new_string = parse_jsonish_string_field(input, "new_string")
+        let new_string = parse_jsonish_string_field(input, patch_keys::NEW_STRING)
             .or_else(|| parse_jsonish_string_field(input, "newString"));
 
         // Keep recovery conservative: require file_path plus at least one edit payload field.
@@ -236,11 +239,14 @@ pub mod json {
             serde_json::Value::String(file_path),
         );
         if let Some(old) = old_string {
-            obj.insert("old_string".to_string(), serde_json::Value::String(old));
+            obj.insert(
+                patch_keys::OLD_STRING.to_string(),
+                serde_json::Value::String(old),
+            );
         }
         if let Some(new_value) = new_string {
             obj.insert(
-                "new_string".to_string(),
+                patch_keys::NEW_STRING.to_string(),
                 serde_json::Value::String(new_value),
             );
         }
@@ -537,27 +543,47 @@ pub mod json {
         )?;
         let old_string = ultra_extract_large_field(
             input,
-            "old_string",
-            &["new_string", "newString", patch_keys::FILE_PATH_SNAKE, patch_keys::FILE_PATH],
+            patch_keys::OLD_STRING,
+            &[
+                patch_keys::NEW_STRING,
+                "newString",
+                patch_keys::FILE_PATH_SNAKE,
+                patch_keys::FILE_PATH,
+            ],
         );
         let new_string = ultra_extract_large_field(
             input,
-            "new_string",
-            &["old_string", "oldString", patch_keys::FILE_PATH_SNAKE, patch_keys::FILE_PATH],
+            patch_keys::NEW_STRING,
+            &[
+                patch_keys::OLD_STRING,
+                "oldString",
+                patch_keys::FILE_PATH_SNAKE,
+                patch_keys::FILE_PATH,
+            ],
         );
         // Also try camelCase variants.
         let old_string = old_string.or_else(|| {
             ultra_extract_large_field(
                 input,
                 "oldString",
-                &["new_string", "newString", patch_keys::FILE_PATH_SNAKE, patch_keys::FILE_PATH],
+                &[
+                    patch_keys::NEW_STRING,
+                    "newString",
+                    patch_keys::FILE_PATH_SNAKE,
+                    patch_keys::FILE_PATH,
+                ],
             )
         });
         let new_string = new_string.or_else(|| {
             ultra_extract_large_field(
                 input,
                 "newString",
-                &["old_string", "oldString", patch_keys::FILE_PATH_SNAKE, patch_keys::FILE_PATH],
+                &[
+                    patch_keys::OLD_STRING,
+                    "oldString",
+                    patch_keys::FILE_PATH_SNAKE,
+                    patch_keys::FILE_PATH,
+                ],
             )
         });
 
@@ -567,10 +593,16 @@ pub mod json {
             serde_json::Value::String(file_path),
         );
         if let Some(v) = old_string {
-            obj.insert("old_string".to_string(), serde_json::Value::String(v));
+            obj.insert(
+                patch_keys::OLD_STRING.to_string(),
+                serde_json::Value::String(v),
+            );
         }
         if let Some(v) = new_string {
-            obj.insert("new_string".to_string(), serde_json::Value::String(v));
+            obj.insert(
+                patch_keys::NEW_STRING.to_string(),
+                serde_json::Value::String(v),
+            );
         }
         Some(serde_json::Value::Object(obj))
     }
@@ -1134,11 +1166,9 @@ mod tests {
     #[test]
     fn recover_tool_arguments_from_jsonish_recovers_truncated_write_payload() {
         let malformed = "{\"file_path\":\"/tmp/t2.html\",\"content\":\"<html><body>hello";
-        let recovered = json::recover_tool_arguments_from_jsonish(
-            BuiltinToolName::Write.as_str(),
-            malformed,
-        )
-        .expect("write payload should be recoverable");
+        let recovered =
+            json::recover_tool_arguments_from_jsonish(BuiltinToolName::Write.as_str(), malformed)
+                .expect("write payload should be recoverable");
         assert_eq!(recovered["file_path"], "/tmp/t2.html");
         assert_eq!(recovered["content"], "<html><body>hello");
     }
@@ -1146,31 +1176,28 @@ mod tests {
     #[test]
     fn recover_tool_arguments_from_jsonish_recovers_truncated_bash_payload() {
         let malformed = "{\"command\":\"cat > t2.html << 'EOF'\\n<html>";
-        let recovered = json::recover_tool_arguments_from_jsonish(
-            BuiltinToolName::Bash.as_str(),
-            malformed,
-        )
-        .expect("bash payload should be recoverable");
+        let recovered =
+            json::recover_tool_arguments_from_jsonish(BuiltinToolName::Bash.as_str(), malformed)
+                .expect("bash payload should be recoverable");
         assert_eq!(recovered["command"], "cat > t2.html << 'EOF'\n<html>");
     }
 
     #[test]
     fn recover_tool_arguments_from_jsonish_returns_none_for_unknown_tool() {
         let malformed = "{\"file_path\":\"/tmp/t2.html\",\"content\":\"hello\"";
-        assert!(
-            json::recover_tool_arguments_from_jsonish(BuiltinToolName::Read.as_str(), malformed)
-                .is_none()
-        );
+        assert!(json::recover_tool_arguments_from_jsonish(
+            BuiltinToolName::Read.as_str(),
+            malformed
+        )
+        .is_none());
     }
 
     #[test]
     fn recover_tool_arguments_from_jsonish_recovers_truncated_edit_payload() {
         let malformed = "{\"file_path\":\"/tmp/t2.html\",\"new_string\":\".class { color: red; }";
-        let recovered = json::recover_tool_arguments_from_jsonish(
-            BuiltinToolName::Edit.as_str(),
-            malformed,
-        )
-        .expect("edit payload should be recoverable");
+        let recovered =
+            json::recover_tool_arguments_from_jsonish(BuiltinToolName::Edit.as_str(), malformed)
+                .expect("edit payload should be recoverable");
         assert_eq!(recovered["file_path"], "/tmp/t2.html");
         assert_eq!(recovered["new_string"], ".class { color: red; }");
         assert!(recovered.get("old_string").is_none());
@@ -1237,7 +1264,10 @@ mod tests {
 
     #[test]
     fn ultra_returns_none_for_garbage() {
-        assert!(json::recover_tool_call_ultra(BuiltinToolName::Write.as_str(), "not json at all").is_none());
+        assert!(
+            json::recover_tool_call_ultra(BuiltinToolName::Write.as_str(), "not json at all")
+                .is_none()
+        );
     }
 
     #[test]

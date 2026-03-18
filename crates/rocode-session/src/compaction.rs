@@ -5,6 +5,8 @@ use chrono::{DateTime, Utc};
 use rocode_core::bus::{Bus, BusEventDef};
 use rocode_core::contracts::events::BusEventName;
 use rocode_core::contracts::plugin_hooks;
+use rocode_core::contracts::session::keys as session_keys;
+use rocode_core::contracts::tools::BuiltinToolName;
 use rocode_core::contracts::wire::keys as wire_keys;
 use rocode_orchestrator::compaction_request;
 use rocode_orchestrator::runtime::events::CancelToken as RuntimeCancelToken;
@@ -24,7 +26,7 @@ const COMPACTION_BUFFER: u64 = 20_000;
 const PRUNE_MINIMUM: u64 = 20_000;
 const PRUNE_PROTECT: u64 = 40_000;
 
-const PRUNE_PROTECTED_TOOLS: &[&str] = &["skill"];
+const PRUNE_PROTECTED_TOOLS: &[&str] = &[BuiltinToolName::Skill.as_str()];
 
 fn new_compaction_model_caller(
     provider: Arc<dyn Provider>,
@@ -589,7 +591,7 @@ When constructing the summary, try to stick to this template:
         if let Some(ops) = session_ops {
             let now_part = Utc::now().timestamp_millis();
             let mut metadata = HashMap::new();
-            metadata.insert("summary".to_string(), serde_json::json!(true));
+            metadata.insert(session_keys::SUMMARY.to_string(), serde_json::json!(true));
 
             let summary_part = Part::Text {
                 id: rocode_core::id::create(rocode_core::id::Prefix::Part, false, None),
@@ -1580,7 +1582,7 @@ mod tests {
         assert_eq!(
             metadata
                 .as_ref()
-                .and_then(|map| map.get("summary"))
+                .and_then(|map| map.get(session_keys::SUMMARY))
                 .and_then(|value| value.as_bool()),
             Some(true)
         );

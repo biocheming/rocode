@@ -1,5 +1,45 @@
 use strum_macros::EnumString;
 
+/// Common argument keys used by built-in tool calls.
+pub mod arg_keys {
+    pub const QUESTIONS: &str = "questions";
+    pub const ANSWERS: &str = "answers";
+    pub const HEADER: &str = "header";
+    pub const QUESTION: &str = "question";
+    pub const COMMAND: &str = "command";
+    pub const CMD: &str = "cmd";
+    pub const SCRIPT: &str = "script";
+    pub const INPUT: &str = "input";
+    pub const FILE: &str = "file";
+    pub const PATTERN: &str = "pattern";
+    pub const URL: &str = "url";
+    pub const QUERY: &str = "query";
+    pub const OPERATION: &str = "operation";
+    pub const OFFSET: &str = "offset";
+    pub const LIMIT: &str = "limit";
+    pub const AGENT: &str = "agent";
+    pub const CATEGORY: &str = "category";
+    pub const DESCRIPTION: &str = "description";
+    pub const PROMPT: &str = "prompt";
+    pub const RUN_IN_BACKGROUND: &str = "run_in_background";
+    pub const SYNC_TODO: &str = "sync_todo";
+    pub const STATUS_FILTER: &str = "status_filter";
+    pub const TODO_ITEM: &str = "todo_item";
+    pub const SUBAGENT_TYPE: &str = "subagent_type";
+    pub const SUBAGENT_TYPE_CAMEL: &str = "subagentType";
+    pub const LOAD_SKILLS: &str = "load_skills";
+    pub const LOADED_SKILLS: &str = "loadedSkills";
+    pub const DELEGATED: &str = "delegated";
+    pub const AGENT_TASK_ID: &str = "agentTaskId";
+    pub const TASK: &str = "task";
+    pub const TOOL_CALLS: &str = "tool_calls";
+    pub const TOOL_CALLS_CAMEL: &str = "toolCalls";
+    pub const TOOL: &str = "tool";
+    pub const NAME: &str = "name";
+    pub const TOOL_NAME: &str = "tool_name";
+    pub const SKILL: &str = "skill";
+}
+
 /// Canonical built-in tool identifier strings.
 ///
 /// These values are used as tool call `name` strings across:
@@ -32,13 +72,21 @@ pub enum BuiltinToolName {
     #[strum(serialize = "task")]
     Task,
 
-    #[strum(serialize = "task_flow", serialize = "taskflow", serialize = "taskFlow")]
+    #[strum(
+        serialize = "task_flow",
+        serialize = "taskflow",
+        serialize = "taskFlow"
+    )]
     TaskFlow,
 
     #[strum(serialize = "edit", serialize = "editfile", serialize = "edit_file")]
     Edit,
 
-    #[strum(serialize = "multiedit", serialize = "multi_edit", serialize = "multi-edit")]
+    #[strum(
+        serialize = "multiedit",
+        serialize = "multi_edit",
+        serialize = "multi-edit"
+    )]
     MultiEdit,
 
     #[strum(serialize = "write", serialize = "writefile", serialize = "write_file")]
@@ -101,7 +149,11 @@ pub enum BuiltinToolName {
     )]
     Ls,
 
-    #[strum(serialize = "notebook_edit", serialize = "notebookedit", serialize = "notebook-edit")]
+    #[strum(
+        serialize = "notebook_edit",
+        serialize = "notebookedit",
+        serialize = "notebook-edit"
+    )]
     NotebookEdit,
 
     #[strum(serialize = "batch")]
@@ -163,10 +215,18 @@ pub enum BuiltinToolName {
     )]
     AstGrepReplace,
 
-    #[strum(serialize = "plan_enter", serialize = "planEnter", serialize = "plan-enter")]
+    #[strum(
+        serialize = "plan_enter",
+        serialize = "planEnter",
+        serialize = "plan-enter"
+    )]
     PlanEnter,
 
-    #[strum(serialize = "plan_exit", serialize = "planExit", serialize = "plan-exit")]
+    #[strum(
+        serialize = "plan_exit",
+        serialize = "planExit",
+        serialize = "plan-exit"
+    )]
     PlanExit,
 
     #[strum(serialize = "invalid")]

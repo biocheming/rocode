@@ -6,6 +6,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
+use rocode_core::contracts::{
+    plugin_hooks, session::keys as session_keys, tools::arg_keys as tool_arg_keys,
+};
 use rocode_orchestrator::inline_subtask_request_defaults;
 use rocode_provider::{Provider, ToolDefinition};
 
@@ -406,8 +409,10 @@ impl SessionPrompt {
         };
         let msg = session.add_synthetic_user_message(text, &attachments);
         if let Some(agent) = message.agent {
-            msg.metadata
-                .insert("synthetic_agent".to_string(), serde_json::json!(agent));
+            msg.metadata.insert(
+                session_keys::SYNTHETIC_AGENT.to_string(),
+                serde_json::json!(agent),
+            );
         }
     }
 
@@ -443,19 +448,22 @@ impl SessionPrompt {
     pub(super) fn mcp_tools_from_session(session: &Session) -> Vec<ToolDefinition> {
         session
             .metadata
-            .get("mcp_tools")
+            .get(session_keys::MCP_TOOLS)
             .and_then(|v| v.as_array())
             .map(|items| {
                 items
                     .iter()
                     .filter_map(|item| {
-                        let name = item.get("name").and_then(|v| v.as_str())?.to_string();
+                        let name = item
+                            .get(tool_arg_keys::NAME)
+                            .and_then(|v| v.as_str())?
+                            .to_string();
                         let description = item
-                            .get("description")
+                            .get(plugin_hooks::keys::DESCRIPTION)
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string());
                         let parameters = item
-                            .get("parameters")
+                            .get(plugin_hooks::keys::PARAMETERS)
                             .cloned()
                             .unwrap_or_else(|| serde_json::json!({"type":"object"}));
                         Some(ToolDefinition {
@@ -474,7 +482,7 @@ impl SessionPrompt {
     ) -> HashMap<String, PersistedSubsession> {
         session
             .metadata
-            .get("subsessions")
+            .get(session_keys::SUBSESSIONS)
             .cloned()
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default()
@@ -485,11 +493,13 @@ impl SessionPrompt {
         subsessions: &HashMap<String, PersistedSubsession>,
     ) {
         if subsessions.is_empty() {
-            session.metadata.remove("subsessions");
+            session.metadata.remove(session_keys::SUBSESSIONS);
             return;
         }
         if let Ok(value) = serde_json::to_value(subsessions) {
-            session.metadata.insert("subsessions".to_string(), value);
+            session
+                .metadata
+                .insert(session_keys::SUBSESSIONS.to_string(), value);
         }
     }
 
@@ -1019,7 +1029,7 @@ mod tests {
         assert_eq!(
             synthetic_msg
                 .metadata
-                .get("synthetic_agent")
+                .get(rocode_core::contracts::session::keys::SYNTHETIC_AGENT)
                 .and_then(|value| value.as_str()),
             Some("docs-researcher")
         );
@@ -1091,11 +1101,11 @@ mod tests {
     fn mcp_tools_from_session_reads_runtime_metadata() {
         let mut session = Session::new("proj", ".");
         session.metadata.insert(
-            "mcp_tools".to_string(),
+            rocode_core::contracts::session::keys::MCP_TOOLS.to_string(),
             serde_json::json!([{
-                "name": "repo_search",
-                "description": "Search repository",
-                "parameters": {"type":"object","properties":{"q":{"type":"string"}}}
+                rocode_core::contracts::tools::arg_keys::NAME: "repo_search",
+                rocode_core::contracts::plugin_hooks::keys::DESCRIPTION: "Search repository",
+                rocode_core::contracts::plugin_hooks::keys::PARAMETERS: {"type":"object","properties":{"q":{"type":"string"}}}
             }]),
         );
 

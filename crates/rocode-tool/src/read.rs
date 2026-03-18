@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use rocode_core::contracts::attachments::{keys as attachment_keys, AttachmentTypeWire};
-use rocode_core::contracts::permission::PermissionTypeWire;
 use rocode_core::contracts::patch::keys as patch_keys;
-use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::permission::PermissionTypeWire;
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use walkdir::WalkDir;
@@ -68,11 +68,11 @@ impl Tool for ReadTool {
                     "minLength": 1,
                     "description": "Absolute path or project-relative path to the file or directory to read."
                 },
-                "offset": {
+                tool_arg_keys::OFFSET: {
                     "type": "number",
                     "description": "The line number to start reading from (1-indexed)"
                 },
-                "limit": {
+                tool_arg_keys::LIMIT: {
                     "type": "number",
                     "description": "The maximum number of lines to read (defaults to 2000)"
                 }
@@ -107,9 +107,11 @@ impl Tool for ReadTool {
             ));
         }
 
-        let offset: usize = args["offset"].as_u64().unwrap_or(1) as usize;
+        let offset: usize = args[tool_arg_keys::OFFSET].as_u64().unwrap_or(1) as usize;
 
-        let limit: usize = args["limit"].as_u64().unwrap_or(DEFAULT_READ_LIMIT as u64) as usize;
+        let limit: usize = args[tool_arg_keys::LIMIT]
+            .as_u64()
+            .unwrap_or(DEFAULT_READ_LIMIT as u64) as usize;
 
         if offset < 1 {
             return Err(ToolError::InvalidArguments("offset must be >= 1".into()));
@@ -297,7 +299,10 @@ fn handle_binary_file(
         serde_json::json!(AttachmentTypeWire::File.as_str()),
     );
     attachment.insert(attachment_keys::MIME.to_string(), serde_json::json!(mime));
-    attachment.insert(attachment_keys::URL.to_string(), serde_json::json!(data_url));
+    attachment.insert(
+        attachment_keys::URL.to_string(),
+        serde_json::json!(data_url),
+    );
     if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
         attachment.insert(
             attachment_keys::FILENAME.to_string(),
@@ -315,10 +320,7 @@ fn handle_binary_file(
             m.insert("truncated".into(), serde_json::json!(false));
             m.insert(attachment_keys::MIME.into(), serde_json::json!(mime));
             m.insert("size".into(), serde_json::json!(content.len()));
-            m.insert(
-                attachment_keys::ATTACHMENT.into(),
-                attachment_value.clone(),
-            );
+            m.insert(attachment_keys::ATTACHMENT.into(), attachment_value.clone());
             m.insert(
                 attachment_keys::ATTACHMENTS.into(),
                 serde_json::json!([attachment_value]),

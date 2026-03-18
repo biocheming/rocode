@@ -6,18 +6,23 @@ use crate::output_blocks::{
     SessionEventField, StatusBlock, ToolBlock, ToolPhase, ToolStructuredDetail,
 };
 use rocode_agent::{AgentRenderEvent, AgentRenderOutcome, AgentToolOutput};
-use rocode_core::contracts::output_blocks::{
-    BlockToneWire, DisplayPreviewKindWire, MessagePhaseWire, MessageRoleWire, OutputBlockKind,
-    ToolPhaseWire, ToolStructuredDetailTypeWire,
-};
-use rocode_core::contracts::output_blocks::keys as output_keys;
-use rocode_core::contracts::patch::keys as patch_keys;
 #[cfg(test)]
 use rocode_core::contracts::agent_tasks::AgentTaskStatusKind;
+use rocode_core::contracts::output_blocks::{
+    keys as output_keys, scheduler_decision_keys as output_decision_keys,
+    scheduler_decision_spec_keys as output_decision_spec_keys,
+    scheduler_stage_keys as output_stage_keys, BlockToneWire, DisplayPreviewKindWire,
+    MessagePhaseWire, MessageRoleWire, OutputBlockKind, ToolPhaseWire,
+    ToolStructuredDetailTypeWire,
+};
+use rocode_core::contracts::patch::keys as patch_keys;
 #[cfg(test)]
 use rocode_core::contracts::todo::TodoPriority;
 use rocode_core::contracts::todo::{keys as todo_keys, TodoStatus};
-use rocode_core::contracts::tools::{BuiltinToolName, QuestionInteractionStatus, ToolCallStatusWire};
+use rocode_core::contracts::tools::{
+    arg_keys as tool_arg_keys, BuiltinToolName, QuestionInteractionStatus, ToolCallStatusWire,
+};
+use rocode_core::contracts::wire::fields as wire_fields;
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -167,7 +172,7 @@ pub fn history_tool_call_to_web(
 
     let mut web = output_block_to_web(&OutputBlock::Tool(block));
     if let serde_json::Value::Object(ref mut map) = web {
-        map.insert("id".to_string(), json!(tool_call_id));
+        map.insert(output_keys::ID.to_string(), json!(tool_call_id));
     }
     apply_history_tool_call_display_override(&mut web, tool_name, input);
     web
@@ -201,7 +206,7 @@ pub fn history_tool_result_to_web(
     }
     let mut web = output_block_to_web(&OutputBlock::Tool(block));
     if let serde_json::Value::Object(ref mut map) = web {
-        map.insert("id".to_string(), json!(tool_call_id));
+        map.insert(output_keys::ID.to_string(), json!(tool_call_id));
     }
     apply_history_tool_result_display_override(&mut web, tool_name, title, metadata);
     apply_history_tool_result_interaction(&mut web, tool_name, title, content, is_error);
@@ -281,7 +286,10 @@ fn apply_history_tool_call_display_override(
 ) {
     match BuiltinToolName::parse(tool_name) {
         Some(BuiltinToolName::Question) => {
-            let Some(questions) = input.get("questions").and_then(|value| value.as_array()) else {
+            let Some(questions) = input
+                .get(wire_fields::QUESTIONS)
+                .and_then(|value| value.as_array())
+            else {
                 return;
             };
             if questions.is_empty() {
@@ -297,15 +305,17 @@ fn apply_history_tool_call_display_override(
                 .enumerate()
                 .filter_map(|(index, item)| {
                     let label = item
-                        .get("header")
+                        .get(wire_fields::HEADER)
                         .and_then(|value| value.as_str())
                         .filter(|value| !value.trim().is_empty())
                         .map(str::to_string)
                         .unwrap_or_else(|| format!("Question {}", index + 1));
-                    let question = item.get("question").and_then(|value| value.as_str())?;
+                    let question = item
+                        .get(wire_fields::QUESTION)
+                        .and_then(|value| value.as_str())?;
                     Some(json!({
-                        "label": label,
-                        "value": question,
+                        output_keys::LABEL: label,
+                        output_keys::VALUE: question,
                     }))
                 })
                 .collect::<Vec<_>>();
@@ -356,8 +366,8 @@ fn apply_history_tool_result_display_override(
                         .iter()
                         .filter_map(|field| {
                             Some(json!({
-                                "label": field.get(output_keys::DISPLAY_FIELD_KEY)?.as_str()?,
-                                "value": field
+                                output_keys::LABEL: field.get(output_keys::DISPLAY_FIELD_KEY)?.as_str()?,
+                                output_keys::VALUE: field
                                     .get(output_keys::DISPLAY_FIELD_VALUE)?
                                     .as_str()
                                     .unwrap_or(""),
@@ -428,10 +438,7 @@ fn apply_history_tool_result_interaction(
                 output_keys::INTERACTION_STATUS.to_string(),
                 json!(status.as_str()),
             ),
-            (
-                output_keys::INTERACTION_CAN_REPLY.to_string(),
-                json!(false),
-            ),
+            (output_keys::INTERACTION_CAN_REPLY.to_string(), json!(false)),
             (
                 output_keys::INTERACTION_CAN_REJECT.to_string(),
                 json!(false),
@@ -450,20 +457,23 @@ fn apply_display_override(
         return;
     };
     let display = map
-        .entry("display".to_string())
+        .entry(output_keys::DISPLAY.to_string())
         .or_insert_with(|| json!({}))
         .as_object_mut();
     let Some(display) = display else {
         return;
     };
     if let Some(summary) = summary {
-        display.insert("summary".to_string(), json!(summary));
+        display.insert(output_keys::SUMMARY.to_string(), json!(summary));
     }
     if !fields.is_empty() {
-        display.insert("fields".to_string(), serde_json::Value::Array(fields));
+        display.insert(
+            output_keys::FIELDS.to_string(),
+            serde_json::Value::Array(fields),
+        );
     }
     if let Some(preview) = preview {
-        display.insert("preview".to_string(), preview);
+        display.insert(output_keys::PREVIEW.to_string(), preview);
     }
 }
 
@@ -487,10 +497,10 @@ fn todo_summary_fields_from_array(todos: &[serde_json::Value]) -> Vec<serde_json
         }
     }
     vec![
-        json!({ "label": "Count", "value": todos.len().to_string() }),
-        json!({ "label": "Pending", "value": pending.to_string() }),
-        json!({ "label": "In Progress", "value": in_progress.to_string() }),
-        json!({ "label": "Completed", "value": completed.to_string() }),
+        json!({ output_keys::LABEL: "Count", output_keys::VALUE: todos.len().to_string() }),
+        json!({ output_keys::LABEL: "Pending", output_keys::VALUE: pending.to_string() }),
+        json!({ output_keys::LABEL: "In Progress", output_keys::VALUE: in_progress.to_string() }),
+        json!({ output_keys::LABEL: "Completed", output_keys::VALUE: completed.to_string() }),
     ]
 }
 
@@ -502,7 +512,9 @@ fn todo_preview_from_array(todos: &[serde_json::Value]) -> Option<serde_json::Va
         .iter()
         .take(8)
         .filter_map(|todo| {
-            let content = todo.get(todo_keys::CONTENT).and_then(|value| value.as_str())?;
+            let content = todo
+                .get(todo_keys::CONTENT)
+                .and_then(|value| value.as_str())?;
             let status_raw = todo
                 .get(todo_keys::STATUS)
                 .and_then(|value| value.as_str())
@@ -517,9 +529,9 @@ fn todo_preview_from_array(todos: &[serde_json::Value]) -> Option<serde_json::Va
         return None;
     }
     Some(json!({
-        "kind": DisplayPreviewKindWire::Text.as_str(),
-        "text": lines.join("\n"),
-        "truncated": todos.len() > lines.len(),
+        output_keys::KIND: DisplayPreviewKindWire::Text.as_str(),
+        output_keys::TEXT: lines.join("\n"),
+        output_keys::TRUNCATED: todos.len() > lines.len(),
     }))
 }
 
@@ -573,7 +585,7 @@ fn extract_tool_input_structured(
         }
         Some(BuiltinToolName::Bash) => {
             let command_preview = input
-                .get("command")
+                .get(tool_arg_keys::COMMAND)
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
@@ -586,7 +598,7 @@ fn extract_tool_input_structured(
         }
         Some(BuiltinToolName::Grep) => {
             let pattern = input
-                .get("pattern")
+                .get(tool_arg_keys::PATTERN)
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
@@ -598,7 +610,7 @@ fn extract_tool_input_structured(
         }
         Some(BuiltinToolName::Glob) => {
             let pattern = input
-                .get("pattern")
+                .get(tool_arg_keys::PATTERN)
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
@@ -713,20 +725,20 @@ fn meta_bool(meta: &HashMap<String, serde_json::Value>, key: &str) -> bool {
 pub fn output_block_to_web(block: &OutputBlock) -> serde_json::Value {
     match block {
         OutputBlock::Status(StatusBlock { tone, text }) => json!({
-            "kind": OutputBlockKind::Status.as_str(),
-            "tone": tone_to_web(tone),
-            "text": text,
+            output_keys::KIND: OutputBlockKind::Status.as_str(),
+            output_keys::TONE: tone_to_web(tone),
+            output_keys::TEXT: text,
         }),
         OutputBlock::Message(MessageBlock { role, phase, text }) => json!({
-            "kind": OutputBlockKind::Message.as_str(),
-            "role": role_to_web(role),
-            "phase": phase_to_web(phase),
-            "text": text,
+            output_keys::KIND: OutputBlockKind::Message.as_str(),
+            output_keys::ROLE: role_to_web(role),
+            output_keys::PHASE: phase_to_web(phase),
+            output_keys::TEXT: text,
         }),
         OutputBlock::Reasoning(ReasoningBlock { phase, text }) => json!({
-            "kind": OutputBlockKind::Reasoning.as_str(),
-            "phase": phase_to_web(phase),
-            "text": text,
+            output_keys::KIND: OutputBlockKind::Reasoning.as_str(),
+            output_keys::PHASE: phase_to_web(phase),
+            output_keys::TEXT: text,
         }),
         OutputBlock::Tool(ToolBlock {
             name,
@@ -741,27 +753,27 @@ pub fn output_block_to_web(block: &OutputBlock) -> serde_json::Value {
                 structured: structured.clone(),
             };
             let mut obj = serde_json::json!({
-                "kind": OutputBlockKind::Tool.as_str(),
-                "name": name,
-                "phase": tool_phase_to_web(phase),
-                "detail": detail,
-                "display": {
-                    "header": tool_web_header(&tool),
-                    "summary": tool_web_summary(&tool),
-                    "fields": tool_web_fields(&tool).into_iter().map(|field| json!({
-                        "label": field.label,
-                        "value": field.value,
+                output_keys::KIND: OutputBlockKind::Tool.as_str(),
+                output_keys::NAME: name,
+                output_keys::PHASE: tool_phase_to_web(phase),
+                output_keys::DETAIL: detail,
+                output_keys::DISPLAY: {
+                    output_keys::HEADER: tool_web_header(&tool),
+                    output_keys::SUMMARY: tool_web_summary(&tool),
+                    output_keys::FIELDS: tool_web_fields(&tool).into_iter().map(|field| json!({
+                        output_keys::LABEL: field.label,
+                        output_keys::VALUE: field.value,
                     })).collect::<Vec<_>>(),
-                    "preview": tool_web_preview(&tool).map(|preview| json!({
-                        "kind": preview.kind,
-                        "text": preview.text,
-                        "truncated": preview.truncated,
+                    output_keys::PREVIEW: tool_web_preview(&tool).map(|preview| json!({
+                        output_keys::KIND: preview.kind,
+                        output_keys::TEXT: preview.text,
+                        output_keys::TRUNCATED: preview.truncated,
                     })),
                 }
             });
             if let Some(ref s) = structured {
                 if let serde_json::Value::Object(ref mut map) = obj {
-                    map.insert("structured".to_string(), structured_to_web(s));
+                    map.insert(output_keys::STRUCTURED.to_string(), structured_to_web(s));
                 }
             }
             obj
@@ -774,80 +786,151 @@ pub fn output_block_to_web(block: &OutputBlock) -> serde_json::Value {
             fields,
             body,
         }) => json!({
-            "kind": OutputBlockKind::SessionEvent.as_str(),
-            "event": event,
-            "title": title,
-            "status": status,
-            "summary": summary,
-            "fields": fields.iter().map(|field| json!({
-                "label": field.label,
-                "value": field.value,
-                "tone": field.tone,
+            output_keys::KIND: OutputBlockKind::SessionEvent.as_str(),
+            output_keys::EVENT: event,
+            output_keys::TITLE: title,
+            output_keys::STATUS: status,
+            output_keys::SUMMARY: summary,
+            output_keys::FIELDS: fields.iter().map(|field| json!({
+                output_keys::LABEL: field.label,
+                output_keys::VALUE: field.value,
+                output_keys::TONE: field.tone,
             })).collect::<Vec<_>>(),
-            "body": body,
+            output_keys::BODY: body,
         }),
         OutputBlock::QueueItem(QueueItemBlock { position, text }) => json!({
-            "kind": OutputBlockKind::QueueItem.as_str(),
-            "position": position,
-            "text": text,
-            "display": {
-                "summary": format!("Queued [{}] {}", position, text),
+            output_keys::KIND: OutputBlockKind::QueueItem.as_str(),
+            output_keys::POSITION: position,
+            output_keys::TEXT: text,
+            output_keys::DISPLAY: {
+                output_keys::SUMMARY: format!("Queued [{}] {}", position, text),
             }
         }),
-        OutputBlock::SchedulerStage(stage) => json!({
-            "kind": OutputBlockKind::SchedulerStage.as_str(),
-            "stage_id": stage.stage_id,
-            "profile": stage.profile,
-            "stage": stage.stage,
-            "title": stage.title,
-            "text": stage.text,
-            "stage_index": stage.stage_index,
-            "stage_total": stage.stage_total,
-            "step": stage.step,
-            "status": stage.status,
-            "focus": stage.focus,
-            "last_event": stage.last_event,
-            "waiting_on": stage.waiting_on,
-            "activity": stage.activity,
-            "available_skill_count": stage.available_skill_count,
-            "available_agent_count": stage.available_agent_count,
-            "available_category_count": stage.available_category_count,
-            "active_skills": stage.active_skills,
-            "active_agents": stage.active_agents,
-            "active_categories": stage.active_categories,
-            "done_agent_count": stage.done_agent_count,
-            "total_agent_count": stage.total_agent_count,
-            "prompt_tokens": stage.prompt_tokens,
-            "completion_tokens": stage.completion_tokens,
-            "reasoning_tokens": stage.reasoning_tokens,
-            "cache_read_tokens": stage.cache_read_tokens,
-            "cache_write_tokens": stage.cache_write_tokens,
-            "child_session_id": stage.child_session_id,
-            "decision": stage.decision.as_ref().map(|decision| json!({
-                "kind": decision.kind,
-                "title": decision.title,
-                "spec": {
-                    "version": decision.spec.version,
-                    "show_header_divider": decision.spec.show_header_divider,
-                    "field_order": decision.spec.field_order,
-                    "field_label_emphasis": decision.spec.field_label_emphasis,
-                    "status_palette": decision.spec.status_palette,
-                    "section_spacing": decision.spec.section_spacing,
-                    "update_policy": decision.spec.update_policy,
-                },
-                "fields": decision.fields.iter().map(|field| json!({
-                    "label": field.label,
-                    "value": field.value,
-                    "tone": field.tone,
-                })).collect::<Vec<_>>(),
-                "sections": decision.sections.iter().map(|section| json!({
-                    "title": section.title,
-                    "body": section.body,
-                })).collect::<Vec<_>>(),
-            })),
-        }),
+        OutputBlock::SchedulerStage(stage) => {
+            let decision_value = stage.decision.as_ref().map(|decision| {
+                json!({
+                    output_decision_keys::KIND: decision.kind,
+                    output_decision_keys::TITLE: decision.title,
+                    output_decision_keys::SPEC: {
+                        output_decision_spec_keys::VERSION: decision.spec.version,
+                        output_decision_spec_keys::SHOW_HEADER_DIVIDER: decision.spec.show_header_divider,
+                        output_decision_spec_keys::FIELD_ORDER: decision.spec.field_order,
+                        output_decision_spec_keys::FIELD_LABEL_EMPHASIS: decision.spec.field_label_emphasis,
+                        output_decision_spec_keys::STATUS_PALETTE: decision.spec.status_palette,
+                        output_decision_spec_keys::SECTION_SPACING: decision.spec.section_spacing,
+                        output_decision_spec_keys::UPDATE_POLICY: decision.spec.update_policy,
+                    },
+                    output_decision_keys::FIELDS: decision.fields.iter().map(|field| json!({
+                        output_keys::LABEL: field.label,
+                        output_keys::VALUE: field.value,
+                        output_keys::TONE: field.tone,
+                    })).collect::<Vec<_>>(),
+                    output_decision_keys::SECTIONS: decision.sections.iter().map(|section| json!({
+                        output_keys::TITLE: section.title,
+                        output_keys::BODY: section.body,
+                    })).collect::<Vec<_>>(),
+                })
+            });
+            let mut map = serde_json::Map::new();
+            map.insert(
+                output_keys::KIND.to_string(),
+                json!(OutputBlockKind::SchedulerStage.as_str()),
+            );
+            map.insert(
+                output_stage_keys::STAGE_ID.to_string(),
+                json!(stage.stage_id),
+            );
+            map.insert(output_stage_keys::PROFILE.to_string(), json!(stage.profile));
+            map.insert(output_stage_keys::STAGE.to_string(), json!(stage.stage));
+            map.insert(output_keys::TITLE.to_string(), json!(stage.title));
+            map.insert(output_keys::TEXT.to_string(), json!(stage.text));
+            map.insert(
+                output_stage_keys::STAGE_INDEX.to_string(),
+                json!(stage.stage_index),
+            );
+            map.insert(
+                output_stage_keys::STAGE_TOTAL.to_string(),
+                json!(stage.stage_total),
+            );
+            map.insert(output_stage_keys::STEP.to_string(), json!(stage.step));
+            map.insert(output_keys::STATUS.to_string(), json!(stage.status));
+            map.insert(output_stage_keys::FOCUS.to_string(), json!(stage.focus));
+            map.insert(
+                output_stage_keys::LAST_EVENT.to_string(),
+                json!(stage.last_event),
+            );
+            map.insert(
+                output_stage_keys::WAITING_ON.to_string(),
+                json!(stage.waiting_on),
+            );
+            map.insert(
+                output_stage_keys::ACTIVITY.to_string(),
+                json!(stage.activity),
+            );
+            map.insert(
+                output_stage_keys::AVAILABLE_SKILL_COUNT.to_string(),
+                json!(stage.available_skill_count),
+            );
+            map.insert(
+                output_stage_keys::AVAILABLE_AGENT_COUNT.to_string(),
+                json!(stage.available_agent_count),
+            );
+            map.insert(
+                output_stage_keys::AVAILABLE_CATEGORY_COUNT.to_string(),
+                json!(stage.available_category_count),
+            );
+            map.insert(
+                output_stage_keys::ACTIVE_SKILLS.to_string(),
+                json!(stage.active_skills),
+            );
+            map.insert(
+                output_stage_keys::ACTIVE_AGENTS.to_string(),
+                json!(stage.active_agents),
+            );
+            map.insert(
+                output_stage_keys::ACTIVE_CATEGORIES.to_string(),
+                json!(stage.active_categories),
+            );
+            map.insert(
+                output_stage_keys::DONE_AGENT_COUNT.to_string(),
+                json!(stage.done_agent_count),
+            );
+            map.insert(
+                output_stage_keys::TOTAL_AGENT_COUNT.to_string(),
+                json!(stage.total_agent_count),
+            );
+            map.insert(
+                wire_fields::PROMPT_TOKENS.to_string(),
+                json!(stage.prompt_tokens),
+            );
+            map.insert(
+                wire_fields::COMPLETION_TOKENS.to_string(),
+                json!(stage.completion_tokens),
+            );
+            map.insert(
+                output_stage_keys::REASONING_TOKENS.to_string(),
+                json!(stage.reasoning_tokens),
+            );
+            map.insert(
+                output_stage_keys::CACHE_READ_TOKENS.to_string(),
+                json!(stage.cache_read_tokens),
+            );
+            map.insert(
+                output_stage_keys::CACHE_WRITE_TOKENS.to_string(),
+                json!(stage.cache_write_tokens),
+            );
+            map.insert(
+                output_stage_keys::CHILD_SESSION_ID.to_string(),
+                json!(stage.child_session_id),
+            );
+            map.insert(
+                output_keys::DECISION.to_string(),
+                decision_value.unwrap_or(serde_json::Value::Null),
+            );
+            serde_json::Value::Object(map)
+        }
         OutputBlock::Inspect(inspect) => json!({
-            "kind": OutputBlockKind::Inspect.as_str(),
+            output_keys::KIND: OutputBlockKind::Inspect.as_str(),
             "stage_ids": inspect.stage_ids,
             "filter_stage_id": inspect.filter_stage_id,
             "events": inspect.events.iter().map(|e| json!({
@@ -879,7 +962,7 @@ pub fn render_agent_event_to_web(
 
     let mut web = output_block_to_web(&map_render_event_to_block(event, config)?);
     if let (Some(id), serde_json::Value::Object(map)) = (tool_id, &mut web) {
-        map.insert("id".to_string(), serde_json::Value::String(id));
+        map.insert(output_keys::ID.to_string(), serde_json::Value::String(id));
     }
     Some(web)
 }
@@ -1229,16 +1312,15 @@ mod tests {
         );
         metadata.insert(
             output_keys::DISPLAY_FIELDS.to_string(),
-            serde_json::Value::Array(vec![serde_json::Value::Object(serde_json::Map::from_iter([
-                (
-                    output_keys::DISPLAY_FIELD_KEY.to_string(),
-                    json!("Scope"),
-                ),
-                (
-                    output_keys::DISPLAY_FIELD_VALUE.to_string(),
-                    json!("Proceed"),
-                ),
-            ]))]),
+            serde_json::Value::Array(vec![serde_json::Value::Object(serde_json::Map::from_iter(
+                [
+                    (output_keys::DISPLAY_FIELD_KEY.to_string(), json!("Scope")),
+                    (
+                        output_keys::DISPLAY_FIELD_VALUE.to_string(),
+                        json!("Proceed"),
+                    ),
+                ],
+            ))]),
         );
 
         let web = history_tool_result_to_web(

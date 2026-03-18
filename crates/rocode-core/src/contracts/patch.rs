@@ -32,6 +32,12 @@ pub mod keys {
 
     /// Common lowercased file path key used in tool metadata and permission prompts.
     pub const FILEPATH: &str = "filepath";
+    /// File content body for write/edit style tool inputs.
+    pub const CONTENT: &str = "content";
+    /// Edit-tool old string argument key.
+    pub const OLD_STRING: &str = "old_string";
+    /// Edit-tool new string argument key.
+    pub const NEW_STRING: &str = "new_string";
 
     /// File write/edit summary: number of bytes written.
     pub const BYTES: &str = "bytes";
@@ -46,9 +52,7 @@ pub mod keys {
 /// File change type strings used in tool metadata payloads.
 ///
 /// Wire format: lowercase strings (`"add"`, `"update"`, `"delete"`, `"move"`).
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, EnumString,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, EnumString)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum FileChangeType {

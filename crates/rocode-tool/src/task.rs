@@ -9,7 +9,8 @@ use rocode_core::contracts::events::BusEventName;
 use rocode_core::contracts::task::{
     TaskResultEnvelope, TASK_NO_TEXT_OUTPUT_MESSAGE, TASK_STATUS_COMPLETED,
 };
-use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
+use rocode_core::contracts::wire::aliases as wire_aliases;
 
 use crate::{
     Metadata, PermissionRequest, TaskAgentInfo, TaskAgentModel, Tool, ToolContext, ToolError,
@@ -245,8 +246,14 @@ impl Tool for TaskTool {
             ctx.ask_permission(
                 PermissionRequest::new(BuiltinToolName::Task.as_str())
                     .with_pattern(&dispatch_label)
-                    .with_metadata("description", serde_json::json!(&input.description))
-                    .with_metadata("subagent_type", serde_json::json!(&dispatch_label))
+                    .with_metadata(
+                        tool_arg_keys::DESCRIPTION,
+                        serde_json::json!(&input.description),
+                    )
+                    .with_metadata(
+                        tool_arg_keys::SUBAGENT_TYPE,
+                        serde_json::json!(&dispatch_label),
+                    )
                     .always_allow(),
             )
             .await?;
@@ -393,8 +400,14 @@ impl Tool for TaskTool {
         let (output, has_text_output) = format_task_output(&session_id, &result_text);
 
         let mut metadata = Metadata::new();
-        metadata.insert("agentTaskId".into(), serde_json::json!(agent_task_id));
-        metadata.insert("sessionId".into(), serde_json::json!(session_id));
+        metadata.insert(
+            tool_arg_keys::AGENT_TASK_ID.into(),
+            serde_json::json!(agent_task_id),
+        );
+        metadata.insert(
+            wire_aliases::SESSION_ID_CAMEL.into(),
+            serde_json::json!(session_id),
+        );
         metadata.insert(
             "taskStatus".into(),
             serde_json::json!(TASK_STATUS_COMPLETED),
@@ -408,7 +421,10 @@ impl Tool for TaskTool {
             }),
         );
         if !loaded_skill_names.is_empty() {
-            metadata.insert("loadedSkills".into(), serde_json::json!(loaded_skill_names));
+            metadata.insert(
+                tool_arg_keys::LOADED_SKILLS.into(),
+                serde_json::json!(loaded_skill_names),
+            );
             metadata.insert(
                 "loadedSkillCount".into(),
                 serde_json::json!(loaded_skill_names.len()),

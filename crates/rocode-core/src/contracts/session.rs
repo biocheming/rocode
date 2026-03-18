@@ -8,6 +8,7 @@ pub mod keys {
     pub const MODEL_PROVIDER: &str = "model_provider";
     pub const MODEL_ID: &str = "model_id";
     pub const MODEL_VARIANT: &str = "model_variant";
+    pub const LEGACY_VARIANT: &str = "variant";
     pub const AGENT: &str = "agent";
 
     // Legacy compatibility
@@ -52,6 +53,22 @@ pub mod keys {
     pub const TOKENS_REASONING: &str = "tokens_reasoning";
     pub const TOKENS_CACHE_READ: &str = "tokens_cache_read";
     pub const TOKENS_CACHE_WRITE: &str = "tokens_cache_write";
+
+    // Prompt/runtime bookkeeping
+    pub const PENDING_SUBTASKS: &str = "pending_subtasks";
+    pub const SUBTASK_ID: &str = "subtask_id";
+    pub const SUBTASK_STATUS: &str = "subtask_status";
+    pub const SUBTASK_AGENT: &str = "agent";
+    pub const SUBTASK_PROMPT: &str = "prompt";
+    pub const SUBTASK_DESCRIPTION: &str = "description";
+    pub const SYNTHETIC_AGENT: &str = "synthetic_agent";
+    pub const MCP_TOOLS: &str = "mcp_tools";
+    pub const SUBSESSIONS: &str = "subsessions";
+    pub const SUMMARY: &str = "summary";
+    pub const SNAPSHOT: &str = "snapshot";
+    pub const STEP_START_SNAPSHOT: &str = "step_start_snapshot";
+    pub const STEP_FINISH_SNAPSHOT: &str = "step_finish_snapshot";
+    pub const LOADED_INSTRUCTION_FILES: &str = "loaded_instruction_files";
 }
 
 /// Canonical message role strings used in persisted session/message payloads.

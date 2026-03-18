@@ -567,8 +567,8 @@ impl SessionPrompt {
 
             if let Some(snapshot) = msg
                 .metadata
-                .get("step_start_snapshot")
-                .or_else(|| msg.metadata.get("snapshot"))
+                .get(session_keys::STEP_START_SNAPSHOT)
+                .or_else(|| msg.metadata.get(session_keys::SNAPSHOT))
                 .and_then(|v| v.as_str())
             {
                 parts.push(V2Part::StepStart(StepStartPart {
@@ -580,7 +580,7 @@ impl SessionPrompt {
             }
             if let Some(snapshot) = msg
                 .metadata
-                .get("step_finish_snapshot")
+                .get(session_keys::STEP_FINISH_SNAPSHOT)
                 .and_then(|v| v.as_str())
             {
                 let input = msg
@@ -658,7 +658,8 @@ impl SessionPrompt {
                         tools: None,
                         variant: msg
                             .metadata
-                            .get("variant")
+                            .get(session_keys::MODEL_VARIANT)
+                            .or_else(|| msg.metadata.get(session_keys::LEGACY_VARIANT))
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string()),
                     }
@@ -733,7 +734,8 @@ impl SessionPrompt {
                         structured: None,
                         variant: msg
                             .metadata
-                            .get("variant")
+                            .get(session_keys::MODEL_VARIANT)
+                            .or_else(|| msg.metadata.get(session_keys::LEGACY_VARIANT))
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string()),
                         finish: msg.finish.clone().or_else(|| {

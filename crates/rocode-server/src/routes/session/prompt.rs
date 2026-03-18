@@ -954,6 +954,6 @@ pub(super) async fn session_prompt(
     Ok(Json(serde_json::json!({
         "status": "started",
         "model": format!("{}/{}", provider_id, model_id),
-        "variant": req.variant,
+        session_keys::MODEL_VARIANT: req.variant,
     })))
 }

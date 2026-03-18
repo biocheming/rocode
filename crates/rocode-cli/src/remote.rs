@@ -14,6 +14,7 @@ use rocode_core::contracts::output_blocks::{
     scheduler_decision_spec_keys as decision_spec_keys, scheduler_stage_keys as stage_keys,
     BlockToneWire, MessagePhaseWire, MessageRoleWire, OutputBlockKind, ToolPhaseWire,
 };
+use rocode_core::contracts::session::keys as session_keys;
 use rocode_core::contracts::wire::{fields as wire_fields, keys as wire_keys};
 use serde::Deserialize;
 use std::io::{self, Write};
@@ -695,7 +696,7 @@ pub(crate) async fn run_non_interactive_attach(options: RemoteAttachOptions) -> 
             "model": model,
             "agent": agent,
             "scheduler_profile": scheduler_profile,
-            "variant": variant,
+            session_keys::MODEL_VARIANT: variant,
             "stream": true
         }))
         .send()

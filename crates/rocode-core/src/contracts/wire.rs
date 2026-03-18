@@ -37,6 +37,12 @@ pub mod keys {
     pub const STAGE_ID: &str = "stageID";
 }
 
+/// HTTP header names used by internal server/plugin transport.
+pub mod headers {
+    pub const X_ROCODE_PLUGIN_INTERNAL: &str = "x-rocode-plugin-internal";
+    pub const X_ROCODE_INTERNAL_TOKEN: &str = "x-rocode-internal-token";
+}
+
 /// Alternate key spellings accepted for backwards compatibility.
 pub mod aliases {
     pub const SESSION_ID_CAMEL: &str = "sessionId";

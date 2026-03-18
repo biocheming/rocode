@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use rocode_agent::AgentExecutor;
 use rocode_command::cli_style::CliStyle;
+use rocode_core::contracts::provider::option_keys as provider_option_keys;
 use rocode_plugin::init_global;
 use rocode_plugin::subprocess::{PluginContext, PluginLoader};
 use rocode_provider::{
@@ -129,12 +130,12 @@ fn provider_to_bootstrap(provider: &rocode_config::ProviderConfig) -> BootstrapC
     let mut options = provider.options.clone().unwrap_or_default();
     if let Some(api_key) = &provider.api_key {
         options
-            .entry("apiKey".to_string())
+            .entry(provider_option_keys::API_KEY.to_string())
             .or_insert_with(|| serde_json::Value::String(api_key.clone()));
     }
     if let Some(base_url) = &provider.base_url {
         options
-            .entry("baseURL".to_string())
+            .entry(provider_option_keys::BASE_URL.to_string())
             .or_insert_with(|| serde_json::Value::String(base_url.clone()));
     }
 
@@ -161,7 +162,7 @@ fn model_to_bootstrap(id: &str, model: &rocode_config::ModelConfig) -> Bootstrap
     let mut options = model.options.clone().unwrap_or_default();
     if let Some(api_key) = &model.api_key {
         options
-            .entry("apiKey".to_string())
+            .entry(provider_option_keys::API_KEY.to_string())
             .or_insert_with(|| serde_json::Value::String(api_key.clone()));
     }
 

@@ -27,8 +27,9 @@ use rocode_core::contracts::scheduler::{
     SchedulerDecisionStatusPalette, SchedulerDecisionUpdatePolicy, SchedulerStageName,
     SchedulerStageStatus, SchedulerStageWaitingOn,
 };
+use rocode_core::contracts::session::keys as session_keys;
 use rocode_core::contracts::todo::{keys as todo_keys, TodoPriority, TodoStatus};
-use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use rocode_core::contracts::wire::fields as wire_fields;
 use rocode_orchestrator::{
     parse_execution_gate_decision, parse_route_decision, scheduler_stage_observability,
@@ -543,7 +544,7 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
         // Capture a "before" snapshot at the first step so compute_diff()
         // can later compare against the final snapshot.
         if step_index == 0 {
-            self.track_snapshot("step_start_snapshot").await;
+            self.track_snapshot(session_keys::STEP_START_SNAPSHOT).await;
         }
 
         self.update_active_stage_message(
@@ -740,7 +741,8 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
         // Capture an "after" snapshot when a file-modifying tool completes
         // successfully so that compute_diff() can measure the delta.
         if !tool_output.is_error && is_file_modifying_tool(tool_name) {
-            self.track_snapshot("step_finish_snapshot").await;
+            self.track_snapshot(session_keys::STEP_FINISH_SNAPSHOT)
+                .await;
         }
     }
 
@@ -765,7 +767,7 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                 if from_snapshot.is_none() {
                     if let Some(s) = msg
                         .metadata
-                        .get("step_start_snapshot")
+                        .get(session_keys::STEP_START_SNAPSHOT)
                         .and_then(|v| v.as_str())
                         .filter(|s| !s.is_empty())
                     {
@@ -774,7 +776,7 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                 }
                 if let Some(s) = msg
                     .metadata
-                    .get("step_finish_snapshot")
+                    .get(session_keys::STEP_FINISH_SNAPSHOT)
                     .and_then(|v| v.as_str())
                     .filter(|s| !s.is_empty())
                 {
@@ -1638,17 +1640,17 @@ fn summarize_todo_args(tool_args: &serde_json::Value) -> Option<String> {
 
 fn summarize_task_args(tool_args: &serde_json::Value) -> Option<String> {
     let agent = tool_args
-        .get("subagent_type")
-        .or_else(|| tool_args.get("subagentType"))
-        .or_else(|| tool_args.get("category"))
+        .get(tool_arg_keys::SUBAGENT_TYPE)
+        .or_else(|| tool_args.get(tool_arg_keys::SUBAGENT_TYPE_CAMEL))
+        .or_else(|| tool_args.get(tool_arg_keys::CATEGORY))
         .and_then(|value| value.as_str())
         .unwrap_or("subagent");
     let description = tool_args
-        .get("description")
+        .get(tool_arg_keys::DESCRIPTION)
         .and_then(|value| value.as_str())
         .unwrap_or("");
     let prompt = tool_args
-        .get("prompt")
+        .get(tool_arg_keys::PROMPT)
         .and_then(|value| value.as_str())
         .unwrap_or("");
     let mut lines = vec![format!("Task → {}", prettify_token(agent))];
@@ -1663,24 +1665,30 @@ fn summarize_task_args(tool_args: &serde_json::Value) -> Option<String> {
 
 fn summarize_task_flow_args(tool_args: &serde_json::Value) -> Option<String> {
     let operation = tool_args
-        .get("operation")
+        .get(tool_arg_keys::OPERATION)
         .and_then(|value| value.as_str())
         .unwrap_or("unknown");
     let mut lines = vec![format!("TaskFlow → {}", prettify_token(operation))];
-    if let Some(agent) = tool_args.get("agent").and_then(|value| value.as_str()) {
+    if let Some(agent) = tool_args
+        .get(tool_arg_keys::AGENT)
+        .and_then(|value| value.as_str())
+    {
         lines.push(format!("- agent: {}", prettify_token(agent)));
     }
     if let Some(description) = tool_args
-        .get("description")
+        .get(tool_arg_keys::DESCRIPTION)
         .and_then(|value| value.as_str())
     {
         lines.push(format!("- label: {}", collapse_text(description, 88)));
     }
-    if let Some(prompt) = tool_args.get("prompt").and_then(|value| value.as_str()) {
+    if let Some(prompt) = tool_args
+        .get(tool_arg_keys::PROMPT)
+        .and_then(|value| value.as_str())
+    {
         lines.push(format!("- prompt: {}", collapse_text(prompt, 88)));
     }
     if let Some(todo_item) = tool_args
-        .get("todo_item")
+        .get(tool_arg_keys::TODO_ITEM)
         .and_then(|value| value.as_object())
     {
         if let Some(content) = todo_item
@@ -1760,14 +1768,18 @@ fn extract_stage_capability_activity(
             }
 
             evidence.push_agent(
-                args.get("subagent_type")
-                    .or_else(|| args.get("subagentType"))
-                    .or_else(|| args.get("agent"))
+                args.get(tool_arg_keys::SUBAGENT_TYPE)
+                    .or_else(|| args.get(tool_arg_keys::SUBAGENT_TYPE_CAMEL))
+                    .or_else(|| args.get(tool_arg_keys::AGENT))
                     .and_then(|value| value.as_str()),
             );
-            evidence.push_category(args.get("category").and_then(|value| value.as_str()));
+            evidence.push_category(
+                args.get(tool_arg_keys::CATEGORY)
+                    .and_then(|value| value.as_str()),
+            );
             evidence.push_skills_from_array(
-                args.get("load_skills").or_else(|| args.get("loadedSkills")),
+                args.get(tool_arg_keys::LOAD_SKILLS)
+                    .or_else(|| args.get(tool_arg_keys::LOADED_SKILLS)),
             );
         }
         StageCapabilityActivitySource::ToolOutput(tool_output) => {
@@ -1780,24 +1792,28 @@ fn extract_stage_capability_activity(
 
             evidence.push_agent(
                 metadata
-                    .get("agent")
+                    .get(tool_arg_keys::AGENT)
                     .and_then(|value| value.as_str())
                     .or_else(|| {
                         metadata
-                            .get("task")
-                            .and_then(|value| value.get("agent"))
+                            .get(tool_arg_keys::TASK)
+                            .and_then(|value| value.get(tool_arg_keys::AGENT))
                             .and_then(|value| value.as_str())
                     }),
             );
-            evidence.push_category(metadata.get("category").and_then(|value| value.as_str()));
+            evidence.push_category(
+                metadata
+                    .get(tool_arg_keys::CATEGORY)
+                    .and_then(|value| value.as_str()),
+            );
             evidence.push_skills_from_array(
                 metadata
-                    .get("loadedSkills")
-                    .or_else(|| metadata.get("load_skills"))
+                    .get(tool_arg_keys::LOADED_SKILLS)
+                    .or_else(|| metadata.get(tool_arg_keys::LOAD_SKILLS))
                     .or_else(|| {
                         metadata
-                            .get("task")
-                            .and_then(|value| value.get("loadedSkills"))
+                            .get(tool_arg_keys::TASK)
+                            .and_then(|value| value.get(tool_arg_keys::LOADED_SKILLS))
                     }),
             );
         }
@@ -1821,11 +1837,11 @@ fn tool_supports_stage_capability_activity_output(
         BuiltinToolName::parse(tool_name),
         Some(BuiltinToolName::Task | BuiltinToolName::TaskFlow)
     ) || metadata
-        .get("delegated")
+        .get(tool_arg_keys::DELEGATED)
         .and_then(|value| value.as_bool())
         .unwrap_or(false)
-        || metadata.get("agentTaskId").is_some()
-        || metadata.get("task").is_some()
+        || metadata.get(tool_arg_keys::AGENT_TASK_ID).is_some()
+        || metadata.get(tool_arg_keys::TASK).is_some()
 }
 
 fn apply_stage_capability_activity_evidence(
@@ -1906,7 +1922,15 @@ fn summarize_generic_tool_args(tool_name: &str, tool_args: &serde_json::Value) -
 // ── Tool-specific activity summarizers ──────────────────────────────────
 
 fn summarize_bash_args(tool_args: &serde_json::Value) -> Option<String> {
-    let command = activity_extract_string(tool_args, &["command", "cmd", "script", "input"])?;
+    let command = activity_extract_string(
+        tool_args,
+        &[
+            tool_arg_keys::COMMAND,
+            tool_arg_keys::CMD,
+            tool_arg_keys::SCRIPT,
+            tool_arg_keys::INPUT,
+        ],
+    )?;
     Some(format!("Bash → $ {}", collapse_text(&command, 120)))
 }
 
@@ -1917,7 +1941,7 @@ fn summarize_read_args(tool_args: &serde_json::Value) -> Option<String> {
             patch_keys::FILE_PATH_SNAKE,
             patch_keys::FILE_PATH,
             patch_keys::LEGACY_PATH,
-            "file",
+            tool_arg_keys::FILE,
         ],
     )?;
     Some(format!("Read → {path}"))
@@ -1930,7 +1954,7 @@ fn summarize_write_args(tool_args: &serde_json::Value) -> Option<String> {
             patch_keys::FILE_PATH_SNAKE,
             patch_keys::FILE_PATH,
             patch_keys::LEGACY_PATH,
-            "file",
+            tool_arg_keys::FILE,
         ],
     )?;
     Some(format!("Write ← {path}"))
@@ -1943,14 +1967,14 @@ fn summarize_edit_args(tool_args: &serde_json::Value) -> Option<String> {
             patch_keys::FILE_PATH_SNAKE,
             patch_keys::FILE_PATH,
             patch_keys::LEGACY_PATH,
-            "file",
+            tool_arg_keys::FILE,
         ],
     )?;
     Some(format!("Edit ← {path}"))
 }
 
 fn summarize_glob_args(tool_args: &serde_json::Value) -> Option<String> {
-    let pattern = activity_extract_string(tool_args, &["pattern"])?;
+    let pattern = activity_extract_string(tool_args, &[tool_arg_keys::PATTERN])?;
     let target = activity_extract_string(
         tool_args,
         &[
@@ -1967,7 +1991,8 @@ fn summarize_glob_args(tool_args: &serde_json::Value) -> Option<String> {
 }
 
 fn summarize_grep_args(tool_args: &serde_json::Value) -> Option<String> {
-    let pattern = activity_extract_string(tool_args, &["pattern", "query"])?;
+    let pattern =
+        activity_extract_string(tool_args, &[tool_arg_keys::PATTERN, tool_arg_keys::QUERY])?;
     let target = activity_extract_string(
         tool_args,
         &[
@@ -1984,18 +2009,18 @@ fn summarize_grep_args(tool_args: &serde_json::Value) -> Option<String> {
 }
 
 fn summarize_webfetch_args(tool_args: &serde_json::Value) -> Option<String> {
-    let url = activity_extract_string(tool_args, &["url"])?;
+    let url = activity_extract_string(tool_args, &[tool_arg_keys::URL])?;
     Some(format!("Web Fetch → {url}"))
 }
 
 fn summarize_search_args(tool_name: &str, tool_args: &serde_json::Value) -> Option<String> {
-    let query = activity_extract_string(tool_args, &["query"])?;
+    let query = activity_extract_string(tool_args, &[tool_arg_keys::QUERY])?;
     let name = pretty_scheduler_stage_name(tool_name);
     Some(format!("{name} → \"{query}\""))
 }
 
 fn summarize_lsp_args(tool_args: &serde_json::Value) -> Option<String> {
-    let operation = activity_extract_string(tool_args, &["operation"])?;
+    let operation = activity_extract_string(tool_args, &[tool_arg_keys::OPERATION])?;
     let target = activity_extract_string(
         tool_args,
         &[
@@ -2013,16 +2038,16 @@ fn summarize_lsp_args(tool_args: &serde_json::Value) -> Option<String> {
 
 fn summarize_batch_args(tool_args: &serde_json::Value) -> Option<String> {
     let calls = tool_args
-        .get("toolCalls")
-        .or_else(|| tool_args.get("tool_calls"))
+        .get(tool_arg_keys::TOOL_CALLS_CAMEL)
+        .or_else(|| tool_args.get(tool_arg_keys::TOOL_CALLS))
         .and_then(|v| v.as_array())?;
     let count = calls.len();
     let mut names: Vec<String> = calls
         .iter()
         .filter_map(|call| {
-            call.get("tool")
-                .or_else(|| call.get("name"))
-                .or_else(|| call.get("tool_name"))
+            call.get(tool_arg_keys::TOOL)
+                .or_else(|| call.get(tool_arg_keys::NAME))
+                .or_else(|| call.get(tool_arg_keys::TOOL_NAME))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
         })
@@ -2036,7 +2061,7 @@ fn summarize_batch_args(tool_args: &serde_json::Value) -> Option<String> {
 }
 
 fn summarize_skill_args(tool_args: &serde_json::Value) -> Option<String> {
-    let name = activity_extract_string(tool_args, &["name", "skill"])?;
+    let name = activity_extract_string(tool_args, &[tool_arg_keys::NAME, tool_arg_keys::SKILL])?;
     Some(format!("Skill → \"{}\"", name))
 }
 

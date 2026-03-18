@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use crate::util::server_url;
 use rocode_config::Config;
+use rocode_core::contracts::{provider::auth_keys, tools::arg_keys as tool_arg_keys};
 
 // Re-export shared types from TUI api module so callers don't need to
 // depend on rocode_tui directly.
@@ -28,6 +29,11 @@ pub struct CliApiClient {
     client: reqwest::Client,
     base_url: String,
 }
+
+const RESPONSE_KEY_DELETED: &str = "deleted";
+const RESPONSE_KEY_SUCCESS: &str = "success";
+const RESPONSE_KEY_SERVERS: &str = "servers";
+const RESPONSE_KEY_FORMATTERS: &str = "formatters";
 
 #[allow(dead_code)]
 impl CliApiClient {
@@ -114,7 +120,7 @@ impl CliApiClient {
         let resp = self.client.delete(&url).send().await?;
         let value: serde_json::Value = Self::json_ok(resp, "delete session").await?;
         Ok(value
-            .get("deleted")
+            .get(RESPONSE_KEY_DELETED)
             .and_then(|v| v.as_bool())
             .unwrap_or(true))
     }
@@ -205,7 +211,7 @@ impl CliApiClient {
         answers: Vec<Vec<String>>,
     ) -> anyhow::Result<()> {
         let url = server_url(&self.base_url, &format!("/question/{}/reply", question_id));
-        let body = serde_json::json!({ "answers": answers });
+        let body = serde_json::json!({ tool_arg_keys::ANSWERS: answers });
         let resp = self.client.post(&url).json(&body).send().await?;
         Self::expect_success(resp, &format!("reply question `{}`", question_id)).await?;
         Ok(())
@@ -332,7 +338,7 @@ impl CliApiClient {
 
     pub async fn set_auth(&self, provider_id: &str, api_key: &str) -> anyhow::Result<()> {
         let url = server_url(&self.base_url, &format!("/auth/{}", provider_id));
-        let body = serde_json::json!({ "key": api_key });
+        let body = serde_json::json!({ auth_keys::KEY: api_key });
         let resp = self.client.put(&url).json(&body).send().await?;
         Self::expect_success(resp, &format!("set auth for `{}`", provider_id)).await?;
         Ok(())
@@ -388,7 +394,7 @@ impl CliApiClient {
         let value: serde_json::Value =
             Self::json_ok(resp, &format!("remove MCP auth `{}`", name)).await?;
         Ok(value
-            .get("success")
+            .get(RESPONSE_KEY_SUCCESS)
             .and_then(|v| v.as_bool())
             .unwrap_or(true))
     }
@@ -413,7 +419,7 @@ impl CliApiClient {
         let url = server_url(&self.base_url, "/lsp");
         let resp = self.client.get(&url).send().await?;
         let v: serde_json::Value = Self::json_ok(resp, "get LSP status").await?;
-        Ok(v.get("servers")
+        Ok(v.get(RESPONSE_KEY_SERVERS)
             .and_then(|s| serde_json::from_value::<Vec<String>>(s.clone()).ok())
             .unwrap_or_default())
     }
@@ -422,7 +428,7 @@ impl CliApiClient {
         let url = server_url(&self.base_url, "/formatter");
         let resp = self.client.get(&url).send().await?;
         let v: serde_json::Value = Self::json_ok(resp, "get formatters").await?;
-        Ok(v.get("formatters")
+        Ok(v.get(RESPONSE_KEY_FORMATTERS)
             .and_then(|s| serde_json::from_value::<Vec<String>>(s.clone()).ok())
             .unwrap_or_default())
     }
@@ -441,7 +447,7 @@ impl CliApiClient {
         let value: serde_json::Value =
             Self::json_ok(resp, &format!("unshare session `{}`", session_id)).await?;
         Ok(value
-            .get("success")
+            .get(RESPONSE_KEY_SUCCESS)
             .and_then(|v| v.as_bool())
             .unwrap_or(true))
     }

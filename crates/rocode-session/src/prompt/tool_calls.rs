@@ -335,7 +335,7 @@ impl SessionPrompt {
                 .and_then(|v| v.as_str())
                 .map(str::trim)
                 .filter(|s| !s.is_empty());
-            let content = obj.get("content").and_then(|v| v.as_str());
+            let content = obj.get(patch_keys::CONTENT).and_then(|v| v.as_str());
             if file_path.is_some() && content.is_some() {
                 return None;
             }
