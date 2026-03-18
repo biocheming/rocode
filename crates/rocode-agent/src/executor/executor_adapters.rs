@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -13,6 +14,32 @@ use rocode_tool::{ToolContext, ToolRegistry};
 
 use super::{attach_subsession_callbacks, map_tool_error, SubsessionState};
 use crate::AgentInfo;
+
+fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+        Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ExecutionMetadataWire {
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    call_id: Option<String>,
+}
+
+fn execution_metadata_wire(metadata: &HashMap<String, serde_json::Value>) -> ExecutionMetadataWire {
+    serde_json::from_value::<ExecutionMetadataWire>(serde_json::Value::Object(
+        metadata.clone().into_iter().collect(),
+    ))
+    .unwrap_or_default()
+}
 
 fn preferred_tool_order_key(name: &str) -> (u8, &str) {
     match name {
@@ -133,11 +160,8 @@ impl ToolRegistryAdapter {
             base_ctx.ask = Some(callback.clone());
         }
 
-        base_ctx.call_id = exec_ctx
-            .metadata
-            .get("call_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let metadata_wire = execution_metadata_wire(&exec_ctx.metadata);
+        base_ctx.call_id = metadata_wire.call_id;
         base_ctx.extra = exec_ctx.metadata.clone();
 
         attach_subsession_callbacks(

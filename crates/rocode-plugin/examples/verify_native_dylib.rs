@@ -3,7 +3,32 @@ use std::path::{Path, PathBuf};
 
 use rocode_config::Config;
 use rocode_plugin::{HookContext, HookEvent};
-use serde_json::Value;
+use serde::Deserialize;
+
+fn deserialize_opt_bool_lossy<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Bool(value)) => Some(value),
+        Some(serde_json::Value::Number(value)) => value.as_i64().map(|value| value != 0),
+        Some(serde_json::Value::String(value)) => {
+            match value.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" | "yes" | "on" => Some(true),
+                "0" | "false" | "no" | "off" => Some(false),
+                _ => None,
+            }
+        }
+        _ => None,
+    })
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct NativeHookPayloadWire {
+    #[serde(default, deserialize_with = "deserialize_opt_bool_lossy")]
+    native_demo_loaded: Option<bool>,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -55,9 +80,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await;
 
     let matched = results.into_iter().any(|result| match result {
-        Ok(output) => output
-            .payload
-            .is_some_and(|payload| payload.get("native_demo_loaded") == Some(&Value::Bool(true))),
+        Ok(output) => output.payload.is_some_and(|payload| {
+            serde_json::from_value::<NativeHookPayloadWire>(payload)
+                .ok()
+                .and_then(|parsed| parsed.native_demo_loaded)
+                == Some(true)
+        }),
         Err(_) => false,
     });
 
