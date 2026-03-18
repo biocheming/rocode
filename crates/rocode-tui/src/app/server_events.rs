@@ -1,7 +1,9 @@
 use super::*;
 use rocode_core::contracts::events::{ServerEventType, SessionRunStatusType, ToolCallPhase};
 use rocode_core::contracts::patch::keys as patch_keys;
-use rocode_core::contracts::wire::keys as wire_keys;
+use rocode_core::contracts::wire::{
+    fields as wire_fields, keys as wire_keys, keysets as wire_keysets, selectors as wire_selectors,
+};
 use std::sync::{Arc, Mutex as StdMutex};
 
 pub(super) fn env_var_enabled(name: &str) -> bool {
@@ -183,17 +185,14 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
     };
     let event_type = value.get(wire_keys::TYPE).and_then(|item| item.as_str());
     let parsed_event_type = event_type.and_then(ServerEventType::parse);
-    let session_id = value
-        .get(wire_keys::SESSION_ID)
-        .and_then(|item| item.as_str())
-        .or_else(|| value.get("sessionId").and_then(|item| item.as_str()));
+    let session_id = wire_selectors::first_str(&value, wire_keysets::SESSION_ID_ANY);
     match parsed_event_type {
         Some(ServerEventType::SessionUpdated) => {
             let Some(session_id) = session_id else {
                 return;
             };
             let source = value
-                .get("source")
+                .get(wire_fields::SOURCE)
                 .and_then(|item| item.as_str())
                 .map(str::to_string);
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
@@ -213,10 +212,14 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
                 return;
             };
             let status_type = value
-                .get("status")
+                .get(wire_fields::STATUS)
                 .and_then(|status| status.get("type"))
                 .and_then(|item| item.as_str())
-                .or_else(|| value.get("status").and_then(|item| item.as_str()));
+                .or_else(|| {
+                    value
+                        .get(wire_fields::STATUS)
+                        .and_then(|item| item.as_str())
+                });
             match status_type.and_then(SessionRunStatusType::parse) {
                 Some(SessionRunStatusType::Busy) => {
                     let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
@@ -230,19 +233,19 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
                 }
                 Some(SessionRunStatusType::Retry) => {
                     let attempt = value
-                        .get("status")
+                        .get(wire_fields::STATUS)
                         .and_then(|status| status.get("attempt"))
                         .and_then(|item| item.as_u64())
                         .and_then(|v| u32::try_from(v).ok())
                         .unwrap_or(0);
                     let message = value
-                        .get("status")
+                        .get(wire_fields::STATUS)
                         .and_then(|status| status.get("message"))
                         .and_then(|item| item.as_str())
                         .unwrap_or_default()
                         .to_string();
                     let next = value
-                        .get("status")
+                        .get(wire_fields::STATUS)
                         .and_then(|status| status.get("next"))
                         .and_then(|item| item.as_i64())
                         .unwrap_or_default();
@@ -262,10 +265,7 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
             let Some(session_id) = session_id else {
                 return;
             };
-            let Some(request_id) = value
-                .get("requestID")
-                .and_then(|item| item.as_str())
-                .or_else(|| value.get("requestId").and_then(|item| item.as_str()))
+            let Some(request_id) = wire_selectors::first_str(&value, wire_keysets::REQUEST_ID_ANY)
             else {
                 return;
             };
@@ -273,17 +273,14 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
                 StateChange::QuestionCreated {
                     session_id: session_id.to_string(),
                     request_id: request_id.to_string(),
-                    },
-                ))));
+                },
+            ))));
         }
         Some(ServerEventType::QuestionResolved) => {
             let Some(session_id) = session_id else {
                 return;
             };
-            let Some(request_id) = value
-                .get("requestID")
-                .and_then(|item| item.as_str())
-                .or_else(|| value.get("requestId").and_then(|item| item.as_str()))
+            let Some(request_id) = wire_selectors::first_str(&value, wire_keysets::REQUEST_ID_ANY)
             else {
                 return;
             };
@@ -291,14 +288,14 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
                 StateChange::QuestionResolved {
                     session_id: session_id.to_string(),
                     request_id: request_id.to_string(),
-                    },
-                ))));
+                },
+            ))));
         }
         Some(ServerEventType::PermissionRequested) => {
             let Some(session_id) = session_id else {
                 return;
             };
-            let Some(info) = value.get("info").cloned() else {
+            let Some(info) = value.get(wire_fields::INFO).cloned() else {
                 return;
             };
             let Ok(permission) = serde_json::from_value::<crate::api::PermissionRequestInfo>(info)
@@ -309,19 +306,15 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
                 StateChange::PermissionRequested {
                     session_id: session_id.to_string(),
                     permission,
-                    },
-                ))));
+                },
+            ))));
         }
         Some(ServerEventType::PermissionResolved) => {
             let Some(session_id) = session_id else {
                 return;
             };
-            let Some(permission_id) = value
-                .get("permissionID")
-                .and_then(|item| item.as_str())
-                .or_else(|| value.get("permissionId").and_then(|item| item.as_str()))
-                .or_else(|| value.get("requestID").and_then(|item| item.as_str()))
-                .or_else(|| value.get("requestId").and_then(|item| item.as_str()))
+            let Some(permission_id) =
+                wire_selectors::first_str(&value, wire_keysets::PERMISSION_ID_ANY)
             else {
                 return;
             };
@@ -329,25 +322,26 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
                 StateChange::PermissionResolved {
                     session_id: session_id.to_string(),
                     permission_id: permission_id.to_string(),
-                    },
-                ))));
+                },
+            ))));
         }
         Some(ServerEventType::ToolCallLifecycle) => {
             let Some(session_id) = session_id else {
                 return;
             };
-            let Some(tool_call_id) = value
-                .get(wire_keys::TOOL_CALL_ID)
-                .and_then(|item| item.as_str())
+            let Some(tool_call_id) =
+                wire_selectors::first_str(&value, wire_keysets::TOOL_CALL_ID_ANY)
             else {
                 tracing::warn!("tool_call.lifecycle missing toolCallId");
                 return;
             };
-            let phase = value.get("phase").and_then(|item| item.as_str());
+            let phase = value.get(wire_fields::PHASE).and_then(|item| item.as_str());
             match phase.and_then(ToolCallPhase::parse) {
                 Some(ToolCallPhase::Start) => {
-                    let Some(tool_name) = value.get("toolName").and_then(|item| item.as_str())
-                    else {
+                    let Some(tool_name) = wire_selectors::first_str(
+                        &value,
+                        &[wire_fields::TOOL_NAME, wire_fields::TOOL_NAME_SNAKE],
+                    ) else {
                         tracing::warn!("tool_call.lifecycle start missing toolName");
                         return;
                     };
@@ -385,14 +379,16 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
             let Some(session_id) = session_id else {
                 return;
             };
-            let Some(tool_call_id) = value
-                .get(wire_keys::TOOL_CALL_ID)
-                .and_then(|item| item.as_str())
+            let Some(tool_call_id) =
+                wire_selectors::first_str(&value, wire_keysets::TOOL_CALL_ID_ANY)
             else {
                 tracing::warn!("tool_call.start missing toolCallId");
                 return;
             };
-            let Some(tool_name) = value.get("toolName").and_then(|item| item.as_str()) else {
+            let Some(tool_name) = wire_selectors::first_str(
+                &value,
+                &[wire_fields::TOOL_NAME, wire_fields::TOOL_NAME_SNAKE],
+            ) else {
                 tracing::warn!("tool_call.start missing toolName");
                 return;
             };
@@ -413,9 +409,8 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
             let Some(session_id) = session_id else {
                 return;
             };
-            let Some(tool_call_id) = value
-                .get(wire_keys::TOOL_CALL_ID)
-                .and_then(|item| item.as_str())
+            let Some(tool_call_id) =
+                wire_selectors::first_str(&value, wire_keysets::TOOL_CALL_ID_ANY)
             else {
                 return;
             };
@@ -423,8 +418,8 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
                 StateChange::ToolCallCompleted {
                     session_id: session_id.to_string(),
                     tool_call_id: tool_call_id.to_string(),
-                    },
-                ))));
+                },
+            ))));
         }
         Some(ServerEventType::ExecutionTopologyChanged) => {
             let Some(session_id) = session_id else {
@@ -433,8 +428,8 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(
                 StateChange::TopologyChanged {
                     session_id: session_id.to_string(),
-                    },
-                ))));
+                },
+            ))));
         }
         Some(ServerEventType::DiffUpdated) => {
             let Some(session_id) = session_id else {
@@ -447,8 +442,10 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
                     arr.iter()
                         .filter_map(|entry| {
                             let path = entry.get(patch_keys::LEGACY_PATH)?.as_str()?;
-                            let additions = entry.get("additions")?.as_u64().unwrap_or(0);
-                            let deletions = entry.get("deletions")?.as_u64().unwrap_or(0);
+                            let additions =
+                                entry.get(wire_fields::ADDITIONS)?.as_u64().unwrap_or(0);
+                            let deletions =
+                                entry.get(wire_fields::DELETIONS)?.as_u64().unwrap_or(0);
                             Some(crate::context::DiffEntry {
                                 file: path.to_string(),
                                 additions: additions as u32,
@@ -469,11 +466,11 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
             let Some(session_id) = session_id else {
                 return;
             };
-            let Some(block) = value.get("block") else {
+            let Some(block) = value.get(wire_keys::BLOCK) else {
                 return;
             };
             let id = value
-                .get("id")
+                .get(wire_fields::ID)
                 .and_then(|item| item.as_str())
                 .map(str::to_string);
             let _ = event_tx.send(Event::Custom(Box::new(CustomEvent::StateChanged(

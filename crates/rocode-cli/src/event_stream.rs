@@ -10,7 +10,9 @@ use tokio::sync::mpsc;
 
 use crate::util::server_url;
 use rocode_core::contracts::events::{ServerEventType, SessionRunStatusType, ToolCallPhase};
-use rocode_core::contracts::wire::keys as wire_keys;
+use rocode_core::contracts::wire::{
+    fields as wire_fields, keys as wire_keys, keysets as wire_keysets, selectors as wire_selectors,
+};
 
 // ── Event types ──────────────────────────────────────────────────────
 
@@ -234,12 +236,8 @@ fn parse_event(
     my_session_id: &str,
 ) -> Option<CliServerEvent> {
     // Helper to extract session_id from various field names.
-    let event_session_id = json
-        .get(wire_keys::SESSION_ID)
-        .or_else(|| json.get("sessionId"))
-        .or_else(|| json.get("session_id"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let event_session_id =
+        wire_selectors::first_str(json, wire_keysets::SESSION_ID_ANY).unwrap_or("");
 
     // Determine event type from SSE event name or payload's "type" field.
     let event_type = if !event_name.is_empty() {
@@ -266,7 +264,7 @@ fn parse_event(
                 return None;
             }
             let source = json
-                .get("source")
+                .get(wire_fields::SOURCE)
                 .and_then(|v| v.as_str())
                 .map(String::from);
             Some(CliServerEvent::SessionUpdated {
@@ -283,7 +281,7 @@ fn parse_event(
             // #[serde(tag = "type")] so the value is an object, but we also
             // accept a plain string for forward compatibility.
             let status = json
-                .get("status")
+                .get(wire_fields::STATUS)
                 .and_then(|v| {
                     v.as_str()
                         .or_else(|| v.get(wire_keys::TYPE).and_then(|t| t.as_str()))
@@ -305,16 +303,11 @@ fn parse_event(
         Some(ServerEventType::QuestionCreated) => {
             // Questions may come from child/subsessions — always handle them
             // so the CLI user can answer regardless of which session asked.
-            let request_id = json
-                .get("requestID")
-                .or_else(|| json.get("requestId"))
-                .or_else(|| json.get("request_id"))
-                .or_else(|| json.get("id"))
-                .and_then(|v| v.as_str())
+            let request_id = wire_selectors::first_str(json, wire_keysets::REQUEST_ID_ANY)
                 .unwrap_or("")
                 .to_string();
             let questions_json = json
-                .get("questions")
+                .get(wire_fields::QUESTIONS)
                 .cloned()
                 .unwrap_or(serde_json::Value::Array(vec![]));
             Some(CliServerEvent::QuestionCreated {
@@ -324,26 +317,19 @@ fn parse_event(
             })
         }
         Some(ServerEventType::QuestionResolved) => {
-            let request_id = json
-                .get("requestID")
-                .or_else(|| json.get("requestId"))
-                .or_else(|| json.get("id"))
-                .and_then(|v| v.as_str())
+            let request_id = wire_selectors::first_str(json, wire_keysets::REQUEST_ID_ANY)
                 .unwrap_or("")
                 .to_string();
             Some(CliServerEvent::QuestionResolved { request_id })
         }
         Some(ServerEventType::PermissionRequested) => {
-            let permission_id = json
-                .get("permissionID")
-                .or_else(|| json.get("permissionId"))
-                .or_else(|| json.get("requestID"))
-                .or_else(|| json.get("requestId"))
-                .or_else(|| json.get("id"))
-                .and_then(|v| v.as_str())
+            let permission_id = wire_selectors::first_str(json, wire_keysets::PERMISSION_ID_ANY)
                 .unwrap_or("")
                 .to_string();
-            let info_json = json.get("info").cloned().unwrap_or(serde_json::Value::Null);
+            let info_json = json
+                .get(wire_fields::INFO)
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             Some(CliServerEvent::PermissionRequested {
                 session_id: event_session_id.to_string(),
                 permission_id,
@@ -351,32 +337,27 @@ fn parse_event(
             })
         }
         Some(ServerEventType::PermissionResolved) => {
-            let permission_id = json
-                .get("permissionID")
-                .or_else(|| json.get("permissionId"))
-                .or_else(|| json.get("requestID"))
-                .or_else(|| json.get("requestId"))
-                .or_else(|| json.get("id"))
-                .and_then(|v| v.as_str())
+            let permission_id = wire_selectors::first_str(json, wire_keysets::PERMISSION_ID_ANY)
                 .unwrap_or("")
                 .to_string();
             Some(CliServerEvent::PermissionResolved { permission_id })
         }
         Some(ServerEventType::ToolCallLifecycle) => {
-            let tool_call_id = json
-                .get(wire_keys::TOOL_CALL_ID)
-                .or_else(|| json.get("tool_call_id"))
-                .and_then(|v| v.as_str())
+            let tool_call_id = wire_selectors::first_str(json, wire_keysets::TOOL_CALL_ID_ANY)
                 .unwrap_or("")
                 .to_string();
-            match ToolCallPhase::parse(json.get("phase").and_then(|v| v.as_str()).unwrap_or("")) {
+            match ToolCallPhase::parse(
+                json.get(wire_fields::PHASE)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+            ) {
                 Some(ToolCallPhase::Start) => {
-                    let tool_name = json
-                        .get("toolName")
-                        .or_else(|| json.get("tool_name"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
+                    let tool_name = wire_selectors::first_str(
+                        json,
+                        &[wire_fields::TOOL_NAME, wire_fields::TOOL_NAME_SNAKE],
+                    )
+                    .unwrap_or("")
+                    .to_string();
                     Some(CliServerEvent::ToolCallStarted {
                         session_id: event_session_id.to_string(),
                         tool_call_id,
@@ -391,18 +372,15 @@ fn parse_event(
             }
         }
         Some(ServerEventType::ToolCallStart) => {
-            let tool_call_id = json
-                .get(wire_keys::TOOL_CALL_ID)
-                .or_else(|| json.get("tool_call_id"))
-                .and_then(|v| v.as_str())
+            let tool_call_id = wire_selectors::first_str(json, wire_keysets::TOOL_CALL_ID_ANY)
                 .unwrap_or("")
                 .to_string();
-            let tool_name = json
-                .get("toolName")
-                .or_else(|| json.get("tool_name"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let tool_name = wire_selectors::first_str(
+                json,
+                &[wire_fields::TOOL_NAME, wire_fields::TOOL_NAME_SNAKE],
+            )
+            .unwrap_or("")
+            .to_string();
             Some(CliServerEvent::ToolCallStarted {
                 session_id: event_session_id.to_string(),
                 tool_call_id,
@@ -410,10 +388,7 @@ fn parse_event(
             })
         }
         Some(ServerEventType::ToolCallComplete) => {
-            let tool_call_id = json
-                .get(wire_keys::TOOL_CALL_ID)
-                .or_else(|| json.get("tool_call_id"))
-                .and_then(|v| v.as_str())
+            let tool_call_id = wire_selectors::first_str(json, wire_keysets::TOOL_CALL_ID_ANY)
                 .unwrap_or("")
                 .to_string();
             Some(CliServerEvent::ToolCallCompleted {
@@ -422,18 +397,10 @@ fn parse_event(
             })
         }
         Some(ServerEventType::ChildSessionAttached) => {
-            let parent_id = json
-                .get("parentID")
-                .or_else(|| json.get("parentId"))
-                .or_else(|| json.get("parent_id"))
-                .and_then(|v| v.as_str())
+            let parent_id = wire_selectors::first_str(json, wire_keysets::PARENT_ID_ANY)
                 .unwrap_or("")
                 .to_string();
-            let child_id = json
-                .get("childID")
-                .or_else(|| json.get("childId"))
-                .or_else(|| json.get("child_id"))
-                .and_then(|v| v.as_str())
+            let child_id = wire_selectors::first_str(json, wire_keysets::CHILD_ID_ANY)
                 .unwrap_or("")
                 .to_string();
             Some(CliServerEvent::ChildSessionAttached {
@@ -442,18 +409,10 @@ fn parse_event(
             })
         }
         Some(ServerEventType::ChildSessionDetached) => {
-            let parent_id = json
-                .get("parentID")
-                .or_else(|| json.get("parentId"))
-                .or_else(|| json.get("parent_id"))
-                .and_then(|v| v.as_str())
+            let parent_id = wire_selectors::first_str(json, wire_keysets::PARENT_ID_ANY)
                 .unwrap_or("")
                 .to_string();
-            let child_id = json
-                .get("childID")
-                .or_else(|| json.get("childId"))
-                .or_else(|| json.get("child_id"))
-                .and_then(|v| v.as_str())
+            let child_id = wire_selectors::first_str(json, wire_keysets::CHILD_ID_ANY)
                 .unwrap_or("")
                 .to_string();
             Some(CliServerEvent::ChildSessionDetached {
@@ -463,7 +422,10 @@ fn parse_event(
         }
         Some(ServerEventType::OutputBlock) => {
             // Output blocks may or may not carry a session_id.
-            let id = json.get("id").and_then(|v| v.as_str()).map(String::from);
+            let id = json
+                .get(wire_fields::ID)
+                .and_then(|v| v.as_str())
+                .map(String::from);
             Some(CliServerEvent::OutputBlock {
                 session_id: event_session_id.to_string(),
                 id,
@@ -472,15 +434,13 @@ fn parse_event(
         }
         Some(ServerEventType::Error) => {
             let error = json
-                .get("error")
+                .get(wire_keys::ERROR)
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown error")
                 .to_string();
-            let message_id = json
-                .get("message_id")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            let done = json.get("done").and_then(|v| v.as_bool());
+            let message_id =
+                wire_selectors::first_str(json, wire_keysets::MESSAGE_ID_ANY).map(String::from);
+            let done = json.get(wire_fields::DONE).and_then(|v| v.as_bool());
             Some(CliServerEvent::Error {
                 session_id: event_session_id.to_string(),
                 error,
@@ -490,17 +450,15 @@ fn parse_event(
         }
         Some(ServerEventType::Usage) => {
             let prompt_tokens = json
-                .get("prompt_tokens")
+                .get(wire_fields::PROMPT_TOKENS)
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
             let completion_tokens = json
-                .get("completion_tokens")
+                .get(wire_fields::COMPLETION_TOKENS)
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            let message_id = json
-                .get("message_id")
-                .and_then(|v| v.as_str())
-                .map(String::from);
+            let message_id =
+                wire_selectors::first_str(json, wire_keysets::MESSAGE_ID_ANY).map(String::from);
             Some(CliServerEvent::Usage {
                 session_id: event_session_id.to_string(),
                 prompt_tokens,
