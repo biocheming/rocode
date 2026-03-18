@@ -124,7 +124,7 @@ async fn resolve_requested_session(
         Some(session_id)
     } else if continue_last {
         let db = Database::new().await?;
-        let session_repo = SessionRepository::new(db.pool().clone());
+        let session_repo = SessionRepository::new(db.conn().clone());
         session_repo
             .list(None, 100)
             .await?

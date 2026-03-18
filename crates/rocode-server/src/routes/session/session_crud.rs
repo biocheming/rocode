@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Path, Query, State},
+    http::{HeaderMap, HeaderValue},
     Json,
 };
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,7 @@ pub struct ListSessionsQuery {
     pub start: Option<i64>,
     pub search: Option<String>,
     pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -395,18 +397,56 @@ impl Drop for IdleGuard {
 pub(super) async fn list_sessions(
     State(state): State<Arc<ServerState>>,
     Query(query): Query<ListSessionsQuery>,
-) -> Result<Json<Vec<SessionInfo>>> {
+) -> Result<(HeaderMap, Json<Vec<SessionInfo>>)> {
+    let ListSessionsQuery {
+        directory,
+        roots,
+        start,
+        search,
+        limit,
+        offset,
+    } = query;
+
+    // Normalize directory filtering to match how sessions are stored (canonical absolute paths).
+    // This lets clients pass "." or relative paths and still get consistent results.
+    let directory = directory.map(|raw| resolved_session_directory(&raw));
+
     let filter = rocode_session::SessionFilter {
-        directory: query.directory,
-        roots: query.roots.unwrap_or(false),
-        start: query.start,
-        search: query.search,
-        limit: query.limit,
+        directory,
+        roots: roots.unwrap_or(false),
+        start,
+        search,
+        limit,
+        offset,
     };
     let manager = state.sessions.lock().await;
-    let sessions = manager.list_filtered(filter);
+    let (total, sessions) = manager.list_filtered_with_total(filter);
     let infos: Vec<SessionInfo> = sessions.into_iter().map(session_to_info).collect();
-    Ok(Json(infos))
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "X-Total-Count",
+        HeaderValue::from_str(&total.to_string()).unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    headers.insert(
+        "X-Returned-Count",
+        HeaderValue::from_str(&infos.len().to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    headers.insert(
+        "X-Offset",
+        HeaderValue::from_str(&offset.unwrap_or(0).to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    if let Some(limit) = limit {
+        headers.insert(
+            "X-Limit",
+            HeaderValue::from_str(&limit.to_string())
+                .unwrap_or_else(|_| HeaderValue::from_static("0")),
+        );
+    }
+
+    Ok((headers, Json(infos)))
 }
 
 pub(super) async fn session_status(

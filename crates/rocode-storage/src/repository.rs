@@ -1,597 +1,43 @@
-use anyhow::Result;
 use chrono::{DateTime, Utc};
+use sea_orm::sea_query::OnConflict;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseTransaction, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect, Set, TransactionTrait,
+};
 use serde::{Deserialize, Serialize};
-use serde_json;
-use sqlx::{FromRow, SqlitePool};
+use std::collections::HashSet;
 
 use rocode_types::{
-    MessagePart, MessageRole, Session, SessionMessage, SessionShare, SessionStatus, SessionSummary,
-    SessionTime, SessionUsage,
+    MessagePart, MessageRole, MessageUsage, PartType, Session, SessionMessage, SessionShare,
+    SessionStatus, SessionSummary, SessionTime, SessionUsage, ToolCallStatus,
 };
 
 use crate::database::DatabaseError;
+use crate::entities::{messages, parts, session_shares, sessions, todos};
+use crate::StorageConnection;
 
-// ── Shared SQL constants (single source of truth for upsert schemas) ────────
-
-const SESSION_UPSERT_SQL: &str = r#"
-INSERT INTO sessions (
-    id, project_id, parent_id, slug, directory, title, version, share_url,
-    summary_additions, summary_deletions, summary_files, summary_diffs,
-    revert, permission, metadata,
-    usage_input_tokens, usage_output_tokens, usage_reasoning_tokens,
-    usage_cache_write_tokens, usage_cache_read_tokens, usage_total_cost,
-    status, created_at, updated_at, time_compacting, time_archived
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(id) DO UPDATE SET
-    title = excluded.title, version = excluded.version, share_url = excluded.share_url,
-    summary_additions = excluded.summary_additions, summary_deletions = excluded.summary_deletions,
-    summary_files = excluded.summary_files, summary_diffs = excluded.summary_diffs,
-    revert = excluded.revert, permission = excluded.permission, metadata = excluded.metadata,
-    usage_input_tokens = excluded.usage_input_tokens, usage_output_tokens = excluded.usage_output_tokens,
-    usage_reasoning_tokens = excluded.usage_reasoning_tokens,
-    usage_cache_write_tokens = excluded.usage_cache_write_tokens,
-    usage_cache_read_tokens = excluded.usage_cache_read_tokens,
-    usage_total_cost = excluded.usage_total_cost,
-    status = excluded.status, updated_at = excluded.updated_at,
-    time_compacting = excluded.time_compacting, time_archived = excluded.time_archived
-"#;
-
-const MESSAGE_UPSERT_SQL: &str = r#"
-INSERT INTO messages (id, session_id, role, created_at, finish, metadata, data)
-VALUES (?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(id) DO UPDATE SET
-    session_id = excluded.session_id,
-    role = excluded.role,
-    created_at = excluded.created_at,
-    finish = excluded.finish,
-    metadata = excluded.metadata,
-    data = excluded.data
-"#;
-
-fn bind_session_upsert<'q>(
-    query: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>,
-    session: &'q Session,
-) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
-    let usage = session.usage.as_ref();
-    query
-        .bind(&session.id)
-        .bind(&session.project_id)
-        .bind(&session.parent_id)
-        .bind(&session.slug)
-        .bind(&session.directory)
-        .bind(&session.title)
-        .bind(&session.version)
-        .bind(session.share.as_ref().map(|s| s.url.as_str()))
-        .bind(
-            session
-                .summary
-                .as_ref()
-                .map(|s| s.additions as i64)
-                .unwrap_or(0),
-        )
-        .bind(
-            session
-                .summary
-                .as_ref()
-                .map(|s| s.deletions as i64)
-                .unwrap_or(0),
-        )
-        .bind(
-            session
-                .summary
-                .as_ref()
-                .map(|s| s.files as i64)
-                .unwrap_or(0),
-        )
-        .bind(
-            session
-                .summary
-                .as_ref()
-                .and_then(|s| serde_json::to_string(&s.diffs).ok()),
-        )
-        .bind(
-            session
-                .revert
-                .as_ref()
-                .and_then(|r| serde_json::to_string(r).ok()),
-        )
-        .bind(
-            session
-                .permission
-                .as_ref()
-                .and_then(|p| serde_json::to_string(p).ok()),
-        )
-        .bind(serde_json::to_string(&session.metadata).ok())
-        .bind(usage.map(|u| u.input_tokens as i64).unwrap_or(0))
-        .bind(usage.map(|u| u.output_tokens as i64).unwrap_or(0))
-        .bind(usage.map(|u| u.reasoning_tokens as i64).unwrap_or(0))
-        .bind(usage.map(|u| u.cache_write_tokens as i64).unwrap_or(0))
-        .bind(usage.map(|u| u.cache_read_tokens as i64).unwrap_or(0))
-        .bind(usage.map(|u| u.total_cost).unwrap_or(0.0))
-        .bind(status_to_string(&session.status))
-        .bind(session.time.created)
-        .bind(session.time.updated)
-        .bind(session.time.compacting)
-        .bind(session.time.archived)
+fn map_query_err(err: sea_orm::DbErr) -> DatabaseError {
+    DatabaseError::QueryError(err.to_string())
 }
 
-fn role_to_str(role: &MessageRole) -> &'static str {
-    match role {
-        MessageRole::User => "user",
-        MessageRole::Assistant => "assistant",
-        MessageRole::System => "system",
-        MessageRole::Tool => "tool",
-    }
+fn map_tx_err(err: sea_orm::DbErr) -> DatabaseError {
+    DatabaseError::TransactionError(err.to_string())
 }
 
-#[derive(Debug, FromRow)]
-struct SessionRow {
-    id: String,
-    project_id: String,
-    parent_id: Option<String>,
-    slug: String,
-    directory: String,
-    title: String,
-    version: String,
-    share_url: Option<String>,
-    summary_additions: Option<i64>,
-    summary_deletions: Option<i64>,
-    summary_files: Option<i64>,
-    summary_diffs: Option<String>,
-    revert: Option<String>,
-    permission: Option<String>,
-    metadata: Option<String>,
-    usage_input_tokens: Option<i64>,
-    usage_output_tokens: Option<i64>,
-    usage_reasoning_tokens: Option<i64>,
-    usage_cache_write_tokens: Option<i64>,
-    usage_cache_read_tokens: Option<i64>,
-    usage_total_cost: Option<f64>,
-    status: String,
-    created_at: i64,
-    updated_at: i64,
-    time_compacting: Option<i64>,
-    time_archived: Option<i64>,
-}
-
-impl SessionRow {
-    fn into_session(self) -> Session {
-        let summary = if self.summary_additions.is_some()
-            || self.summary_deletions.is_some()
-            || self.summary_files.is_some()
-        {
-            Some(SessionSummary {
-                additions: self.summary_additions.unwrap_or(0) as u64,
-                deletions: self.summary_deletions.unwrap_or(0) as u64,
-                files: self.summary_files.unwrap_or(0) as u64,
-                diffs: self
-                    .summary_diffs
-                    .and_then(|d| serde_json::from_str(&d).ok()),
-            })
-        } else {
-            None
-        };
-
-        let created_dt = DateTime::from_timestamp_millis(self.created_at).unwrap_or_else(Utc::now);
-        let updated_dt = DateTime::from_timestamp_millis(self.updated_at).unwrap_or_else(Utc::now);
-
-        Session {
-            id: self.id,
-            slug: self.slug,
-            project_id: self.project_id,
-            directory: self.directory,
-            parent_id: self.parent_id,
-            title: self.title,
-            version: self.version,
-            time: SessionTime {
-                created: self.created_at,
-                updated: self.updated_at,
-                compacting: self.time_compacting,
-                archived: self.time_archived,
-            },
-            messages: vec![],
-            summary,
-            share: self.share_url.map(|url| SessionShare { url }),
-            revert: self.revert.and_then(|r| serde_json::from_str(&r).ok()),
-            permission: self.permission.and_then(|p| serde_json::from_str(&p).ok()),
-            metadata: self
-                .metadata
-                .and_then(|m| serde_json::from_str(&m).ok())
-                .unwrap_or_default(),
-            usage: if self.usage_input_tokens.is_some() {
-                Some(SessionUsage {
-                    input_tokens: self.usage_input_tokens.unwrap_or(0) as u64,
-                    output_tokens: self.usage_output_tokens.unwrap_or(0) as u64,
-                    reasoning_tokens: self.usage_reasoning_tokens.unwrap_or(0) as u64,
-                    cache_write_tokens: self.usage_cache_write_tokens.unwrap_or(0) as u64,
-                    cache_read_tokens: self.usage_cache_read_tokens.unwrap_or(0) as u64,
-                    total_cost: self.usage_total_cost.unwrap_or(0.0),
-                })
-            } else {
-                None
-            },
-            status: string_to_status(&self.status),
-            created_at: created_dt,
-            updated_at: updated_dt,
-        }
+fn normalize_limit_offset(limit: i64, offset: i64) -> Result<(u64, u64), DatabaseError> {
+    if limit < 0 {
+        return Err(DatabaseError::QueryError(format!(
+            "limit must be >= 0, got {}",
+            limit
+        )));
     }
-}
-
-#[derive(Clone)]
-pub struct SessionRepository {
-    pool: SqlitePool,
-}
-
-impl SessionRepository {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    if offset < 0 {
+        return Err(DatabaseError::QueryError(format!(
+            "offset must be >= 0, got {}",
+            offset
+        )));
     }
-
-    pub async fn create(&self, session: &Session) -> Result<(), DatabaseError> {
-        let summary_diffs = session
-            .summary
-            .as_ref()
-            .and_then(|s| serde_json::to_string(&s.diffs).ok());
-
-        let revert_json = session
-            .revert
-            .as_ref()
-            .and_then(|r| serde_json::to_string(r).ok());
-
-        let permission_json = session
-            .permission
-            .as_ref()
-            .and_then(|p| serde_json::to_string(p).ok());
-        let metadata_json = serde_json::to_string(&session.metadata).ok();
-
-        let share_url = session.share.as_ref().map(|s| s.url.as_str());
-
-        let usage = session.usage.as_ref();
-
-        sqlx::query(
-            r#"
-            INSERT INTO sessions (
-                id, project_id, parent_id, slug, directory, title, version, share_url,
-                summary_additions, summary_deletions, summary_files, summary_diffs,
-                revert, permission, metadata,
-                usage_input_tokens, usage_output_tokens, usage_reasoning_tokens,
-                usage_cache_write_tokens, usage_cache_read_tokens, usage_total_cost,
-                status, created_at, updated_at, time_compacting, time_archived
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#,
-        )
-        .bind(&session.id)
-        .bind(&session.project_id)
-        .bind(&session.parent_id)
-        .bind(&session.slug)
-        .bind(&session.directory)
-        .bind(&session.title)
-        .bind(&session.version)
-        .bind(share_url)
-        .bind(
-            session
-                .summary
-                .as_ref()
-                .map(|s| s.additions as i64)
-                .unwrap_or(0),
-        )
-        .bind(
-            session
-                .summary
-                .as_ref()
-                .map(|s| s.deletions as i64)
-                .unwrap_or(0),
-        )
-        .bind(
-            session
-                .summary
-                .as_ref()
-                .map(|s| s.files as i64)
-                .unwrap_or(0),
-        )
-        .bind(summary_diffs)
-        .bind(revert_json)
-        .bind(permission_json)
-        .bind(metadata_json)
-        .bind(usage.map(|u| u.input_tokens as i64).unwrap_or(0))
-        .bind(usage.map(|u| u.output_tokens as i64).unwrap_or(0))
-        .bind(usage.map(|u| u.reasoning_tokens as i64).unwrap_or(0))
-        .bind(usage.map(|u| u.cache_write_tokens as i64).unwrap_or(0))
-        .bind(usage.map(|u| u.cache_read_tokens as i64).unwrap_or(0))
-        .bind(usage.map(|u| u.total_cost).unwrap_or(0.0))
-        .bind(status_to_string(&session.status))
-        .bind(session.time.created)
-        .bind(session.time.updated)
-        .bind(session.time.compacting)
-        .bind(session.time.archived)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-
-        Ok(())
-    }
-
-    pub async fn get(&self, id: &str) -> Result<Option<Session>, DatabaseError> {
-        let row = sqlx::query_as::<_, SessionRow>(
-            r#"SELECT 
-                id, project_id, parent_id, slug, directory, title, version, share_url,
-                summary_additions, summary_deletions, summary_files, summary_diffs,
-                revert, permission, metadata,
-                usage_input_tokens, usage_output_tokens, usage_reasoning_tokens,
-                usage_cache_write_tokens, usage_cache_read_tokens, usage_total_cost,
-                status, created_at, updated_at, time_compacting, time_archived
-            FROM sessions WHERE id = ?"#,
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-
-        Ok(row.map(|r| r.into_session()))
-    }
-
-    pub async fn list(
-        &self,
-        project_id: Option<&str>,
-        limit: i64,
-    ) -> Result<Vec<Session>, DatabaseError> {
-        let rows = match project_id {
-            Some(pid) => sqlx::query_as::<_, SessionRow>(
-                r#"SELECT 
-                        id, project_id, parent_id, slug, directory, title, version, share_url,
-                        summary_additions, summary_deletions, summary_files, summary_diffs,
-                        revert, permission, metadata,
-                        usage_input_tokens, usage_output_tokens, usage_reasoning_tokens,
-                        usage_cache_write_tokens, usage_cache_read_tokens, usage_total_cost,
-                        status, created_at, updated_at, time_compacting, time_archived
-                    FROM sessions WHERE project_id = ? 
-                    ORDER BY updated_at DESC LIMIT ?"#,
-            )
-            .bind(pid)
-            .bind(limit)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| DatabaseError::QueryError(e.to_string()))?,
-            None => sqlx::query_as::<_, SessionRow>(
-                r#"SELECT 
-                        id, project_id, parent_id, slug, directory, title, version, share_url,
-                        summary_additions, summary_deletions, summary_files, summary_diffs,
-                        revert, permission, metadata,
-                        usage_input_tokens, usage_output_tokens, usage_reasoning_tokens,
-                        usage_cache_write_tokens, usage_cache_read_tokens, usage_total_cost,
-                        status, created_at, updated_at, time_compacting, time_archived
-                    FROM sessions 
-                    ORDER BY updated_at DESC LIMIT ?"#,
-            )
-            .bind(limit)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| DatabaseError::QueryError(e.to_string()))?,
-        };
-
-        Ok(rows.into_iter().map(|r| r.into_session()).collect())
-    }
-
-    pub async fn update(&self, session: &Session) -> Result<(), DatabaseError> {
-        let summary_diffs = session
-            .summary
-            .as_ref()
-            .and_then(|s| serde_json::to_string(&s.diffs).ok());
-
-        let revert_json = session
-            .revert
-            .as_ref()
-            .and_then(|r| serde_json::to_string(r).ok());
-
-        let permission_json = session
-            .permission
-            .as_ref()
-            .and_then(|p| serde_json::to_string(p).ok());
-
-        let share_url = session.share.as_ref().map(|s| s.url.as_str());
-        let metadata_json = serde_json::to_string(&session.metadata).ok();
-
-        let usage = session.usage.as_ref();
-
-        sqlx::query(
-            r#"
-            UPDATE sessions SET
-                title = ?, version = ?, share_url = ?,
-                summary_additions = ?, summary_deletions = ?, summary_files = ?, summary_diffs = ?,
-                revert = ?, permission = ?, metadata = ?,
-                usage_input_tokens = ?, usage_output_tokens = ?, usage_reasoning_tokens = ?,
-                usage_cache_write_tokens = ?, usage_cache_read_tokens = ?, usage_total_cost = ?,
-                status = ?, updated_at = ?, time_compacting = ?, time_archived = ?
-            WHERE id = ?
-            "#,
-        )
-        .bind(&session.title)
-        .bind(&session.version)
-        .bind(share_url)
-        .bind(
-            session
-                .summary
-                .as_ref()
-                .map(|s| s.additions as i64)
-                .unwrap_or(0),
-        )
-        .bind(
-            session
-                .summary
-                .as_ref()
-                .map(|s| s.deletions as i64)
-                .unwrap_or(0),
-        )
-        .bind(
-            session
-                .summary
-                .as_ref()
-                .map(|s| s.files as i64)
-                .unwrap_or(0),
-        )
-        .bind(summary_diffs)
-        .bind(revert_json)
-        .bind(permission_json)
-        .bind(metadata_json)
-        .bind(usage.map(|u| u.input_tokens as i64).unwrap_or(0))
-        .bind(usage.map(|u| u.output_tokens as i64).unwrap_or(0))
-        .bind(usage.map(|u| u.reasoning_tokens as i64).unwrap_or(0))
-        .bind(usage.map(|u| u.cache_write_tokens as i64).unwrap_or(0))
-        .bind(usage.map(|u| u.cache_read_tokens as i64).unwrap_or(0))
-        .bind(usage.map(|u| u.total_cost).unwrap_or(0.0))
-        .bind(status_to_string(&session.status))
-        .bind(session.time.updated)
-        .bind(session.time.compacting)
-        .bind(session.time.archived)
-        .bind(&session.id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-
-        Ok(())
-    }
-
-    pub async fn upsert(&self, session: &Session) -> Result<(), DatabaseError> {
-        bind_session_upsert(sqlx::query(SESSION_UPSERT_SQL), session)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-        Ok(())
-    }
-
-    pub async fn delete(&self, id: &str) -> Result<(), DatabaseError> {
-        sqlx::query("DELETE FROM sessions WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-
-        Ok(())
-    }
-
-    pub async fn list_children(&self, parent_id: &str) -> Result<Vec<Session>, DatabaseError> {
-        let rows = sqlx::query_as::<_, SessionRow>(
-            r#"SELECT 
-                id, project_id, parent_id, slug, directory, title, version, share_url,
-                summary_additions, summary_deletions, summary_files, summary_diffs,
-                revert, permission, metadata,
-                usage_input_tokens, usage_output_tokens, usage_reasoning_tokens,
-                usage_cache_write_tokens, usage_cache_read_tokens, usage_total_cost,
-                status, created_at, updated_at, time_compacting, time_archived
-            FROM sessions WHERE parent_id = ? 
-            ORDER BY created_at DESC"#,
-        )
-        .bind(parent_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-
-        Ok(rows.into_iter().map(|r| r.into_session()).collect())
-    }
-
-    /// Atomically upsert a session, upsert its messages, and delete stale messages
-    /// that no longer exist in the session layer (e.g. after revert/delete).
-    pub async fn flush_with_messages(
-        &self,
-        session: &Session,
-        messages: &[SessionMessage],
-    ) -> Result<(), DatabaseError> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| DatabaseError::TransactionError(e.to_string()))?;
-
-        // Upsert session
-        bind_session_upsert(sqlx::query(SESSION_UPSERT_SQL), session)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-
-        // Upsert messages
-        for msg in messages {
-            let data_json = serde_json::to_string(&msg.parts)
-                .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-            let metadata_json = serde_json::to_string(&msg.metadata)
-                .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-            sqlx::query(MESSAGE_UPSERT_SQL)
-                .bind(&msg.id)
-                .bind(&msg.session_id)
-                .bind(role_to_str(&msg.role))
-                .bind(msg.created_at.timestamp_millis())
-                .bind(&msg.finish)
-                .bind(&metadata_json)
-                .bind(&data_json)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-        }
-
-        // Delete stale messages
-        let keep_ids: Vec<&str> = messages.iter().map(|m| m.id.as_str()).collect();
-        if keep_ids.is_empty() {
-            sqlx::query("DELETE FROM messages WHERE session_id = ?")
-                .bind(&session.id)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-        } else if keep_ids.len() <= 998 {
-            let placeholders: String = keep_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-            let sql = format!(
-                "DELETE FROM messages WHERE session_id = ? AND id NOT IN ({})",
-                placeholders
-            );
-            let mut query = sqlx::query(&sql).bind(&session.id);
-            for id in &keep_ids {
-                query = query.bind(*id);
-            }
-            query
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-        } else {
-            sqlx::query("CREATE TEMP TABLE IF NOT EXISTS _keep_msg_ids (id TEXT PRIMARY KEY)")
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-            sqlx::query("DELETE FROM _keep_msg_ids")
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-            for chunk in keep_ids.chunks(500) {
-                let placeholders: String =
-                    chunk.iter().map(|_| "(?)").collect::<Vec<_>>().join(",");
-                let sql = format!(
-                    "INSERT OR IGNORE INTO _keep_msg_ids (id) VALUES {}",
-                    placeholders
-                );
-                let mut query = sqlx::query(&sql);
-                for id in chunk {
-                    query = query.bind(*id);
-                }
-                query
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-            }
-            sqlx::query(
-                "DELETE FROM messages WHERE session_id = ? AND id NOT IN (SELECT id FROM _keep_msg_ids)",
-            )
-            .bind(&session.id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-            sqlx::query("DROP TABLE IF EXISTS _keep_msg_ids")
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-        }
-
-        tx.commit()
-            .await
-            .map_err(|e| DatabaseError::TransactionError(e.to_string()))?;
-        Ok(())
-    }
+    Ok((limit as u64, offset as u64))
 }
 
 fn status_to_string(status: &SessionStatus) -> &'static str {
@@ -612,67 +58,795 @@ fn string_to_status(s: &str) -> SessionStatus {
     }
 }
 
-#[derive(Clone)]
-pub struct MessageRepository {
-    pool: SqlitePool,
+fn role_to_str(role: &MessageRole) -> &'static str {
+    match role {
+        MessageRole::User => "user",
+        MessageRole::Assistant => "assistant",
+        MessageRole::System => "system",
+        MessageRole::Tool => "tool",
+    }
 }
 
-impl MessageRepository {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+fn string_to_role(s: &str) -> Option<MessageRole> {
+    match s {
+        "user" => Some(MessageRole::User),
+        "assistant" => Some(MessageRole::Assistant),
+        "system" => Some(MessageRole::System),
+        "tool" => Some(MessageRole::Tool),
+        _ => None,
+    }
+}
+
+fn session_insert_model(session: &Session) -> sessions::ActiveModel {
+    let summary_diffs = session
+        .summary
+        .as_ref()
+        .and_then(|s| serde_json::to_string(&s.diffs).ok());
+    let revert_json = session
+        .revert
+        .as_ref()
+        .and_then(|r| serde_json::to_string(r).ok());
+    let permission_json = session
+        .permission
+        .as_ref()
+        .and_then(|p| serde_json::to_string(p).ok());
+    let metadata_json = serde_json::to_string(&session.metadata).ok();
+
+    let usage = session.usage.as_ref();
+
+    sessions::ActiveModel {
+        id: Set(session.id.clone()),
+        project_id: Set(session.project_id.clone()),
+        parent_id: Set(session.parent_id.clone()),
+        slug: Set(session.slug.clone()),
+        directory: Set(session.directory.clone()),
+        title: Set(session.title.clone()),
+        version: Set(session.version.clone()),
+        share_url: Set(session.share.as_ref().map(|s| s.url.clone())),
+        summary_additions: Set(session
+            .summary
+            .as_ref()
+            .map(|s| s.additions as i64)
+            .unwrap_or(0)),
+        summary_deletions: Set(session
+            .summary
+            .as_ref()
+            .map(|s| s.deletions as i64)
+            .unwrap_or(0)),
+        summary_files: Set(session
+            .summary
+            .as_ref()
+            .map(|s| s.files as i64)
+            .unwrap_or(0)),
+        summary_diffs: Set(summary_diffs),
+        revert: Set(revert_json),
+        permission: Set(permission_json),
+        metadata: Set(metadata_json),
+        usage_input_tokens: Set(usage.map(|u| u.input_tokens as i64).unwrap_or(0)),
+        usage_output_tokens: Set(usage.map(|u| u.output_tokens as i64).unwrap_or(0)),
+        usage_reasoning_tokens: Set(usage.map(|u| u.reasoning_tokens as i64).unwrap_or(0)),
+        usage_cache_write_tokens: Set(usage.map(|u| u.cache_write_tokens as i64).unwrap_or(0)),
+        usage_cache_read_tokens: Set(usage.map(|u| u.cache_read_tokens as i64).unwrap_or(0)),
+        usage_total_cost: Set(usage.map(|u| u.total_cost).unwrap_or(0.0)),
+        status: Set(status_to_string(&session.status).to_string()),
+        created_at: Set(session.time.created),
+        updated_at: Set(session.time.updated),
+        time_compacting: Set(session.time.compacting),
+        time_archived: Set(session.time.archived),
+    }
+}
+
+fn session_update_model(session: &Session) -> sessions::ActiveModel {
+    let summary_diffs = session
+        .summary
+        .as_ref()
+        .and_then(|s| serde_json::to_string(&s.diffs).ok());
+    let revert_json = session
+        .revert
+        .as_ref()
+        .and_then(|r| serde_json::to_string(r).ok());
+    let permission_json = session
+        .permission
+        .as_ref()
+        .and_then(|p| serde_json::to_string(p).ok());
+    let metadata_json = serde_json::to_string(&session.metadata).ok();
+
+    let usage = session.usage.as_ref();
+
+    sessions::ActiveModel {
+        id: Set(session.id.clone()),
+        title: Set(session.title.clone()),
+        version: Set(session.version.clone()),
+        share_url: Set(session.share.as_ref().map(|s| s.url.clone())),
+        summary_additions: Set(session
+            .summary
+            .as_ref()
+            .map(|s| s.additions as i64)
+            .unwrap_or(0)),
+        summary_deletions: Set(session
+            .summary
+            .as_ref()
+            .map(|s| s.deletions as i64)
+            .unwrap_or(0)),
+        summary_files: Set(session
+            .summary
+            .as_ref()
+            .map(|s| s.files as i64)
+            .unwrap_or(0)),
+        summary_diffs: Set(summary_diffs),
+        revert: Set(revert_json),
+        permission: Set(permission_json),
+        metadata: Set(metadata_json),
+        usage_input_tokens: Set(usage.map(|u| u.input_tokens as i64).unwrap_or(0)),
+        usage_output_tokens: Set(usage.map(|u| u.output_tokens as i64).unwrap_or(0)),
+        usage_reasoning_tokens: Set(usage.map(|u| u.reasoning_tokens as i64).unwrap_or(0)),
+        usage_cache_write_tokens: Set(usage.map(|u| u.cache_write_tokens as i64).unwrap_or(0)),
+        usage_cache_read_tokens: Set(usage.map(|u| u.cache_read_tokens as i64).unwrap_or(0)),
+        usage_total_cost: Set(usage.map(|u| u.total_cost).unwrap_or(0.0)),
+        status: Set(status_to_string(&session.status).to_string()),
+        updated_at: Set(session.time.updated),
+        time_compacting: Set(session.time.compacting),
+        time_archived: Set(session.time.archived),
+        ..Default::default()
+    }
+}
+
+fn session_from_model(model: sessions::Model) -> Session {
+    let summary_present = model.summary_additions != 0
+        || model.summary_deletions != 0
+        || model.summary_files != 0
+        || model.summary_diffs.is_some();
+    let summary = summary_present.then(|| SessionSummary {
+        additions: model.summary_additions as u64,
+        deletions: model.summary_deletions as u64,
+        files: model.summary_files as u64,
+        diffs: model
+            .summary_diffs
+            .as_deref()
+            .and_then(|d| serde_json::from_str(d).ok()),
+    });
+
+    let created_dt = DateTime::from_timestamp_millis(model.created_at).unwrap_or_else(Utc::now);
+    let updated_dt = DateTime::from_timestamp_millis(model.updated_at).unwrap_or_else(Utc::now);
+
+    let usage_present = model.usage_input_tokens != 0
+        || model.usage_output_tokens != 0
+        || model.usage_reasoning_tokens != 0
+        || model.usage_cache_write_tokens != 0
+        || model.usage_cache_read_tokens != 0
+        || model.usage_total_cost != 0.0;
+    let usage = usage_present.then(|| SessionUsage {
+        input_tokens: model.usage_input_tokens as u64,
+        output_tokens: model.usage_output_tokens as u64,
+        reasoning_tokens: model.usage_reasoning_tokens as u64,
+        cache_write_tokens: model.usage_cache_write_tokens as u64,
+        cache_read_tokens: model.usage_cache_read_tokens as u64,
+        total_cost: model.usage_total_cost,
+    });
+
+    Session {
+        id: model.id,
+        slug: model.slug,
+        project_id: model.project_id,
+        directory: model.directory,
+        parent_id: model.parent_id,
+        title: model.title,
+        version: model.version,
+        time: SessionTime {
+            created: model.created_at,
+            updated: model.updated_at,
+            compacting: model.time_compacting,
+            archived: model.time_archived,
+        },
+        messages: vec![],
+        summary,
+        share: model.share_url.map(|url| SessionShare { url }),
+        revert: model.revert.and_then(|r| serde_json::from_str(&r).ok()),
+        permission: model.permission.and_then(|p| serde_json::from_str(&p).ok()),
+        metadata: model
+            .metadata
+            .and_then(|m| serde_json::from_str(&m).ok())
+            .unwrap_or_default(),
+        usage,
+        status: string_to_status(&model.status),
+        created_at: created_dt,
+        updated_at: updated_dt,
+    }
+}
+
+fn message_insert_model(message: &SessionMessage) -> Result<messages::ActiveModel, DatabaseError> {
+    let data_json = serde_json::to_string(&message.parts)
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+    let metadata_json = serde_json::to_string(&message.metadata)
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+    let usage = message.usage.as_ref();
+
+    Ok(messages::ActiveModel {
+        id: Set(message.id.clone()),
+        session_id: Set(message.session_id.clone()),
+        role: Set(role_to_str(&message.role).to_string()),
+        created_at: Set(message.created_at.timestamp_millis()),
+        tokens_input: Set(usage.map(|u| u.input_tokens as i64).unwrap_or(0)),
+        tokens_output: Set(usage.map(|u| u.output_tokens as i64).unwrap_or(0)),
+        tokens_reasoning: Set(usage.map(|u| u.reasoning_tokens as i64).unwrap_or(0)),
+        tokens_cache_read: Set(usage.map(|u| u.cache_read_tokens as i64).unwrap_or(0)),
+        tokens_cache_write: Set(usage.map(|u| u.cache_write_tokens as i64).unwrap_or(0)),
+        cost: Set(usage.map(|u| u.total_cost).unwrap_or(0.0)),
+        finish: Set(message.finish.clone()),
+        metadata: Set(Some(metadata_json)),
+        data: Set(Some(data_json)),
+        ..Default::default()
+    })
+}
+
+fn message_from_model(model: messages::Model) -> Option<SessionMessage> {
+    let msg_role = string_to_role(model.role.as_str())?;
+
+    let parts: Vec<MessagePart> = model
+        .data
+        .and_then(|c| serde_json::from_str(&c).ok())
+        .unwrap_or_default();
+
+    let created = DateTime::from_timestamp_millis(model.created_at).unwrap_or_else(Utc::now);
+
+    let usage_present = model.tokens_input != 0
+        || model.tokens_output != 0
+        || model.tokens_reasoning != 0
+        || model.tokens_cache_read != 0
+        || model.tokens_cache_write != 0
+        || model.cost != 0.0;
+    let usage = usage_present.then(|| MessageUsage {
+        input_tokens: model.tokens_input as u64,
+        output_tokens: model.tokens_output as u64,
+        reasoning_tokens: model.tokens_reasoning as u64,
+        cache_write_tokens: model.tokens_cache_write as u64,
+        cache_read_tokens: model.tokens_cache_read as u64,
+        total_cost: model.cost,
+    });
+
+    Some(SessionMessage {
+        id: model.id,
+        session_id: model.session_id,
+        role: msg_role,
+        parts,
+        created_at: created,
+        metadata: model
+            .metadata
+            .and_then(|m| serde_json::from_str(&m).ok())
+            .unwrap_or_default(),
+        usage,
+        finish: model.finish,
+    })
+}
+
+fn part_type_to_str(part_type: &PartType) -> &'static str {
+    match part_type {
+        PartType::Text { .. } => "text",
+        PartType::ToolCall { .. } => "tool_call",
+        PartType::ToolResult { .. } => "tool_result",
+        PartType::Reasoning { .. } => "reasoning",
+        PartType::File { .. } => "file",
+        PartType::StepStart { .. } => "step_start",
+        PartType::StepFinish { .. } => "step_finish",
+        PartType::Snapshot { .. } => "snapshot",
+        PartType::Patch { .. } => "patch",
+        PartType::Agent { .. } => "agent",
+        PartType::Subtask { .. } => "subtask",
+        PartType::Retry { .. } => "retry",
+        PartType::Compaction { .. } => "compaction",
+    }
+}
+
+fn tool_status_to_str(status: &ToolCallStatus) -> &'static str {
+    match status {
+        ToolCallStatus::Pending => "pending",
+        ToolCallStatus::Running => "running",
+        ToolCallStatus::Completed => "completed",
+        ToolCallStatus::Error => "error",
+    }
+}
+
+fn part_insert_model(
+    session_id: &str,
+    message_id: &str,
+    sort_order: i64,
+    part: &MessagePart,
+) -> Result<parts::ActiveModel, DatabaseError> {
+    let created_at = part.created_at.timestamp_millis();
+    let data_json = serde_json::to_string(part)
+        .map(Some)
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+    let mut active = parts::ActiveModel {
+        id: Set(part.id.clone()),
+        message_id: Set(message_id.to_string()),
+        session_id: Set(session_id.to_string()),
+        created_at: Set(created_at),
+        part_type: Set(part_type_to_str(&part.part_type).to_string()),
+        sort_order: Set(sort_order),
+        data: Set(data_json),
+        ..Default::default()
+    };
+
+    match &part.part_type {
+        PartType::Text { text, .. } => {
+            active.text = Set(Some(text.clone()));
+        }
+        PartType::ToolCall {
+            id,
+            name,
+            input,
+            status,
+            ..
+        } => {
+            active.tool_name = Set(Some(name.clone()));
+            active.tool_call_id = Set(Some(id.clone()));
+            active.tool_arguments = Set(serde_json::to_string(input).ok());
+            active.tool_status = Set(Some(tool_status_to_str(status).to_string()));
+        }
+        PartType::ToolResult {
+            tool_call_id,
+            content,
+            is_error,
+            ..
+        } => {
+            active.tool_call_id = Set(Some(tool_call_id.clone()));
+            active.tool_result = Set(Some(content.clone()));
+            active.tool_error = Set(is_error.then(|| content.clone()));
+            active.tool_status = Set(Some(if *is_error { "error" } else { "completed" }.into()));
+        }
+        PartType::Reasoning { text } => {
+            active.reasoning = Set(Some(text.clone()));
+        }
+        PartType::File {
+            url,
+            filename,
+            mime,
+        } => {
+            active.file_url = Set(Some(url.clone()));
+            active.file_filename = Set(Some(filename.clone()));
+            active.file_mime = Set(Some(mime.clone()));
+        }
+        _ => {}
     }
 
-    pub async fn create(&self, message: &SessionMessage) -> Result<(), DatabaseError> {
-        let data_json = serde_json::to_string(&message.parts)
-            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-        let metadata_json = serde_json::to_string(&message.metadata)
-            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+    Ok(active)
+}
 
-        let role_str = match message.role {
-            MessageRole::User => "user",
-            MessageRole::Assistant => "assistant",
-            MessageRole::System => "system",
-            MessageRole::Tool => "tool",
-        };
+#[derive(Clone)]
+pub struct SessionRepository {
+    conn: StorageConnection,
+}
 
-        sqlx::query(
-            r#"
-            INSERT INTO messages (id, session_id, role, created_at, finish, metadata, data)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            "#,
-        )
-        .bind(&message.id)
-        .bind(&message.session_id)
-        .bind(role_str)
-        .bind(message.created_at.timestamp_millis())
-        .bind(&message.finish)
-        .bind(&metadata_json)
-        .bind(&data_json)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+impl SessionRepository {
+    pub fn new(conn: StorageConnection) -> Self {
+        Self { conn }
+    }
+
+    pub async fn create(&self, session: &Session) -> Result<(), DatabaseError> {
+        sessions::Entity::insert(session_insert_model(session))
+            .exec(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+        Ok(())
+    }
+
+    pub async fn get(&self, id: &str) -> Result<Option<Session>, DatabaseError> {
+        let row = sessions::Entity::find_by_id(id.to_string())
+            .one(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+        Ok(row.map(session_from_model))
+    }
+
+    pub async fn list(
+        &self,
+        project_id: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<Session>, DatabaseError> {
+        let (limit, _offset) = normalize_limit_offset(limit, 0)?;
+        let mut query = sessions::Entity::find();
+        if let Some(pid) = project_id {
+            query = query.filter(sessions::Column::ProjectId.eq(pid));
+        }
+        let rows = query
+            .order_by_desc(sessions::Column::UpdatedAt)
+            .limit(limit)
+            .offset(0)
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+        Ok(rows.into_iter().map(session_from_model).collect())
+    }
+
+    pub async fn count(&self, project_id: Option<&str>) -> Result<u64, DatabaseError> {
+        let mut query = sessions::Entity::find();
+        if let Some(pid) = project_id {
+            query = query.filter(sessions::Column::ProjectId.eq(pid));
+        }
+        query.count(&self.conn).await.map_err(map_query_err)
+    }
+
+    pub async fn list_page(
+        &self,
+        project_id: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Session>, DatabaseError> {
+        let (limit, offset) = normalize_limit_offset(limit, offset)?;
+        let mut query = sessions::Entity::find();
+        if let Some(pid) = project_id {
+            query = query.filter(sessions::Column::ProjectId.eq(pid));
+        }
+        let rows = query
+            .order_by_desc(sessions::Column::UpdatedAt)
+            .limit(limit)
+            .offset(offset)
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+        Ok(rows.into_iter().map(session_from_model).collect())
+    }
+
+    pub async fn count_for_directory(&self, directory: &str) -> Result<u64, DatabaseError> {
+        sessions::Entity::find()
+            .filter(sessions::Column::Directory.eq(directory))
+            .count(&self.conn)
+            .await
+            .map_err(map_query_err)
+    }
+
+    pub async fn list_for_directory_page(
+        &self,
+        directory: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Session>, DatabaseError> {
+        let (limit, offset) = normalize_limit_offset(limit, offset)?;
+        let rows = sessions::Entity::find()
+            .filter(sessions::Column::Directory.eq(directory))
+            .order_by_desc(sessions::Column::UpdatedAt)
+            .limit(limit)
+            .offset(offset)
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+        Ok(rows.into_iter().map(session_from_model).collect())
+    }
+
+    pub async fn update(&self, session: &Session) -> Result<(), DatabaseError> {
+        session_update_model(session)
+            .update(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+        Ok(())
+    }
+
+    pub async fn upsert(&self, session: &Session) -> Result<(), DatabaseError> {
+        sessions::Entity::insert(session_insert_model(session))
+            .on_conflict(
+                OnConflict::column(sessions::Column::Id)
+                    .update_columns([
+                        sessions::Column::Title,
+                        sessions::Column::Version,
+                        sessions::Column::ShareUrl,
+                        sessions::Column::SummaryAdditions,
+                        sessions::Column::SummaryDeletions,
+                        sessions::Column::SummaryFiles,
+                        sessions::Column::SummaryDiffs,
+                        sessions::Column::Revert,
+                        sessions::Column::Permission,
+                        sessions::Column::Metadata,
+                        sessions::Column::UsageInputTokens,
+                        sessions::Column::UsageOutputTokens,
+                        sessions::Column::UsageReasoningTokens,
+                        sessions::Column::UsageCacheWriteTokens,
+                        sessions::Column::UsageCacheReadTokens,
+                        sessions::Column::UsageTotalCost,
+                        sessions::Column::Status,
+                        sessions::Column::UpdatedAt,
+                        sessions::Column::TimeCompacting,
+                        sessions::Column::TimeArchived,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+        Ok(())
+    }
+
+    pub async fn delete(&self, id: &str) -> Result<(), DatabaseError> {
+        sessions::Entity::delete_by_id(id.to_string())
+            .exec(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+        Ok(())
+    }
+
+    pub async fn list_children(&self, parent_id: &str) -> Result<Vec<Session>, DatabaseError> {
+        let rows = sessions::Entity::find()
+            .filter(sessions::Column::ParentId.eq(parent_id))
+            .order_by_desc(sessions::Column::CreatedAt)
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+        Ok(rows.into_iter().map(session_from_model).collect())
+    }
+
+    async fn upsert_session_in_tx(
+        &self,
+        tx: &DatabaseTransaction,
+        session: &Session,
+    ) -> Result<(), DatabaseError> {
+        sessions::Entity::insert(session_insert_model(session))
+            .on_conflict(
+                OnConflict::column(sessions::Column::Id)
+                    .update_columns([
+                        sessions::Column::Title,
+                        sessions::Column::Version,
+                        sessions::Column::ShareUrl,
+                        sessions::Column::SummaryAdditions,
+                        sessions::Column::SummaryDeletions,
+                        sessions::Column::SummaryFiles,
+                        sessions::Column::SummaryDiffs,
+                        sessions::Column::Revert,
+                        sessions::Column::Permission,
+                        sessions::Column::Metadata,
+                        sessions::Column::UsageInputTokens,
+                        sessions::Column::UsageOutputTokens,
+                        sessions::Column::UsageReasoningTokens,
+                        sessions::Column::UsageCacheWriteTokens,
+                        sessions::Column::UsageCacheReadTokens,
+                        sessions::Column::UsageTotalCost,
+                        sessions::Column::Status,
+                        sessions::Column::UpdatedAt,
+                        sessions::Column::TimeCompacting,
+                        sessions::Column::TimeArchived,
+                    ])
+                    .to_owned(),
+            )
+            .exec(tx)
+            .await
+            .map_err(map_query_err)?;
+        Ok(())
+    }
+
+    async fn upsert_messages_in_tx(
+        &self,
+        tx: &DatabaseTransaction,
+        messages_to_upsert: &[SessionMessage],
+    ) -> Result<(), DatabaseError> {
+        for msg in messages_to_upsert {
+            messages::Entity::insert(message_insert_model(msg)?)
+                .on_conflict(
+                    OnConflict::column(messages::Column::Id)
+                        .update_columns([
+                            messages::Column::SessionId,
+                            messages::Column::Role,
+                            messages::Column::CreatedAt,
+                            messages::Column::TokensInput,
+                            messages::Column::TokensOutput,
+                            messages::Column::TokensReasoning,
+                            messages::Column::TokensCacheRead,
+                            messages::Column::TokensCacheWrite,
+                            messages::Column::Cost,
+                            messages::Column::Finish,
+                            messages::Column::Metadata,
+                            messages::Column::Data,
+                        ])
+                        .to_owned(),
+                )
+                .exec(tx)
+                .await
+                .map_err(map_query_err)?;
+        }
+        Ok(())
+    }
+
+    async fn upsert_parts_in_tx(
+        &self,
+        tx: &DatabaseTransaction,
+        messages_to_upsert: &[SessionMessage],
+    ) -> Result<(), DatabaseError> {
+        for msg in messages_to_upsert {
+            for (idx, part) in msg.parts.iter().enumerate() {
+                parts::Entity::insert(part_insert_model(
+                    msg.session_id.as_str(),
+                    msg.id.as_str(),
+                    idx as i64,
+                    part,
+                )?)
+                .on_conflict(
+                    OnConflict::column(parts::Column::Id)
+                        .update_columns([
+                            parts::Column::MessageId,
+                            parts::Column::SessionId,
+                            parts::Column::CreatedAt,
+                            parts::Column::PartType,
+                            parts::Column::Text,
+                            parts::Column::ToolName,
+                            parts::Column::ToolCallId,
+                            parts::Column::ToolArguments,
+                            parts::Column::ToolResult,
+                            parts::Column::ToolError,
+                            parts::Column::ToolStatus,
+                            parts::Column::FileUrl,
+                            parts::Column::FileFilename,
+                            parts::Column::FileMime,
+                            parts::Column::Reasoning,
+                            parts::Column::SortOrder,
+                            parts::Column::Data,
+                        ])
+                        .to_owned(),
+                )
+                .exec(tx)
+                .await
+                .map_err(map_query_err)?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn delete_stale_parts_for_message_in_tx(
+        &self,
+        tx: &DatabaseTransaction,
+        message_id: &str,
+        keep_ids: &HashSet<String>,
+    ) -> Result<(), DatabaseError> {
+        if keep_ids.is_empty() {
+            parts::Entity::delete_many()
+                .filter(parts::Column::MessageId.eq(message_id))
+                .exec(tx)
+                .await
+                .map_err(map_query_err)?;
+            return Ok(());
+        }
+
+        let existing_ids: Vec<String> = parts::Entity::find()
+            .filter(parts::Column::MessageId.eq(message_id))
+            .select_only()
+            .column(parts::Column::Id)
+            .into_tuple()
+            .all(tx)
+            .await
+            .map_err(map_query_err)?;
+
+        let stale: Vec<String> = existing_ids
+            .into_iter()
+            .filter(|id| !keep_ids.contains(id))
+            .collect();
+
+        for chunk in stale.chunks(500) {
+            parts::Entity::delete_many()
+                .filter(parts::Column::Id.is_in(chunk.to_vec()))
+                .exec(tx)
+                .await
+                .map_err(map_query_err)?;
+        }
 
         Ok(())
     }
 
-    pub async fn upsert(&self, message: &SessionMessage) -> Result<(), DatabaseError> {
-        let data_json = serde_json::to_string(&message.parts)
-            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-        let metadata_json = serde_json::to_string(&message.metadata)
-            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-
-        sqlx::query(MESSAGE_UPSERT_SQL)
-            .bind(&message.id)
-            .bind(&message.session_id)
-            .bind(role_to_str(&message.role))
-            .bind(message.created_at.timestamp_millis())
-            .bind(&message.finish)
-            .bind(&metadata_json)
-            .bind(&data_json)
-            .execute(&self.pool)
+    async fn delete_stale_messages_in_tx(
+        &self,
+        tx: &DatabaseTransaction,
+        session_id: &str,
+        keep_ids: &HashSet<String>,
+    ) -> Result<(), DatabaseError> {
+        let existing_ids: Vec<String> = messages::Entity::find()
+            .filter(messages::Column::SessionId.eq(session_id))
+            .select_only()
+            .column(messages::Column::Id)
+            .into_tuple()
+            .all(tx)
             .await
-            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+            .map_err(map_query_err)?;
 
+        let stale: Vec<String> = existing_ids
+            .into_iter()
+            .filter(|id| !keep_ids.contains(id))
+            .collect();
+
+        for chunk in stale.chunks(500) {
+            messages::Entity::delete_many()
+                .filter(messages::Column::Id.is_in(chunk.to_vec()))
+                .exec(tx)
+                .await
+                .map_err(map_query_err)?;
+        }
+
+        Ok(())
+    }
+
+    /// Atomically upsert a session, upsert its messages, and delete stale messages
+    /// that no longer exist in the session layer (e.g. after revert/delete).
+    pub async fn flush_with_messages(
+        &self,
+        session: &Session,
+        messages_to_flush: &[SessionMessage],
+    ) -> Result<(), DatabaseError> {
+        let tx = self.conn.begin().await.map_err(map_tx_err)?;
+
+        let keep_ids: HashSet<String> = messages_to_flush.iter().map(|m| m.id.clone()).collect();
+
+        let result = async {
+            self.upsert_session_in_tx(&tx, session).await?;
+            self.upsert_messages_in_tx(&tx, messages_to_flush).await?;
+            self.upsert_parts_in_tx(&tx, messages_to_flush).await?;
+            self.delete_stale_messages_in_tx(&tx, &session.id, &keep_ids)
+                .await?;
+            for msg in messages_to_flush {
+                let keep_parts: HashSet<String> = msg.parts.iter().map(|p| p.id.clone()).collect();
+                self.delete_stale_parts_for_message_in_tx(&tx, &msg.id, &keep_parts)
+                    .await?;
+            }
+            Ok::<(), DatabaseError>(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => tx.commit().await.map_err(map_tx_err),
+            Err(err) => {
+                let _ = tx.rollback().await;
+                Err(err)
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct MessageRepository {
+    conn: StorageConnection,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageHeaderRow {
+    pub id: String,
+    pub session_id: String,
+    pub role: String,
+    pub created_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finish: Option<String>,
+}
+
+impl MessageRepository {
+    pub fn new(conn: StorageConnection) -> Self {
+        Self { conn }
+    }
+
+    pub async fn create(&self, message: &SessionMessage) -> Result<(), DatabaseError> {
+        messages::Entity::insert(message_insert_model(message)?)
+            .exec(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+        Ok(())
+    }
+
+    pub async fn upsert(&self, message: &SessionMessage) -> Result<(), DatabaseError> {
+        messages::Entity::insert(message_insert_model(message)?)
+            .on_conflict(
+                OnConflict::column(messages::Column::Id)
+                    .update_columns([
+                        messages::Column::SessionId,
+                        messages::Column::Role,
+                        messages::Column::CreatedAt,
+                        messages::Column::TokensInput,
+                        messages::Column::TokensOutput,
+                        messages::Column::TokensReasoning,
+                        messages::Column::TokensCacheRead,
+                        messages::Column::TokensCacheWrite,
+                        messages::Column::Cost,
+                        messages::Column::Finish,
+                        messages::Column::Metadata,
+                        messages::Column::Data,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&self.conn)
+            .await
+            .map_err(map_query_err)?;
         Ok(())
     }
 
@@ -680,136 +854,105 @@ impl MessageRepository {
         &self,
         session_id: &str,
     ) -> Result<Vec<SessionMessage>, DatabaseError> {
-        #[derive(FromRow)]
-        struct MessageRow {
-            id: String,
-            session_id: String,
-            role: String,
-            created_at: i64,
-            finish: Option<String>,
-            metadata: Option<String>,
-            data: Option<String>,
-        }
+        let rows = messages::Entity::find()
+            .filter(messages::Column::SessionId.eq(session_id))
+            .order_by_asc(messages::Column::CreatedAt)
+            .order_by_asc(messages::Column::Id)
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
 
-        let rows = sqlx::query_as::<_, MessageRow>(
-            r#"SELECT id, session_id, role, created_at, finish, metadata, data
-               FROM messages WHERE session_id = ? ORDER BY created_at ASC"#,
-        )
-        .bind(session_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+        Ok(rows.into_iter().filter_map(message_from_model).collect())
+    }
 
-        let messages: Vec<SessionMessage> = rows
+    pub async fn count_for_session(&self, session_id: &str) -> Result<u64, DatabaseError> {
+        messages::Entity::find()
+            .filter(messages::Column::SessionId.eq(session_id))
+            .count(&self.conn)
+            .await
+            .map_err(map_query_err)
+    }
+
+    pub async fn list_headers_for_session_page(
+        &self,
+        session_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<MessageHeaderRow>, DatabaseError> {
+        let (limit, offset) = normalize_limit_offset(limit, offset)?;
+        let rows: Vec<(String, String, String, i64, Option<String>)> = messages::Entity::find()
+            .filter(messages::Column::SessionId.eq(session_id))
+            .select_only()
+            .column(messages::Column::Id)
+            .column(messages::Column::SessionId)
+            .column(messages::Column::Role)
+            .column(messages::Column::CreatedAt)
+            .column(messages::Column::Finish)
+            .order_by_asc(messages::Column::CreatedAt)
+            .order_by_asc(messages::Column::Id)
+            .limit(limit)
+            .offset(offset)
+            .into_tuple()
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+
+        Ok(rows
             .into_iter()
-            .filter_map(|row| {
-                let msg_role = match row.role.as_str() {
-                    "user" => MessageRole::User,
-                    "assistant" => MessageRole::Assistant,
-                    "system" => MessageRole::System,
-                    "tool" => MessageRole::Tool,
-                    _ => return None,
-                };
+            .map(
+                |(id, session_id, role, created_at, finish)| MessageHeaderRow {
+                    id,
+                    session_id,
+                    role,
+                    created_at,
+                    finish,
+                },
+            )
+            .collect())
+    }
 
-                let parts: Vec<MessagePart> = row
-                    .data
-                    .and_then(|c| serde_json::from_str(&c).ok())
-                    .unwrap_or_default();
+    pub async fn list_for_session_page(
+        &self,
+        session_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<SessionMessage>, DatabaseError> {
+        let (limit, offset) = normalize_limit_offset(limit, offset)?;
+        let rows = messages::Entity::find()
+            .filter(messages::Column::SessionId.eq(session_id))
+            .order_by_asc(messages::Column::CreatedAt)
+            .order_by_asc(messages::Column::Id)
+            .limit(limit)
+            .offset(offset)
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
 
-                let created =
-                    DateTime::from_timestamp_millis(row.created_at).unwrap_or_else(Utc::now);
-
-                Some(SessionMessage {
-                    id: row.id,
-                    session_id: row.session_id,
-                    role: msg_role,
-                    parts,
-                    created_at: created,
-                    metadata: row
-                        .metadata
-                        .and_then(|m| serde_json::from_str(&m).ok())
-                        .unwrap_or_default(),
-                    finish: row.finish,
-                })
-            })
-            .collect();
-
-        Ok(messages)
+        Ok(rows.into_iter().filter_map(message_from_model).collect())
     }
 
     pub async fn get(&self, id: &str) -> Result<Option<SessionMessage>, DatabaseError> {
-        #[derive(FromRow)]
-        struct MessageRow {
-            id: String,
-            session_id: String,
-            role: String,
-            created_at: i64,
-            finish: Option<String>,
-            metadata: Option<String>,
-            data: Option<String>,
-        }
-
-        let row = sqlx::query_as::<_, MessageRow>(
-            r#"SELECT id, session_id, role, created_at, finish, metadata, data
-               FROM messages WHERE id = ?"#,
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-
-        match row {
-            Some(row) => {
-                let msg_role = match row.role.as_str() {
-                    "user" => MessageRole::User,
-                    "assistant" => MessageRole::Assistant,
-                    "system" => MessageRole::System,
-                    "tool" => MessageRole::Tool,
-                    _ => return Ok(None),
-                };
-
-                let parts: Vec<MessagePart> = row
-                    .data
-                    .and_then(|c| serde_json::from_str(&c).ok())
-                    .unwrap_or_default();
-
-                let created =
-                    DateTime::from_timestamp_millis(row.created_at).unwrap_or_else(Utc::now);
-
-                Ok(Some(SessionMessage {
-                    id: row.id,
-                    session_id: row.session_id,
-                    role: msg_role,
-                    parts,
-                    created_at: created,
-                    metadata: row
-                        .metadata
-                        .and_then(|m| serde_json::from_str(&m).ok())
-                        .unwrap_or_default(),
-                    finish: row.finish,
-                }))
-            }
-            None => Ok(None),
-        }
+        let row = messages::Entity::find_by_id(id.to_string())
+            .one(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+        Ok(row.and_then(message_from_model))
     }
 
     pub async fn delete(&self, id: &str) -> Result<(), DatabaseError> {
-        sqlx::query("DELETE FROM messages WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
+        messages::Entity::delete_by_id(id.to_string())
+            .exec(&self.conn)
             .await
-            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-
+            .map_err(map_query_err)?;
         Ok(())
     }
 
     pub async fn delete_for_session(&self, session_id: &str) -> Result<(), DatabaseError> {
-        sqlx::query("DELETE FROM messages WHERE session_id = ?")
-            .bind(session_id)
-            .execute(&self.pool)
+        messages::Entity::delete_many()
+            .filter(messages::Column::SessionId.eq(session_id))
+            .exec(&self.conn)
             .await
-            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-
+            .map_err(map_query_err)?;
         Ok(())
     }
 }
@@ -823,35 +966,25 @@ pub struct TodoItem {
     pub position: i64,
 }
 
+#[derive(Clone)]
 pub struct TodoRepository {
-    pool: SqlitePool,
+    conn: StorageConnection,
 }
 
 impl TodoRepository {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(conn: StorageConnection) -> Self {
+        Self { conn }
     }
 
     pub async fn list_for_session(&self, session_id: &str) -> Result<Vec<TodoItem>, DatabaseError> {
-        #[derive(FromRow)]
-        struct TodoRow {
-            todo_id: String,
-            content: String,
-            status: String,
-            priority: String,
-            position: i64,
-        }
+        let rows = todos::Entity::find()
+            .filter(todos::Column::SessionId.eq(session_id))
+            .order_by_asc(todos::Column::Position)
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
 
-        let rows = sqlx::query_as::<_, TodoRow>(
-            r#"SELECT todo_id, content, status, priority, position 
-               FROM todos WHERE session_id = ? ORDER BY position ASC"#,
-        )
-        .bind(session_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-
-        let todos: Vec<TodoItem> = rows
+        Ok(rows
             .into_iter()
             .map(|row| TodoItem {
                 id: row.todo_id,
@@ -860,59 +993,93 @@ impl TodoRepository {
                 priority: row.priority,
                 position: row.position,
             })
-            .collect();
+            .collect())
+    }
 
-        Ok(todos)
+    pub async fn count_for_session(&self, session_id: &str) -> Result<u64, DatabaseError> {
+        todos::Entity::find()
+            .filter(todos::Column::SessionId.eq(session_id))
+            .count(&self.conn)
+            .await
+            .map_err(map_query_err)
+    }
+
+    pub async fn list_for_session_page(
+        &self,
+        session_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<TodoItem>, DatabaseError> {
+        let (limit, offset) = normalize_limit_offset(limit, offset)?;
+        let rows = todos::Entity::find()
+            .filter(todos::Column::SessionId.eq(session_id))
+            .order_by_asc(todos::Column::Position)
+            .order_by_asc(todos::Column::TodoId)
+            .limit(limit)
+            .offset(offset)
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| TodoItem {
+                id: row.todo_id,
+                content: row.content,
+                status: row.status,
+                priority: row.priority,
+                position: row.position,
+            })
+            .collect())
     }
 
     pub async fn upsert(&self, session_id: &str, todo: &TodoItem) -> Result<(), DatabaseError> {
         let now = Utc::now().timestamp_millis();
+        let insert = todos::ActiveModel {
+            session_id: Set(session_id.to_string()),
+            todo_id: Set(todo.id.clone()),
+            content: Set(todo.content.clone()),
+            status: Set(todo.status.clone()),
+            priority: Set(todo.priority.clone()),
+            position: Set(todo.position),
+            created_at: Set(now),
+            updated_at: Set(now),
+        };
 
-        sqlx::query(
-            r#"
-            INSERT INTO todos (session_id, todo_id, content, status, priority, position, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(session_id, todo_id) DO UPDATE SET
-                content = excluded.content,
-                status = excluded.status,
-                priority = excluded.priority,
-                position = excluded.position,
-                updated_at = excluded.updated_at
-            "#
-        )
-        .bind(session_id)
-        .bind(&todo.id)
-        .bind(&todo.content)
-        .bind(&todo.status)
-        .bind(&todo.priority)
-        .bind(todo.position)
-        .bind(now)
-        .bind(now)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-
+        todos::Entity::insert(insert)
+            .on_conflict(
+                OnConflict::columns([todos::Column::SessionId, todos::Column::TodoId])
+                    .update_columns([
+                        todos::Column::Content,
+                        todos::Column::Status,
+                        todos::Column::Priority,
+                        todos::Column::Position,
+                        todos::Column::UpdatedAt,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&self.conn)
+            .await
+            .map_err(map_query_err)?;
         Ok(())
     }
 
     pub async fn delete(&self, session_id: &str, todo_id: &str) -> Result<(), DatabaseError> {
-        sqlx::query("DELETE FROM todos WHERE session_id = ? AND todo_id = ?")
-            .bind(session_id)
-            .bind(todo_id)
-            .execute(&self.pool)
+        todos::Entity::delete_many()
+            .filter(todos::Column::SessionId.eq(session_id))
+            .filter(todos::Column::TodoId.eq(todo_id))
+            .exec(&self.conn)
             .await
-            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-
+            .map_err(map_query_err)?;
         Ok(())
     }
 
     pub async fn delete_for_session(&self, session_id: &str) -> Result<(), DatabaseError> {
-        sqlx::query("DELETE FROM todos WHERE session_id = ?")
-            .bind(session_id)
-            .execute(&self.pool)
+        todos::Entity::delete_many()
+            .filter(todos::Column::SessionId.eq(session_id))
+            .exec(&self.conn)
             .await
-            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-
+            .map_err(map_query_err)?;
         Ok(())
     }
 }
@@ -925,32 +1092,21 @@ pub struct SessionShareRow {
     pub url: String,
 }
 
+#[derive(Clone)]
 pub struct ShareRepository {
-    pool: SqlitePool,
+    conn: StorageConnection,
 }
 
 impl ShareRepository {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(conn: StorageConnection) -> Self {
+        Self { conn }
     }
 
     pub async fn get(&self, session_id: &str) -> Result<Option<SessionShareRow>, DatabaseError> {
-        #[derive(FromRow)]
-        struct ShareRow {
-            session_id: String,
-            id: String,
-            secret: String,
-            url: String,
-        }
-
-        let row = sqlx::query_as::<_, ShareRow>(
-            r#"SELECT session_id, id, secret, url FROM session_shares WHERE session_id = ?"#,
-        )
-        .bind(session_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-
+        let row = session_shares::Entity::find_by_id(session_id.to_string())
+            .one(&self.conn)
+            .await
+            .map_err(map_query_err)?;
         Ok(row.map(|r| SessionShareRow {
             session_id: r.session_id,
             id: r.id,
@@ -961,36 +1117,35 @@ impl ShareRepository {
 
     pub async fn upsert(&self, share: &SessionShareRow) -> Result<(), DatabaseError> {
         let now = Utc::now().timestamp_millis();
+        let insert = session_shares::ActiveModel {
+            session_id: Set(share.session_id.clone()),
+            id: Set(share.id.clone()),
+            secret: Set(share.secret.clone()),
+            url: Set(share.url.clone()),
+            created_at: Set(now),
+        };
 
-        sqlx::query(
-            r#"
-            INSERT INTO session_shares (session_id, id, secret, url, created_at)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(session_id) DO UPDATE SET
-                id = excluded.id,
-                secret = excluded.secret,
-                url = excluded.url
-            "#,
-        )
-        .bind(&share.session_id)
-        .bind(&share.id)
-        .bind(&share.secret)
-        .bind(&share.url)
-        .bind(now)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-
+        session_shares::Entity::insert(insert)
+            .on_conflict(
+                OnConflict::column(session_shares::Column::SessionId)
+                    .update_columns([
+                        session_shares::Column::Id,
+                        session_shares::Column::Secret,
+                        session_shares::Column::Url,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&self.conn)
+            .await
+            .map_err(map_query_err)?;
         Ok(())
     }
 
     pub async fn delete(&self, session_id: &str) -> Result<(), DatabaseError> {
-        sqlx::query("DELETE FROM session_shares WHERE session_id = ?")
-            .bind(session_id)
-            .execute(&self.pool)
+        session_shares::Entity::delete_by_id(session_id.to_string())
+            .exec(&self.conn)
             .await
-            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-
+            .map_err(map_query_err)?;
         Ok(())
     }
 }
@@ -1000,6 +1155,7 @@ pub struct PartRow {
     pub id: String,
     pub message_id: String,
     pub session_id: String,
+    pub created_at: i64,
     pub part_type: String,
     pub text: Option<String>,
     pub tool_name: Option<String>,
@@ -1008,45 +1164,74 @@ pub struct PartRow {
     pub tool_result: Option<String>,
     pub tool_error: Option<String>,
     pub tool_status: Option<String>,
+    pub file_url: Option<String>,
+    pub file_filename: Option<String>,
+    pub file_mime: Option<String>,
+    pub reasoning: Option<String>,
+    pub sort_order: i64,
+    pub data: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct PartRepository {
+    conn: StorageConnection,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartSummaryRow {
+    pub id: String,
+    pub message_id: String,
+    pub session_id: String,
+    pub created_at: i64,
+    pub part_type: String,
+    pub tool_name: Option<String>,
+    pub tool_call_id: Option<String>,
+    pub tool_status: Option<String>,
     pub sort_order: i64,
 }
 
-pub struct PartRepository {
-    pool: SqlitePool,
-}
-
 impl PartRepository {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(conn: StorageConnection) -> Self {
+        Self { conn }
+    }
+
+    pub async fn get(&self, id: &str) -> Result<Option<PartRow>, DatabaseError> {
+        let row = parts::Entity::find_by_id(id.to_string())
+            .one(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+
+        Ok(row.map(|r| PartRow {
+            id: r.id,
+            message_id: r.message_id,
+            session_id: r.session_id,
+            created_at: r.created_at,
+            part_type: r.part_type,
+            text: r.text,
+            tool_name: r.tool_name,
+            tool_call_id: r.tool_call_id,
+            tool_arguments: r.tool_arguments,
+            tool_result: r.tool_result,
+            tool_error: r.tool_error,
+            tool_status: r.tool_status,
+            file_url: r.file_url,
+            file_filename: r.file_filename,
+            file_mime: r.file_mime,
+            reasoning: r.reasoning,
+            sort_order: r.sort_order,
+            data: r.data,
+        }))
     }
 
     pub async fn list_for_message(&self, message_id: &str) -> Result<Vec<PartRow>, DatabaseError> {
-        #[derive(FromRow)]
-        struct Row {
-            id: String,
-            message_id: String,
-            session_id: String,
-            part_type: String,
-            text: Option<String>,
-            tool_name: Option<String>,
-            tool_call_id: Option<String>,
-            tool_arguments: Option<String>,
-            tool_result: Option<String>,
-            tool_error: Option<String>,
-            tool_status: Option<String>,
-            sort_order: i64,
-        }
-
-        let rows = sqlx::query_as::<_, Row>(
-            r#"SELECT id, message_id, session_id, part_type, text, 
-                      tool_name, tool_call_id, tool_arguments, tool_result, 
-                      tool_error, tool_status, sort_order
-               FROM parts WHERE message_id = ? ORDER BY sort_order ASC"#,
-        )
-        .bind(message_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+        let rows = parts::Entity::find()
+            .filter(parts::Column::MessageId.eq(message_id))
+            .order_by_asc(parts::Column::SortOrder)
+            .order_by_asc(parts::Column::CreatedAt)
+            .order_by_asc(parts::Column::Id)
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
 
         Ok(rows
             .into_iter()
@@ -1054,6 +1239,7 @@ impl PartRepository {
                 id: r.id,
                 message_id: r.message_id,
                 session_id: r.session_id,
+                created_at: r.created_at,
                 part_type: r.part_type,
                 text: r.text,
                 tool_name: r.tool_name,
@@ -1062,38 +1248,143 @@ impl PartRepository {
                 tool_result: r.tool_result,
                 tool_error: r.tool_error,
                 tool_status: r.tool_status,
+                file_url: r.file_url,
+                file_filename: r.file_filename,
+                file_mime: r.file_mime,
+                reasoning: r.reasoning,
                 sort_order: r.sort_order,
+                data: r.data,
+            })
+            .collect())
+    }
+
+    pub async fn count_for_message(&self, message_id: &str) -> Result<u64, DatabaseError> {
+        parts::Entity::find()
+            .filter(parts::Column::MessageId.eq(message_id))
+            .count(&self.conn)
+            .await
+            .map_err(map_query_err)
+    }
+
+    pub async fn list_summaries_for_message_page(
+        &self,
+        message_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<PartSummaryRow>, DatabaseError> {
+        let (limit, offset) = normalize_limit_offset(limit, offset)?;
+        let rows: Vec<(
+            String,
+            String,
+            String,
+            i64,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            i64,
+        )> = parts::Entity::find()
+            .filter(parts::Column::MessageId.eq(message_id))
+            .select_only()
+            .column(parts::Column::Id)
+            .column(parts::Column::MessageId)
+            .column(parts::Column::SessionId)
+            .column(parts::Column::CreatedAt)
+            .column(parts::Column::PartType)
+            .column(parts::Column::ToolName)
+            .column(parts::Column::ToolCallId)
+            .column(parts::Column::ToolStatus)
+            .column(parts::Column::SortOrder)
+            .order_by_asc(parts::Column::SortOrder)
+            .order_by_asc(parts::Column::CreatedAt)
+            .order_by_asc(parts::Column::Id)
+            .limit(limit)
+            .offset(offset)
+            .into_tuple()
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+
+        Ok(rows
+            .into_iter()
+            .map(
+                |(
+                    id,
+                    message_id,
+                    session_id,
+                    created_at,
+                    part_type,
+                    tool_name,
+                    tool_call_id,
+                    tool_status,
+                    sort_order,
+                )| PartSummaryRow {
+                    id,
+                    message_id,
+                    session_id,
+                    created_at,
+                    part_type,
+                    tool_name,
+                    tool_call_id,
+                    tool_status,
+                    sort_order,
+                },
+            )
+            .collect())
+    }
+
+    pub async fn list_for_message_page(
+        &self,
+        message_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<PartRow>, DatabaseError> {
+        let (limit, offset) = normalize_limit_offset(limit, offset)?;
+        let rows = parts::Entity::find()
+            .filter(parts::Column::MessageId.eq(message_id))
+            .order_by_asc(parts::Column::SortOrder)
+            .order_by_asc(parts::Column::CreatedAt)
+            .order_by_asc(parts::Column::Id)
+            .limit(limit)
+            .offset(offset)
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| PartRow {
+                id: r.id,
+                message_id: r.message_id,
+                session_id: r.session_id,
+                created_at: r.created_at,
+                part_type: r.part_type,
+                text: r.text,
+                tool_name: r.tool_name,
+                tool_call_id: r.tool_call_id,
+                tool_arguments: r.tool_arguments,
+                tool_result: r.tool_result,
+                tool_error: r.tool_error,
+                tool_status: r.tool_status,
+                file_url: r.file_url,
+                file_filename: r.file_filename,
+                file_mime: r.file_mime,
+                reasoning: r.reasoning,
+                sort_order: r.sort_order,
+                data: r.data,
             })
             .collect())
     }
 
     pub async fn list_for_session(&self, session_id: &str) -> Result<Vec<PartRow>, DatabaseError> {
-        #[derive(FromRow)]
-        struct Row {
-            id: String,
-            message_id: String,
-            session_id: String,
-            part_type: String,
-            text: Option<String>,
-            tool_name: Option<String>,
-            tool_call_id: Option<String>,
-            tool_arguments: Option<String>,
-            tool_result: Option<String>,
-            tool_error: Option<String>,
-            tool_status: Option<String>,
-            sort_order: i64,
-        }
-
-        let rows = sqlx::query_as::<_, Row>(
-            r#"SELECT id, message_id, session_id, part_type, text, 
-                      tool_name, tool_call_id, tool_arguments, tool_result, 
-                      tool_error, tool_status, sort_order
-               FROM parts WHERE session_id = ? ORDER BY sort_order ASC"#,
-        )
-        .bind(session_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+        let rows = parts::Entity::find()
+            .filter(parts::Column::SessionId.eq(session_id))
+            .order_by_asc(parts::Column::SortOrder)
+            .order_by_asc(parts::Column::CreatedAt)
+            .order_by_asc(parts::Column::Id)
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
 
         Ok(rows
             .into_iter()
@@ -1101,6 +1392,7 @@ impl PartRepository {
                 id: r.id,
                 message_id: r.message_id,
                 session_id: r.session_id,
+                created_at: r.created_at,
                 part_type: r.part_type,
                 text: r.text,
                 tool_name: r.tool_name,
@@ -1109,78 +1401,144 @@ impl PartRepository {
                 tool_result: r.tool_result,
                 tool_error: r.tool_error,
                 tool_status: r.tool_status,
+                file_url: r.file_url,
+                file_filename: r.file_filename,
+                file_mime: r.file_mime,
+                reasoning: r.reasoning,
                 sort_order: r.sort_order,
+                data: r.data,
+            })
+            .collect())
+    }
+
+    pub async fn count_for_session(&self, session_id: &str) -> Result<u64, DatabaseError> {
+        parts::Entity::find()
+            .filter(parts::Column::SessionId.eq(session_id))
+            .count(&self.conn)
+            .await
+            .map_err(map_query_err)
+    }
+
+    pub async fn list_for_session_page(
+        &self,
+        session_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<PartRow>, DatabaseError> {
+        let (limit, offset) = normalize_limit_offset(limit, offset)?;
+        let rows = parts::Entity::find()
+            .filter(parts::Column::SessionId.eq(session_id))
+            .order_by_asc(parts::Column::SortOrder)
+            .order_by_asc(parts::Column::CreatedAt)
+            .order_by_asc(parts::Column::Id)
+            .limit(limit)
+            .offset(offset)
+            .all(&self.conn)
+            .await
+            .map_err(map_query_err)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| PartRow {
+                id: r.id,
+                message_id: r.message_id,
+                session_id: r.session_id,
+                created_at: r.created_at,
+                part_type: r.part_type,
+                text: r.text,
+                tool_name: r.tool_name,
+                tool_call_id: r.tool_call_id,
+                tool_arguments: r.tool_arguments,
+                tool_result: r.tool_result,
+                tool_error: r.tool_error,
+                tool_status: r.tool_status,
+                file_url: r.file_url,
+                file_filename: r.file_filename,
+                file_mime: r.file_mime,
+                reasoning: r.reasoning,
+                sort_order: r.sort_order,
+                data: r.data,
             })
             .collect())
     }
 
     pub async fn upsert(&self, part: &PartRow) -> Result<(), DatabaseError> {
-        let now = Utc::now().timestamp_millis();
+        let insert = parts::ActiveModel {
+            id: Set(part.id.clone()),
+            message_id: Set(part.message_id.clone()),
+            session_id: Set(part.session_id.clone()),
+            created_at: Set(part.created_at),
+            part_type: Set(part.part_type.clone()),
+            text: Set(part.text.clone()),
+            tool_name: Set(part.tool_name.clone()),
+            tool_call_id: Set(part.tool_call_id.clone()),
+            tool_arguments: Set(part.tool_arguments.clone()),
+            tool_result: Set(part.tool_result.clone()),
+            tool_error: Set(part.tool_error.clone()),
+            tool_status: Set(part.tool_status.clone()),
+            file_url: Set(part.file_url.clone()),
+            file_filename: Set(part.file_filename.clone()),
+            file_mime: Set(part.file_mime.clone()),
+            reasoning: Set(part.reasoning.clone()),
+            sort_order: Set(part.sort_order),
+            data: Set(part.data.clone()),
+            ..Default::default()
+        };
 
-        sqlx::query(
-            r#"
-            INSERT INTO parts (id, message_id, session_id, part_type, text, 
-                              tool_name, tool_call_id, tool_arguments, tool_result, 
-                              tool_error, tool_status, sort_order, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                text = excluded.text,
-                tool_name = excluded.tool_name,
-                tool_call_id = excluded.tool_call_id,
-                tool_arguments = excluded.tool_arguments,
-                tool_result = excluded.tool_result,
-                tool_error = excluded.tool_error,
-                tool_status = excluded.tool_status,
-                sort_order = excluded.sort_order
-            "#,
-        )
-        .bind(&part.id)
-        .bind(&part.message_id)
-        .bind(&part.session_id)
-        .bind(&part.part_type)
-        .bind(&part.text)
-        .bind(&part.tool_name)
-        .bind(&part.tool_call_id)
-        .bind(&part.tool_arguments)
-        .bind(&part.tool_result)
-        .bind(&part.tool_error)
-        .bind(&part.tool_status)
-        .bind(part.sort_order)
-        .bind(now)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+        parts::Entity::insert(insert)
+            .on_conflict(
+                OnConflict::column(parts::Column::Id)
+                    .update_columns([
+                        parts::Column::MessageId,
+                        parts::Column::SessionId,
+                        parts::Column::CreatedAt,
+                        parts::Column::PartType,
+                        parts::Column::Text,
+                        parts::Column::ToolName,
+                        parts::Column::ToolCallId,
+                        parts::Column::ToolArguments,
+                        parts::Column::ToolResult,
+                        parts::Column::ToolError,
+                        parts::Column::ToolStatus,
+                        parts::Column::FileUrl,
+                        parts::Column::FileFilename,
+                        parts::Column::FileMime,
+                        parts::Column::Reasoning,
+                        parts::Column::SortOrder,
+                        parts::Column::Data,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&self.conn)
+            .await
+            .map_err(map_query_err)?;
 
         Ok(())
     }
 
     pub async fn delete(&self, id: &str) -> Result<(), DatabaseError> {
-        sqlx::query("DELETE FROM parts WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
+        parts::Entity::delete_by_id(id.to_string())
+            .exec(&self.conn)
             .await
-            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-
+            .map_err(map_query_err)?;
         Ok(())
     }
 
     pub async fn delete_for_message(&self, message_id: &str) -> Result<(), DatabaseError> {
-        sqlx::query("DELETE FROM parts WHERE message_id = ?")
-            .bind(message_id)
-            .execute(&self.pool)
+        parts::Entity::delete_many()
+            .filter(parts::Column::MessageId.eq(message_id))
+            .exec(&self.conn)
             .await
-            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-
+            .map_err(map_query_err)?;
         Ok(())
     }
 
     pub async fn delete_for_session(&self, session_id: &str) -> Result<(), DatabaseError> {
-        sqlx::query("DELETE FROM parts WHERE session_id = ?")
-            .bind(session_id)
-            .execute(&self.pool)
+        parts::Entity::delete_many()
+            .filter(parts::Column::SessionId.eq(session_id))
+            .exec(&self.conn)
             .await
-            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-
+            .map_err(map_query_err)?;
         Ok(())
     }
 }
@@ -1193,6 +1551,7 @@ mod tests {
     use rocode_core::contracts::scheduler::keys as scheduler_keys;
     use rocode_core::contracts::session::keys as session_keys;
     use rocode_types::{MessageRole, Session, SessionMessage, SessionStatus, SessionTime};
+    use sea_orm::{ConnectionTrait, DbBackend, Statement};
     use std::collections::HashMap;
 
     fn make_session(id: &str) -> Session {
@@ -1226,6 +1585,7 @@ mod tests {
             parts: vec![],
             created_at: Utc::now(),
             metadata: HashMap::new(),
+            usage: None,
             finish: None,
         }
     }
@@ -1233,7 +1593,7 @@ mod tests {
     #[tokio::test]
     async fn session_metadata_roundtrips() {
         let db = Database::in_memory().await.unwrap();
-        let session_repo = SessionRepository::new(db.pool().clone());
+        let session_repo = SessionRepository::new(db.conn().clone());
 
         let mut session = make_session("s_meta");
         session.metadata.insert(
@@ -1261,8 +1621,8 @@ mod tests {
     #[tokio::test]
     async fn message_metadata_roundtrips() {
         let db = Database::in_memory().await.unwrap();
-        let session_repo = SessionRepository::new(db.pool().clone());
-        let message_repo = MessageRepository::new(db.pool().clone());
+        let session_repo = SessionRepository::new(db.conn().clone());
+        let message_repo = MessageRepository::new(db.conn().clone());
 
         session_repo.upsert(&make_session("s_meta")).await.unwrap();
 
@@ -1299,8 +1659,8 @@ mod tests {
     #[tokio::test]
     async fn flush_with_messages_atomicity() {
         let db = Database::in_memory().await.unwrap();
-        let session_repo = SessionRepository::new(db.pool().clone());
-        let message_repo = MessageRepository::new(db.pool().clone());
+        let session_repo = SessionRepository::new(db.conn().clone());
+        let message_repo = MessageRepository::new(db.conn().clone());
 
         let session = make_session("s1");
         let msgs = vec![
@@ -1326,8 +1686,8 @@ mod tests {
     #[tokio::test]
     async fn flush_deletes_stale_messages() {
         let db = Database::in_memory().await.unwrap();
-        let session_repo = SessionRepository::new(db.pool().clone());
-        let message_repo = MessageRepository::new(db.pool().clone());
+        let session_repo = SessionRepository::new(db.conn().clone());
+        let message_repo = MessageRepository::new(db.conn().clone());
 
         let session = make_session("s1");
         let msgs = vec![
@@ -1358,14 +1718,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_stale_large_set_uses_temp_table() {
+    async fn flush_deletes_stale_messages_large_set() {
         let db = Database::in_memory().await.unwrap();
-        let session_repo = SessionRepository::new(db.pool().clone());
-        let message_repo = MessageRepository::new(db.pool().clone());
+        let session_repo = SessionRepository::new(db.conn().clone());
+        let message_repo = MessageRepository::new(db.conn().clone());
 
         let session = make_session("s1");
 
-        // 1100 messages exceeds the 998 inline limit → temp table path
         let mut msgs: Vec<SessionMessage> = (0..1100)
             .map(|i| make_message(&format!("m{}", i), "s1", MessageRole::User))
             .collect();
@@ -1395,7 +1754,7 @@ mod tests {
     #[tokio::test]
     async fn upsert_updates_existing_session() {
         let db = Database::in_memory().await.unwrap();
-        let session_repo = SessionRepository::new(db.pool().clone());
+        let session_repo = SessionRepository::new(db.conn().clone());
 
         let mut session = make_session("s1");
         session_repo.upsert(&session).await.unwrap();
@@ -1411,10 +1770,106 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_count_and_pagination_work() {
+        let db = Database::in_memory().await.unwrap();
+        let session_repo = SessionRepository::new(db.conn().clone());
+
+        let mut s1 = make_session("s1");
+        s1.time.created = 10;
+        s1.time.updated = 10;
+        session_repo.upsert(&s1).await.unwrap();
+
+        let mut s2 = make_session("s2");
+        s2.time.created = 20;
+        s2.time.updated = 20;
+        session_repo.upsert(&s2).await.unwrap();
+
+        let mut s3 = make_session("s3");
+        s3.time.created = 30;
+        s3.time.updated = 30;
+        session_repo.upsert(&s3).await.unwrap();
+
+        let mut s4 = make_session("s4");
+        s4.time.created = 40;
+        s4.time.updated = 40;
+        session_repo.upsert(&s4).await.unwrap();
+
+        let mut s5 = make_session("s5");
+        s5.directory = "/tmp/other".to_string();
+        s5.time.created = 50;
+        s5.time.updated = 50;
+        session_repo.upsert(&s5).await.unwrap();
+
+        assert_eq!(session_repo.count(None).await.unwrap(), 5);
+        assert_eq!(
+            session_repo.count_for_directory("/tmp/test").await.unwrap(),
+            4
+        );
+        assert_eq!(
+            session_repo
+                .count_for_directory("/tmp/other")
+                .await
+                .unwrap(),
+            1
+        );
+
+        let first_two = session_repo.list_page(None, 2, 0).await.unwrap();
+        assert_eq!(
+            first_two.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["s5", "s4"]
+        );
+
+        let middle_two = session_repo.list_page(None, 2, 2).await.unwrap();
+        assert_eq!(
+            middle_two.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["s3", "s2"]
+        );
+
+        let dir_sessions = session_repo
+            .list_for_directory_page("/tmp/test", 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(
+            dir_sessions
+                .iter()
+                .map(|s| s.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["s4", "s3", "s2", "s1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn message_count_and_pagination_work() {
+        let db = Database::in_memory().await.unwrap();
+        let session_repo = SessionRepository::new(db.conn().clone());
+        let message_repo = MessageRepository::new(db.conn().clone());
+
+        session_repo.upsert(&make_session("s1")).await.unwrap();
+
+        for (idx, millis) in [10, 20, 30, 40, 50].iter().enumerate() {
+            let id = format!("m{}", idx + 1);
+            let mut msg = make_message(&id, "s1", MessageRole::User);
+            msg.created_at = DateTime::from_timestamp_millis(*millis).unwrap_or_else(Utc::now);
+            message_repo.create(&msg).await.unwrap();
+        }
+
+        assert_eq!(message_repo.count_for_session("s1").await.unwrap(), 5);
+
+        let page = message_repo
+            .list_for_session_page("s1", 2, 2)
+            .await
+            .unwrap();
+        assert_eq!(
+            page.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            vec!["m3", "m4"]
+        );
+    }
+
+    #[tokio::test]
     async fn flush_rolls_back_on_mid_transaction_failure() {
         let db = Database::in_memory().await.unwrap();
-        let session_repo = SessionRepository::new(db.pool().clone());
-        let message_repo = MessageRepository::new(db.pool().clone());
+        let session_repo = SessionRepository::new(db.conn().clone());
+        let message_repo = MessageRepository::new(db.conn().clone());
 
         // Establish baseline: session "v1" with messages m1, m2
         let mut session = make_session("s1");
@@ -1429,8 +1884,11 @@ mod tests {
             .unwrap();
 
         // Sabotage: rename messages table so message upsert fails inside the tx
-        sqlx::query("ALTER TABLE messages RENAME TO messages_backup")
-            .execute(db.pool())
+        db.conn()
+            .execute(Statement::from_string(
+                DbBackend::Sqlite,
+                "ALTER TABLE messages RENAME TO messages_backup".to_string(),
+            ))
             .await
             .unwrap();
 
@@ -1445,8 +1903,11 @@ mod tests {
         );
 
         // Restore messages table
-        sqlx::query("ALTER TABLE messages_backup RENAME TO messages")
-            .execute(db.pool())
+        db.conn()
+            .execute(Statement::from_string(
+                DbBackend::Sqlite,
+                "ALTER TABLE messages_backup RENAME TO messages".to_string(),
+            ))
             .await
             .unwrap();
 

@@ -1441,7 +1441,7 @@ async fn cli_list_sessions(runtime: Option<&CliExecutionRuntime>) {
         }
     };
 
-    let session_repo = rocode_storage::SessionRepository::new(db.pool().clone());
+    let session_repo = rocode_storage::SessionRepository::new(db.conn().clone());
 
     let sessions = match session_repo.list(None, 20).await {
         Ok(sessions) => sessions,

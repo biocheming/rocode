@@ -10,7 +10,7 @@ mod session_crud;
 use std::sync::Arc;
 
 use axum::{
-    routing::{delete, get, patch, post},
+    routing::{get, patch, post},
     Router,
 };
 
@@ -33,7 +33,10 @@ pub use self::scheduler::{
 use self::cancel::{abort_prompt, abort_scheduler_stage, abort_session};
 use self::events::{get_session_event_stages, get_session_events};
 use self::executions::{cancel_session_execution, get_session_executions, list_all_executions};
-use self::messages::{add_message_part, delete_message, delete_part, list_messages, send_message};
+use self::messages::{
+    add_message_part, delete_message, delete_part, get_message_part, list_message_parts,
+    list_message_summaries, list_messages, send_message,
+};
 use self::prompt::session_prompt;
 use self::recovery::{execute_session_recovery, get_session_recovery};
 use self::session_crud::{
@@ -87,15 +90,19 @@ pub(crate) fn session_routes() -> Router<Arc<ServerState>> {
         .route("/{id}/compaction", post(start_compaction))
         .route("/{id}/command", post(execute_command))
         .route("/{id}/shell", post(execute_shell))
+        .route("/{id}/message/summary", get(list_message_summaries))
         .route("/{id}/message", post(send_message).get(list_messages))
         .route(
             "/{id}/message/{msgID}",
             get(get_message).delete(delete_message),
         )
-        .route("/{id}/message/{msgID}/part", post(add_message_part))
+        .route(
+            "/{id}/message/{msgID}/part",
+            post(add_message_part).get(list_message_parts),
+        )
         .route(
             "/{id}/message/{msgID}/part/{partID}",
-            delete(delete_part).patch(update_part),
+            get(get_message_part).delete(delete_part).patch(update_part),
         )
         .route("/{id}/tool/{tool_call_id}/cancel", post(cancel_tool_call))
         .route("/{id}/stream", post(stream_message))

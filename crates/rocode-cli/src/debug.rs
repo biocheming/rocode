@@ -216,7 +216,7 @@ pub(crate) async fn handle_debug_command(action: DebugCommands) -> anyhow::Resul
         }
         DebugCommands::Scrap => {
             let db = Database::new().await?;
-            let session_repo = SessionRepository::new(db.pool().clone());
+            let session_repo = SessionRepository::new(db.conn().clone());
             let sessions = session_repo.list(None, 10_000).await?;
             let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
             for session in sessions {

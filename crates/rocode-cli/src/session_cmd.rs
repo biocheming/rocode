@@ -8,8 +8,8 @@ pub(crate) async fn handle_session_command(action: SessionCommands) -> anyhow::R
     let db = Database::new()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to open session database: {}", e))?;
-    let session_repo = SessionRepository::new(db.pool().clone());
-    let message_repo = MessageRepository::new(db.pool().clone());
+    let session_repo = SessionRepository::new(db.conn().clone());
+    let message_repo = MessageRepository::new(db.conn().clone());
 
     match action {
         SessionCommands::List {

@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
+use axum::http::{HeaderMap, HeaderValue};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +14,10 @@ use rocode_command::agent_presenter::{
 };
 
 use super::session_crud::persist_sessions_if_enabled;
+
+fn map_storage_err(err: rocode_storage::DatabaseError) -> ApiError {
+    ApiError::InternalError(format!("storage error: {}", err))
+}
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct SendMessageRequest {
@@ -112,6 +117,126 @@ pub(super) fn message_role_name(role: &rocode_session::MessageRole) -> &'static 
     }
 }
 
+#[derive(Debug, Serialize)]
+pub(super) struct MessageSummaryInfo {
+    pub id: String,
+    pub session_id: String,
+    pub role: String,
+    pub created_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finish: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct ListMessageSummariesQuery {
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+pub(super) async fn list_message_summaries(
+    State(state): State<Arc<ServerState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<ListMessageSummariesQuery>,
+) -> Result<(HeaderMap, Json<Vec<MessageSummaryInfo>>)> {
+    // Validate session exists in the in-memory manager (source of truth for session lifecycle).
+    {
+        let sessions = state.sessions.lock().await;
+        if sessions.get(&session_id).is_none() {
+            return Err(ApiError::SessionNotFound(session_id));
+        }
+    }
+
+    let offset = query.offset.unwrap_or(0);
+    let limit = query.limit.filter(|value| *value > 0).unwrap_or(50);
+
+    // Prefer DB-backed summaries when storage is enabled to avoid pulling `messages.data`.
+    if let Some(repo) = state.message_repo.as_ref() {
+        let total = repo
+            .count_for_session(&session_id)
+            .await
+            .map_err(map_storage_err)?;
+        let rows = repo
+            .list_headers_for_session_page(&session_id, limit as i64, offset as i64)
+            .await
+            .map_err(map_storage_err)?;
+
+        let infos = rows
+            .into_iter()
+            .map(|row| MessageSummaryInfo {
+                id: row.id,
+                session_id: row.session_id,
+                role: row.role,
+                created_at: row.created_at,
+                finish: row.finish,
+            })
+            .collect::<Vec<_>>();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Total-Count",
+            HeaderValue::from_str(&total.to_string())
+                .unwrap_or_else(|_| HeaderValue::from_static("0")),
+        );
+        headers.insert(
+            "X-Returned-Count",
+            HeaderValue::from_str(&infos.len().to_string())
+                .unwrap_or_else(|_| HeaderValue::from_static("0")),
+        );
+        headers.insert(
+            "X-Offset",
+            HeaderValue::from_str(&offset.to_string())
+                .unwrap_or_else(|_| HeaderValue::from_static("0")),
+        );
+        headers.insert(
+            "X-Limit",
+            HeaderValue::from_str(&limit.to_string())
+                .unwrap_or_else(|_| HeaderValue::from_static("0")),
+        );
+
+        return Ok((headers, Json(infos)));
+    }
+
+    // Fallback to in-memory summaries (no parts included).
+    let sessions = state.sessions.lock().await;
+    let session = sessions
+        .get(&session_id)
+        .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
+    let total = session.messages.len();
+
+    let mut infos = Vec::new();
+    for message in session.messages.iter().skip(offset).take(limit) {
+        infos.push(MessageSummaryInfo {
+            id: message.id.clone(),
+            session_id: session_id.clone(),
+            role: message_role_name(&message.role).to_string(),
+            created_at: message.created_at.timestamp_millis(),
+            finish: message.finish.clone(),
+        });
+    }
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "X-Total-Count",
+        HeaderValue::from_str(&total.to_string()).unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    headers.insert(
+        "X-Returned-Count",
+        HeaderValue::from_str(&infos.len().to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    headers.insert(
+        "X-Offset",
+        HeaderValue::from_str(&offset.to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    headers.insert(
+        "X-Limit",
+        HeaderValue::from_str(&limit.to_string()).unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+
+    Ok((headers, Json(infos)))
+}
+
 fn part_type_name(part_type: &rocode_session::PartType) -> &'static str {
     match part_type {
         rocode_session::PartType::Text { .. } => "text",
@@ -128,6 +253,202 @@ fn part_type_name(part_type: &rocode_session::PartType) -> &'static str {
         rocode_session::PartType::Retry { .. } => "retry",
         rocode_session::PartType::Compaction { .. } => "compaction",
     }
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct PartSummaryInfo {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub part_type: String,
+    pub created_at: i64,
+    pub sort_order: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct ListMessagePartsQuery {
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+pub(super) async fn list_message_parts(
+    State(state): State<Arc<ServerState>>,
+    Path((session_id, msg_id)): Path<(String, String)>,
+    Query(query): Query<ListMessagePartsQuery>,
+) -> Result<(HeaderMap, Json<Vec<PartSummaryInfo>>)> {
+    let offset = query.offset.unwrap_or(0);
+    let limit = query.limit.filter(|value| *value > 0).unwrap_or(200);
+
+    // Prefer DB-backed parts (supports lazy loading without reading messages.data).
+    if let Some(part_repo) = state.part_repo.as_ref() {
+        let total = part_repo
+            .count_for_message(&msg_id)
+            .await
+            .map_err(map_storage_err)?;
+        if total > 0 {
+            let rows = part_repo
+                .list_summaries_for_message_page(&msg_id, limit as i64, offset as i64)
+                .await
+                .map_err(map_storage_err)?;
+
+            let infos = rows
+                .into_iter()
+                .map(|row| PartSummaryInfo {
+                    id: row.id,
+                    part_type: row.part_type,
+                    created_at: row.created_at,
+                    sort_order: row.sort_order,
+                    tool_name: row.tool_name,
+                    tool_call_id: row.tool_call_id,
+                    tool_status: row.tool_status,
+                })
+                .collect::<Vec<_>>();
+
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                "X-Total-Count",
+                HeaderValue::from_str(&total.to_string())
+                    .unwrap_or_else(|_| HeaderValue::from_static("0")),
+            );
+            headers.insert(
+                "X-Returned-Count",
+                HeaderValue::from_str(&infos.len().to_string())
+                    .unwrap_or_else(|_| HeaderValue::from_static("0")),
+            );
+            headers.insert(
+                "X-Offset",
+                HeaderValue::from_str(&offset.to_string())
+                    .unwrap_or_else(|_| HeaderValue::from_static("0")),
+            );
+            headers.insert(
+                "X-Limit",
+                HeaderValue::from_str(&limit.to_string())
+                    .unwrap_or_else(|_| HeaderValue::from_static("0")),
+            );
+
+            return Ok((headers, Json(infos)));
+        }
+    }
+
+    // Fallback: read from in-memory session messages (not DB-backed).
+    let sessions = state.sessions.lock().await;
+    let session = sessions
+        .get(&session_id)
+        .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
+    let message = session
+        .get_message(&msg_id)
+        .ok_or_else(|| ApiError::NotFound(format!("Message not found: {}", msg_id)))?;
+
+    let total = message.parts.len();
+    let mut infos = Vec::new();
+    for (idx, part) in message.parts.iter().enumerate().skip(offset).take(limit) {
+        let (tool_name, tool_call_id, tool_status) = match &part.part_type {
+            rocode_session::PartType::ToolCall {
+                id, name, status, ..
+            } => (
+                Some(name.clone()),
+                Some(id.clone()),
+                Some(
+                    match status {
+                        rocode_session::ToolCallStatus::Pending => "pending",
+                        rocode_session::ToolCallStatus::Running => "running",
+                        rocode_session::ToolCallStatus::Completed => "completed",
+                        rocode_session::ToolCallStatus::Error => "error",
+                    }
+                    .to_string(),
+                ),
+            ),
+            rocode_session::PartType::ToolResult {
+                tool_call_id,
+                is_error,
+                ..
+            } => (
+                None,
+                Some(tool_call_id.clone()),
+                Some(if *is_error { "error" } else { "completed" }.to_string()),
+            ),
+            _ => (None, None, None),
+        };
+
+        infos.push(PartSummaryInfo {
+            id: part.id.clone(),
+            part_type: part_type_name(&part.part_type).to_string(),
+            created_at: part.created_at.timestamp_millis(),
+            sort_order: idx as i64,
+            tool_name,
+            tool_call_id,
+            tool_status,
+        });
+    }
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "X-Total-Count",
+        HeaderValue::from_str(&total.to_string()).unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    headers.insert(
+        "X-Returned-Count",
+        HeaderValue::from_str(&infos.len().to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    headers.insert(
+        "X-Offset",
+        HeaderValue::from_str(&offset.to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    headers.insert(
+        "X-Limit",
+        HeaderValue::from_str(&limit.to_string()).unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+
+    Ok((headers, Json(infos)))
+}
+
+pub(super) async fn get_message_part(
+    State(state): State<Arc<ServerState>>,
+    Path((session_id, msg_id, part_id)): Path<(String, String, String)>,
+) -> Result<Json<serde_json::Value>> {
+    if let Some(part_repo) = state.part_repo.as_ref() {
+        let row = part_repo.get(&part_id).await.map_err(map_storage_err)?;
+        if let Some(row) = row {
+            if row.session_id != session_id || row.message_id != msg_id {
+                return Err(ApiError::NotFound(format!("Part not found: {}", part_id)));
+            }
+
+            let data_json = row
+                .data
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok());
+
+            return Ok(Json(serde_json::json!({
+                "row": row,
+                "part": data_json,
+            })));
+        }
+    }
+
+    // Fallback: find the part in memory.
+    let sessions = state.sessions.lock().await;
+    let session = sessions
+        .get(&session_id)
+        .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
+    let message = session
+        .get_message(&msg_id)
+        .ok_or_else(|| ApiError::NotFound(format!("Message not found: {}", msg_id)))?;
+    let part = message
+        .parts
+        .iter()
+        .find(|p| p.id == part_id)
+        .ok_or_else(|| ApiError::NotFound(format!("Part not found: {}", part_id)))?;
+
+    Ok(Json(serde_json::json!({
+        "part": part,
+    })))
 }
 
 fn part_to_info(
@@ -637,7 +958,7 @@ pub(super) async fn list_messages(
     State(state): State<Arc<ServerState>>,
     Path(session_id): Path<String>,
     Query(query): Query<ListMessagesQuery>,
-) -> Result<Json<Vec<MessageInfo>>> {
+) -> Result<(HeaderMap, Json<Vec<MessageInfo>>)> {
     state
         .api_perf
         .list_messages_calls
@@ -654,6 +975,12 @@ pub(super) async fn list_messages(
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    if query.after.is_some() && query.offset.is_some() {
+        return Err(ApiError::BadRequest(
+            "Query parameters `after` and `offset` are mutually exclusive".to_string(),
+        ));
+    }
+
     let mut pending_questions =
         super::super::tui::list_questions_for_session(&state, &session_id).await;
     let sessions = state.sessions.lock().await;
@@ -661,16 +988,22 @@ pub(super) async fn list_messages(
         .get(&session_id)
         .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
     let tool_names = collect_tool_names(session);
+    let total = session.messages.len();
     let limit = query.limit.filter(|value| *value > 0);
-    let mut started = query.after.is_none();
+    let start_offset = if let Some(after) = query.after.as_deref() {
+        session
+            .messages
+            .iter()
+            .position(|m| m.id == after)
+            .map(|pos| pos.saturating_add(1))
+            // If the anchor message is unknown, fall back to a full list so clients can recover.
+            .unwrap_or(0)
+    } else {
+        query.offset.unwrap_or(0)
+    };
+
     let mut messages = Vec::new();
-    for message in &session.messages {
-        if !started {
-            if query.after.as_deref() == Some(message.id.as_str()) {
-                started = true;
-            }
-            continue;
-        }
+    for message in session.messages.iter().skip(start_offset) {
         messages.push(message_to_info(
             &session_id,
             message,
@@ -684,25 +1017,30 @@ pub(super) async fn list_messages(
         }
     }
 
-    // If the anchor message is unknown, fall back to a full list so clients can recover.
-    if query.after.is_some() && !started {
-        messages.clear();
-        for message in &session.messages {
-            messages.push(message_to_info(
-                &session_id,
-                message,
-                &tool_names,
-                &mut pending_questions,
-            ));
-            if let Some(limit) = limit {
-                if messages.len() >= limit {
-                    break;
-                }
-            }
-        }
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "X-Total-Count",
+        HeaderValue::from_str(&total.to_string()).unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    headers.insert(
+        "X-Returned-Count",
+        HeaderValue::from_str(&messages.len().to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    headers.insert(
+        "X-Offset",
+        HeaderValue::from_str(&start_offset.to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    if let Some(limit) = limit {
+        headers.insert(
+            "X-Limit",
+            HeaderValue::from_str(&limit.to_string())
+                .unwrap_or_else(|_| HeaderValue::from_static("0")),
+        );
     }
 
-    Ok(Json(messages))
+    Ok((headers, Json(messages)))
 }
 
 fn match_pending_question_request(
@@ -818,6 +1156,7 @@ fn question_pending_interaction_json(
 pub(super) struct ListMessagesQuery {
     pub after: Option<String>,
     pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 pub(super) async fn delete_message(

@@ -1129,7 +1129,17 @@ impl SessionManager {
 
     /// List sessions with filters
     pub fn list_filtered(&self, filter: SessionFilter) -> Vec<&Session> {
-        self.sessions
+        self.list_filtered_with_total(filter).1
+    }
+
+    /// List sessions with filters, returning `(total, items)`.
+    ///
+    /// `total` is the count after filtering but before pagination.
+    pub fn list_filtered_with_total(&self, filter: SessionFilter) -> (usize, Vec<&Session>) {
+        let search = filter.search.as_deref().map(|s| s.to_lowercase());
+
+        let mut sessions: Vec<&Session> = self
+            .sessions
             .values()
             .filter(|s| {
                 if let Some(ref dir) = filter.directory {
@@ -1145,14 +1155,31 @@ impl SessionManager {
                         return false;
                     }
                 }
-                if let Some(ref search) = filter.search {
-                    if !s.title.to_lowercase().contains(&search.to_lowercase()) {
+                if let Some(ref search) = search {
+                    if !s.title.to_lowercase().contains(search) {
                         return false;
                     }
                 }
                 true
             })
-            .collect()
+            .collect();
+
+        // Match storage ordering: most recently updated first.
+        sessions.sort_by(|a, b| {
+            b.time
+                .updated
+                .cmp(&a.time.updated)
+                .then_with(|| b.time.created.cmp(&a.time.created))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+
+        let total = sessions.len();
+        let offset = filter.offset.unwrap_or(0);
+        let mut paged: Vec<&Session> = sessions.into_iter().skip(offset).collect();
+        if let Some(limit) = filter.limit {
+            paged.truncate(limit);
+        }
+        (total, paged)
     }
 
     /// Get children of a session
@@ -1315,6 +1342,7 @@ pub struct SessionFilter {
     pub start: Option<i64>,
     pub search: Option<String>,
     pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 // ============================================================================

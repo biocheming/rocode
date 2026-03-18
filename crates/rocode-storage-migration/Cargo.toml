@@ -1,0 +1,19 @@
+[package]
+name = "rocode-storage-migration"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "rocode_storage_migration"
+path = "src/lib.rs"
+
+[dependencies]
+sea-orm-migration = { workspace = true }
+sea-orm = { workspace = true }
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+rocode-types = { path = "../rocode-types" }
+rocode-util = { path = "../rocode-util" }

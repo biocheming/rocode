@@ -85,42 +85,65 @@ impl StageEventLog {
     ///
     /// Returns an owned `Vec` of matching events in chronological order.
     pub async fn query(&self, session_id: &str, filter: &EventFilter) -> Vec<StageEvent> {
+        self.query_with_total(session_id, filter).await.1
+    }
+
+    /// Query events for a session, returning `(total, items)`.
+    ///
+    /// `total` is the count after filtering but before pagination (offset/limit).
+    pub async fn query_with_total(
+        &self,
+        session_id: &str,
+        filter: &EventFilter,
+    ) -> (usize, Vec<StageEvent>) {
         let guard = self.sessions.read().await;
         let Some(buf) = guard.get(session_id) else {
-            return Vec::new();
+            return (0, Vec::new());
         };
 
-        let iter = buf.iter().filter(|evt| {
+        let offset = filter.offset.unwrap_or(0);
+        let limit = filter.limit;
+
+        let mut total = 0usize;
+        let mut items = Vec::new();
+
+        for evt in buf.iter() {
             if let Some(ref sid) = filter.stage_id {
                 if evt.stage_id.as_ref() != Some(sid) {
-                    return false;
+                    continue;
                 }
             }
             if let Some(ref eid) = filter.execution_id {
                 if evt.execution_id.as_ref() != Some(eid) {
-                    return false;
+                    continue;
                 }
             }
             if let Some(ref et) = filter.event_type {
                 if evt.event_type != *et {
-                    return false;
+                    continue;
                 }
             }
             if let Some(since) = filter.since {
                 if evt.ts < since {
-                    return false;
+                    continue;
                 }
             }
-            true
-        });
 
-        let offset = filter.offset.unwrap_or(0);
-        let limited: Box<dyn Iterator<Item = &StageEvent>> = match filter.limit {
-            Some(lim) => Box::new(iter.skip(offset).take(lim)),
-            None => Box::new(iter.skip(offset)),
-        };
+            let match_index = total;
+            total += 1;
 
-        limited.cloned().collect()
+            if match_index < offset {
+                continue;
+            }
+            if let Some(limit) = limit {
+                if items.len() >= limit {
+                    continue;
+                }
+            }
+            items.push(evt.clone());
+        }
+
+        (total, items)
     }
 
     /// Return the distinct `stage_id` values present in a session's log.
@@ -316,6 +339,31 @@ mod tests {
         assert_eq!(page.len(), 2);
         assert_eq!(page[0].ts, 3);
         assert_eq!(page[1].ts, 4);
+    }
+
+    #[tokio::test]
+    async fn query_with_total_counts_before_pagination() {
+        let log = StageEventLog::new();
+        for ts in 0..10 {
+            log.record("s1", make_event(Some("stg1"), Some("e1"), "t", ts))
+                .await;
+        }
+
+        let (total, page) = log
+            .query_with_total(
+                "s1",
+                &EventFilter {
+                    limit: Some(3),
+                    offset: Some(4),
+                    ..Default::default()
+                },
+            )
+            .await;
+
+        assert_eq!(total, 10);
+        assert_eq!(page.len(), 3);
+        assert_eq!(page[0].ts, 4);
+        assert_eq!(page[2].ts, 6);
     }
 
     #[tokio::test]

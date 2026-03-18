@@ -9,6 +9,7 @@ license.workspace = true
 rocode-core = { path = "../rocode-core" }
 rocode-types = { path = "../rocode-types" }
 rocode-util = { path = "../rocode-util" }
+rocode-storage-migration = { path = "../rocode-storage-migration" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -17,7 +18,8 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+sea-orm = { workspace = true }
+sea-orm-migration = { workspace = true }
 dirs = { workspace = true }
 
 [dev-dependencies]

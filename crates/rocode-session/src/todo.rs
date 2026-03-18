@@ -32,10 +32,10 @@ impl TodoManager {
         }
     }
 
-    pub fn with_database(pool: sqlx::SqlitePool) -> Self {
+    pub fn with_database(conn: rocode_storage::StorageConnection) -> Self {
         Self {
             state: Arc::new(RwLock::new(HashMap::new())),
-            db: Some(Arc::new(TodoRepository::new(pool))),
+            db: Some(Arc::new(TodoRepository::new(conn))),
             bus: None,
         }
     }

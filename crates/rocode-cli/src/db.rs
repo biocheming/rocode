@@ -91,8 +91,8 @@ pub(crate) async fn handle_stats_command(
     project: Option<String>,
 ) -> anyhow::Result<()> {
     let db = Database::new().await?;
-    let session_repo = SessionRepository::new(db.pool().clone());
-    let message_repo = MessageRepository::new(db.pool().clone());
+    let session_repo = SessionRepository::new(db.conn().clone());
+    let message_repo = MessageRepository::new(db.conn().clone());
 
     let mut sessions = session_repo.list(None, 50_000).await?;
     if let Some(project) = project {

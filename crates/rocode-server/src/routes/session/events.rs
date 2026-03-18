@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Path, Query, State},
+    http::{HeaderMap, HeaderValue},
     Json,
 };
 use serde::Deserialize;
@@ -38,7 +39,10 @@ pub(super) async fn get_session_events(
     State(state): State<Arc<ServerState>>,
     Path(session_id): Path<String>,
     Query(query): Query<EventsQuery>,
-) -> Result<Json<Vec<rocode_command::stage_protocol::StageEvent>>> {
+) -> Result<(
+    HeaderMap,
+    Json<Vec<rocode_command::stage_protocol::StageEvent>>,
+)> {
     let filter = crate::stage_event_log::EventFilter {
         stage_id: query.stage_id,
         execution_id: query.execution_id,
@@ -47,8 +51,35 @@ pub(super) async fn get_session_events(
         limit: query.limit,
         offset: query.offset,
     };
-    let events = state.stage_event_log.query(&session_id, &filter).await;
-    Ok(Json(events))
+    let (total, events) = state
+        .stage_event_log
+        .query_with_total(&session_id, &filter)
+        .await;
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "X-Total-Count",
+        HeaderValue::from_str(&total.to_string()).unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    headers.insert(
+        "X-Returned-Count",
+        HeaderValue::from_str(&events.len().to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    headers.insert(
+        "X-Offset",
+        HeaderValue::from_str(&query.offset.unwrap_or(0).to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    if let Some(limit) = query.limit {
+        headers.insert(
+            "X-Limit",
+            HeaderValue::from_str(&limit.to_string())
+                .unwrap_or_else(|_| HeaderValue::from_static("0")),
+        );
+    }
+
+    Ok((headers, Json(events)))
 }
 
 /// `GET /session/{id}/events/stages` — list distinct stage IDs that have events.
