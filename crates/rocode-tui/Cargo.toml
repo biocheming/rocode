@@ -17,6 +17,7 @@ rocode-agent = { path = "../rocode-agent" }
 rocode-tool = { path = "../rocode-tool" }
 rocode-mcp = { path = "../rocode-mcp" }
 rocode-command = { path = "../rocode-command" }
+rocode-types = { path = "../rocode-types" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

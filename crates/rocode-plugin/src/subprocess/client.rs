@@ -15,11 +15,35 @@ use tokio::io::BufReader;
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 
-use super::protocol::{RpcError, RpcRequest, RpcResponse};
+use super::protocol::{RpcError, RpcMessage, RpcRequest, RpcResponse};
 use super::runtime::JsRuntime;
 use rocode_core::codec::{self, CodecError};
 use rocode_core::process_registry::{global_registry, ProcessGuard, ProcessKind};
 use rocode_core::stderr_drain::{spawn_stderr_drain, StderrDrainConfig};
+
+#[derive(Debug, Deserialize, Default)]
+struct OutputWire {
+    #[serde(default)]
+    output: Value,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct AuthFetchStreamStartWire {
+    #[serde(default)]
+    status: Option<u16>,
+    #[serde(default)]
+    headers: HashMap<String, String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct AuthFetchStreamNotificationParamsWire {
+    #[serde(default, rename = "requestId")]
+    request_id: Option<u64>,
+    #[serde(default)]
+    chunk: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+}
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -376,8 +400,9 @@ impl PluginSubprocess {
                                 return Err(err.into());
                             }
                             let result = resp.result.unwrap_or(Value::Null);
-                            let output = result.get("output").cloned().unwrap_or(Value::Null);
-                            return Ok(output);
+                            let wire: OutputWire =
+                                serde_json::from_value(result).unwrap_or_default();
+                            return Ok(wire.output);
                         }
                         ref msg if msg.is_progress_notification() => {
                             deadline = tokio::time::Instant::now() + self.timeout;
@@ -449,10 +474,12 @@ impl PluginSubprocess {
             tokio::fs::remove_file(&file_path).await.ok();
 
             let result = result?;
-            Ok(result.get("output").cloned().unwrap_or(Value::Null))
+            let wire: OutputWire = serde_json::from_value(result).unwrap_or_default();
+            Ok(wire.output)
         } else {
             let result: Value = self.call("hook.invoke", Some(params)).await?;
-            Ok(result.get("output").cloned().unwrap_or(Value::Null))
+            let wire: OutputWire = serde_json::from_value(result).unwrap_or_default();
+            Ok(wire.output)
         }
     }
 
@@ -543,22 +570,10 @@ impl PluginSubprocess {
                     }
                 };
 
-                if raw.get("id").and_then(Value::as_u64) == Some(id) {
-                    let response: RpcResponse = match serde_json::from_value(raw) {
-                        Ok(response) => response,
-                        Err(err) => {
-                            let send_err = PluginSubprocessError::Json(err);
-                            if let Some(tx) = start_tx.take() {
-                                let _ = tx.send(Err(send_err));
-                            } else {
-                                let _ = chunk_tx.send(Err(send_err)).await;
-                            }
-                            break;
-                        }
-                    };
-
-                    if let Some(error) = response.error {
-                        let send_err = PluginSubprocessError::from(error);
+                let message = match RpcMessage::from_value(raw) {
+                    Ok(message) => message,
+                    Err(err) => {
+                        let send_err = PluginSubprocessError::from(err);
                         if let Some(tx) = start_tx.take() {
                             let _ = tx.send(Err(send_err));
                         } else {
@@ -566,57 +581,67 @@ impl PluginSubprocess {
                         }
                         break;
                     }
+                };
 
-                    let result = response.result.unwrap_or(Value::Null);
-                    let status = result
-                        .get("status")
-                        .and_then(Value::as_u64)
-                        .and_then(|v| u16::try_from(v).ok())
-                        .unwrap_or(200);
-                    let headers = result
-                        .get("headers")
-                        .cloned()
-                        .and_then(|v| serde_json::from_value(v).ok())
-                        .unwrap_or_default();
-                    if let Some(tx) = start_tx.take() {
-                        let _ = tx.send(Ok((status, headers)));
+                match message {
+                    RpcMessage::Response(response) => {
+                        if response.id != id {
+                            continue;
+                        }
+
+                        if let Some(error) = response.error {
+                            let send_err = PluginSubprocessError::from(error);
+                            if let Some(tx) = start_tx.take() {
+                                let _ = tx.send(Err(send_err));
+                            } else {
+                                let _ = chunk_tx.send(Err(send_err)).await;
+                            }
+                            break;
+                        }
+
+                        let result = response.result.unwrap_or(Value::Null);
+                        let wire: AuthFetchStreamStartWire =
+                            serde_json::from_value(result).unwrap_or_default();
+                        let status = wire.status.unwrap_or(200);
+                        let headers = wire.headers;
+                        if let Some(tx) = start_tx.take() {
+                            let _ = tx.send(Ok((status, headers)));
+                        }
                     }
-                    continue;
-                }
+                    RpcMessage::Notification(notification) => {
+                        let params = notification.params.unwrap_or(Value::Null);
+                        let wire: AuthFetchStreamNotificationParamsWire =
+                            serde_json::from_value(params).unwrap_or_default();
+                        if wire.request_id != Some(id) {
+                            continue;
+                        }
 
-                let method = raw.get("method").and_then(Value::as_str);
-                let params = raw.get("params").cloned().unwrap_or(Value::Null);
-                let request_id = params.get("requestId").and_then(Value::as_u64);
-                if request_id != Some(id) {
-                    continue;
-                }
-
-                match method {
-                    Some("auth.fetch.stream.chunk") => {
-                        if let Some(chunk) = params.get("chunk").and_then(Value::as_str) {
-                            if chunk_tx.send(Ok(chunk.to_string())).await.is_err() {
+                        match notification.method.as_str() {
+                            "auth.fetch.stream.chunk" => {
+                                if let Some(chunk) = wire.chunk {
+                                    if chunk_tx.send(Ok(chunk)).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                            "auth.fetch.stream.error" => {
+                                let message = wire
+                                    .message
+                                    .unwrap_or_else(|| "plugin custom fetch stream failed".into());
+                                let error = PluginSubprocessError::Protocol(message);
+                                if let Some(tx) = start_tx.take() {
+                                    let _ = tx.send(Err(error));
+                                } else {
+                                    let _ = chunk_tx.send(Err(error)).await;
+                                }
                                 break;
                             }
+                            "auth.fetch.stream.end" => {
+                                break;
+                            }
+                            _ => {}
                         }
                     }
-                    Some("auth.fetch.stream.error") => {
-                        let message = params
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .unwrap_or("plugin custom fetch stream failed")
-                            .to_string();
-                        let error = PluginSubprocessError::Protocol(message);
-                        if let Some(tx) = start_tx.take() {
-                            let _ = tx.send(Err(error));
-                        } else {
-                            let _ = chunk_tx.send(Err(error)).await;
-                        }
-                        break;
-                    }
-                    Some("auth.fetch.stream.end") => {
-                        break;
-                    }
-                    _ => {}
                 }
             }
         });
@@ -848,11 +873,10 @@ impl PluginSubprocess {
         let reader = &mut transport.stdout;
         loop {
             let raw = Self::read_raw_message(reader).await?;
-            if raw.get("id").and_then(Value::as_u64) != Some(expected_id) {
-                continue;
+            match RpcMessage::from_value(raw)? {
+                RpcMessage::Response(resp) if resp.id == expected_id => return Ok(resp),
+                _ => continue,
             }
-            let response: RpcResponse = serde_json::from_value(raw)?;
-            return Ok(response);
         }
     }
 

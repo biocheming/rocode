@@ -48,13 +48,9 @@ use crate::session_runtime::events::{broadcast_config_updated, ServerEvent};
 use crate::web;
 use crate::{ApiError, Result, ServerState};
 use rocode_agent::{AgentMode, AgentRegistry};
+use rocode_command::output_blocks::{MessagePhase, MessageRole, OutputBlock, ReasoningBlock};
 use rocode_command::{CommandRegistry, ResolvedUiCommand};
 use rocode_config::Config as AppConfig;
-use rocode_core::contracts::{
-    output_blocks::{keys as block_keys, MessagePhaseWire, OutputBlockKind},
-    provider::auth_keys,
-    wire::{headers as wire_headers, keysets as wire_keysets, selectors as wire_selectors},
-};
 use rocode_orchestrator::{SchedulerConfig, SchedulerPresetKind};
 use rocode_permission::PermissionRuleset;
 use rocode_plugin::subprocess::{PluginLoader, PluginSubprocessError};
@@ -64,6 +60,9 @@ pub fn router() -> Router<Arc<ServerState>> {
     Router::new()
         .route("/", get(web::index))
         .route("/web/app.css", get(web::app_css))
+        .route("/web/base/variables.css", get(web::css_variables))
+        .route("/web/base/reset.css", get(web::css_reset))
+        .route("/web/base/utilities.css", get(web::css_utilities))
         .route("/web/app.js", get(web::app_js))
         .route("/health", get(health))
         .route("/event", get(event_stream))
@@ -211,27 +210,30 @@ pub(crate) fn stream_server_events(
         };
 
         // Same check but for raw JSON strings that failed to parse as ServerEvent.
-        // Extract "sessionID" from JSON to apply filter.
+        // Extract session identifiers from JSON to apply filter.
+        #[derive(Debug, Deserialize)]
+        struct RawSessionFilterIds {
+            #[serde(rename = "sessionID", alias = "sessionId", alias = "session_id")]
+            session_id: Option<String>,
+            #[serde(rename = "parentID", alias = "parentId", alias = "parent_id")]
+            parent_id: Option<String>,
+        }
+
         let raw_matches_filter = |raw: &str| -> bool {
             let Some(ref filter) = session_filter else {
                 return true;
             };
-            // Fast-path: if no "sessionID" key, treat as global.
-            let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+            let Ok(ids) = serde_json::from_str::<RawSessionFilterIds>(raw) else {
                 return true;
             };
-            match wire_selectors::first_str(&value, wire_keysets::SESSION_ID_ANY) {
+
+            // Prefer sessionID if present; fall back to parentID (for child_session events).
+            match ids.session_id.as_deref() {
                 Some(sid) => sid == filter.as_str(),
-                None => {
-                    let parent_id = wire_selectors::first_str(&value, wire_keysets::PARENT_ID_ANY);
-                    let child_id = wire_selectors::first_str(&value, wire_keysets::CHILD_ID_ANY);
-                    match (parent_id, child_id) {
-                        (Some(pid), Some(cid)) => pid == filter.as_str() || cid == filter.as_str(),
-                        (Some(pid), None) => pid == filter.as_str(),
-                        (None, Some(cid)) => cid == filter.as_str(),
-                        (None, None) => true, // global event
-                    }
-                }
+                None => match ids.parent_id.as_deref() {
+                    Some(pid) => pid == filter.as_str(),
+                    None => true,
+                },
             }
         };
 
@@ -336,6 +338,29 @@ fn parse_server_event(raw: &str) -> Option<ServerEvent> {
     serde_json::from_str(raw).ok()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MergeableOutputDelta {
+    Message { role: MessageRole, text: String },
+    Reasoning { text: String },
+}
+
+fn parse_mergeable_output_delta(block: &serde_json::Value) -> Option<MergeableOutputDelta> {
+    let parsed: OutputBlock = serde_json::from_value(block.clone()).ok()?;
+    match parsed {
+        OutputBlock::Message(message) if message.phase == MessagePhase::Delta => {
+            Some(MergeableOutputDelta::Message {
+                role: message.role,
+                text: message.text,
+            })
+        }
+        OutputBlock::Reasoning(ReasoningBlock {
+            phase: MessagePhase::Delta,
+            text,
+        }) => Some(MergeableOutputDelta::Reasoning { text }),
+        _ => None,
+    }
+}
+
 fn is_mergeable_output_delta(event: &ServerEvent) -> bool {
     let ServerEvent::OutputBlock { id, block, .. } = event else {
         return false;
@@ -343,24 +368,7 @@ fn is_mergeable_output_delta(event: &ServerEvent) -> bool {
     if id.as_deref().is_none_or(str::is_empty) {
         return false;
     }
-    let kind = block
-        .get(block_keys::KIND)
-        .and_then(|value| value.as_str())
-        .and_then(OutputBlockKind::parse);
-    let phase = block
-        .get(block_keys::PHASE)
-        .and_then(|value| value.as_str())
-        .and_then(MessagePhaseWire::parse);
-    matches!(
-        (kind, phase),
-        (
-            Some(OutputBlockKind::Message),
-            Some(MessagePhaseWire::Delta)
-        ) | (
-            Some(OutputBlockKind::Reasoning),
-            Some(MessagePhaseWire::Delta)
-        )
-    )
+    parse_mergeable_output_delta(block).is_some()
 }
 
 fn merge_output_block_delta(current: &mut ServerEvent, next: &ServerEvent) -> bool {
@@ -384,54 +392,35 @@ fn merge_output_block_delta(current: &mut ServerEvent, next: &ServerEvent) -> bo
         return false;
     }
 
-    let current_kind = current_block
-        .get(block_keys::KIND)
-        .and_then(|value| value.as_str())
-        .and_then(OutputBlockKind::parse);
-    let next_kind = next_block
-        .get(block_keys::KIND)
-        .and_then(|value| value.as_str())
-        .and_then(OutputBlockKind::parse);
-    let current_phase = current_block
-        .get(block_keys::PHASE)
-        .and_then(|value| value.as_str())
-        .and_then(MessagePhaseWire::parse);
-    let next_phase = next_block
-        .get(block_keys::PHASE)
-        .and_then(|value| value.as_str())
-        .and_then(MessagePhaseWire::parse);
-    if current_kind != next_kind
-        || current_phase != Some(MessagePhaseWire::Delta)
-        || next_phase != Some(MessagePhaseWire::Delta)
-    {
-        return false;
-    }
-    if current_kind == Some(OutputBlockKind::Message)
-        && current_block
-            .get(block_keys::ROLE)
-            .and_then(|value| value.as_str())
-            != next_block
-                .get(block_keys::ROLE)
-                .and_then(|value| value.as_str())
-    {
-        return false;
-    }
-
-    let Some(next_text) = next_block
-        .get(block_keys::TEXT)
-        .and_then(|value| value.as_str())
-    else {
+    let Some(current_delta) = parse_mergeable_output_delta(current_block) else {
         return false;
     };
-    let Some(current_text) = current_block
-        .get_mut(block_keys::TEXT)
-        .and_then(|value| value.as_str())
-    else {
+    let Some(next_delta) = parse_mergeable_output_delta(next_block) else {
         return false;
     };
 
-    current_block[block_keys::TEXT] =
-        serde_json::Value::String(format!("{current_text}{next_text}"));
+    let merged = match (current_delta, next_delta) {
+        (
+            MergeableOutputDelta::Message {
+                role: current_role,
+                text: current_text,
+            },
+            MergeableOutputDelta::Message {
+                role: next_role,
+                text: next_text,
+            },
+        ) if current_role == next_role => format!("{current_text}{next_text}"),
+        (
+            MergeableOutputDelta::Reasoning { text: current_text },
+            MergeableOutputDelta::Reasoning { text: next_text },
+        ) => format!("{current_text}{next_text}"),
+        _ => return false,
+    };
+
+    let Some(map) = current_block.as_object_mut() else {
+        return false;
+    };
+    map.insert("text".to_string(), serde_json::Value::String(merged));
     true
 }
 
@@ -642,7 +631,7 @@ pub fn internal_token() -> &'static str {
 
 fn is_valid_internal_request(headers: &HeaderMap) -> bool {
     let Some(value) = headers
-        .get(wire_headers::X_ROCODE_PLUGIN_INTERNAL)
+        .get("x-rocode-plugin-internal")
         .and_then(|v| v.to_str().ok())
     else {
         return false;
@@ -653,7 +642,7 @@ fn is_valid_internal_request(headers: &HeaderMap) -> bool {
     }
     // Verify token
     let Some(token) = headers
-        .get(wire_headers::X_ROCODE_INTERNAL_TOKEN)
+        .get("x-rocode-internal-token")
         .and_then(|v| v.to_str().ok())
     else {
         tracing::warn!("internal request header present but missing token");
@@ -966,17 +955,24 @@ fn parse_auth_info_payload(payload: serde_json::Value) -> Option<AuthInfo> {
         return Some(auth);
     }
 
-    let key = payload
-        .get(auth_keys::API_KEY_SNAKE)
-        .and_then(|v| v.as_str())
-        .or_else(|| {
-            payload
-                .get(auth_keys::API_KEY_CAMEL)
-                .and_then(|v| v.as_str())
-        })
-        .or_else(|| payload.get(auth_keys::TOKEN).and_then(|v| v.as_str()))
-        .or_else(|| payload.get(auth_keys::KEY).and_then(|v| v.as_str()))
-        .map(str::to_string)?;
+    #[derive(Debug, Deserialize)]
+    struct AuthKeyPayload {
+        #[serde(default)]
+        api_key: Option<String>,
+        #[serde(default, rename = "apiKey")]
+        api_key_camel: Option<String>,
+        #[serde(default)]
+        token: Option<String>,
+        #[serde(default)]
+        key: Option<String>,
+    }
+
+    let keys = serde_json::from_value::<AuthKeyPayload>(payload).ok()?;
+    let key = keys
+        .api_key
+        .or(keys.api_key_camel)
+        .or(keys.token)
+        .or(keys.key)?;
 
     Some(AuthInfo::Api { key })
 }
@@ -1000,9 +996,6 @@ pub(crate) fn get_plugin_loader() -> Option<&'static Arc<PluginLoader>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocode_core::contracts::output_blocks::{
-        MessagePhaseWire, MessageRoleWire, OutputBlockKind,
-    };
     use serde_json::json;
 
     #[test]
@@ -1026,9 +1019,9 @@ mod tests {
             session_id: "session-a".to_string(),
             id: Some("msg-1".to_string()),
             block: json!({
-                "kind": OutputBlockKind::Message.as_str(),
-                "phase": MessagePhaseWire::Delta.as_str(),
-                "role": MessageRoleWire::Assistant.as_str(),
+                "kind": "message",
+                "phase": "delta",
+                "role": "assistant",
                 "text": "hel",
             }),
         };
@@ -1036,9 +1029,9 @@ mod tests {
             session_id: "session-a".to_string(),
             id: Some("msg-1".to_string()),
             block: json!({
-                "kind": OutputBlockKind::Message.as_str(),
-                "phase": MessagePhaseWire::Delta.as_str(),
-                "role": MessageRoleWire::Assistant.as_str(),
+                "kind": "message",
+                "phase": "delta",
+                "role": "assistant",
                 "text": "lo",
             }),
         };
@@ -1048,7 +1041,7 @@ mod tests {
             panic!("expected output block");
         };
         assert_eq!(
-            block.get(block_keys::TEXT).and_then(|value| value.as_str()),
+            block.get("text").and_then(|value| value.as_str()),
             Some("hello")
         );
     }
@@ -1059,9 +1052,9 @@ mod tests {
             session_id: "session-a".to_string(),
             id: Some("msg-1".to_string()),
             block: json!({
-                "kind": OutputBlockKind::Message.as_str(),
-                "phase": MessagePhaseWire::Delta.as_str(),
-                "role": MessageRoleWire::Assistant.as_str(),
+                "kind": "message",
+                "phase": "delta",
+                "role": "assistant",
                 "text": "hel",
             }),
         };
@@ -1069,9 +1062,9 @@ mod tests {
             session_id: "session-a".to_string(),
             id: Some("msg-2".to_string()),
             block: json!({
-                "kind": OutputBlockKind::Message.as_str(),
-                "phase": MessagePhaseWire::Delta.as_str(),
-                "role": MessageRoleWire::Assistant.as_str(),
+                "kind": "message",
+                "phase": "delta",
+                "role": "assistant",
                 "text": "lo",
             }),
         };
@@ -1085,8 +1078,8 @@ mod tests {
             session_id: "session-a".to_string(),
             id: Some("reasoning-1".to_string()),
             block: json!({
-                "kind": OutputBlockKind::Reasoning.as_str(),
-                "phase": MessagePhaseWire::Delta.as_str(),
+                "kind": "reasoning",
+                "phase": "delta",
                 "text": "thinking",
             }),
         };
@@ -1094,8 +1087,8 @@ mod tests {
             session_id: "session-a".to_string(),
             id: Some("reasoning-1".to_string()),
             block: json!({
-                "kind": OutputBlockKind::Reasoning.as_str(),
-                "phase": MessagePhaseWire::Full.as_str(),
+                "kind": "reasoning",
+                "phase": "full",
                 "text": "thinking done",
             }),
         };

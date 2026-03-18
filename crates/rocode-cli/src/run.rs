@@ -586,9 +586,8 @@ fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style:
             if !is_related_session(&session_id) {
                 return;
             }
-            let block_payload = payload.get("block").unwrap_or(&payload);
-            let Some(block) = parse_output_block(block_payload) else {
-                tracing::debug!(?id, payload = %block_payload, "failed to parse output_block");
+            let Some(block) = parse_output_block(&payload) else {
+                tracing::debug!(?id, payload = %payload, "failed to parse output_block");
                 return;
             };
             if matches!(block, OutputBlock::Reasoning(_))

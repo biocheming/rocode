@@ -6,13 +6,12 @@ use axum::{
     extract::{Path, Query, State},
     Json,
 };
-use rocode_core::contracts::scheduler::keys as scheduler_keys;
-use rocode_core::contracts::session::keys as session_keys;
-use rocode_core::contracts::wire::keys as wire_keys;
 use serde::{Deserialize, Serialize};
 
 use crate::runtime_control::SessionRunStatus;
-use crate::session_runtime::events::broadcast_session_updated;
+use crate::session_runtime::events::{
+    broadcast_server_event, broadcast_session_updated, ServerEvent,
+};
 use crate::{ApiError, Result, ServerState};
 
 // ─── Request / Response structs ───────────────────────────────────────
@@ -262,12 +261,12 @@ pub(crate) fn resolved_session_directory(raw: &str) -> String {
 pub(super) fn session_model_override(session: &rocode_session::Session) -> Option<String> {
     session
         .metadata
-        .get(session_keys::MODEL_PROVIDER)
+        .get("model_provider")
         .and_then(|value| value.as_str())
         .zip(
             session
                 .metadata
-                .get(session_keys::MODEL_ID)
+                .get("model_id")
                 .and_then(|value| value.as_str()),
         )
         .map(|(provider, model)| format!("{provider}/{model}"))
@@ -276,7 +275,7 @@ pub(super) fn session_model_override(session: &rocode_session::Session) -> Optio
 pub(super) fn session_variant_override(session: &rocode_session::Session) -> Option<String> {
     session
         .metadata
-        .get(session_keys::MODEL_VARIANT)
+        .get("model_variant")
         .and_then(|value| value.as_str())
         .map(|value| value.to_string())
 }
@@ -284,7 +283,7 @@ pub(super) fn session_variant_override(session: &rocode_session::Session) -> Opt
 pub(super) fn session_agent_override(session: &rocode_session::Session) -> Option<String> {
     session
         .metadata
-        .get(session_keys::AGENT)
+        .get("agent")
         .and_then(|value| value.as_str())
         .map(|value| value.to_string())
 }
@@ -294,8 +293,8 @@ pub(super) fn session_scheduler_profile_override(
 ) -> Option<String> {
     session
         .metadata
-        .get(scheduler_keys::PROFILE)
-        .or_else(|| session.metadata.get(scheduler_keys::RESOLVED_PROFILE))
+        .get("scheduler_profile")
+        .or_else(|| session.metadata.get("resolved_scheduler_profile"))
         .and_then(|value| value.as_str())
         .map(|value| value.to_string())
 }
@@ -325,11 +324,11 @@ pub(super) async fn set_session_run_status(
         }
     }
 
-    crate::session_runtime::events::broadcast_server_event(
+    broadcast_server_event(
         state.as_ref(),
-        &crate::session_runtime::events::ServerEvent::SessionStatus {
+        &ServerEvent::SessionStatus {
             session_id: session_id.to_string(),
-            status,
+            status: rocode_types::SessionRunStatusWire::Tagged(status),
         },
     );
 }
@@ -453,14 +452,12 @@ pub(super) async fn create_session(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        session.metadata.insert(
-            scheduler_keys::PROFILE.to_string(),
-            serde_json::json!(profile),
-        );
-        session.metadata.insert(
-            session_keys::SCHEDULER_APPLIED.to_string(),
-            serde_json::json!(true),
-        );
+        session
+            .metadata
+            .insert("scheduler_profile".to_string(), serde_json::json!(profile));
+        session
+            .metadata
+            .insert("scheduler_applied".to_string(), serde_json::json!(true));
         sessions.update(session.clone());
     }
     drop(sessions);
@@ -793,7 +790,7 @@ pub(super) async fn get_message(
 
     let info = serde_json::json!({
         "id": message.id,
-        wire_keys::SESSION_ID: session_id,
+        "sessionID": session_id,
         "role": super::messages::message_role_name(&message.role),
         "createdAt": message.created_at.timestamp_millis(),
     });

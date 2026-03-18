@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use std::time::Duration;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
@@ -87,36 +88,77 @@ pub fn retryable(error: &crate::MessageError) -> Option<String> {
             }
         }
         crate::MessageError::Unknown { message } => {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(message) {
-                if let Some(obj) = json.as_object() {
-                    let code = obj.get("code").and_then(|c| c.as_str()).unwrap_or("");
+            #[derive(Debug, Deserialize, Default)]
+            struct UnknownErrorInnerWire {
+                #[serde(
+                    default,
+                    rename = "type",
+                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                )]
+                kind: Option<String>,
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                )]
+                code: Option<String>,
+            }
 
-                    if obj.get("type").and_then(|t| t.as_str()) == Some("error") {
-                        if let Some(error_obj) = obj.get("error").and_then(|e| e.as_object()) {
-                            if error_obj.get("type").and_then(|t| t.as_str())
-                                == Some("too_many_requests")
-                            {
-                                return Some("Too Many Requests".to_string());
-                            }
-                            if error_obj
-                                .get("code")
-                                .and_then(|c| c.as_str())
-                                .map(|c| c.contains("rate_limit"))
-                                .unwrap_or(false)
-                            {
-                                return Some("Rate Limited".to_string());
-                            }
-                        }
+            fn deserialize_opt_unknown_error_inner_wire<'de, D>(
+                deserializer: D,
+            ) -> Result<Option<UnknownErrorInnerWire>, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+                Ok(match value {
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(value) => serde_json::from_value::<UnknownErrorInnerWire>(value).ok(),
+                })
+            }
+
+            #[derive(Debug, Deserialize, Default)]
+            struct UnknownErrorEnvelopeWire {
+                #[serde(
+                    default,
+                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                )]
+                code: Option<String>,
+                #[serde(
+                    default,
+                    rename = "type",
+                    deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+                )]
+                kind: Option<String>,
+                #[serde(default, deserialize_with = "deserialize_opt_unknown_error_inner_wire")]
+                error: Option<UnknownErrorInnerWire>,
+            }
+
+            let envelope: UnknownErrorEnvelopeWire = match serde_json::from_str(message) {
+                Ok(envelope) => envelope,
+                Err(_) => return None,
+            };
+
+            let code = envelope.code.as_deref().unwrap_or("");
+            if envelope.kind.as_deref() == Some("error") {
+                if let Some(error) = envelope.error.as_ref() {
+                    if error.kind.as_deref() == Some("too_many_requests") {
+                        return Some("Too Many Requests".to_string());
                     }
-
-                    if code.contains("exhausted") || code.contains("unavailable") {
-                        return Some("Provider is overloaded".to_string());
+                    if error
+                        .code
+                        .as_deref()
+                        .is_some_and(|code| code.contains("rate_limit"))
+                    {
+                        return Some("Rate Limited".to_string());
                     }
-
-                    return Some(message.clone());
                 }
             }
-            None
+
+            if code.contains("exhausted") || code.contains("unavailable") {
+                return Some("Provider is overloaded".to_string());
+            }
+
+            Some(message.clone())
         }
         _ => None,
     }

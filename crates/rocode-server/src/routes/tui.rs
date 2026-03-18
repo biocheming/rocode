@@ -14,7 +14,6 @@ pub(crate) use crate::runtime_control::QuestionInfo;
 use crate::runtime_control::QuestionReply;
 use crate::session_runtime::events::{broadcast_server_event, ServerEvent};
 use crate::{ApiError, Result, ServerState};
-use rocode_core::contracts::wire::keys as wire_keys;
 
 pub(crate) fn question_routes() -> Router<Arc<ServerState>> {
     Router::new()
@@ -290,13 +289,12 @@ async fn enqueue_tui_request(state: &Arc<ServerState>, path: &str, body: serde_j
     drop(queue);
     TUI_REQUEST_NOTIFY.notify_one();
 
-    state.broadcast(
-        &serde_json::json!({
-            wire_keys::TYPE: rocode_core::contracts::events::ServerEventType::TuiRequest.as_str(),
-            "path": path,
-            "body": body,
-        })
-        .to_string(),
+    broadcast_server_event(
+        state.as_ref(),
+        &ServerEvent::TuiRequest {
+            path: path.to_string(),
+            body,
+        },
     );
 }
 
@@ -488,7 +486,7 @@ async fn select_session(
     enqueue_tui_request(
         &state,
         "/tui/select-session",
-        serde_json::json!({ wire_keys::SESSION_ID: req.session_id }),
+        serde_json::json!({ "sessionID": req.session_id }),
     )
     .await;
     Ok(Json(true))
@@ -523,8 +521,6 @@ async fn submit_tui_response(Json(body): Json<serde_json::Value>) -> Json<bool> 
 mod tests {
     use super::*;
     use crate::ServerState;
-    use rocode_core::contracts::events::{QuestionResolutionKind, ServerEventType};
-    use rocode_core::contracts::wire::keys as wire_keys;
     use std::sync::{Arc, Mutex as StdMutex};
 
     fn sample_question() -> rocode_tool::QuestionDef {
@@ -556,12 +552,10 @@ mod tests {
                 let maybe_request_id = {
                     let events = captured_for_answer.lock().expect("capture lock");
                     events.iter().find_map(|event| {
-                        let ty = event
-                            .get(wire_keys::TYPE)
-                            .and_then(|value| value.as_str())?;
-                        if ty == ServerEventType::QuestionCreated.as_str() {
+                        let ty = event.get("type").and_then(|value| value.as_str())?;
+                        if ty == "question.created" {
                             event
-                                .get(wire_keys::REQUEST_ID)
+                                .get("requestID")
                                 .and_then(|value| value.as_str())
                                 .map(str::to_string)
                         } else {
@@ -594,20 +588,13 @@ mod tests {
 
         let events = captured.lock().expect("capture lock");
         assert!(events.iter().any(|event| {
-            event.get(wire_keys::TYPE).and_then(|value| value.as_str())
-                == Some(ServerEventType::QuestionCreated.as_str())
-                && event
-                    .get(wire_keys::SESSION_ID)
-                    .and_then(|value| value.as_str())
+            event.get("type").and_then(|value| value.as_str()) == Some("question.created")
+                && event.get("sessionID").and_then(|value| value.as_str())
                     == Some(session_id.as_str())
         }));
         assert!(events.iter().any(|event| {
-            event.get(wire_keys::TYPE).and_then(|value| value.as_str())
-                == Some(ServerEventType::QuestionResolved.as_str())
-                && event
-                    .get(rocode_core::contracts::wire::fields::RESOLUTION)
-                    .and_then(|value| value.as_str())
-                    == Some(QuestionResolutionKind::Answered.as_str())
+            event.get("type").and_then(|value| value.as_str()) == Some("question.resolved")
+                && event.get("resolution").and_then(|value| value.as_str()) == Some("answered")
         }));
     }
 
@@ -627,12 +614,10 @@ mod tests {
                 let maybe_request_id = {
                     let events = captured_for_reject.lock().expect("capture lock");
                     events.iter().find_map(|event| {
-                        let ty = event
-                            .get(wire_keys::TYPE)
-                            .and_then(|value| value.as_str())?;
-                        if ty == ServerEventType::QuestionCreated.as_str() {
+                        let ty = event.get("type").and_then(|value| value.as_str())?;
+                        if ty == "question.created" {
                             event
-                                .get(wire_keys::REQUEST_ID)
+                                .get("requestID")
                                 .and_then(|value| value.as_str())
                                 .map(str::to_string)
                         } else {
@@ -667,12 +652,8 @@ mod tests {
 
         let events = captured.lock().expect("capture lock");
         assert!(events.iter().any(|event| {
-            event.get(wire_keys::TYPE).and_then(|value| value.as_str())
-                == Some(ServerEventType::QuestionResolved.as_str())
-                && event
-                    .get(rocode_core::contracts::wire::fields::RESOLUTION)
-                    .and_then(|value| value.as_str())
-                    == Some(QuestionResolutionKind::Rejected.as_str())
+            event.get("type").and_then(|value| value.as_str()) == Some("question.resolved")
+                && event.get("resolution").and_then(|value| value.as_str()) == Some("rejected")
         }));
     }
 }

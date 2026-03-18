@@ -1,7 +1,5 @@
 use async_trait::async_trait;
 use regex::Regex;
-use rocode_core::contracts::permission::PermissionTypeWire;
-use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -9,6 +7,7 @@ use std::time::SystemTime;
 use walkdir::WalkDir;
 
 use crate::{Metadata, Tool, ToolContext, ToolError, ToolResult};
+use rocode_types::GrepToolInput;
 
 const MAX_LINE_LENGTH: usize = 2000;
 
@@ -40,7 +39,7 @@ struct GrepMatch {
 #[async_trait]
 impl Tool for GrepTool {
     fn id(&self) -> &str {
-        BuiltinToolName::Grep.as_str()
+        "grep"
     }
 
     fn description(&self) -> &str {
@@ -51,11 +50,11 @@ impl Tool for GrepTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                (tool_arg_keys::PATTERN): {
+                "pattern": {
                     "type": "string",
                     "description": "The regex pattern to search for"
                 },
-                (tool_arg_keys::PATH): {
+                "path": {
                     "type": "string",
                     "description": "The directory to search in"
                 },
@@ -72,7 +71,7 @@ impl Tool for GrepTool {
                     "description": "Search hidden files and directories (default: false)"
                 }
             },
-            "required": [tool_arg_keys::PATTERN]
+            "required": ["pattern"]
         })
     }
 
@@ -81,25 +80,15 @@ impl Tool for GrepTool {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let pattern: String = args[tool_arg_keys::PATTERN]
-            .as_str()
-            .ok_or_else(|| ToolError::InvalidArguments("pattern is required".into()))?
-            .to_string();
+        let input = GrepToolInput::from_value(&args);
+        let pattern = input
+            .pattern
+            .ok_or_else(|| ToolError::InvalidArguments("pattern is required".into()))?;
 
-        let search_path: String = args[tool_arg_keys::PATH]
-            .as_str()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| ctx.directory.clone());
-
-        let glob_filter: Option<String> = args["glob"].as_str().map(|s| s.to_string());
-
-        let ignore_case: bool = args
-            .get("ignore_case")
-            .or_else(|| args.get("ignoreCase"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        let include_hidden: bool = args["hidden"].as_bool().unwrap_or(false);
+        let search_path = input.path.unwrap_or_else(|| ctx.directory.clone());
+        let glob_filter = input.glob;
+        let ignore_case = input.ignore_case.unwrap_or(false);
+        let include_hidden = input.hidden.unwrap_or(false);
 
         let base_dir = if search_path.is_empty() {
             &self.directory
@@ -111,18 +100,18 @@ impl Tool for GrepTool {
 
         if ctx.is_external_path(&base_dir_str) {
             ctx.ask_permission(
-                crate::PermissionRequest::new(PermissionTypeWire::ExternalDirectory.as_str())
+                crate::PermissionRequest::new("external_directory")
                     .with_pattern(format!("{}/*", base_dir_str))
-                    .with_metadata(tool_arg_keys::PATH, serde_json::json!(&base_dir_str)),
+                    .with_metadata("path", serde_json::json!(&base_dir_str)),
             )
             .await?;
         }
 
         ctx.ask_permission(
-            crate::PermissionRequest::new(BuiltinToolName::Grep.as_str())
+            crate::PermissionRequest::new("grep")
                 .with_pattern(&pattern)
                 .always_allow()
-                .with_metadata(tool_arg_keys::PATH, serde_json::json!(&base_dir_str)),
+                .with_metadata("path", serde_json::json!(&base_dir_str)),
         )
         .await?;
 
@@ -258,10 +247,7 @@ impl Tool for GrepTool {
             metadata: {
                 let mut m = Metadata::new();
                 m.insert("matches".into(), serde_json::json!(total_matches));
-                m.insert(
-                    tool_arg_keys::TRUNCATED.into(),
-                    serde_json::json!(truncated),
-                );
+                m.insert("truncated".into(), serde_json::json!(truncated));
                 m.insert("hasErrors".into(), serde_json::json!(has_errors));
                 m
             },

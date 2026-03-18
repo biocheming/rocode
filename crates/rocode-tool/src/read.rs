@@ -1,14 +1,11 @@
 use async_trait::async_trait;
-use rocode_core::contracts::attachments::{keys as attachment_keys, AttachmentTypeWire};
-use rocode_core::contracts::patch::keys as patch_keys;
-use rocode_core::contracts::permission::PermissionTypeWire;
-use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use walkdir::WalkDir;
 
 use crate::path_guard::{resolve_user_path, RootPathFallbackPolicy};
 use crate::{Metadata, Tool, ToolContext, ToolError, ToolResult};
+use rocode_types::ReadToolInput;
 
 const DEFAULT_READ_LIMIT: usize = 2000;
 const MAX_LINE_LENGTH: usize = 2000;
@@ -52,7 +49,7 @@ impl Default for ReadTool {
 #[async_trait]
 impl Tool for ReadTool {
     fn id(&self) -> &str {
-        BuiltinToolName::Read.as_str()
+        "read"
     }
 
     fn description(&self) -> &str {
@@ -63,21 +60,21 @@ impl Tool for ReadTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                (patch_keys::FILE_PATH_SNAKE): {
+                "file_path": {
                     "type": "string",
                     "minLength": 1,
                     "description": "Absolute path or project-relative path to the file or directory to read."
                 },
-                tool_arg_keys::OFFSET: {
+                "offset": {
                     "type": "number",
                     "description": "The line number to start reading from (1-indexed)"
                 },
-                tool_arg_keys::LIMIT: {
+                "limit": {
                     "type": "number",
                     "description": "The maximum number of lines to read (defaults to 2000)"
                 }
             },
-            "required": [patch_keys::FILE_PATH_SNAKE]
+            "required": ["file_path"]
         })
     }
 
@@ -86,19 +83,13 @@ impl Tool for ReadTool {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let file_path: String = args
-            .get(patch_keys::FILE_PATH_SNAKE)
-            .or_else(|| args.get(patch_keys::FILE_PATH))
-            .or_else(|| args.get(patch_keys::FILEPATH))
-            .or_else(|| args.get(patch_keys::LEGACY_PATH))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                ToolError::InvalidArguments(format!(
-                    "file_path is required. Got args: {}. If you are unsure of the correct path, use glob first.",
-                    serde_json::to_string(&args).unwrap_or_else(|_| format!("{:?}", args))
-                ))
-            })?
-            .to_string();
+        let input = ReadToolInput::from_value(&args);
+        let file_path = input
+            .file_path
+            .ok_or_else(|| ToolError::InvalidArguments(format!(
+                "file_path is required. Got args: {}. If you are unsure of the correct path, use glob first.",
+                serde_json::to_string(&args).unwrap_or_else(|_| format!("{:?}", args))
+            )))?;
         let file_path = file_path.trim().to_string();
         if file_path.is_empty() {
             return Err(ToolError::InvalidArguments(
@@ -107,11 +98,9 @@ impl Tool for ReadTool {
             ));
         }
 
-        let offset: usize = args[tool_arg_keys::OFFSET].as_u64().unwrap_or(1) as usize;
+        let offset: usize = input.offset.unwrap_or(1) as usize;
 
-        let limit: usize = args[tool_arg_keys::LIMIT]
-            .as_u64()
-            .unwrap_or(DEFAULT_READ_LIMIT as u64) as usize;
+        let limit: usize = input.limit.unwrap_or(DEFAULT_READ_LIMIT as u64) as usize;
 
         if offset < 1 {
             return Err(ToolError::InvalidArguments("offset must be >= 1".into()));
@@ -147,16 +136,16 @@ impl Tool for ReadTool {
                 .unwrap_or_else(|| path_str.clone());
 
             ctx.ask_permission(
-                crate::PermissionRequest::new(PermissionTypeWire::ExternalDirectory.as_str())
+                crate::PermissionRequest::new("external_directory")
                     .with_pattern(format!("{}/*", parent))
-                    .with_metadata(patch_keys::FILEPATH, serde_json::json!(path_str))
-                    .with_metadata(tool_arg_keys::PARENT_DIR, serde_json::json!(parent)),
+                    .with_metadata("filepath", serde_json::json!(path_str))
+                    .with_metadata("parentDir", serde_json::json!(parent)),
             )
             .await?;
         }
 
         ctx.ask_permission(
-            crate::PermissionRequest::new(BuiltinToolName::Read.as_str())
+            crate::PermissionRequest::new("read")
                 .with_pattern(&path_str)
                 .always_allow(),
         )
@@ -294,20 +283,11 @@ fn handle_binary_file(
     );
 
     let mut attachment = serde_json::Map::new();
-    attachment.insert(
-        attachment_keys::TYPE.to_string(),
-        serde_json::json!(AttachmentTypeWire::File.as_str()),
-    );
-    attachment.insert(attachment_keys::MIME.to_string(), serde_json::json!(mime));
-    attachment.insert(
-        attachment_keys::URL.to_string(),
-        serde_json::json!(data_url),
-    );
+    attachment.insert("type".to_string(), serde_json::json!("file"));
+    attachment.insert("mime".to_string(), serde_json::json!(mime));
+    attachment.insert("url".to_string(), serde_json::json!(data_url));
     if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
-        attachment.insert(
-            attachment_keys::FILENAME.to_string(),
-            serde_json::json!(filename),
-        );
+        attachment.insert("filename".to_string(), serde_json::json!(filename));
     }
     let attachment_value = serde_json::Value::Object(attachment);
 
@@ -318,13 +298,10 @@ fn handle_binary_file(
             let mut m = Metadata::new();
             m.insert("preview".into(), serde_json::json!(msg));
             m.insert("truncated".into(), serde_json::json!(false));
-            m.insert(attachment_keys::MIME.into(), serde_json::json!(mime));
+            m.insert("mime".into(), serde_json::json!(mime));
             m.insert("size".into(), serde_json::json!(content.len()));
-            m.insert(attachment_keys::ATTACHMENT.into(), attachment_value.clone());
-            m.insert(
-                attachment_keys::ATTACHMENTS.into(),
-                serde_json::json!([attachment_value]),
-            );
+            m.insert("attachment".into(), attachment_value.clone());
+            m.insert("attachments".into(), serde_json::json!([attachment_value]));
             m
         },
         truncated: false,
@@ -512,7 +489,7 @@ async fn read_file_content(
             let mut m = Metadata::new();
             m.insert("preview".into(), serde_json::json!(preview));
             m.insert("truncated".into(), serde_json::json!(truncated));
-            m.insert(patch_keys::FILEPATH.into(), serde_json::json!(path_str));
+            m.insert("filepath".into(), serde_json::json!(path_str));
             m.insert("loaded".into(), serde_json::json!(loaded_files));
             m.insert("size".into(), serde_json::json!(content.len()));
             m.insert("total_lines".into(), serde_json::json!(total_lines));
@@ -649,19 +626,17 @@ mod tests {
 
         let attachments = result
             .metadata
-            .get(attachment_keys::ATTACHMENTS)
+            .get("attachments")
             .and_then(|v| v.as_array())
             .expect("attachments should exist");
         assert_eq!(attachments.len(), 1);
         assert_eq!(
-            attachments[0]
-                .get(attachment_keys::MIME)
-                .and_then(|v| v.as_str()),
+            attachments[0].get("mime").and_then(|v| v.as_str()),
             Some("application/pdf")
         );
         assert!(
             attachments[0]
-                .get(attachment_keys::URL)
+                .get("url")
                 .and_then(|v| v.as_str())
                 .map(|v| v.starts_with("data:application/pdf;base64,"))
                 .unwrap_or(false),

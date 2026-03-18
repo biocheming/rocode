@@ -9,10 +9,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tracing;
 
-use rocode_core::contracts::provider::ProviderFinishReasonWire;
-use rocode_core::contracts::tools::BuiltinToolName;
-use rocode_core::contracts::wire::keys as wire_keys;
-
 use crate::custom_fetch::get_custom_fetch_proxy;
 use crate::responses::*;
 use crate::tools::InputTool;
@@ -174,19 +170,6 @@ impl RawChatResponse {
                     }
                 }
 
-                if let Some(reasoning) = &raw_msg._reasoning_text {
-                    if !reasoning.is_empty() {
-                        parts.insert(
-                            0,
-                            crate::ContentPart {
-                                content_type: "reasoning".to_string(),
-                                text: Some(reasoning.clone()),
-                                ..Default::default()
-                            },
-                        );
-                    }
-                }
-
                 // Tool calls → ContentPart with tool_use
                 if let Some(tool_calls) = &raw_msg.tool_calls {
                     for tc in tool_calls {
@@ -311,8 +294,8 @@ fn invalid_tool_payload_for_history(
 ) -> Value {
     json!({
         "tool": tool_name,
-        wire_keys::TOOL_CALL_ID: tool_call_id,
-        wire_keys::ERROR: error,
+        "toolCallId": tool_call_id,
+        "error": error,
         "receivedArgs": received_args,
     })
 }
@@ -356,7 +339,7 @@ fn normalize_tool_call_arguments_for_request(
             );
             increment_tool_args_invalid(tool_name, "history", 0);
             NormalizedHistoricalToolCall {
-                tool_name: BuiltinToolName::Invalid.as_str().to_string(),
+                tool_name: "invalid".to_string(),
                 arguments: payload.to_string(),
             }
         }
@@ -401,7 +384,7 @@ fn normalize_tool_call_arguments_for_request(
             );
             increment_tool_args_invalid(tool_name, "history", raw.len());
             NormalizedHistoricalToolCall {
-                tool_name: BuiltinToolName::Invalid.as_str().to_string(),
+                tool_name: "invalid".to_string(),
                 arguments: payload.to_string(),
             }
         }
@@ -430,7 +413,7 @@ fn normalize_tool_call_arguments_for_request(
             );
             increment_tool_args_invalid(tool_name, "history", 0);
             NormalizedHistoricalToolCall {
-                tool_name: BuiltinToolName::Invalid.as_str().to_string(),
+                tool_name: "invalid".to_string(),
                 arguments: payload.to_string(),
             }
         }
@@ -505,104 +488,97 @@ fn parse_legacy_sse_data(data: &str, state: &mut LegacySseParserState) -> Vec<St
         return events;
     }
 
-    let chunk: Value = match serde_json::from_str(data) {
+    let chunk: crate::stream::OpenAISSEvent = match serde_json::from_str(data) {
         Ok(v) => v,
         Err(_) => return events,
     };
 
-    let usage = chunk.get("usage");
-    let prompt_tokens = usage
-        .and_then(|u| u.get("prompt_tokens"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let completion_tokens = usage
-        .and_then(|u| u.get("completion_tokens"))
-        .and_then(Value::as_u64)
+    let prompt_tokens = chunk.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0);
+    let completion_tokens = chunk
+        .usage
+        .as_ref()
+        .map(|u| u.completion_tokens)
         .unwrap_or(0);
 
-    if usage.is_some() {
+    if chunk.usage.is_some() {
         events.push(StreamEvent::Usage {
             prompt_tokens,
             completion_tokens,
         });
     }
 
-    if let Some(choices) = chunk.get("choices").and_then(Value::as_array) {
-        for choice in choices {
-            if let Some(delta) = choice.get("delta") {
-                let reasoning = delta
-                    .get("reasoning_content")
-                    .or_else(|| delta.get("reasoning_text"))
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
+    for choice in chunk.choices {
+        if let Some(delta) = choice.delta {
+            let reasoning = delta
+                .reasoning_content
+                .as_deref()
+                .or(delta.reasoning_text.as_deref())
+                .unwrap_or_default();
 
-                if !reasoning.is_empty() {
-                    if !state.reasoning_open {
-                        state.reasoning_open = true;
-                        events.push(StreamEvent::ReasoningStart {
-                            id: "reasoning-0".to_string(),
-                        });
-                    }
-                    events.push(StreamEvent::ReasoningDelta {
+            if !reasoning.is_empty() {
+                if !state.reasoning_open {
+                    state.reasoning_open = true;
+                    events.push(StreamEvent::ReasoningStart {
                         id: "reasoning-0".to_string(),
-                        text: reasoning.to_string(),
                     });
                 }
+                events.push(StreamEvent::ReasoningDelta {
+                    id: "reasoning-0".to_string(),
+                    text: reasoning.to_string(),
+                });
+            }
 
-                if let Some(text) = delta.get("content").and_then(Value::as_str) {
-                    if !text.is_empty() {
-                        if state.reasoning_open {
-                            state.reasoning_open = false;
-                            events.push(StreamEvent::ReasoningEnd {
-                                id: "reasoning-0".to_string(),
-                            });
-                        }
-                        events.push(StreamEvent::TextDelta(text.to_string()));
-                    }
-                }
-
-                if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
-                    if !tool_calls.is_empty() && state.reasoning_open {
+            if let Some(text) = delta.content.as_deref() {
+                if !text.is_empty() {
+                    if state.reasoning_open {
                         state.reasoning_open = false;
                         events.push(StreamEvent::ReasoningEnd {
                             id: "reasoning-0".to_string(),
                         });
                     }
-                    for tc in tool_calls {
-                        let index = tc.get("index").and_then(Value::as_u64).unwrap_or(0) as u32;
-                        let id = if let Some(id) = tc
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .filter(|s| !s.is_empty())
-                        {
-                            let id = id.to_string();
-                            state.tool_call_ids.insert(index, id.clone());
-                            id
-                        } else {
-                            state
-                                .tool_call_ids
-                                .entry(index)
-                                .or_insert_with(|| format!("tool-call-{}", index))
-                                .clone()
-                        };
+                    events.push(StreamEvent::TextDelta(text.to_string()));
+                }
+            }
 
-                        if let Some(func) = tc.get("function") {
-                            if let Some(name) = func.get("name").and_then(Value::as_str) {
-                                let should_emit_start = state
-                                    .tool_call_names
-                                    .get(&index)
-                                    .map(|existing| existing != name)
-                                    .unwrap_or(true);
-                                state.tool_call_names.insert(index, name.to_string());
-                                if should_emit_start {
-                                    events.push(StreamEvent::ToolCallStart {
-                                        id: id.clone(),
-                                        name: name.to_string(),
-                                    });
-                                }
+            if let Some(tool_calls) = delta.tool_calls {
+                if !tool_calls.is_empty() && state.reasoning_open {
+                    state.reasoning_open = false;
+                    events.push(StreamEvent::ReasoningEnd {
+                        id: "reasoning-0".to_string(),
+                    });
+                }
+                for tc in tool_calls {
+                    let index = tc.index;
+                    let id = if let Some(id) = tc.id.as_deref().filter(|s| !s.is_empty()) {
+                        let id = id.to_string();
+                        state.tool_call_ids.insert(index, id.clone());
+                        id
+                    } else {
+                        state
+                            .tool_call_ids
+                            .entry(index)
+                            .or_insert_with(|| format!("tool-call-{}", index))
+                            .clone()
+                    };
+
+                    if let Some(func) = tc.function {
+                        if let Some(name) = func.name.as_deref() {
+                            let should_emit_start = state
+                                .tool_call_names
+                                .get(&index)
+                                .map(|existing| existing != name)
+                                .unwrap_or(true);
+                            state.tool_call_names.insert(index, name.to_string());
+                            if should_emit_start {
+                                events.push(StreamEvent::ToolCallStart {
+                                    id: id.clone(),
+                                    name: name.to_string(),
+                                });
                             }
+                        }
 
-                            if let Some(arguments) = func.get("arguments").and_then(Value::as_str) {
+                        match &func.arguments {
+                            Some(Value::String(arguments)) => {
                                 if !arguments.is_empty() {
                                     tracing::info!(
                                         tool_call_id = %id,
@@ -615,7 +591,8 @@ fn parse_legacy_sse_data(data: &str, state: &mut LegacySseParserState) -> Vec<St
                                         input: arguments.to_string(),
                                     });
                                 }
-                            } else if let Some(arguments_value) = func.get("arguments") {
+                            }
+                            Some(arguments_value @ Value::Object(_)) => {
                                 // LiteLLM or other proxies may send arguments as a JSON
                                 // object instead of a string. Handle this case.
                                 tracing::info!(
@@ -624,9 +601,7 @@ fn parse_legacy_sse_data(data: &str, state: &mut LegacySseParserState) -> Vec<St
                                     arguments_preview = %arguments_value.to_string().chars().take(200).collect::<String>(),
                                     "[DIAG-SSE] arguments field is NOT a string"
                                 );
-                                if arguments_value.is_object()
-                                    && !arguments_value.as_object().is_none_or(|o| o.is_empty())
-                                {
+                                if !arguments_value.as_object().is_none_or(|o| o.is_empty()) {
                                     let serialized = arguments_value.to_string();
                                     events.push(StreamEvent::ToolCallDelta {
                                         id,
@@ -634,31 +609,42 @@ fn parse_legacy_sse_data(data: &str, state: &mut LegacySseParserState) -> Vec<St
                                     });
                                 }
                             }
+                            Some(arguments_value) => {
+                                tracing::info!(
+                                    tool_call_id = %id,
+                                    arguments_type = %if arguments_value.is_object() { "object" } else if arguments_value.is_null() { "null" } else { "other" },
+                                    arguments_preview = %arguments_value.to_string().chars().take(200).collect::<String>(),
+                                    "[DIAG-SSE] arguments field is NOT a string"
+                                );
+                            }
+                            None => {}
                         }
                     }
                 }
             }
+        }
 
-            if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
-                if state.reasoning_open {
-                    state.reasoning_open = false;
-                    events.push(StreamEvent::ReasoningEnd {
-                        id: "reasoning-0".to_string(),
-                    });
-                }
-                let normalized_reason = ProviderFinishReasonWire::parse(reason)
-                    .map(|parsed| parsed.as_str().to_string())
-                    .unwrap_or_else(|| reason.to_string());
-                events.push(StreamEvent::FinishStep {
-                    finish_reason: Some(normalized_reason),
-                    usage: crate::stream::StreamUsage {
-                        prompt_tokens,
-                        completion_tokens,
-                        ..Default::default()
-                    },
-                    provider_metadata: None,
+        if let Some(reason) = choice.finish_reason.as_deref() {
+            if state.reasoning_open {
+                state.reasoning_open = false;
+                events.push(StreamEvent::ReasoningEnd {
+                    id: "reasoning-0".to_string(),
                 });
             }
+            let normalized_reason = if reason == "tool_calls" {
+                "tool-calls".to_string()
+            } else {
+                reason.to_string()
+            };
+            events.push(StreamEvent::FinishStep {
+                finish_reason: Some(normalized_reason),
+                usage: crate::stream::StreamUsage {
+                    prompt_tokens,
+                    completion_tokens,
+                    ..Default::default()
+                },
+                provider_metadata: None,
+            });
         }
     }
 
@@ -838,6 +824,7 @@ fn assistant_message_to_openai(content: &crate::Content) -> (Value, Vec<String>)
         crate::Content::Parts(parts) => {
             let mut text = String::new();
             let mut tool_calls = Vec::new();
+            let mut ids = Vec::new();
 
             for part in parts {
                 match part.content_type.as_str() {
@@ -853,6 +840,7 @@ fn assistant_message_to_openai(content: &crate::Content) -> (Value, Vec<String>)
                                 &tool_use.id,
                                 &tool_use.input,
                             );
+                            ids.push(tool_use.id.clone());
                             tool_calls.push(json!({
                                 "id": tool_use.id,
                                 "type": "function",
@@ -886,17 +874,6 @@ fn assistant_message_to_openai(content: &crate::Content) -> (Value, Vec<String>)
                 );
                 message.insert("tool_calls".to_string(), Value::Array(tool_calls));
             }
-            let ids = message
-                .get("tool_calls")
-                .and_then(|value| value.as_array())
-                .map(|calls| {
-                    calls
-                        .iter()
-                        .filter_map(|call| call.get("id").and_then(Value::as_str))
-                        .map(|id| id.to_string())
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
 
             (Value::Object(message), ids)
         }
@@ -1096,12 +1073,12 @@ fn tools_to_input_tools(tools: Option<&Vec<crate::ToolDefinition>>) -> Option<Ve
 
 fn finish_reason_to_string(reason: FinishReason) -> String {
     match reason {
-        FinishReason::Stop => ProviderFinishReasonWire::Stop.as_str().to_string(),
-        FinishReason::Length => ProviderFinishReasonWire::Length.as_str().to_string(),
-        FinishReason::ContentFilter => ProviderFinishReasonWire::ContentFilter.as_str().to_string(),
-        FinishReason::ToolCalls => ProviderFinishReasonWire::ToolCalls.as_str().to_string(),
-        FinishReason::Error => ProviderFinishReasonWire::Error.as_str().to_string(),
-        FinishReason::Unknown => ProviderFinishReasonWire::Unknown.as_str().to_string(),
+        FinishReason::Stop => "stop".to_string(),
+        FinishReason::Length => "length".to_string(),
+        FinishReason::ContentFilter => "content_filter".to_string(),
+        FinishReason::ToolCalls => "tool-calls".to_string(),
+        FinishReason::Error => "error".to_string(),
+        FinishReason::Unknown => "unknown".to_string(),
     }
 }
 
@@ -1154,9 +1131,6 @@ fn responses_generate_options(_config: &ProviderConfig, request: &ChatRequest) -
         provider_options.reasoning_effort =
             openai_reasoning_effort(&request.model, request.variant.as_deref())
                 .map(ToString::to_string);
-    }
-    if provider_options.reasoning_summary.is_none() && provider_options.reasoning_effort.is_some() {
-        provider_options.reasoning_summary = Some("auto".to_string());
     }
 
     GenerateOptions {
@@ -1309,6 +1283,22 @@ fn reassemble_sse_chunks(body: &str) -> Result<RawChatResponse, ProviderError> {
     // tool_calls keyed by index: (id, name, arguments)
     let mut tool_calls: HashMap<u32, (Option<String>, Option<String>, String)> = HashMap::new();
 
+    fn deserialize_opt_usage_lossy<'de, D>(deserializer: D) -> Result<Option<RawUsage>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<Value>::deserialize(deserializer)?;
+        Ok(value.and_then(|value| serde_json::from_value::<RawUsage>(value).ok()))
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct OpenAiSseChunkWire {
+        #[serde(default)]
+        choices: Vec<crate::stream::OpenAIChoice>,
+        #[serde(default, deserialize_with = "deserialize_opt_usage_lossy")]
+        usage: Option<RawUsage>,
+    }
+
     for line in body.lines() {
         let line = line.trim();
         if !line.starts_with("data:") {
@@ -1318,50 +1308,83 @@ fn reassemble_sse_chunks(body: &str) -> Result<RawChatResponse, ProviderError> {
         if data == "[DONE]" {
             break;
         }
-        let chunk: Value = match serde_json::from_str(data) {
+        let chunk: OpenAiSseChunkWire = match serde_json::from_str(data) {
             Ok(v) => v,
             Err(_) => continue,
         };
-        if let Some(choices) = chunk.get("choices").and_then(|c| c.as_array()) {
-            for choice in choices {
-                if let Some(delta) = choice.get("delta") {
-                    if let Some(text) = delta.get("content").and_then(|v| v.as_str()) {
-                        content.push_str(text);
-                    }
-                    // ZhipuAI uses "reasoning_content"; OpenAI uses "reasoning_text"
-                    let reasoning_val = delta
-                        .get("reasoning_content")
-                        .or_else(|| delta.get("reasoning_text"))
-                        .and_then(|v| v.as_str());
-                    if let Some(r) = reasoning_val {
-                        reasoning.push_str(r);
-                    }
-                    if let Some(tcs) = delta.get("tool_calls").and_then(|v| v.as_array()) {
-                        for tc in tcs {
-                            let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let entry =
-                                tool_calls.entry(idx).or_insert((None, None, String::new()));
-                            if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
-                                entry.0 = Some(id.to_string());
+
+        for choice in chunk.choices {
+            if let Some(delta) = choice.delta {
+                if let Some(text) = delta.content.as_deref() {
+                    content.push_str(text);
+                }
+
+                // ZhipuAI uses "reasoning_content"; OpenAI uses "reasoning_text"
+                let reasoning_val = delta
+                    .reasoning_content
+                    .as_deref()
+                    .or(delta.reasoning_text.as_deref());
+                if let Some(text) = reasoning_val {
+                    reasoning.push_str(text);
+                }
+
+                if let Some(tool_calls_delta) = delta.tool_calls {
+                    for tc in tool_calls_delta {
+                        let idx = tc.index;
+                        let entry = tool_calls
+                            .entry(idx)
+                            .or_insert_with(|| (None, None, String::new()));
+
+                        if let Some(id) = tc.id {
+                            if !id.is_empty() {
+                                entry.0 = Some(id);
                             }
-                            if let Some(func) = tc.get("function") {
-                                if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
-                                    entry.1 = Some(name.to_string());
+                        }
+
+                        if let Some(function) = tc.function {
+                            if let Some(name) = function.name {
+                                if !name.is_empty() {
+                                    entry.1 = Some(name);
                                 }
-                                if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
-                                    entry.2.push_str(args);
+                            }
+                            if let Some(args) = function.arguments {
+                                match args {
+                                    Value::String(raw) => {
+                                        if !raw.is_empty() {
+                                            entry.2.push_str(&raw);
+                                        }
+                                    }
+                                    Value::Object(obj) => {
+                                        if !obj.is_empty() {
+                                            entry.2.push_str(&Value::Object(obj).to_string());
+                                        }
+                                    }
+                                    Value::Array(arr) => {
+                                        if !arr.is_empty() {
+                                            entry.2.push_str(&Value::Array(arr).to_string());
+                                        }
+                                    }
+                                    other => {
+                                        if !other.is_null() {
+                                            entry.2.push_str(&other.to_string());
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
-                if let Some(fr) = choice.get("finish_reason").and_then(|v| v.as_str()) {
-                    finish_reason = Some(fr.to_string());
+            }
+
+            if let Some(fr) = choice.finish_reason {
+                if !fr.is_empty() {
+                    finish_reason = Some(fr);
                 }
             }
         }
-        if let Some(u) = chunk.get("usage") {
-            usage = serde_json::from_value(u.clone()).ok();
+
+        if chunk.usage.is_some() {
+            usage = chunk.usage;
         }
     }
 
@@ -1746,15 +1769,12 @@ mod tests {
     fn parse_legacy_sse_data_uses_stable_tool_call_id_when_missing() {
         let mut state = LegacySseParserState::default();
         let start = parse_legacy_sse_data(
-            &format!(
-                r#"{{"choices":[{{"delta":{{"tool_calls":[{{"index":0,"function":{{"name":"{}"}}}}]}}}}]}}"#,
-                BuiltinToolName::Bash.as_str()
-            ),
+            "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"bash\"}}]}}]}",
             &mut state,
         );
         assert!(matches!(
             start.first(),
-            Some(StreamEvent::ToolCallStart { id, name }) if id == "tool-call-0" && name == BuiltinToolName::Bash.as_str()
+            Some(StreamEvent::ToolCallStart { id, name }) if id == "tool-call-0" && name == "bash"
         ));
 
         let delta = parse_legacy_sse_data(
@@ -1781,7 +1801,7 @@ mod tests {
                     content_type: "tool_use".to_string(),
                     tool_use: Some(crate::ToolUse {
                         id: "call_1".to_string(),
-                        name: BuiltinToolName::Bash.as_str().to_string(),
+                        name: "bash".to_string(),
                         input: serde_json::json!({ "cmd": "ls" }),
                     }),
                     ..Default::default()
@@ -1810,10 +1830,7 @@ mod tests {
         assert_eq!(converted.len(), 2);
         assert_eq!(converted[0]["role"], "assistant");
         assert_eq!(converted[0]["tool_calls"][0]["type"], "function");
-        assert_eq!(
-            converted[0]["tool_calls"][0]["function"]["name"],
-            BuiltinToolName::Bash.as_str()
-        );
+        assert_eq!(converted[0]["tool_calls"][0]["function"]["name"], "bash");
         assert_eq!(converted[1]["role"], "tool");
         assert_eq!(converted[1]["tool_call_id"], "call_1");
         assert_eq!(converted[1]["content"], "ok");
@@ -1940,56 +1957,6 @@ mod tests {
             .clone();
         assert!(input.is_object(), "valid JSON args should remain an object");
         assert_eq!(input["file_path"], "t2.html");
-    }
-
-    #[test]
-    fn raw_chat_response_preserves_reasoning_text_as_part() {
-        let raw = RawChatResponse {
-            id: Some("resp_reasoning".to_string()),
-            model: Some("test-model".to_string()),
-            choices: vec![RawChoice {
-                index: Some(0),
-                message: Some(RawMessage {
-                    role: Some("assistant".to_string()),
-                    content: Some("final answer".to_string()),
-                    tool_calls: None,
-                    _reasoning_text: Some("thinking trace".to_string()),
-                }),
-                finish_reason: Some("stop".to_string()),
-            }],
-            usage: None,
-        };
-
-        let chat = raw.into_chat_response();
-        let crate::Content::Parts(parts) = &chat.choices[0].message.content else {
-            panic!("expected parts content");
-        };
-        assert_eq!(parts.len(), 2);
-        assert_eq!(parts[0].content_type, "reasoning");
-        assert_eq!(parts[0].text.as_deref(), Some("thinking trace"));
-        assert_eq!(parts[1].content_type, "text");
-        assert_eq!(parts[1].text.as_deref(), Some("final answer"));
-    }
-
-    #[test]
-    fn responses_generate_options_defaults_reasoning_summary_to_auto() {
-        let request = ChatRequest {
-            model: "gpt-5".to_string(),
-            variant: Some("medium".to_string()),
-            messages: vec![Message::user("hello".to_string())],
-            system: None,
-            tools: None,
-            max_tokens: None,
-            temperature: None,
-            top_p: None,
-            stream: None,
-            provider_options: None,
-        };
-
-        let options = responses_generate_options(&ProviderConfig::new("test", "", ""), &request);
-        let provider_options = options.provider_options.expect("provider options");
-        assert_eq!(provider_options.reasoning_effort.as_deref(), Some("medium"));
-        assert_eq!(provider_options.reasoning_summary.as_deref(), Some("auto"));
     }
 
     #[test]

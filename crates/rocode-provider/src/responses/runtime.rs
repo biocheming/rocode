@@ -1,4 +1,5 @@
 use futures::{Stream, StreamExt};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -327,40 +328,70 @@ impl OpenAIResponsesLanguageModel {
         let body: Value = serde_json::from_str(&raw)
             .map_err(|e| ProviderError::ApiError(format!("invalid responses payload: {}", e)))?;
 
-        let output = body
-            .get("output")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+        fn deserialize_vec_value_lossy<'de, D>(deserializer: D) -> Result<Vec<Value>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = Option::<Value>::deserialize(deserializer)?;
+            Ok(match value {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::Array(values)) => values,
+                Some(other) => vec![other],
+            })
+        }
+
+        #[derive(Debug, Default, Deserialize)]
+        struct IncompleteDetailsWire {
+            #[serde(default)]
+            reason: String,
+        }
+
+        #[derive(Debug, Default, Deserialize)]
+        struct ResponsesBodyWire {
+            #[serde(default, deserialize_with = "deserialize_vec_value_lossy")]
+            output: Vec<Value>,
+            #[serde(default)]
+            usage: Option<Value>,
+            #[serde(default)]
+            incomplete_details: Option<IncompleteDetailsWire>,
+            #[serde(default)]
+            id: Option<String>,
+            #[serde(default)]
+            model: Option<String>,
+            #[serde(default)]
+            created_at: Option<u64>,
+            #[serde(default)]
+            service_tier: Option<String>,
+        }
+
+        let wire = serde_json::from_value::<ResponsesBodyWire>(body).unwrap_or_default();
+        let ResponsesBodyWire {
+            output,
+            usage,
+            incomplete_details,
+            id,
+            model,
+            created_at,
+            service_tier,
+        } = wire;
+
         let (parts, has_function_call, logprobs) = parse_output_items(&output);
 
-        let usage = body
-            .get("usage")
-            .cloned()
+        let usage = usage
             .and_then(|v| serde_json::from_value::<ResponsesUsage>(v).ok())
             .unwrap_or_default();
 
-        let incomplete_reason = body
-            .get("incomplete_details")
-            .and_then(Value::as_object)
-            .and_then(|obj| obj.get("reason"))
-            .and_then(Value::as_str);
+        let incomplete_reason = incomplete_details
+            .as_ref()
+            .map(|details| details.reason.as_str())
+            .filter(|reason| !reason.trim().is_empty());
         let finish_reason = map_openai_response_finish_reason(incomplete_reason, has_function_call);
 
         let metadata = ResponseMetadata {
-            response_id: body
-                .get("id")
-                .and_then(Value::as_str)
-                .map(ToString::to_string),
-            model_id: body
-                .get("model")
-                .and_then(Value::as_str)
-                .map(ToString::to_string),
-            timestamp: body.get("created_at").and_then(Value::as_u64),
-            service_tier: body
-                .get("service_tier")
-                .and_then(Value::as_str)
-                .map(ToString::to_string),
+            response_id: id,
+            model_id: model,
+            timestamp: created_at,
+            service_tier,
             logprobs: if logprobs.is_empty() {
                 None
             } else {

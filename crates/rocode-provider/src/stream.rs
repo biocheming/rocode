@@ -1,8 +1,7 @@
 use crate::provider::ProviderError;
 use bytes::Bytes;
 use futures::{stream, Stream, StreamExt};
-use rocode_core::contracts::provider::ProviderFinishReasonWire;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 
@@ -169,7 +168,7 @@ pub(crate) struct OpenAIDelta {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct OpenAIToolCall {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_u32_lossy")]
     pub index: u32,
     pub id: Option<String>,
     #[serde(default)]
@@ -179,15 +178,43 @@ pub(crate) struct OpenAIToolCall {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct OpenAIFunction {
     pub name: Option<String>,
-    pub arguments: Option<String>,
+    pub arguments: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct OpenAIUsage {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_u64_lossy")]
     pub prompt_tokens: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_u64_lossy")]
     pub completion_tokens: u64,
+}
+
+fn deserialize_u64_lossy<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        None | Some(serde_json::Value::Null) => 0,
+        Some(serde_json::Value::Number(value)) => value.as_u64().unwrap_or(0),
+        Some(serde_json::Value::Bool(value)) => u64::from(value),
+        Some(serde_json::Value::String(raw)) => raw.trim().parse::<u64>().unwrap_or(0),
+        _ => 0,
+    })
+}
+
+fn deserialize_u32_lossy<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        None | Some(serde_json::Value::Null) => 0,
+        Some(serde_json::Value::Number(value)) => value.as_u64().unwrap_or(0) as u32,
+        Some(serde_json::Value::Bool(value)) => u32::from(value),
+        Some(serde_json::Value::String(raw)) => raw.trim().parse::<u32>().unwrap_or(0),
+        _ => 0,
+    })
 }
 
 fn openai_tool_call_id(tc: &OpenAIToolCall) -> String {
@@ -699,7 +726,15 @@ pub fn parse_openai_value(value: serde_json::Value) -> Vec<StreamEvent> {
                 for tc in tool_calls {
                     if let Some(func) = &tc.function {
                         let has_name = func.name.as_deref().is_some_and(|n| !n.is_empty());
-                        let has_args = func.arguments.as_deref().is_some_and(|a| !a.is_empty());
+                        let args_payload = match &func.arguments {
+                            Some(serde_json::Value::String(raw)) if !raw.is_empty() => {
+                                Some(raw.to_string())
+                            }
+                            Some(serde_json::Value::Object(obj)) if !obj.is_empty() => {
+                                Some(serde_json::Value::Object(obj.clone()).to_string())
+                            }
+                            _ => None,
+                        };
 
                         if has_name {
                             events.push(StreamEvent::ToolCallStart {
@@ -707,10 +742,10 @@ pub fn parse_openai_value(value: serde_json::Value) -> Vec<StreamEvent> {
                                 name: func.name.clone().unwrap_or_default(),
                             });
                         }
-                        if has_args {
+                        if let Some(args_payload) = args_payload {
                             events.push(StreamEvent::ToolCallDelta {
                                 id: openai_tool_call_id(tc),
-                                input: func.arguments.clone().unwrap_or_default(),
+                                input: args_payload,
                             });
                         }
                     }
@@ -718,21 +753,19 @@ pub fn parse_openai_value(value: serde_json::Value) -> Vec<StreamEvent> {
             }
         }
 
-        if let Some(reason) = choice.finish_reason.as_deref() {
-            match ProviderFinishReasonWire::parse(reason) {
-                Some(ProviderFinishReasonWire::Stop) => {
+        if let Some(reason) = &choice.finish_reason {
+            match reason.as_str() {
+                "stop" => {
                     events.push(StreamEvent::FinishStep {
-                        finish_reason: Some(ProviderFinishReasonWire::Stop.as_str().to_string()),
+                        finish_reason: Some("stop".to_string()),
                         usage: usage.clone().unwrap_or_default(),
                         provider_metadata: None,
                     });
                     events.push(StreamEvent::Done);
                 }
-                Some(ProviderFinishReasonWire::ToolCalls) => {
+                "tool_calls" => {
                     events.push(StreamEvent::FinishStep {
-                        finish_reason: Some(
-                            ProviderFinishReasonWire::ToolCalls.as_str().to_string(),
-                        ),
+                        finish_reason: Some("tool-calls".to_string()),
                         usage: usage.clone().unwrap_or_default(),
                         provider_metadata: None,
                     });

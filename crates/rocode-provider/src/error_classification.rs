@@ -1,5 +1,6 @@
 use crate::error_code::StandardErrorCode;
 use crate::provider::ProviderError;
+use serde::Deserialize;
 
 /// Classify a provider runtime error into a standard V2 error code.
 pub fn classify_provider_error(error: &ProviderError) -> StandardErrorCode {
@@ -37,15 +38,23 @@ pub fn classify_provider_error(error: &ProviderError) -> StandardErrorCode {
 }
 
 fn extract_provider_code_from_json(value: &serde_json::Value) -> Option<String> {
-    if let Some(error) = value.get("error") {
-        if let Some(code) = error.get("code").and_then(|v| v.as_str()) {
-            return Some(code.to_string());
-        }
-        if let Some(kind) = error.get("type").and_then(|v| v.as_str()) {
-            return Some(kind.to_string());
-        }
+    #[derive(Debug, Default, Deserialize)]
+    struct ErrorEnvelopeWire {
+        #[serde(default)]
+        error: Option<ErrorBodyWire>,
     }
-    None
+
+    #[derive(Debug, Default, Deserialize)]
+    struct ErrorBodyWire {
+        #[serde(default)]
+        code: Option<String>,
+        #[serde(default, rename = "type")]
+        kind: Option<String>,
+    }
+
+    let wire = serde_json::from_value::<ErrorEnvelopeWire>(value.clone()).ok()?;
+    let error = wire.error?;
+    error.code.or(error.kind)
 }
 
 /// Extract provider-specific error code from message body text.

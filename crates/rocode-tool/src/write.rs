@@ -1,14 +1,10 @@
 use async_trait::async_trait;
-use rocode_core::contracts::events::BusEventName;
-use rocode_core::contracts::fs::{keys as fs_keys, FileWatcherEventKind};
-use rocode_core::contracts::patch::keys as patch_keys;
-use rocode_core::contracts::permission::PermissionTypeWire;
-use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
 use crate::path_guard::{resolve_user_path, RootPathFallbackPolicy};
 use crate::{Metadata, Tool, ToolContext, ToolError, ToolResult};
+use rocode_types::WriteToolInput;
 
 #[cfg(feature = "lsp")]
 const MAX_DIAGNOSTICS_PER_FILE: usize = 20;
@@ -36,7 +32,7 @@ impl Default for WriteTool {
 #[async_trait]
 impl Tool for WriteTool {
     fn id(&self) -> &str {
-        BuiltinToolName::Write.as_str()
+        "write"
     }
 
     fn description(&self) -> &str {
@@ -47,16 +43,16 @@ impl Tool for WriteTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                (patch_keys::FILE_PATH_SNAKE): {
+                "file_path": {
                     "type": "string",
                     "description": "Absolute path or project-relative path to the file to write"
                 },
-                (patch_keys::CONTENT): {
+                "content": {
                     "type": "string",
                     "description": "The content to write to the file"
                 }
             },
-            "required": [patch_keys::FILE_PATH_SNAKE, patch_keys::CONTENT]
+            "required": ["file_path", "content"]
         })
     }
 
@@ -65,20 +61,13 @@ impl Tool for WriteTool {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let file_path: String = args
-            .get(patch_keys::FILE_PATH_SNAKE)
-            .or_else(|| args.get(patch_keys::FILE_PATH))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                ToolError::InvalidArguments("file_path (or filePath) is required".into())
-            })?
-            .trim()
-            .to_string();
-
-        let content: String = args[patch_keys::CONTENT]
-            .as_str()
-            .ok_or_else(|| ToolError::InvalidArguments("content is required".into()))?
-            .to_string();
+        let input = WriteToolInput::from_value(&args);
+        let file_path = input.file_path.ok_or_else(|| {
+            ToolError::InvalidArguments("file_path (or filePath) is required".into())
+        })?;
+        let content = input
+            .content
+            .ok_or_else(|| ToolError::InvalidArguments("content is required".into()))?;
 
         let base_dir = if ctx.directory.is_empty() {
             &self.directory
@@ -110,10 +99,10 @@ impl Tool for WriteTool {
                 .unwrap_or_else(|| path_str.clone());
 
             ctx.ask_permission(
-                crate::PermissionRequest::new(PermissionTypeWire::ExternalDirectory.as_str())
+                crate::PermissionRequest::new("external_directory")
                     .with_pattern(format!("{}/*", parent))
-                    .with_metadata(patch_keys::FILEPATH, serde_json::json!(&path_str))
-                    .with_metadata(tool_arg_keys::PARENT_DIR, serde_json::json!(parent)),
+                    .with_metadata("filepath", serde_json::json!(&path_str))
+                    .with_metadata("parentDir", serde_json::json!(parent)),
             )
             .await?;
         }
@@ -128,9 +117,9 @@ impl Tool for WriteTool {
         let diff = create_diff(&path_str, &old_content, &content);
 
         ctx.ask_permission(
-            crate::PermissionRequest::new(BuiltinToolName::Edit.as_str())
+            crate::PermissionRequest::new("edit")
                 .with_pattern(&path_str)
-                .with_metadata(patch_keys::DIFF, serde_json::json!(diff))
+                .with_metadata("diff", serde_json::json!(diff))
                 .always_allow(),
         )
         .await?;
@@ -151,25 +140,19 @@ impl Tool for WriteTool {
             .await
             .map_err(|e| ToolError::ExecutionError(format!("Failed to write file: {}", e)))?;
 
-        let file_watcher_event = if exists {
-            FileWatcherEventKind::Change
-        } else {
-            FileWatcherEventKind::Add
-        };
-
         ctx.do_publish_bus(
-            BusEventName::FileEdited.as_str(),
+            "file.edited",
             serde_json::json!({
-                (fs_keys::FILE): path_str
+                "file": path_str
             }),
         )
         .await;
 
         ctx.do_publish_bus(
-            BusEventName::FileWatcherUpdated.as_str(),
+            "file_watcher.updated",
             serde_json::json!({
-                (fs_keys::FILE): path_str,
-                (fs_keys::EVENT): file_watcher_event.as_str()
+                "file": path_str,
+                "event": if exists { "change" } else { "add" }
             }),
         )
         .await;
@@ -204,11 +187,11 @@ impl Tool for WriteTool {
             output,
             metadata: {
                 let mut m = Metadata::new();
-                m.insert(patch_keys::BYTES.into(), serde_json::json!(byte_count));
-                m.insert(patch_keys::LINES.into(), serde_json::json!(line_count));
-                m.insert(patch_keys::FILEPATH.into(), serde_json::json!(path_str));
-                m.insert(patch_keys::EXISTS.into(), serde_json::json!(exists));
-                m.insert(patch_keys::DIFF.into(), serde_json::json!(diff));
+                m.insert("bytes".into(), serde_json::json!(byte_count));
+                m.insert("lines".into(), serde_json::json!(line_count));
+                m.insert("filepath".into(), serde_json::json!(path_str));
+                m.insert("exists".into(), serde_json::json!(exists));
+                m.insert("diff".into(), serde_json::json!(diff));
                 m
             },
             truncated: false,

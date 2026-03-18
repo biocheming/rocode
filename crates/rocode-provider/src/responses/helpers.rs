@@ -1,8 +1,6 @@
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-
-use rocode_core::contracts::provider::ProviderFinishReasonWire;
-use rocode_core::contracts::provider::ProviderToolCallNameWire;
 
 use crate::message::{ContentPart, ToolResult, ToolUse};
 use crate::stream::{StreamEvent, StreamUsage, ToolResultOutput};
@@ -62,14 +60,14 @@ pub(super) fn process_stream_chunk(
                 ongoing_tool_calls.insert(
                     output_index,
                     OngoingToolCall {
-                        tool_name: ProviderToolCallNameWire::WebSearchCall.as_str().to_string(),
+                        tool_name: "web_search_call".to_string(),
                         tool_call_id: id.clone(),
                         code_interpreter: None,
                     },
                 );
                 events.push(StreamEvent::ToolInputStart {
                     id,
-                    tool_name: ProviderToolCallNameWire::WebSearchCall.as_str().to_string(),
+                    tool_name: "web_search_call".to_string(),
                 });
             }
             OutputItemAddedItem::CodeInterpreterCall {
@@ -81,18 +79,14 @@ pub(super) fn process_stream_chunk(
                 ongoing_tool_calls.insert(
                     output_index,
                     OngoingToolCall {
-                        tool_name: ProviderToolCallNameWire::CodeInterpreterCall
-                            .as_str()
-                            .to_string(),
+                        tool_name: "code_interpreter_call".to_string(),
                         tool_call_id: id.clone(),
                         code_interpreter: Some(CodeInterpreterState { container_id }),
                     },
                 );
                 events.push(StreamEvent::ToolInputStart {
                     id: id.clone(),
-                    tool_name: ProviderToolCallNameWire::CodeInterpreterCall
-                        .as_str()
-                        .to_string(),
+                    tool_name: "code_interpreter_call".to_string(),
                 });
                 if let Some(code) = code {
                     if !code.is_empty() {
@@ -103,22 +97,22 @@ pub(super) fn process_stream_chunk(
             OutputItemAddedItem::FileSearchCall { id } => {
                 events.push(StreamEvent::ToolCallStart {
                     id: id.clone(),
-                    name: ProviderToolCallNameWire::FileSearchCall.as_str().to_string(),
+                    name: "file_search_call".to_string(),
                 });
                 events.push(StreamEvent::ToolCallEnd {
                     id,
-                    name: ProviderToolCallNameWire::FileSearchCall.as_str().to_string(),
+                    name: "file_search_call".to_string(),
                     input: json!({}),
                 });
             }
             OutputItemAddedItem::ImageGenerationCall { id } => {
                 events.push(StreamEvent::ToolCallStart {
                     id: id.clone(),
-                    name: ProviderToolCallNameWire::ImageGenerationCall.as_str().to_string(),
+                    name: "image_generation_call".to_string(),
                 });
                 events.push(StreamEvent::ToolCallEnd {
                     id,
-                    name: ProviderToolCallNameWire::ImageGenerationCall.as_str().to_string(),
+                    name: "image_generation_call".to_string(),
                     input: json!({}),
                 });
             }
@@ -148,11 +142,11 @@ pub(super) fn process_stream_chunk(
             OutputItemAddedItem::ComputerCall { id, .. } => {
                 events.push(StreamEvent::ToolCallStart {
                     id: id.clone(),
-                    name: ProviderToolCallNameWire::ComputerCall.as_str().to_string(),
+                    name: "computer_call".to_string(),
                 });
                 events.push(StreamEvent::ToolCallEnd {
                     id,
-                    name: ProviderToolCallNameWire::ComputerCall.as_str().to_string(),
+                    name: "computer_call".to_string(),
                     input: json!({}),
                 });
             }
@@ -181,12 +175,12 @@ pub(super) fn process_stream_chunk(
                 events.push(StreamEvent::ToolInputEnd { id: id.clone() });
                 events.push(StreamEvent::ToolCallEnd {
                     id: id.clone(),
-                    name: ProviderToolCallNameWire::WebSearchCall.as_str().to_string(),
+                    name: "web_search_call".to_string(),
                     input: input.clone(),
                 });
                 events.push(StreamEvent::ToolResult {
                     tool_call_id: id,
-                    tool_name: ProviderToolCallNameWire::WebSearchCall.as_str().to_string(),
+                    tool_name: "web_search_call".to_string(),
                     input: Some(input.clone()),
                     output: ToolResultOutput {
                         output: serde_json::to_string(&input).unwrap_or_default(),
@@ -210,9 +204,7 @@ pub(super) fn process_stream_chunk(
                 if let Some(code) = code {
                     events.push(StreamEvent::ToolCallEnd {
                         id: id.clone(),
-                        name: ProviderToolCallNameWire::CodeInterpreterCall
-                            .as_str()
-                            .to_string(),
+                        name: "code_interpreter_call".to_string(),
                         input: json!({
                             "code": code,
                             "container_id": container_id,
@@ -223,9 +215,7 @@ pub(super) fn process_stream_chunk(
                 let output_json = json!({ "outputs": outputs });
                 events.push(StreamEvent::ToolResult {
                     tool_call_id: id,
-                    tool_name: ProviderToolCallNameWire::CodeInterpreterCall
-                        .as_str()
-                        .to_string(),
+                    tool_name: "code_interpreter_call".to_string(),
                     input: None,
                     output: ToolResultOutput {
                         output: serde_json::to_string(&output_json).unwrap_or_default(),
@@ -249,7 +239,7 @@ pub(super) fn process_stream_chunk(
                 });
                 events.push(StreamEvent::ToolResult {
                     tool_call_id: id,
-                    tool_name: ProviderToolCallNameWire::FileSearchCall.as_str().to_string(),
+                    tool_name: "file_search_call".to_string(),
                     input: None,
                     output: ToolResultOutput {
                         output: serde_json::to_string(&output_json).unwrap_or_default(),
@@ -265,9 +255,7 @@ pub(super) fn process_stream_chunk(
             OutputItemDoneItem::ImageGenerationCall { id, result } => {
                 events.push(StreamEvent::ToolResult {
                     tool_call_id: id,
-                    tool_name: ProviderToolCallNameWire::ImageGenerationCall
-                        .as_str()
-                        .to_string(),
+                    tool_name: "image_generation_call".to_string(),
                     input: None,
                     output: ToolResultOutput {
                         output: result,
@@ -289,7 +277,7 @@ pub(super) fn process_stream_chunk(
                 });
                 events.push(StreamEvent::ToolCallEnd {
                     id: call_id.clone(),
-                    name: ProviderToolCallNameWire::LocalShell.as_str().to_string(),
+                    name: "local_shell".to_string(),
                     input: json!({ "action": action }),
                 });
                 *has_function_call = true;
@@ -314,7 +302,7 @@ pub(super) fn process_stream_chunk(
                 let status = status.unwrap_or_else(|| "unknown".to_string());
                 events.push(StreamEvent::ToolResult {
                     tool_call_id: id,
-                    tool_name: ProviderToolCallNameWire::ComputerCall.as_str().to_string(),
+                    tool_name: "computer_call".to_string(),
                     input: None,
                     output: ToolResultOutput {
                         output: status,
@@ -381,9 +369,7 @@ pub(super) fn process_stream_chunk(
         } => {
             events.push(StreamEvent::ToolResult {
                 tool_call_id: item_id,
-                tool_name: ProviderToolCallNameWire::ImageGenerationCall
-                    .as_str()
-                    .to_string(),
+                tool_name: "image_generation_call".to_string(),
                 input: None,
                 output: ToolResultOutput {
                     output: partial_image_b64,
@@ -481,42 +467,98 @@ pub(super) fn process_stream_chunk(
 pub(super) fn parse_output_items(
     output: &[Value],
 ) -> (Vec<ContentPart>, bool, Vec<Vec<LogprobEntry>>) {
+    fn deserialize_vec_value_lossy<'de, D>(deserializer: D) -> Result<Vec<Value>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<Value>::deserialize(deserializer)?;
+        Ok(match value {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::Array(values)) => values,
+            Some(other) => vec![other],
+        })
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct OutputItemWire {
+        #[serde(rename = "type", default)]
+        item_type: String,
+        #[serde(default)]
+        id: String,
+        #[serde(default)]
+        call_id: String,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        arguments: Option<Value>,
+        #[serde(default)]
+        encrypted_content: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_vec_value_lossy")]
+        summary: Vec<Value>,
+        #[serde(default, deserialize_with = "deserialize_vec_value_lossy")]
+        content: Vec<Value>,
+        #[serde(default)]
+        action: Option<Value>,
+        #[serde(default)]
+        queries: Option<Value>,
+        #[serde(default)]
+        results: Option<Value>,
+        #[serde(default)]
+        code: Option<Value>,
+        #[serde(default)]
+        container_id: Option<Value>,
+        #[serde(default)]
+        outputs: Option<Value>,
+        #[serde(default)]
+        result: Option<Value>,
+        #[serde(default)]
+        status: Option<Value>,
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct SummaryTextWire {
+        #[serde(default)]
+        text: String,
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct MessageContentWire {
+        #[serde(rename = "type", default)]
+        content_type: String,
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        logprobs: Option<Value>,
+    }
+
     let mut parts = Vec::new();
     let mut has_function_call = false;
     let mut logprobs = Vec::new();
 
     for item in output {
-        let Some(item_type) = item.get("type").and_then(Value::as_str) else {
-            continue;
+        let mut wire = match serde_json::from_value::<OutputItemWire>(item.clone()) {
+            Ok(wire) => wire,
+            Err(_) => continue,
         };
-        match item_type {
+
+        let item_type = std::mem::take(&mut wire.item_type);
+
+        match item_type.as_str() {
             "reasoning" => {
-                let id = item
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let encrypted = item
-                    .get("encrypted_content")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string);
-                let summary = item
-                    .get("summary")
-                    .and_then(Value::as_array)
-                    .map(|parts| {
-                        parts
-                            .iter()
-                            .filter_map(|p| p.get("text").and_then(Value::as_str))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    })
-                    .unwrap_or_default();
+                let summary = wire
+                    .summary
+                    .into_iter()
+                    .filter_map(|entry| serde_json::from_value::<SummaryTextWire>(entry).ok())
+                    .map(|entry| entry.text)
+                    .filter(|text| !text.trim().is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n");
 
                 let mut provider_options = HashMap::new();
-                if !id.is_empty() {
-                    provider_options.insert("itemId".to_string(), Value::String(id));
+                if !wire.id.is_empty() {
+                    provider_options.insert("itemId".to_string(), Value::String(wire.id));
                 }
-                if let Some(encrypted) = encrypted {
+                if let Some(encrypted) = wire.encrypted_content {
                     provider_options
                         .insert("encryptedContent".to_string(), Value::String(encrypted));
                 }
@@ -533,188 +575,126 @@ pub(super) fn parse_output_items(
                 });
             }
             "message" => {
-                for content in item
-                    .get("content")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default()
-                {
-                    let Some(content_type) = content.get("type").and_then(Value::as_str) else {
+                for content in wire.content {
+                    let Ok(content) = serde_json::from_value::<MessageContentWire>(content) else {
                         continue;
                     };
-                    if content_type == "output_text" {
-                        let text = content
-                            .get("text")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string();
-                        if !text.is_empty() {
-                            parts.push(ContentPart {
-                                content_type: "text".to_string(),
-                                text: Some(text),
-                                ..Default::default()
-                            });
-                        }
-                        if let Some(lp) = content.get("logprobs").cloned() {
-                            if let Ok(parsed) = serde_json::from_value::<Vec<LogprobEntry>>(lp) {
-                                if !parsed.is_empty() {
-                                    logprobs.push(parsed);
-                                }
+                    if content.content_type != "output_text" {
+                        continue;
+                    }
+                    if !content.text.is_empty() {
+                        parts.push(ContentPart {
+                            content_type: "text".to_string(),
+                            text: Some(content.text),
+                            ..Default::default()
+                        });
+                    }
+                    if let Some(logprobs_value) = content.logprobs {
+                        if let Ok(parsed) =
+                            serde_json::from_value::<Vec<LogprobEntry>>(logprobs_value)
+                        {
+                            if !parsed.is_empty() {
+                                logprobs.push(parsed);
                             }
                         }
                     }
                 }
             }
             "function_call" => {
-                let call_id = item
-                    .get("call_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let name = item
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let arguments = item
-                    .get("arguments")
-                    .and_then(Value::as_str)
-                    .unwrap_or("{}");
+                let arguments = match wire.arguments {
+                    Some(Value::String(raw)) => parse_json_or_string(raw),
+                    Some(other) => other,
+                    None => json!({}),
+                };
                 parts.push(ContentPart {
                     content_type: "tool_use".to_string(),
                     tool_use: Some(ToolUse {
-                        id: call_id,
-                        name,
-                        input: parse_json_or_string(arguments.to_string()),
+                        id: wire.call_id,
+                        name: wire.name,
+                        input: arguments,
                     }),
                     ..Default::default()
                 });
                 has_function_call = true;
             }
-            other => {
-                // Provider tool call items (OpenAI Responses output items).
-                //
-                // Only treat *_call items as provider tool calls to avoid accidentally
-                // interpreting unrelated types.
-                if !other.ends_with("_call") && !other.ends_with("-call") {
-                    continue;
-                }
-
-                let Some(provider_tool) = ProviderToolCallNameWire::parse(other) else {
-                    continue;
-                };
-
-                match provider_tool {
-                    ProviderToolCallNameWire::WebSearchCall => {
-                        let id = item
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string();
-                        let action =
-                            item.get("action").cloned().unwrap_or_else(|| json!({}));
-                        parts.push(provider_executed_tool_parts(
-                            id,
-                            provider_tool.as_str(),
-                            action.clone(),
-                            action,
-                        ));
-                        has_function_call = true;
-                    }
-                    ProviderToolCallNameWire::FileSearchCall => {
-                        let id = item
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string();
-                        let output = json!({
-                            "queries": item.get("queries").cloned().unwrap_or_else(|| json!([])),
-                            "results": item.get("results").cloned().unwrap_or(Value::Null),
-                        });
-                        parts.push(provider_executed_tool_parts(
-                            id,
-                            provider_tool.as_str(),
-                            json!({}),
-                            output,
-                        ));
-                        has_function_call = true;
-                    }
-                    ProviderToolCallNameWire::CodeInterpreterCall => {
-                        let id = item
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string();
-                        let input = json!({
-                            "code": item.get("code").cloned().unwrap_or(Value::Null),
-                            "container_id": item.get("container_id").cloned().unwrap_or(Value::Null),
-                        });
-                        let output = json!({
-                            "outputs": item.get("outputs").cloned().unwrap_or(Value::Null),
-                        });
-                        parts.push(provider_executed_tool_parts(
-                            id,
-                            provider_tool.as_str(),
-                            input,
-                            output,
-                        ));
-                        has_function_call = true;
-                    }
-                    ProviderToolCallNameWire::ImageGenerationCall => {
-                        let id = item
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string();
-                        let output = json!({
-                            "result": item.get("result").cloned().unwrap_or(Value::Null),
-                        });
-                        parts.push(provider_executed_tool_parts(
-                            id,
-                            provider_tool.as_str(),
-                            json!({}),
-                            output,
-                        ));
-                        has_function_call = true;
-                    }
-                    ProviderToolCallNameWire::ComputerCall => {
-                        let id = item
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string();
-                        let output = json!({
-                            "status": item.get("status").cloned().unwrap_or(Value::Null),
-                        });
-                        parts.push(provider_executed_tool_parts(
-                            id,
-                            provider_tool.as_str(),
-                            json!({}),
-                            output,
-                        ));
-                        has_function_call = true;
-                    }
-                    ProviderToolCallNameWire::LocalShell => {
-                        let call_id = item
-                            .get("call_id")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string();
-                        let action =
-                            item.get("action").cloned().unwrap_or_else(|| json!({}));
-                        parts.push(ContentPart {
-                            content_type: "tool_use".to_string(),
-                            tool_use: Some(ToolUse {
-                                id: call_id,
-                                name: provider_tool.as_str().to_string(),
-                                input: json!({ "action": action }),
-                            }),
-                            ..Default::default()
-                        });
-                        has_function_call = true;
-                    }
-                }
+            "web_search_call" => {
+                let id = wire.id;
+                let action = wire.action.unwrap_or_else(|| json!({}));
+                parts.push(provider_executed_tool_parts(
+                    id,
+                    "web_search_call",
+                    action.clone(),
+                    action,
+                ));
+                has_function_call = true;
             }
+            "file_search_call" => {
+                let output = json!({
+                    "queries": wire.queries.unwrap_or_else(|| json!([])),
+                    "results": wire.results.unwrap_or(Value::Null),
+                });
+                parts.push(provider_executed_tool_parts(
+                    wire.id,
+                    "file_search_call",
+                    json!({}),
+                    output,
+                ));
+                has_function_call = true;
+            }
+            "code_interpreter_call" => {
+                let input = json!({
+                    "code": wire.code.unwrap_or(Value::Null),
+                    "container_id": wire.container_id.unwrap_or(Value::Null),
+                });
+                let output = json!({
+                    "outputs": wire.outputs.unwrap_or(Value::Null),
+                });
+                parts.push(provider_executed_tool_parts(
+                    wire.id,
+                    "code_interpreter_call",
+                    input,
+                    output,
+                ));
+                has_function_call = true;
+            }
+            "image_generation_call" => {
+                let output = json!({
+                    "result": wire.result.unwrap_or(Value::Null),
+                });
+                parts.push(provider_executed_tool_parts(
+                    wire.id,
+                    "image_generation_call",
+                    json!({}),
+                    output,
+                ));
+                has_function_call = true;
+            }
+            "local_shell_call" => {
+                let action = wire.action.unwrap_or_else(|| json!({}));
+                parts.push(ContentPart {
+                    content_type: "tool_use".to_string(),
+                    tool_use: Some(ToolUse {
+                        id: wire.call_id,
+                        name: "local_shell".to_string(),
+                        input: json!({ "action": action }),
+                    }),
+                    ..Default::default()
+                });
+                has_function_call = true;
+            }
+            "computer_call" => {
+                let output = json!({
+                    "status": wire.status.unwrap_or(Value::Null),
+                });
+                parts.push(provider_executed_tool_parts(
+                    wire.id,
+                    "computer_call",
+                    json!({}),
+                    output,
+                ));
+                has_function_call = true;
+            }
+            _ => {}
         }
     }
 
@@ -849,11 +829,11 @@ pub(super) fn extract_sse_data(frame: &str) -> Option<String> {
 
 pub(super) fn finish_reason_label(reason: FinishReason) -> &'static str {
     match reason {
-        FinishReason::Stop => ProviderFinishReasonWire::Stop.as_str(),
-        FinishReason::Length => ProviderFinishReasonWire::Length.as_str(),
-        FinishReason::ContentFilter => ProviderFinishReasonWire::ContentFilter.as_str(),
-        FinishReason::ToolCalls => ProviderFinishReasonWire::ToolCalls.as_str(),
-        FinishReason::Error => ProviderFinishReasonWire::Error.as_str(),
-        FinishReason::Unknown => ProviderFinishReasonWire::Unknown.as_str(),
+        FinishReason::Stop => "stop",
+        FinishReason::Length => "length",
+        FinishReason::ContentFilter => "content-filter",
+        FinishReason::ToolCalls => "tool-calls",
+        FinishReason::Error => "error",
+        FinishReason::Unknown => "unknown",
     }
 }

@@ -258,12 +258,28 @@ fn is_openai_error_retryable(status: u16) -> bool {
 pub fn parse_stream_error(data: &str) -> Option<ParsedStreamError> {
     let body: serde_json::Value = serde_json::from_str(data).ok()?;
 
-    if body.get("type")?.as_str()? != "error" {
-        return None;
+    #[derive(Debug, Default, serde::Deserialize)]
+    struct StreamErrorWire {
+        #[serde(rename = "type", default)]
+        event_type: String,
+        #[serde(default)]
+        error: Option<StreamErrorDetailWire>,
     }
 
-    let error = body.get("error")?;
-    let code = error.get("code")?.as_str()?;
+    #[derive(Debug, Default, serde::Deserialize)]
+    struct StreamErrorDetailWire {
+        #[serde(default)]
+        code: Option<String>,
+        #[serde(default)]
+        message: Option<String>,
+    }
+
+    let wire = serde_json::from_value::<StreamErrorWire>(body.clone()).ok()?;
+    if wire.event_type != "error" {
+        return None;
+    }
+    let error = wire.error?;
+    let code = error.code.as_deref()?;
     let response_body = serde_json::to_string(&body).unwrap_or_default();
 
     match code {
@@ -283,10 +299,9 @@ pub fn parse_stream_error(data: &str) -> Option<ParsedStreamError> {
         }),
         "invalid_prompt" => {
             let msg = error
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("Invalid prompt.")
-                .to_string();
+                .message
+                .filter(|m| !m.trim().is_empty())
+                .unwrap_or_else(|| "Invalid prompt.".to_string());
             Some(ParsedStreamError::ApiError {
                 message: msg,
                 is_retryable: false,

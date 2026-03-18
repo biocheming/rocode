@@ -70,6 +70,7 @@ enum ShellSessionState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 struct ShellSessionInput {
     operation: ShellSessionOperation,
     #[serde(default, alias = "sessionId")]

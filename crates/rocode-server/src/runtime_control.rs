@@ -169,19 +169,7 @@ pub(crate) enum FieldUpdate<T> {
     Clear,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-#[derive(Default)]
-pub enum SessionRunStatus {
-    #[default]
-    Idle,
-    Busy,
-    Retry {
-        attempt: u32,
-        message: String,
-        next: i64,
-    },
-}
+pub use rocode_types::SessionRunStatus;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuestionOptionInfo {

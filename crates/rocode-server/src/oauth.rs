@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use rocode_core::contracts::provider::auth_keys;
 use rocode_plugin::subprocess::PluginLoader;
 use rocode_provider::{AuthError, AuthInfo, AuthManager, AuthMethodType, Authorization};
 use serde::{Deserialize, Serialize};
@@ -15,6 +14,53 @@ pub struct AuthMethodInfo {
 
 pub struct ProviderAuth {
     auth_manager: Arc<AuthManager>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct AuthCallbackWire {
+    #[serde(
+        default,
+        rename = "type",
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    kind: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    provider: Option<String>,
+    #[serde(
+        default,
+        alias = "apiKey",
+        alias = "token",
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    key: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    access: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    refresh: Option<String>,
+    #[serde(default, deserialize_with = "rocode_types::deserialize_opt_i64_lossy")]
+    expires: Option<i64>,
+    #[serde(
+        default,
+        alias = "accountId",
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    account_id: Option<String>,
+    #[serde(
+        default,
+        alias = "enterpriseUrl",
+        alias = "enterpriseURL",
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    enterprise_url: Option<String>,
 }
 
 impl ProviderAuth {
@@ -82,30 +128,16 @@ impl ProviderAuth {
             .await
             .map_err(|_| AuthError::OauthCallbackFailed)?;
 
-        let auth_type = result
-            .get(auth_keys::TYPE)
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if auth_type != auth_keys::SUCCESS {
+        let wire: AuthCallbackWire = serde_json::from_value(result).unwrap_or_default();
+
+        if wire.kind.as_deref() != Some("success") {
             return Err(AuthError::OauthCallbackFailed);
         }
 
         // Plugin callback can override target provider (e.g. copilot enterprise).
-        let target_provider = result
-            .get(auth_keys::PROVIDER)
-            .and_then(|v| v.as_str())
-            .unwrap_or(provider_id);
+        let target_provider = wire.provider.as_deref().unwrap_or(provider_id);
 
-        if let Some(key) = result
-            .get(auth_keys::KEY)
-            .and_then(|v| v.as_str())
-            .or_else(|| {
-                result
-                    .get(auth_keys::API_KEY_CAMEL)
-                    .and_then(|v| v.as_str())
-            })
-            .or_else(|| result.get(auth_keys::TOKEN).and_then(|v| v.as_str()))
-        {
+        if let Some(key) = wire.key.as_deref() {
             self.auth_manager
                 .set(
                     target_provider,
@@ -117,16 +149,8 @@ impl ProviderAuth {
             return Ok(());
         }
 
-        let access = result
-            .get(auth_keys::ACCESS)
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let refresh = result
-            .get(auth_keys::REFRESH)
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
+        let access = wire.access.unwrap_or_default();
+        let refresh = wire.refresh.unwrap_or_default();
 
         if access.is_empty() && refresh.is_empty() {
             return Err(AuthError::OauthCallbackFailed);
@@ -138,15 +162,9 @@ impl ProviderAuth {
                 AuthInfo::OAuth {
                     access,
                     refresh,
-                    expires: result.get(auth_keys::EXPIRES).and_then(|v| v.as_i64()),
-                    account_id: result
-                        .get(auth_keys::ACCOUNT_ID)
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string),
-                    enterprise_url: result
-                        .get(auth_keys::ENTERPRISE_URL)
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string),
+                    expires: wire.expires,
+                    account_id: wire.account_id,
+                    enterprise_url: wire.enterprise_url,
                 },
             )
             .await;

@@ -41,8 +41,6 @@ use rocode_command::interactive::{parse_interactive_command, InteractiveCommand}
 use rocode_command::output_blocks::{BlockTone, StatusBlock};
 use rocode_command::{CommandRegistry, UiActionId};
 use rocode_core::agent_task_registry::{global_task_registry, AgentTaskStatus};
-use rocode_core::contracts::output_blocks::OutputBlockKind;
-use rocode_core::contracts::permission::PermissionReplyWire;
 
 use crate::api::{
     ApiClient, ExecutionModeInfo, ExecutionStatus as ApiExecutionStatus, McpStatusInfo,
@@ -517,7 +515,7 @@ impl App {
                             if let Some(request) = self.permission_prompt.approve() {
                                 self.resolve_permission_request(
                                     &request.id,
-                                    PermissionReplyWire::Once.as_str(),
+                                    "once",
                                     Some("approved".to_string()),
                                 );
                             }
@@ -526,7 +524,7 @@ impl App {
                             if let Some(request) = self.permission_prompt.deny() {
                                 self.resolve_permission_request(
                                     &request.id,
-                                    PermissionReplyWire::Reject.as_str(),
+                                    "reject",
                                     Some("rejected".to_string()),
                                 );
                             }
@@ -535,7 +533,7 @@ impl App {
                             if let Some(request) = self.permission_prompt.approve_always() {
                                 self.resolve_permission_request(
                                     &request.id,
-                                    PermissionReplyWire::Always.as_str(),
+                                    "always",
                                     Some("approved always".to_string()),
                                 );
                             }
@@ -544,7 +542,7 @@ impl App {
                             if let Some(request) = self.permission_prompt.deny() {
                                 self.resolve_permission_request(
                                     &request.id,
-                                    PermissionReplyWire::Reject.as_str(),
+                                    "reject",
                                     Some("rejected".to_string()),
                                 );
                             }
@@ -1000,7 +998,7 @@ impl App {
                                         if let Some(request) = self.permission_prompt.approve() {
                                             self.resolve_permission_request(
                                                 &request.id,
-                                                PermissionReplyWire::Once.as_str(),
+                                                "once",
                                                 Some("approved".to_string()),
                                             );
                                         }
@@ -1009,7 +1007,7 @@ impl App {
                                         if let Some(request) = self.permission_prompt.deny() {
                                             self.resolve_permission_request(
                                                 &request.id,
-                                                PermissionReplyWire::Reject.as_str(),
+                                                "reject",
                                                 Some("rejected".to_string()),
                                             );
                                         }
@@ -1020,7 +1018,7 @@ impl App {
                                         {
                                             self.resolve_permission_request(
                                                 &request.id,
-                                                PermissionReplyWire::Always.as_str(),
+                                                "always",
                                                 Some("approved always".to_string()),
                                             );
                                         }
@@ -1320,6 +1318,10 @@ impl App {
                 }) => {
                     let current_session = self.current_session_id();
                     let is_active_session = current_session.as_deref() == Some(session_id.as_str());
+                    let is_scheduler_stage = matches!(
+                        &payload,
+                        rocode_command::output_blocks::OutputBlock::SchedulerStage(_)
+                    );
                     let current_is_parent_of_target =
                         current_session.as_deref().is_some_and(|active| {
                             let session_ctx = self.context.session.read();
@@ -1335,18 +1337,13 @@ impl App {
                         session_ctx.apply_output_block_incremental(
                             session_id,
                             id.as_deref(),
-                            payload,
+                            &payload,
                         );
                     }
 
                     if let Route::Session { session_id: active } = self.context.current_route() {
                         if active == *session_id {
-                            if payload
-                                .get("kind")
-                                .and_then(|value| value.as_str())
-                                .and_then(OutputBlockKind::parse)
-                                == Some(OutputBlockKind::SchedulerStage)
-                            {
+                            if is_scheduler_stage {
                                 self.refresh_child_sessions();
                             }
                             self.event_caused_change = true;
@@ -1871,11 +1868,11 @@ mod tests {
         use crate::context::TodoStatus;
 
         let cases = vec![
-            (TodoStatus::Pending.as_str(), TodoStatus::Pending),
-            (TodoStatus::InProgress.as_str(), TodoStatus::InProgress),
-            (TodoStatus::Completed.as_str(), TodoStatus::Completed),
+            ("pending", TodoStatus::Pending),
+            ("in_progress", TodoStatus::InProgress),
+            ("completed", TodoStatus::Completed),
             ("done", TodoStatus::Completed),
-            (TodoStatus::Cancelled.as_str(), TodoStatus::Cancelled),
+            ("cancelled", TodoStatus::Cancelled),
             ("canceled", TodoStatus::Cancelled),
             ("unknown_status", TodoStatus::Pending),
         ];

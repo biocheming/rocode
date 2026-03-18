@@ -22,7 +22,7 @@ use crate::provider::ProviderError;
 use crate::stream::{StreamEvent, StreamResult, StreamUsage};
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
-use rocode_core::contracts::provider::ProviderFinishReasonWire;
+use serde::Deserialize;
 use std::pin::Pin;
 
 /// Convert a single `StreamingEvent` into zero or more rocode `StreamEvent`s.
@@ -102,9 +102,11 @@ pub fn streaming_event_to_stream_events(event: StreamingEvent) -> Vec<StreamEven
             // finish_reason or stop_reason signals end of a step
             let reason = finish_reason.or(stop_reason);
             if let Some(ref r) = reason {
-                let normalized = ProviderFinishReasonWire::parse(r.as_str())
-                    .map(|parsed| parsed.as_str().to_string())
-                    .unwrap_or_else(|| r.to_string());
+                let normalized = match r.as_str() {
+                    "end_turn" | "stop" => "stop".to_string(),
+                    "tool_use" | "tool_calls" => "tool-calls".to_string(),
+                    other => other.to_string(),
+                };
                 events.push(StreamEvent::FinishStep {
                     finish_reason: Some(normalized),
                     usage: usage_for_step,
@@ -172,19 +174,17 @@ pub fn bridge_streaming_events(
 /// The `id` and `model` fields are populated from the raw response JSON
 /// if available (OpenAI format), or default to empty strings.
 pub fn driver_response_to_chat_response(resp: DriverResponse) -> ChatResponse {
-    let id = resp
-        .raw
-        .get("id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    #[derive(Debug, Default, Deserialize)]
+    struct DriverResponseRawWire {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        model: Option<String>,
+    }
 
-    let model = resp
-        .raw
-        .get("model")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    let raw = serde_json::from_value::<DriverResponseRawWire>(resp.raw.clone()).unwrap_or_default();
+    let id = raw.id.unwrap_or_default();
+    let model = raw.model.unwrap_or_default();
 
     let content = resp.content.unwrap_or_default();
 
@@ -513,41 +513,28 @@ fn chat_request_to_driver_messages(request: &crate::ChatRequest) -> Vec<DriverMe
 /// Handles both OpenAI format (`prompt_tokens`/`completion_tokens`)
 /// and Anthropic format (`input_tokens`/`output_tokens`).
 fn extract_usage(value: &serde_json::Value) -> StreamUsage {
-    let prompt = value
-        .get("prompt_tokens")
-        .or_else(|| value.get("input_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    #[derive(Debug, Default, Deserialize)]
+    struct UsageWire {
+        #[serde(default, alias = "input_tokens")]
+        prompt_tokens: Option<u64>,
+        #[serde(default, alias = "output_tokens")]
+        completion_tokens: Option<u64>,
+        #[serde(default)]
+        reasoning_tokens: Option<u64>,
+        #[serde(default, alias = "cache_read_input_tokens")]
+        cache_read_tokens: Option<u64>,
+        #[serde(default, alias = "cache_creation_input_tokens")]
+        cache_write_tokens: Option<u64>,
+    }
 
-    let completion = value
-        .get("completion_tokens")
-        .or_else(|| value.get("output_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-
-    let reasoning = value
-        .get("reasoning_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-
-    let cache_read = value
-        .get("cache_read_input_tokens")
-        .or_else(|| value.get("cache_read_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-
-    let cache_write = value
-        .get("cache_creation_input_tokens")
-        .or_else(|| value.get("cache_write_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    let wire = serde_json::from_value::<UsageWire>(value.clone()).unwrap_or_default();
 
     StreamUsage {
-        prompt_tokens: prompt,
-        completion_tokens: completion,
-        reasoning_tokens: reasoning,
-        cache_read_tokens: cache_read,
-        cache_write_tokens: cache_write,
+        prompt_tokens: wire.prompt_tokens.unwrap_or(0),
+        completion_tokens: wire.completion_tokens.unwrap_or(0),
+        reasoning_tokens: wire.reasoning_tokens.unwrap_or(0),
+        cache_read_tokens: wire.cache_read_tokens.unwrap_or(0),
+        cache_write_tokens: wire.cache_write_tokens.unwrap_or(0),
     }
 }
 
@@ -556,7 +543,6 @@ mod tests {
     use super::*;
     use crate::driver::UsageInfo;
     use futures::StreamExt;
-    use rocode_core::contracts::tools::BuiltinToolName;
     use serde_json::json;
 
     #[test]
@@ -591,7 +577,7 @@ mod tests {
     fn tool_call_started_uses_index_based_id() {
         let event = StreamingEvent::ToolCallStarted {
             tool_call_id: "call_abc123".to_string(),
-            tool_name: BuiltinToolName::Read.as_str().to_string(),
+            tool_name: "read".to_string(),
             index: Some(2),
         };
         let result = streaming_event_to_stream_events(event);
@@ -599,7 +585,7 @@ mod tests {
         match &result[0] {
             StreamEvent::ToolCallStart { id, name } => {
                 assert_eq!(id, "tool-call-2");
-                assert_eq!(name, BuiltinToolName::Read.as_str());
+                assert_eq!(name, "read");
             }
             other => panic!("expected ToolCallStart, got: {:?}", other),
         }
@@ -609,7 +595,7 @@ mod tests {
     fn tool_call_started_falls_back_to_tool_call_id() {
         let event = StreamingEvent::ToolCallStarted {
             tool_call_id: "call_xyz".to_string(),
-            tool_name: BuiltinToolName::Write.as_str().to_string(),
+            tool_name: "write".to_string(),
             index: None,
         };
         let result = streaming_event_to_stream_events(event);
@@ -710,7 +696,7 @@ mod tests {
             StreamEvent::FinishStep {
                 finish_reason: Some(r),
                 ..
-            } => assert_eq!(r, ProviderFinishReasonWire::Stop.as_str()),
+            } => assert_eq!(r, "stop"),
             other => panic!("expected FinishStep, got: {:?}", other),
         }
     }
@@ -728,7 +714,7 @@ mod tests {
             StreamEvent::FinishStep {
                 finish_reason: Some(r),
                 ..
-            } => assert_eq!(r, ProviderFinishReasonWire::Stop.as_str()),
+            } => assert_eq!(r, "stop"),
             other => panic!("expected FinishStep, got: {:?}", other),
         }
     }
@@ -745,7 +731,7 @@ mod tests {
             StreamEvent::FinishStep {
                 finish_reason: Some(r),
                 ..
-            } => assert_eq!(r, ProviderFinishReasonWire::ToolCalls.as_str()),
+            } => assert_eq!(r, "tool-calls"),
             other => panic!("expected FinishStep, got: {:?}", other),
         }
     }
@@ -877,7 +863,7 @@ mod tests {
             content: None,
             finish_reason: Some("tool_calls".to_string()),
             usage: None,
-            tool_calls: vec![json!({"type": "tool_use", "name": BuiltinToolName::Bash.as_str()})],
+            tool_calls: vec![json!({"type": "tool_use", "name": "bash"})],
             raw: json!({}),
         };
 
@@ -913,7 +899,7 @@ mod tests {
             }),
             Ok(StreamingEvent::ToolCallStarted {
                 tool_call_id: "tc-0".to_string(),
-                tool_name: BuiltinToolName::Read.as_str().to_string(),
+                tool_name: "read".to_string(),
                 index: Some(0),
             }),
             Ok(StreamingEvent::PartialToolCall {
@@ -941,7 +927,7 @@ mod tests {
             .any(|e| matches!(e, StreamEvent::TextDelta(s) if s == "Hello")));
         assert!(output
             .iter()
-            .any(|e| matches!(e, StreamEvent::ToolCallStart { name, .. } if name == BuiltinToolName::Read.as_str())));
+            .any(|e| matches!(e, StreamEvent::ToolCallStart { name, .. } if name == "read")));
         assert!(output
             .iter()
             .any(|e| matches!(e, StreamEvent::ToolCallEnd { .. })));

@@ -17,6 +17,7 @@ rocode-grep = { path = "../rocode-grep" }
 rocode-plugin = { path = "../rocode-plugin" }
 rocode-permission = { path = "../rocode-permission" }
 rocode-orchestrator = { path = "../rocode-orchestrator" }
+rocode-types = { path = "../rocode-types" }
 rocode-lsp = { path = "../rocode-lsp", optional = true }
 lsp-types = { version = "0.97", optional = true }
 tree-sitter = { workspace = true }

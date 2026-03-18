@@ -1,10 +1,10 @@
 use async_trait::async_trait;
-use rocode_core::contracts::permission::PermissionTypeWire;
-use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+use walkdir::WalkDir;
 
 use crate::{Metadata, Tool, ToolContext, ToolError, ToolResult};
+use rocode_types::GlobToolInput;
 
 pub struct GlobTool {
     directory: PathBuf,
@@ -24,46 +24,10 @@ impl Default for GlobTool {
     }
 }
 
-/// Parse a glob pattern and extract an optional file extension and path prefix
-/// for use with `SearchBuilder`.
-///
-/// Returns `(ext, path_prefix)`:
-/// - `ext`: e.g. `"rs"` from `**/*.rs`
-/// - `path_prefix`: e.g. `"src"` from `src/**/*.rs`
-fn parse_glob_hints(pattern: &str) -> (Option<String>, Option<String>) {
-    // Extract extension from patterns ending in `*.ext` (no dots in ext)
-    let ext = pattern
-        .rsplit_once("*.")
-        .map(|(_, rest)| rest)
-        .filter(|e| !e.is_empty() && !e.contains('/') && !e.contains('*') && !e.contains('?'))
-        .map(String::from);
-
-    // Extract leading literal path prefix (before any glob metacharacter)
-    let prefix = pattern
-        .find(|c: char| c == '*' || c == '?' || c == '[')
-        .and_then(|pos| {
-            let before = &pattern[..pos];
-            let trimmed = before.trim_end_matches('/');
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        });
-
-    (ext, prefix)
-}
-
-/// Check if a glob pattern has no recursive `**` component,
-/// meaning it should only match in the immediate directory.
-fn is_shallow_pattern(pattern: &str) -> bool {
-    !pattern.contains("**") && !pattern.contains('/')
-}
-
 #[async_trait]
 impl Tool for GlobTool {
     fn id(&self) -> &str {
-        BuiltinToolName::Glob.as_str()
+        "glob"
     }
 
     fn description(&self) -> &str {
@@ -74,16 +38,16 @@ impl Tool for GlobTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                (tool_arg_keys::PATTERN): {
+                "pattern": {
                     "type": "string",
                     "description": "The glob pattern to match files against"
                 },
-                (tool_arg_keys::PATH): {
+                "path": {
                     "type": "string",
                     "description": "The directory to search in. Defaults to current directory."
                 }
             },
-            "required": [tool_arg_keys::PATTERN]
+            "required": ["pattern"]
         })
     }
 
@@ -92,15 +56,11 @@ impl Tool for GlobTool {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let pattern: String = args[tool_arg_keys::PATTERN]
-            .as_str()
-            .ok_or_else(|| ToolError::InvalidArguments("pattern is required".into()))?
-            .to_string();
-
-        let search_path: String = args[tool_arg_keys::PATH]
-            .as_str()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| ctx.directory.clone());
+        let input = GlobToolInput::from_value(&args);
+        let pattern = input
+            .pattern
+            .ok_or_else(|| ToolError::InvalidArguments("pattern is required".into()))?;
+        let search_path = input.path.unwrap_or_else(|| ctx.directory.clone());
 
         let base_dir = if search_path.is_empty() {
             &self.directory
@@ -112,78 +72,52 @@ impl Tool for GlobTool {
 
         if ctx.is_external_path(&base_dir_str) {
             ctx.ask_permission(
-                crate::PermissionRequest::new(PermissionTypeWire::ExternalDirectory.as_str())
+                crate::PermissionRequest::new("external_directory")
                     .with_pattern(format!("{}/*", base_dir_str))
-                    .with_metadata(tool_arg_keys::PATH, serde_json::json!(&base_dir_str)),
+                    .with_metadata("path", serde_json::json!(&base_dir_str)),
             )
             .await?;
         }
 
         ctx.ask_permission(
-            crate::PermissionRequest::new(BuiltinToolName::Glob.as_str())
+            crate::PermissionRequest::new("glob")
                 .with_pattern(&pattern)
-                .with_metadata(tool_arg_keys::PATH, serde_json::json!(&base_dir_str))
+                .with_metadata("path", serde_json::json!(&base_dir_str))
                 .always_allow(),
         )
         .await?;
 
-        // Validate the glob pattern early.
         let glob_pattern = glob::Pattern::new(&pattern)
             .map_err(|e| ToolError::InvalidArguments(format!("Invalid glob pattern: {}", e)))?;
 
-        // Extract hints for SearchBuilder optimisation.
-        let (ext_hint, prefix_hint) = parse_glob_hints(&pattern);
-        let shallow = is_shallow_pattern(&pattern);
-
-        // Determine the actual search root: base_dir + optional prefix.
-        let search_root = match &prefix_hint {
-            Some(prefix) => {
-                let candidate = base_dir.join(prefix);
-                if candidate.is_dir() {
-                    candidate
-                } else {
-                    base_dir.to_path_buf()
-                }
-            }
-            None => base_dir.to_path_buf(),
-        };
-
-        let mut builder = crate::rust_search::SearchBuilder::default()
-            .location(&search_root)
-            .hidden();
-
-        if let Some(ref ext) = ext_hint {
-            builder = builder.ext(ext.as_str());
-        }
-
-        if shallow {
-            builder = builder.depth(1);
-        }
-
-        let results: Vec<String> = builder.build().collect();
-
-        // Post-filter against the full glob pattern on relative paths.
         let mut files_with_mtime: Vec<(String, SystemTime)> = Vec::new();
-        for abs_path_str in results {
-            let abs_path = Path::new(&abs_path_str);
-            if !abs_path.is_file() {
+
+        for entry in WalkDir::new(base_dir)
+            .follow_links(true)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let path = entry.path();
+            if !path.is_file() {
                 continue;
             }
-            let rel_path = abs_path.strip_prefix(base_dir).unwrap_or(abs_path);
+
+            let rel_path = path.strip_prefix(base_dir).unwrap_or(path);
             let rel_str = rel_path.to_string_lossy();
+
             if glob_pattern.matches(&rel_str) {
-                let mtime = abs_path
+                let mtime = path
                     .metadata()
                     .and_then(|m| m.modified())
                     .unwrap_or(SystemTime::UNIX_EPOCH);
-                files_with_mtime.push((abs_path_str, mtime));
+                files_with_mtime.push((path.to_string_lossy().to_string(), mtime));
             }
         }
 
         files_with_mtime.sort_by(|a, b| b.1.cmp(&a.1));
 
         let total = files_with_mtime.len();
-        let truncated = total > 100;
+        let truncated = files_with_mtime.len() > 100;
         let matches: Vec<&str> = files_with_mtime
             .iter()
             .take(100)
@@ -208,11 +142,8 @@ impl Tool for GlobTool {
             output,
             metadata: {
                 let mut m = Metadata::new();
-                m.insert(tool_arg_keys::COUNT.into(), serde_json::json!(total));
-                m.insert(
-                    tool_arg_keys::TRUNCATED.into(),
-                    serde_json::json!(truncated),
-                );
+                m.insert("count".into(), serde_json::json!(total));
+                m.insert("truncated".into(), serde_json::json!(truncated));
                 m
             },
             truncated,

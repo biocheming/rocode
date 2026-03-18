@@ -6,13 +6,10 @@
 
 use std::time::Duration;
 
+use rocode_types::{ServerEvent, SessionRunStatus, SessionRunStatusWire, ToolCallPhase};
 use tokio::sync::mpsc;
 
 use crate::util::server_url;
-use rocode_core::contracts::events::{ServerEventType, SessionRunStatusType, ToolCallPhase};
-use rocode_core::contracts::wire::{
-    fields as wire_fields, keys as wire_keys, keysets as wire_keysets, selectors as wire_selectors,
-};
 
 // ── Event types ──────────────────────────────────────────────────────
 
@@ -235,242 +232,178 @@ fn parse_event(
     json: &serde_json::Value,
     my_session_id: &str,
 ) -> Option<CliServerEvent> {
-    // Helper to extract session_id from various field names.
-    let event_session_id =
-        wire_selectors::first_str(json, wire_keysets::SESSION_ID_ANY).unwrap_or("");
+    fn parse_server_event(event_name: &str, json: &serde_json::Value) -> Option<ServerEvent> {
+        if let Ok(event) = serde_json::from_value::<ServerEvent>(json.clone()) {
+            return Some(event);
+        }
 
-    // Determine event type from SSE event name or payload's "type" field.
-    let event_type = if !event_name.is_empty() {
-        event_name.to_string()
-    } else {
-        json.get(wire_keys::TYPE)
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string()
-    };
-    let parsed_event_type = ServerEventType::parse(&event_type);
+        // If the server used the SSE `event:` channel name but the payload is
+        // missing `"type"`, patch it in and try again.
+        if !event_name.is_empty() {
+            let Some(obj) = json.as_object() else {
+                return None;
+            };
+            if obj.contains_key("type") {
+                return None;
+            }
 
-    // Global events (no session filter).
-    if parsed_event_type == Some(ServerEventType::ConfigUpdated) {
-        return Some(CliServerEvent::ConfigUpdated);
+            let mut patched = obj.clone();
+            patched.insert(
+                "type".to_string(),
+                serde_json::Value::String(event_name.to_string()),
+            );
+            return serde_json::from_value::<ServerEvent>(serde_json::Value::Object(patched)).ok();
+        }
+
+        None
     }
 
-    // Session-scoped events — filter by session_id.
-    let is_my_session = event_session_id.is_empty() || event_session_id == my_session_id;
+    let Some(event) = parse_server_event(event_name, json) else {
+        #[derive(Debug, serde::Deserialize)]
+        struct EventTypeOnly {
+            #[serde(rename = "type")]
+            event_type: Option<String>,
+        }
 
-    match parsed_event_type {
-        Some(ServerEventType::SessionUpdated) => {
-            if !is_my_session {
+        let event_type = if !event_name.is_empty() {
+            event_name.to_string()
+        } else {
+            serde_json::from_value::<EventTypeOnly>(json.clone())
+                .ok()
+                .and_then(|v| v.event_type)
+                .unwrap_or_default()
+        };
+
+        tracing::trace!("Unknown SSE event: {}", event_type);
+        return Some(CliServerEvent::Unknown {
+            event: event_type,
+            data: json.clone(),
+        });
+    };
+
+    match event {
+        ServerEvent::ConfigUpdated => Some(CliServerEvent::ConfigUpdated),
+        ServerEvent::SessionUpdated { session_id, source } => {
+            if session_id != my_session_id {
                 return None;
             }
-            let source = json
-                .get(wire_fields::SOURCE)
-                .and_then(|v| v.as_str())
-                .map(String::from);
             Some(CliServerEvent::SessionUpdated {
-                session_id: event_session_id.to_string(),
-                source,
+                session_id,
+                source: Some(source),
             })
         }
-        Some(ServerEventType::SessionStatus) => {
-            if !is_my_session {
+        ServerEvent::SessionStatus { session_id, status } => {
+            if session_id != my_session_id {
                 return None;
             }
-            // Support both plain string "idle" and tagged object {"type": "idle"}
-            // formats. The server serializes SessionRunStatus with
-            // #[serde(tag = "type")] so the value is an object, but we also
-            // accept a plain string for forward compatibility.
-            let status = json
-                .get(wire_fields::STATUS)
-                .and_then(|v| {
-                    v.as_str()
-                        .or_else(|| v.get(wire_keys::TYPE).and_then(|t| t.as_str()))
-                })
-                .unwrap_or("");
-            match SessionRunStatusType::parse(status) {
-                Some(SessionRunStatusType::Busy) => Some(CliServerEvent::SessionBusy {
-                    session_id: event_session_id.to_string(),
-                }),
-                Some(SessionRunStatusType::Idle) => Some(CliServerEvent::SessionIdle {
-                    session_id: event_session_id.to_string(),
-                }),
-                Some(SessionRunStatusType::Retry) => Some(CliServerEvent::SessionRetrying {
-                    session_id: event_session_id.to_string(),
-                }),
-                _ => None,
+            match status {
+                SessionRunStatusWire::Tagged(SessionRunStatus::Busy) => {
+                    Some(CliServerEvent::SessionBusy { session_id })
+                }
+                SessionRunStatusWire::Tagged(SessionRunStatus::Idle) => {
+                    Some(CliServerEvent::SessionIdle { session_id })
+                }
+                SessionRunStatusWire::Tagged(SessionRunStatus::Retry { .. }) => {
+                    Some(CliServerEvent::SessionRetrying { session_id })
+                }
+                SessionRunStatusWire::String(value) => match value.as_str() {
+                    "busy" => Some(CliServerEvent::SessionBusy { session_id }),
+                    "idle" => Some(CliServerEvent::SessionIdle { session_id }),
+                    "retry" => Some(CliServerEvent::SessionRetrying { session_id }),
+                    _ => None,
+                },
             }
         }
-        Some(ServerEventType::QuestionCreated) => {
-            // Questions may come from child/subsessions — always handle them
-            // so the CLI user can answer regardless of which session asked.
-            let request_id = wire_selectors::first_str(json, wire_keysets::REQUEST_ID_ANY)
-                .unwrap_or("")
-                .to_string();
-            let questions_json = json
-                .get(wire_fields::QUESTIONS)
-                .cloned()
-                .unwrap_or(serde_json::Value::Array(vec![]));
-            Some(CliServerEvent::QuestionCreated {
-                request_id,
-                session_id: event_session_id.to_string(),
-                questions_json,
-            })
-        }
-        Some(ServerEventType::QuestionResolved) => {
-            let request_id = wire_selectors::first_str(json, wire_keysets::REQUEST_ID_ANY)
-                .unwrap_or("")
-                .to_string();
+        ServerEvent::QuestionCreated {
+            session_id,
+            request_id,
+            questions,
+        } => Some(CliServerEvent::QuestionCreated {
+            request_id,
+            session_id,
+            questions_json: questions,
+        }),
+        ServerEvent::QuestionResolved { request_id, .. } => {
             Some(CliServerEvent::QuestionResolved { request_id })
         }
-        Some(ServerEventType::PermissionRequested) => {
-            let permission_id = wire_selectors::first_str(json, wire_keysets::PERMISSION_ID_ANY)
-                .unwrap_or("")
-                .to_string();
-            let info_json = json
-                .get(wire_fields::INFO)
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            Some(CliServerEvent::PermissionRequested {
-                session_id: event_session_id.to_string(),
-                permission_id,
-                info_json,
-            })
-        }
-        Some(ServerEventType::PermissionResolved) => {
-            let permission_id = wire_selectors::first_str(json, wire_keysets::PERMISSION_ID_ANY)
-                .unwrap_or("")
-                .to_string();
+        ServerEvent::PermissionRequested {
+            session_id,
+            permission_id,
+            info,
+        } => Some(CliServerEvent::PermissionRequested {
+            session_id,
+            permission_id,
+            info_json: info,
+        }),
+        ServerEvent::PermissionResolved { permission_id, .. } => {
             Some(CliServerEvent::PermissionResolved { permission_id })
         }
-        Some(ServerEventType::ToolCallLifecycle) => {
-            let tool_call_id = wire_selectors::first_str(json, wire_keysets::TOOL_CALL_ID_ANY)
-                .unwrap_or("")
-                .to_string();
-            match ToolCallPhase::parse(
-                json.get(wire_fields::PHASE)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(""),
-            ) {
-                Some(ToolCallPhase::Start) => {
-                    let tool_name = wire_selectors::first_str(
-                        json,
-                        &[wire_fields::TOOL_NAME, wire_fields::TOOL_NAME_SNAKE],
-                    )
-                    .unwrap_or("")
-                    .to_string();
-                    Some(CliServerEvent::ToolCallStarted {
-                        session_id: event_session_id.to_string(),
-                        tool_call_id,
-                        tool_name,
-                    })
-                }
-                Some(ToolCallPhase::Complete) => Some(CliServerEvent::ToolCallCompleted {
-                    session_id: event_session_id.to_string(),
-                    tool_call_id,
-                }),
-                _ => None,
-            }
-        }
-        Some(ServerEventType::ToolCallStart) => {
-            let tool_call_id = wire_selectors::first_str(json, wire_keysets::TOOL_CALL_ID_ANY)
-                .unwrap_or("")
-                .to_string();
-            let tool_name = wire_selectors::first_str(
-                json,
-                &[wire_fields::TOOL_NAME, wire_fields::TOOL_NAME_SNAKE],
-            )
-            .unwrap_or("")
-            .to_string();
-            Some(CliServerEvent::ToolCallStarted {
-                session_id: event_session_id.to_string(),
+        ServerEvent::ToolCallLifecycle {
+            session_id,
+            tool_call_id,
+            phase,
+            tool_name,
+        } => match phase {
+            ToolCallPhase::Start => Some(CliServerEvent::ToolCallStarted {
+                session_id,
                 tool_call_id,
-                tool_name,
-            })
-        }
-        Some(ServerEventType::ToolCallComplete) => {
-            let tool_call_id = wire_selectors::first_str(json, wire_keysets::TOOL_CALL_ID_ANY)
-                .unwrap_or("")
-                .to_string();
-            Some(CliServerEvent::ToolCallCompleted {
-                session_id: event_session_id.to_string(),
+                tool_name: tool_name.unwrap_or_default(),
+            }),
+            ToolCallPhase::Complete => Some(CliServerEvent::ToolCallCompleted {
+                session_id,
                 tool_call_id,
-            })
-        }
-        Some(ServerEventType::ChildSessionAttached) => {
-            let parent_id = wire_selectors::first_str(json, wire_keysets::PARENT_ID_ANY)
-                .unwrap_or("")
-                .to_string();
-            let child_id = wire_selectors::first_str(json, wire_keysets::CHILD_ID_ANY)
-                .unwrap_or("")
-                .to_string();
-            Some(CliServerEvent::ChildSessionAttached {
-                parent_id,
-                child_id,
-            })
-        }
-        Some(ServerEventType::ChildSessionDetached) => {
-            let parent_id = wire_selectors::first_str(json, wire_keysets::PARENT_ID_ANY)
-                .unwrap_or("")
-                .to_string();
-            let child_id = wire_selectors::first_str(json, wire_keysets::CHILD_ID_ANY)
-                .unwrap_or("")
-                .to_string();
-            Some(CliServerEvent::ChildSessionDetached {
-                parent_id,
-                child_id,
-            })
-        }
-        Some(ServerEventType::OutputBlock) => {
-            // Output blocks may or may not carry a session_id.
-            let id = json
-                .get(wire_fields::ID)
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            Some(CliServerEvent::OutputBlock {
-                session_id: event_session_id.to_string(),
-                id,
-                payload: json.clone(),
-            })
-        }
-        Some(ServerEventType::Error) => {
-            let error = json
-                .get(wire_keys::ERROR)
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown error")
-                .to_string();
-            let message_id =
-                wire_selectors::first_str(json, wire_keysets::MESSAGE_ID_ANY).map(String::from);
-            let done = json.get(wire_fields::DONE).and_then(|v| v.as_bool());
-            Some(CliServerEvent::Error {
-                session_id: event_session_id.to_string(),
-                error,
-                message_id,
-                done,
-            })
-        }
-        Some(ServerEventType::Usage) => {
-            let prompt_tokens = json
-                .get(wire_fields::PROMPT_TOKENS)
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let completion_tokens = json
-                .get(wire_fields::COMPLETION_TOKENS)
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let message_id =
-                wire_selectors::first_str(json, wire_keysets::MESSAGE_ID_ANY).map(String::from);
-            Some(CliServerEvent::Usage {
-                session_id: event_session_id.to_string(),
-                prompt_tokens,
-                completion_tokens,
-                message_id,
-            })
-        }
-        _ => {
-            tracing::trace!("Unknown SSE event: {}", event_type);
+            }),
+        },
+        ServerEvent::ChildSessionAttached {
+            parent_id,
+            child_id,
+        } => Some(CliServerEvent::ChildSessionAttached {
+            parent_id,
+            child_id,
+        }),
+        ServerEvent::ChildSessionDetached {
+            parent_id,
+            child_id,
+        } => Some(CliServerEvent::ChildSessionDetached {
+            parent_id,
+            child_id,
+        }),
+        ServerEvent::OutputBlock {
+            session_id,
+            block,
+            id,
+        } => Some(CliServerEvent::OutputBlock {
+            session_id,
+            id,
+            payload: block,
+        }),
+        ServerEvent::Error {
+            session_id,
+            error,
+            message_id,
+            done,
+        } => Some(CliServerEvent::Error {
+            session_id: session_id.unwrap_or_default(),
+            error,
+            message_id,
+            done,
+        }),
+        ServerEvent::Usage {
+            session_id,
+            prompt_tokens,
+            completion_tokens,
+            message_id,
+        } => Some(CliServerEvent::Usage {
+            session_id: session_id.unwrap_or_default(),
+            prompt_tokens,
+            completion_tokens,
+            message_id,
+        }),
+        other => {
+            tracing::trace!("Unhandled SSE event: {:?}", other.event_name());
             Some(CliServerEvent::Unknown {
-                event: event_type,
-                data: json.clone(),
+                event: other.event_name().to_string(),
+                data: serde_json::to_value(other).unwrap_or(serde_json::Value::Null),
             })
         }
     }
@@ -479,33 +412,26 @@ fn parse_event(
 #[cfg(test)]
 mod tests {
     use super::{parse_event, CliServerEvent};
-    use rocode_core::contracts::events::{
-        QuestionResolutionKind, ServerEventType, SessionRunStatusType, ToolCallPhase,
-    };
-    use rocode_core::contracts::output_blocks::{
-        MessagePhaseWire, MessageRoleWire, OutputBlockKind,
-    };
-    use rocode_core::contracts::tools::BuiltinToolName;
 
     #[test]
     fn output_block_is_filtered_to_current_session() {
         let mine = serde_json::json!({
-            "type": ServerEventType::OutputBlock.as_str(),
+            "type": "output_block",
             "sessionID": "session-1",
             "block": {
-                "kind": OutputBlockKind::Message.as_str(),
-                "phase": MessagePhaseWire::Delta.as_str(),
-                "role": MessageRoleWire::Assistant.as_str(),
+                "kind": "message",
+                "phase": "delta",
+                "role": "assistant",
                 "text": "hi"
             }
         });
         let other = serde_json::json!({
-            "type": ServerEventType::OutputBlock.as_str(),
+            "type": "output_block",
             "sessionID": "session-2",
             "block": {
-                "kind": OutputBlockKind::Message.as_str(),
-                "phase": MessagePhaseWire::Delta.as_str(),
-                "role": MessageRoleWire::Assistant.as_str(),
+                "kind": "message",
+                "phase": "delta",
+                "role": "assistant",
                 "text": "nope"
             }
         });
@@ -526,7 +452,7 @@ mod tests {
     #[test]
     fn config_updated_is_parsed_as_global_event() {
         let payload = serde_json::json!({
-            "type": ServerEventType::ConfigUpdated.as_str()
+            "type": "config.updated"
         });
 
         let event = parse_event("", &payload, "session-1");
@@ -537,7 +463,7 @@ mod tests {
     #[test]
     fn question_created_from_child_session_is_not_filtered() {
         let payload = serde_json::json!({
-            "type": ServerEventType::QuestionCreated.as_str(),
+            "type": "question.created",
             "sessionID": "child-session-1",
             "requestID": "question-1",
             "questions": [{
@@ -559,7 +485,7 @@ mod tests {
     #[test]
     fn child_session_attach_event_is_parsed() {
         let payload = serde_json::json!({
-            "type": ServerEventType::ChildSessionAttached.as_str(),
+            "type": "child_session.attached",
             "parentID": "parent-session-1",
             "childID": "child-session-1"
         });
@@ -576,10 +502,10 @@ mod tests {
     #[test]
     fn canonical_question_resolved_event_is_parsed() {
         let payload = serde_json::json!({
-            "type": ServerEventType::QuestionResolved.as_str(),
+            "type": "question.resolved",
             "sessionID": "session-1",
             "requestID": "question-1",
-            "resolution": QuestionResolutionKind::Answered.as_str(),
+            "resolution": "answered",
         });
 
         let event = parse_event("", &payload, "session-1");
@@ -593,10 +519,10 @@ mod tests {
     #[test]
     fn canonical_tool_call_lifecycle_complete_event_is_parsed() {
         let payload = serde_json::json!({
-            "type": ServerEventType::ToolCallLifecycle.as_str(),
+            "type": "tool_call.lifecycle",
             "sessionID": "session-1",
             "toolCallId": "tool-1",
-            "phase": ToolCallPhase::Complete.as_str(),
+            "phase": "complete",
         });
 
         let event = parse_event("", &payload, "session-1");
@@ -611,14 +537,14 @@ mod tests {
     #[test]
     fn canonical_permission_requested_event_is_parsed() {
         let payload = serde_json::json!({
-            "type": ServerEventType::PermissionRequested.as_str(),
+            "type": "permission.requested",
             "sessionID": "session-1",
             "permissionID": "permission-1",
             "info": {
                 "id": "permission-1",
                 "session_id": "session-1",
-                "tool": BuiltinToolName::Bash.as_str(),
-                "input": {"permission": BuiltinToolName::Bash.as_str(), "patterns": ["cargo test"]},
+                "tool": "bash",
+                "input": {"permission": "bash", "patterns": ["cargo test"]},
                 "message": "Permission required"
             }
         });
@@ -637,9 +563,9 @@ mod tests {
         // The server serializes SessionRunStatus with #[serde(tag = "type")]
         // so idle becomes {"type": "idle"} rather than a plain string.
         let payload = serde_json::json!({
-            "type": ServerEventType::SessionStatus.as_str(),
+            "type": "session.status",
             "sessionID": "session-1",
-            "status": {"type": SessionRunStatusType::Idle.as_str()}
+            "status": {"type": "idle"}
         });
 
         let event = parse_event("", &payload, "session-1");
@@ -653,9 +579,9 @@ mod tests {
     #[test]
     fn session_status_busy_tagged_object_is_parsed() {
         let payload = serde_json::json!({
-            "type": ServerEventType::SessionStatus.as_str(),
+            "type": "session.status",
             "sessionID": "session-1",
-            "status": {"type": SessionRunStatusType::Busy.as_str()}
+            "status": {"type": "busy"}
         });
 
         let event = parse_event("", &payload, "session-1");
@@ -670,9 +596,9 @@ mod tests {
     fn session_status_plain_string_is_parsed() {
         // Forward-compatible: also accept plain string format.
         let payload = serde_json::json!({
-            "type": ServerEventType::SessionStatus.as_str(),
+            "type": "session.status",
             "sessionID": "session-1",
-            "status": SessionRunStatusType::Idle.as_str()
+            "status": "idle"
         });
 
         let event = parse_event("", &payload, "session-1");

@@ -11,8 +11,6 @@ use tokio::sync::{oneshot, Mutex, RwLock};
 
 use crate::session_runtime::events::{broadcast_server_event, ServerEvent};
 use crate::{ApiError, Result, ServerState};
-use rocode_core::contracts::permission::keys as permission_keys;
-use rocode_core::contracts::permission::PermissionReplyWire;
 
 pub(crate) fn permission_routes() -> Router<Arc<ServerState>> {
     Router::new()
@@ -36,28 +34,51 @@ static PERMISSION_WAITERS: Lazy<Mutex<HashMap<String, oneshot::Sender<Permission
 
 #[derive(Debug)]
 struct PermissionReply {
-    reply: PermissionReplyWire,
+    reply: String,
     message: Option<String>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct PermissionRequestMetadataMessage {
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    description: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    question: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+    command: Option<String>,
+}
+
+fn deserialize_opt_string_lossy<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        None => None,
+        Some(serde_json::Value::String(value)) => Some(value),
+        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+        Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
+impl PermissionRequestMetadataMessage {
+    fn from_map(metadata: &HashMap<String, serde_json::Value>) -> Self {
+        serde_json::to_value(metadata)
+            .ok()
+            .and_then(|value| serde_json::from_value::<Self>(value).ok())
+            .unwrap_or_default()
+    }
+}
+
 fn permission_request_message(request: &rocode_tool::PermissionRequest) -> String {
-    request
-        .metadata
-        .get(permission_keys::DESCRIPTION)
-        .and_then(|value| value.as_str())
-        .or_else(|| {
-            request
-                .metadata
-                .get(permission_keys::QUESTION)
-                .and_then(|value| value.as_str())
-        })
-        .or_else(|| {
-            request
-                .metadata
-                .get(permission_keys::COMMAND)
-                .and_then(|value| value.as_str())
-        })
-        .map(str::to_string)
+    let metadata = PermissionRequestMetadataMessage::from_map(&request.metadata);
+    metadata
+        .description
+        .or(metadata.question)
+        .or(metadata.command)
         .or_else(|| {
             (!request.patterns.is_empty())
                 .then(|| format!("{}: {}", request.permission, request.patterns.join(", ")))
@@ -74,24 +95,12 @@ fn permission_request_info(
         id: permission_id,
         session_id,
         tool: request.permission.clone(),
-        input: serde_json::Value::Object(serde_json::Map::from_iter([
-            (
-                permission_keys::REQUEST_PERMISSION.to_string(),
-                serde_json::json!(request.permission),
-            ),
-            (
-                permission_keys::REQUEST_PATTERNS.to_string(),
-                serde_json::json!(request.patterns),
-            ),
-            (
-                permission_keys::REQUEST_METADATA.to_string(),
-                serde_json::json!(request.metadata),
-            ),
-            (
-                permission_keys::REQUEST_ALWAYS.to_string(),
-                serde_json::json!(request.always),
-            ),
-        ])),
+        input: serde_json::json!({
+            "permission": request.permission,
+            "patterns": request.patterns,
+            "metadata": request.metadata,
+            "always": request.always,
+        }),
         message: permission_request_message(request),
     }
 }
@@ -140,12 +149,16 @@ pub(crate) async fn request_permission(
     state.runtime_state.permission_resolved(&session_id).await;
 
     match wait_result {
-        Ok(Ok(PermissionReply { reply, message })) => match reply {
-            PermissionReplyWire::Once | PermissionReplyWire::Always => Ok(()),
-            PermissionReplyWire::Reject => Err(rocode_tool::ToolError::PermissionDenied(
+        Ok(Ok(PermissionReply { reply, message })) => match reply.as_str() {
+            "once" | "always" => Ok(()),
+            "reject" => Err(rocode_tool::ToolError::PermissionDenied(
                 message
                     .unwrap_or_else(|| format!("Permission rejected for {}", request.permission)),
             )),
+            other => Err(rocode_tool::ToolError::ExecutionError(format!(
+                "Invalid permission reply: {}",
+                other
+            ))),
         },
         Ok(Err(_)) => {
             PERMISSION_REQUESTS.write().await.remove(&permission_id);
@@ -180,9 +193,14 @@ async fn reply_permission(
     Path(id): Path<String>,
     Json(req): Json<ReplyPermissionRequest>,
 ) -> Result<Json<bool>> {
-    let reply = PermissionReplyWire::parse(&req.reply).ok_or_else(|| {
-        ApiError::BadRequest("Invalid reply; expected `once`, `always`, or `reject`".to_string())
-    })?;
+    match req.reply.as_str() {
+        "once" | "always" | "reject" => {}
+        _ => {
+            return Err(ApiError::BadRequest(
+                "Invalid reply; expected `once`, `always`, or `reject`".to_string(),
+            ));
+        }
+    }
 
     let mut pending = PERMISSION_REQUESTS.write().await;
     let permission = pending
@@ -192,7 +210,7 @@ async fn reply_permission(
 
     if let Some(waiter) = PERMISSION_WAITERS.lock().await.remove(&id) {
         let _ = waiter.send(PermissionReply {
-            reply,
+            reply: req.reply.clone(),
             message: req.message.clone(),
         });
     }
@@ -202,7 +220,7 @@ async fn reply_permission(
         &ServerEvent::PermissionResolved {
             session_id: permission.session_id,
             permission_id: id,
-            reply,
+            reply: req.reply,
             message: req.message,
         },
     );
@@ -215,8 +233,6 @@ mod tests {
     use axum::extract::Path;
     use axum::extract::State;
     use axum::Json;
-    use rocode_core::contracts::events::ServerEventType;
-    use rocode_core::contracts::tools::BuiltinToolName;
 
     #[tokio::test]
     async fn request_permission_emits_requested_and_resolved_events() {
@@ -228,7 +244,7 @@ mod tests {
             request_permission(
                 state_for_request,
                 "session-1".to_string(),
-                rocode_tool::PermissionRequest::new(BuiltinToolName::Bash.as_str())
+                rocode_tool::PermissionRequest::new("bash")
                     .with_pattern("cargo test")
                     .with_metadata("command", serde_json::json!("cargo test")),
             )
@@ -247,15 +263,12 @@ mod tests {
         let requested = rx.recv().await.expect("requested event");
         let requested_json: serde_json::Value =
             serde_json::from_str(&requested).expect("requested json");
-        assert_eq!(
-            requested_json["type"],
-            ServerEventType::PermissionRequested.as_str()
-        );
+        assert_eq!(requested_json["type"], "permission.requested");
         assert_eq!(requested_json["permissionID"], permission_id);
         assert_eq!(requested_json["sessionID"], "session-1");
 
         let reply = ReplyPermissionRequest {
-            reply: PermissionReplyWire::Once.as_str().to_string(),
+            reply: "once".to_string(),
             message: Some("approved".to_string()),
         };
         let _ = reply_permission(
@@ -269,12 +282,9 @@ mod tests {
         let resolved = rx.recv().await.expect("resolved event");
         let resolved_json: serde_json::Value =
             serde_json::from_str(&resolved).expect("resolved json");
-        assert_eq!(
-            resolved_json["type"],
-            ServerEventType::PermissionResolved.as_str()
-        );
+        assert_eq!(resolved_json["type"], "permission.resolved");
         assert_eq!(resolved_json["permissionID"], permission_id);
-        assert_eq!(resolved_json["reply"], PermissionReplyWire::Once.as_str());
+        assert_eq!(resolved_json["reply"], "once");
 
         request_task
             .await

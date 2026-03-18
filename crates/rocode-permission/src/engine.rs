@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use rocode_core::contracts::permission::PermissionHookStatus;
 use rocode_plugin::{HookContext, HookEvent};
 
 use crate::matching::wildcard_match;
@@ -111,15 +110,12 @@ impl PermissionEngine {
             .with_data("permission_type", serde_json::json!(&info.permission_type))
             .with_data("permission_id", serde_json::json!(&permission_id))
             .with_data("permission", serde_json::json!(&info))
-            .with_data(
-                "status",
-                serde_json::json!(PermissionHookStatus::Ask.as_str()),
-            );
+            .with_data("status", serde_json::json!("ask"));
         if let Some(call_id) = &info.call_id {
             hook_ctx = hook_ctx.with_data("call_id", serde_json::json!(call_id));
         }
 
-        let mut status = PermissionHookStatus::Ask;
+        let mut status = "ask".to_string();
         let hook_outputs = rocode_plugin::trigger_collect(hook_ctx).await;
         for output in hook_outputs {
             let Some(payload) = output.payload.as_ref() else {
@@ -130,16 +126,16 @@ impl PermissionEngine {
             }
         }
 
-        match status {
-            PermissionHookStatus::Allow => return Ok(()),
-            PermissionHookStatus::Deny => {
+        match status.as_str() {
+            "allow" => return Ok(()),
+            "deny" => {
                 return Err(PermissionError::Rejected {
                     session_id: session_id.clone(),
                     permission_id: permission_id.clone(),
                     tool_call_id: info.call_id.clone(),
                 });
             }
-            PermissionHookStatus::Ask => {}
+            _ => {}
         }
 
         self.pending
@@ -208,11 +204,41 @@ fn hook_payload_object(
         .or_else(|| payload.get("data").and_then(|value| value.as_object()))
 }
 
-fn extract_permission_status(payload: &serde_json::Value) -> Option<PermissionHookStatus> {
-    hook_payload_object(payload)
-        .and_then(|object| object.get("status"))
-        .and_then(|value| value.as_str())
-        .and_then(PermissionHookStatus::parse)
+fn extract_permission_status(payload: &serde_json::Value) -> Option<String> {
+    let object = hook_payload_object(payload)?;
+
+    #[derive(Debug, Default, Deserialize)]
+    struct PermissionStatusWire {
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        status: Option<String>,
+    }
+
+    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            None | Some(serde_json::Value::Null) => None,
+            Some(serde_json::Value::String(value)) => {
+                let trimmed = value.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            }
+            Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+            Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
+            _ => None,
+        })
+    }
+
+    let wire = serde_json::to_value(object)
+        .ok()
+        .and_then(|value| serde_json::from_value::<PermissionStatusWire>(value).ok())
+        .unwrap_or_default();
+
+    wire.status
+        .as_deref()
+        .filter(|status| matches!(*status, "ask" | "deny" | "allow"))
+        .map(ToString::to_string)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -231,7 +257,6 @@ pub enum PermissionError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocode_core::contracts::tools::BuiltinToolName;
 
     #[tokio::test]
     async fn test_permission_engine() {
@@ -239,7 +264,7 @@ mod tests {
 
         let info = PermissionInfo {
             id: "per_test".to_string(),
-            permission_type: BuiltinToolName::Bash.as_str().to_string(),
+            permission_type: "bash".to_string(),
             pattern: Some(Pattern::Single("ls".to_string())),
             session_id: "ses_test".to_string(),
             message_id: "msg_test".to_string(),

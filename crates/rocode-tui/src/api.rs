@@ -548,6 +548,18 @@ pub struct RevertResponse {
     pub success: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DeleteSessionResponse {
+    #[serde(default)]
+    deleted: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SuccessResponse {
+    #[serde(default)]
+    success: Option<bool>,
+}
+
 /// Server-side todo item returned by `/session/{id}/todo`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiTodoItem {
@@ -864,11 +876,8 @@ impl ApiClient {
                 text
             );
         }
-        let value = response.json::<serde_json::Value>()?;
-        Ok(value
-            .get("deleted")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true))
+        let body = response.json::<DeleteSessionResponse>()?;
+        Ok(body.deleted.unwrap_or(true))
     }
 
     pub fn send_prompt(
@@ -1142,11 +1151,8 @@ impl ApiClient {
                 text
             );
         }
-        let value = response.json::<serde_json::Value>()?;
-        Ok(value
-            .get("success")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true))
+        let body = response.json::<SuccessResponse>()?;
+        Ok(body.success.unwrap_or(true))
     }
 
     pub fn connect_mcp(&self, name: &str) -> anyhow::Result<bool> {
@@ -1260,11 +1266,8 @@ impl ApiClient {
                 text
             );
         }
-        let value = response.json::<serde_json::Value>()?;
-        Ok(value
-            .get("success")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true))
+        let body = response.json::<SuccessResponse>()?;
+        Ok(body.success.unwrap_or(true))
     }
 
     pub fn compact_session(&self, session_id: &str) -> anyhow::Result<CompactResponse> {

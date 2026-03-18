@@ -403,29 +403,70 @@ fn apply_command_hook_payload(rendered: &mut String, payload: &serde_json::Value
         return;
     };
 
-    if let Some(text) = object
-        .get("output")
-        .and_then(|value| value.as_str())
-        .or_else(|| object.get("template").and_then(|value| value.as_str()))
+    #[derive(Debug, Default, Deserialize)]
+    struct CommandHookPartWire {
+        #[serde(
+            default,
+            rename = "type",
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        kind: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        text: Option<String>,
+    }
+
+    fn deserialize_parts_lossy<'de, D>(
+        deserializer: D,
+    ) -> Result<Vec<CommandHookPartWire>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
     {
-        *rendered = text.to_string();
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        let Some(serde_json::Value::Array(values)) = value else {
+            return Ok(Vec::new());
+        };
+        Ok(values
+            .into_iter()
+            .filter_map(|value| serde_json::from_value::<CommandHookPartWire>(value).ok())
+            .collect())
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct CommandHookPayloadWire {
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        output: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        template: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_parts_lossy")]
+        parts: Vec<CommandHookPartWire>,
+    }
+
+    let wire = serde_json::to_value(object)
+        .ok()
+        .and_then(|value| serde_json::from_value::<CommandHookPayloadWire>(value).ok())
+        .unwrap_or_default();
+
+    if let Some(text) = wire.output.or(wire.template) {
+        if !text.is_empty() {
+            *rendered = text;
+        }
         return;
     }
 
-    let Some(parts) = object.get("parts").and_then(|value| value.as_array()) else {
-        return;
-    };
-
-    let text = parts
-        .iter()
-        .filter_map(|part| part.as_object())
-        .filter(|part| {
-            part.get("type")
-                .and_then(|value| value.as_str())
-                .map(|kind| kind == "text")
-                .unwrap_or(false)
-        })
-        .filter_map(|part| part.get("text").and_then(|value| value.as_str()))
+    let text = wire
+        .parts
+        .into_iter()
+        .filter(|part| part.kind.as_deref() == Some("text"))
+        .filter_map(|part| part.text)
         .collect::<Vec<_>>()
         .join("\n");
 

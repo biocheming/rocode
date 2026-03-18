@@ -1,6 +1,4 @@
 use crate::runtime::events::StepUsage;
-use rocode_core::contracts::tools::arg_keys as tool_arg_keys;
-use rocode_core::contracts::wire::aliases as wire_aliases;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -91,24 +89,49 @@ pub fn continuation_target_from_tool_metadata(
     metadata: Option<&Value>,
 ) -> Option<ContinuationTarget> {
     let metadata = metadata?;
-    let session_id = metadata
-        .get(wire_aliases::SESSION_ID_CAMEL)
-        .or_else(|| metadata.get(wire_aliases::SESSION_ID_SNAKE))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
 
-    let agent_task_id = metadata
-        .get(tool_arg_keys::AGENT_TASK_ID)
-        .or_else(|| metadata.get(tool_arg_keys::AGENT_TASK_ID_SNAKE))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
+    #[derive(Debug, Default, Deserialize)]
+    struct ContinuationTargetWire {
+        #[serde(
+            default,
+            alias = "sessionId",
+            alias = "session_id",
+            deserialize_with = "deserialize_opt_string_trimmed"
+        )]
+        session_id: Option<String>,
+        #[serde(
+            default,
+            alias = "agentTaskId",
+            alias = "agent_task_id",
+            deserialize_with = "deserialize_opt_string_trimmed"
+        )]
+        agent_task_id: Option<String>,
+    }
+
+    fn deserialize_opt_string_trimmed<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<Value>::deserialize(deserializer)?;
+        Ok(match value {
+            None | Some(Value::Null) => None,
+            Some(Value::String(value)) => {
+                let trimmed = value.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            }
+            Some(Value::Number(value)) => Some(value.to_string()),
+            Some(Value::Bool(value)) => Some(value.to_string()),
+            _ => None,
+        })
+    }
+
+    let wire =
+        serde_json::from_value::<ContinuationTargetWire>(metadata.clone()).unwrap_or_default();
+    let session_id = wire.session_id?;
 
     Some(ContinuationTarget {
-        session_id: session_id.to_string(),
-        agent_task_id,
+        session_id,
+        agent_task_id: wire.agent_task_id,
         tool_name: Some(tool_name.to_string()),
     })
 }

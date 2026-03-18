@@ -1,5 +1,6 @@
 use anyhow::Result;
 use rocode_types::{MessagePart, PartType};
+use serde::Deserialize;
 use serde_json::Value;
 use sqlx::sqlite::{SqliteConnection, SqlitePool, SqlitePoolOptions};
 use sqlx::{FromRow, Sqlite, Transaction};
@@ -232,20 +233,29 @@ fn invalid_tool_payload_for_storage(tool_name: &str, error: &str, received_args:
 }
 
 fn sanitize_tool_call_input_for_storage(tool_name: &str, input: &Value) -> (Value, bool, bool) {
-    if let Some(obj) = input.as_object() {
-        let is_legacy_unrecoverable = obj
-            .get("_rocode_unrecoverable_tool_args")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        if !is_legacy_unrecoverable {
+    #[derive(Debug, Default, Deserialize)]
+    struct LegacyUnrecoverableToolArgsWire {
+        #[serde(default, rename = "_rocode_unrecoverable_tool_args")]
+        unrecoverable: bool,
+        #[serde(default, deserialize_with = "rocode_types::deserialize_opt_u64_lossy")]
+        raw_len: Option<u64>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        raw_preview: Option<String>,
+    }
+
+    if let Ok(wire) = serde_json::from_value::<LegacyUnrecoverableToolArgsWire>(input.clone()) {
+        if !wire.unrecoverable {
             return (input.clone(), false, false);
         }
 
         let received_args = serde_json::json!({
             "type": "object",
             "source": "legacy-unrecoverable-sentinel",
-            "raw_len": obj.get("raw_len").and_then(Value::as_u64),
-            "preview": obj.get("raw_preview").and_then(Value::as_str),
+            "raw_len": wire.raw_len,
+            "preview": wire.raw_preview,
         });
         return (
             invalid_tool_payload_for_storage(

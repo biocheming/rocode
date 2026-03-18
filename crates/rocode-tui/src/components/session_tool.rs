@@ -4,17 +4,13 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
-use serde_json::Value;
-
-use rocode_core::contracts::output_blocks::keys as output_keys;
-use rocode_core::contracts::output_blocks::DisplayModeWire;
-use rocode_core::contracts::patch::{keys as patch_keys, FileChangeType};
-use rocode_core::contracts::task::{
-    metadata_keys as task_metadata_keys, TaskResultEnvelope, TASK_STATUS_COMPLETED,
+use rocode_types::{
+    BatchToolInput, CommandToolInput, DisplayOverrideMetadata, FilePathToolInput, GlobToolInput,
+    GrepToolInput, LspToolInput, NotebookEditToolInput, QueryToolInput, QuestionToolInput,
+    QuestionToolResult, SkillToolInput, TaskToolInput, TodoWriteToolInput, UrlToolInput,
 };
-use rocode_core::contracts::todo::keys as todo_keys;
-use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
-use rocode_core::contracts::wire::fields as wire_fields;
+use serde::Deserialize;
+use serde_json::Value;
 
 use super::markdown::MarkdownRenderer;
 use crate::theme::Theme;
@@ -39,6 +35,168 @@ pub enum ToolState {
 /// Threshold: tool results longer than this are "block" tools with expandable output
 const BLOCK_RESULT_THRESHOLD: usize = 3;
 
+#[derive(Debug, Default, Deserialize)]
+struct DiffMetadataWire {
+    #[serde(
+        default,
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    diff: Option<String>,
+}
+
+impl DiffMetadataWire {
+    fn from_map(metadata: &HashMap<String, Value>) -> Self {
+        serde_json::to_value(metadata)
+            .ok()
+            .and_then(|value| serde_json::from_value::<Self>(value).ok())
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct EditResultMetadataWire {
+    #[serde(default, deserialize_with = "rocode_types::deserialize_opt_u64_lossy")]
+    replacements: Option<u64>,
+    #[serde(
+        default,
+        deserialize_with = "rocode_types::deserialize_vec_value_lossy"
+    )]
+    diagnostics: Vec<Value>,
+    #[serde(
+        default,
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    diff: Option<String>,
+}
+
+impl EditResultMetadataWire {
+    fn from_map(metadata: &HashMap<String, Value>) -> Self {
+        serde_json::to_value(metadata)
+            .ok()
+            .and_then(|value| serde_json::from_value::<Self>(value).ok())
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum PatchFileEntryWire {
+    Path(String),
+    Object(PatchFileObjectWire),
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct PatchFileObjectWire {
+    #[serde(
+        default,
+        alias = "relativePath",
+        alias = "path",
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    relative_path: Option<String>,
+    #[serde(
+        default,
+        rename = "type",
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    change_type: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    diff: Option<String>,
+}
+
+fn deserialize_patch_files_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Vec<PatchFileEntryWire>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    let Some(Value::Array(values)) = value else {
+        return Ok(Vec::new());
+    };
+    Ok(values
+        .into_iter()
+        .filter_map(|value| serde_json::from_value::<PatchFileEntryWire>(value).ok())
+        .collect())
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PatchResultMetadataWire {
+    #[serde(default, deserialize_with = "deserialize_patch_files_lossy")]
+    files: Vec<PatchFileEntryWire>,
+    #[serde(
+        default,
+        deserialize_with = "rocode_types::deserialize_vec_value_lossy"
+    )]
+    diagnostics: Vec<Value>,
+    #[serde(
+        default,
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    diff: Option<String>,
+}
+
+impl PatchResultMetadataWire {
+    fn from_map(metadata: &HashMap<String, Value>) -> Self {
+        serde_json::to_value(metadata)
+            .ok()
+            .and_then(|value| serde_json::from_value::<Self>(value).ok())
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct TaskModelWire {
+    #[serde(
+        default,
+        alias = "providerID",
+        alias = "provider_id",
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    provider_id: Option<String>,
+    #[serde(
+        default,
+        alias = "modelID",
+        alias = "model_id",
+        deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+    )]
+    model_id: Option<String>,
+}
+
+fn deserialize_opt_task_model_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Option<TaskModelWire>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| serde_json::from_value::<TaskModelWire>(value).ok()))
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct TaskResultMetadataWire {
+    #[serde(
+        default,
+        alias = "hasTextOutput",
+        deserialize_with = "rocode_types::deserialize_opt_bool_lossy"
+    )]
+    has_text_output: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_opt_task_model_lossy")]
+    model: Option<TaskModelWire>,
+}
+
+impl TaskResultMetadataWire {
+    fn from_map(metadata: &HashMap<String, Value>) -> Self {
+        serde_json::to_value(metadata)
+            .ok()
+            .and_then(|value| serde_json::from_value::<Self>(value).ok())
+            .unwrap_or_default()
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 struct ReadSummary {
     size_bytes: Option<usize>,
@@ -55,25 +213,22 @@ struct WriteSummary {
 
 /// Map tool name to a semantic glyph
 pub fn tool_glyph(name: &str) -> &'static str {
-    let normalized = normalize_tool_name(name);
-    if normalized == "subagent" {
-        return "#";
-    }
-
-    match BuiltinToolName::parse(normalized.as_str()) {
-        Some(BuiltinToolName::Bash) => "$",
-        Some(BuiltinToolName::Read | BuiltinToolName::Ls) => "→",
-        Some(BuiltinToolName::Write | BuiltinToolName::Edit | BuiltinToolName::MultiEdit) => "←",
-        Some(BuiltinToolName::Glob | BuiltinToolName::Grep) => "✱",
-        Some(BuiltinToolName::WebFetch) => "%",
-        Some(BuiltinToolName::CodeSearch) => "◇",
-        Some(BuiltinToolName::WebSearch) => "◈",
-        Some(BuiltinToolName::Task | BuiltinToolName::TaskFlow) => "#",
-        Some(BuiltinToolName::ApplyPatch) => "%",
-        Some(BuiltinToolName::Skill) => "⚙",
-        Some(BuiltinToolName::Batch) => "⫘",
-        Some(BuiltinToolName::Question) => "?",
-        Some(BuiltinToolName::TodoWrite | BuiltinToolName::TodoRead) => "☐",
+    match name {
+        "bash" | "shell" => "$",
+        "read" | "readFile" | "read_file" => "→",
+        "write" | "writeFile" | "write_file" => "←",
+        "edit" | "editFile" | "edit_file" => "←",
+        "glob" | "grep" | "search" | "ripgrep" => "✱",
+        "list" | "ls" | "listDir" | "list_dir" => "→",
+        "webfetch" | "web_fetch" | "fetch" => "%",
+        "codesearch" | "code_search" => "◇",
+        "websearch" | "web_search" => "◈",
+        "task" | "subagent" => "#",
+        "apply_patch" | "applyPatch" => "%",
+        "skill" => "⚙",
+        "batch" => "⫘",
+        "question" => "?",
+        "todowrite" | "todo_write" | "todoRead" | "todo_read" => "☐",
         _ => "⚙",
     }
 }
@@ -82,13 +237,9 @@ pub fn tool_glyph(name: &str) -> &'static str {
 fn is_block_tool(name: &str, result: Option<&ToolResultInfo>) -> bool {
     // Check display.mode override from metadata
     if let Some(info) = result {
-        if let Some(mode) = info
-            .metadata
-            .as_ref()
-            .and_then(|m| m.get(output_keys::DISPLAY_MODE))
-            .and_then(|v| v.as_str())
-        {
-            if DisplayModeWire::parse(mode) == Some(DisplayModeWire::Block) {
+        if let Some(metadata) = info.metadata.as_ref() {
+            let display = DisplayOverrideMetadata::from_map(metadata);
+            if display.mode.as_deref() == Some("block") {
                 return true;
             }
         }
@@ -96,30 +247,19 @@ fn is_block_tool(name: &str, result: Option<&ToolResultInfo>) -> bool {
 
     let normalized = normalize_tool_name(name);
     // Tools that always produce block output
-    match BuiltinToolName::parse(normalized.as_str()) {
-        Some(
-            BuiltinToolName::Bash
-            | BuiltinToolName::ApplyPatch
-            | BuiltinToolName::Batch
-            | BuiltinToolName::Question
-            | BuiltinToolName::Task
-            | BuiltinToolName::TaskFlow
-            | BuiltinToolName::TodoWrite,
-        ) => return true,
-        Some(BuiltinToolName::Skill) => return false,
+    match normalized.as_str() {
+        "bash" | "shell" | "apply_patch" | "batch" | "question" | "task" | "todowrite"
+        | "todo_write" => return true,
+        "skill" => return false,
         _ => {}
     }
     // edit/write tools with diff metadata are block-level
     if is_write_tool(&normalized) || is_edit_tool(&normalized) {
         if let Some(info) = result {
-            if info
-                .metadata
-                .as_ref()
-                .and_then(|m| m.get(patch_keys::DIFF))
-                .and_then(|v| v.as_str())
-                .is_some_and(|d| !d.is_empty())
-            {
-                return true;
+            if let Some(metadata) = info.metadata.as_ref() {
+                if DiffMetadataWire::from_map(metadata).diff.is_some() {
+                    return true;
+                }
             }
         }
     }
@@ -132,38 +272,26 @@ fn is_block_tool(name: &str, result: Option<&ToolResultInfo>) -> bool {
 }
 
 fn is_read_tool(normalized_name: &str) -> bool {
-    matches!(
-        BuiltinToolName::parse(normalized_name),
-        Some(BuiltinToolName::Read)
-    )
+    matches!(normalized_name, "read" | "readfile" | "read_file")
 }
 
 fn is_list_tool(normalized_name: &str) -> bool {
     matches!(
-        BuiltinToolName::parse(normalized_name),
-        Some(BuiltinToolName::Ls)
+        normalized_name,
+        "ls" | "list" | "listdir" | "list_dir" | "list_directory"
     )
 }
 
 fn is_write_tool(normalized_name: &str) -> bool {
-    matches!(
-        BuiltinToolName::parse(normalized_name),
-        Some(BuiltinToolName::Write)
-    )
+    matches!(normalized_name, "write" | "writefile" | "write_file")
 }
 
 fn is_edit_tool(normalized_name: &str) -> bool {
-    matches!(
-        BuiltinToolName::parse(normalized_name),
-        Some(BuiltinToolName::Edit | BuiltinToolName::MultiEdit)
-    )
+    matches!(normalized_name, "edit" | "editfile" | "edit_file")
 }
 
 fn is_patch_tool(normalized_name: &str) -> bool {
-    matches!(
-        BuiltinToolName::parse(normalized_name),
-        Some(BuiltinToolName::ApplyPatch)
-    )
+    matches!(normalized_name, "apply_patch" | "applypatch")
 }
 
 fn split_list_output<'a>(lines: &'a [&'a str]) -> (Option<&'a str>, Vec<&'a str>) {
@@ -189,13 +317,9 @@ pub fn render_tool_call(
     theme: &Theme,
 ) -> Vec<Line<'static>> {
     let normalized = normalize_tool_name(name);
-    let tool_kind = BuiltinToolName::parse(normalized.as_str());
     if matches!(state, ToolState::Completed)
         && !show_tool_details
-        && !matches!(
-            tool_kind,
-            Some(BuiltinToolName::Task | BuiltinToolName::TodoWrite)
-        )
+        && !matches!(normalized.as_str(), "task" | "todowrite" | "todo_write")
     {
         return Vec::new();
     }
@@ -292,7 +416,7 @@ pub fn render_tool_call(
                 }
             } else if render_display_hints(info, theme, bg, &mut lines) {
                 // Display hints handled the rendering
-            } else if matches!(tool_kind, Some(BuiltinToolName::Task)) {
+            } else if normalized == "task" {
                 render_task_result_block(
                     result_text,
                     arguments,
@@ -302,7 +426,7 @@ pub fn render_tool_call(
                     bg,
                     &mut lines,
                 );
-            } else if matches!(tool_kind, Some(BuiltinToolName::TodoWrite)) {
+            } else if matches!(normalized.as_str(), "todowrite" | "todo_write") {
                 render_todowrite_result_block(
                     result_text,
                     show_tool_details,
@@ -342,7 +466,7 @@ pub fn render_tool_call(
                 );
             } else if is_read_tool(&normalized) {
                 // Read output is very large and noisy; keep it summarized in the header only.
-            } else if matches!(tool_kind, Some(BuiltinToolName::Batch)) {
+            } else if normalized == "batch" {
                 render_batch_result_block(
                     result_text,
                     arguments,
@@ -351,7 +475,7 @@ pub fn render_tool_call(
                     bg,
                     &mut lines,
                 );
-            } else if matches!(tool_kind, Some(BuiltinToolName::Question)) {
+            } else if normalized == "question" {
                 render_question_result_block(result_text, arguments, theme, bg, &mut lines);
             } else if show_tool_details {
                 let output_lines = result_text.lines().collect::<Vec<_>>();
@@ -361,7 +485,7 @@ pub fn render_tool_call(
                     (None, output_lines.clone())
                 };
                 let line_count = list_entries.len();
-                let mut preview_limit = if matches!(tool_kind, Some(BuiltinToolName::Bash)) {
+                let mut preview_limit = if normalized == "bash" || normalized == "shell" {
                     10usize
                 } else if is_list_tool(&normalized) {
                     40usize
@@ -412,9 +536,7 @@ pub fn render_tool_call(
                     ));
                 }
             }
-        } else if matches!(tool_kind, Some(BuiltinToolName::Task))
-            && matches!(state, ToolState::Pending | ToolState::Running)
-        {
+        } else if normalized == "task" && matches!(state, ToolState::Pending | ToolState::Running) {
             render_task_running_block(arguments, theme, bg, &mut lines);
         }
 
@@ -457,10 +579,10 @@ pub fn render_tool_call(
             let display_summary = info
                 .metadata
                 .as_ref()
-                .and_then(|m| m.get(output_keys::DISPLAY_SUMMARY))
-                .and_then(|v| v.as_str());
+                .map(DisplayOverrideMetadata::from_map)
+                .and_then(|display| display.summary);
 
-            if let Some(summary) = display_summary {
+            if let Some(summary) = display_summary.as_deref() {
                 main_spans.push(Span::styled(
                     format!(" — {}", format_preview_line(summary, 80)),
                     Style::default().fg(theme.text_muted),
@@ -535,19 +657,13 @@ fn render_display_hints(
         Some(m) => m,
         None => return false,
     };
-
-    let has_fields = metadata.contains_key(output_keys::DISPLAY_FIELDS);
-    let has_summary = metadata.contains_key(output_keys::DISPLAY_SUMMARY);
-
-    if !has_fields && !has_summary {
+    let display = DisplayOverrideMetadata::from_map(metadata);
+    if display.summary.is_none() && display.fields.is_empty() {
         return false;
     }
 
-    // Render display.summary as the summary line
-    if let Some(summary) = metadata
-        .get(output_keys::DISPLAY_SUMMARY)
-        .and_then(|v| v.as_str())
-    {
+    // Render display.summary as the summary line.
+    if let Some(summary) = display.summary.as_deref() {
         lines.push(block_content_line(
             format_preview_line(summary, 96),
             Style::default().fg(theme.text_muted),
@@ -556,27 +672,19 @@ fn render_display_hints(
         ));
     }
 
-    // Render display.fields as key-value pairs
-    if let Some(fields) = metadata
-        .get(output_keys::DISPLAY_FIELDS)
-        .and_then(|v| v.as_array())
-    {
-        for field in fields {
-            let key = field
-                .get(output_keys::DISPLAY_FIELD_KEY)
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
-            let value = field
-                .get(output_keys::DISPLAY_FIELD_VALUE)
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            lines.push(block_content_line(
-                format!("{}: {}", key, format_preview_line(value, 88 - key.len())),
-                Style::default().fg(theme.text),
-                theme,
-                bg,
-            ));
+    // Render display.fields as key-value pairs.
+    for field in &display.fields {
+        let key = field.key.trim();
+        if key.is_empty() {
+            continue;
         }
+        let value = field.value.as_deref().unwrap_or("");
+        lines.push(block_content_line(
+            format!("{}: {}", key, format_preview_line(value, 88 - key.len())),
+            Style::default().fg(theme.text),
+            theme,
+            bg,
+        ));
     }
 
     true
@@ -592,14 +700,11 @@ fn render_batch_result_block(
     lines: &mut Vec<Line<'static>>,
 ) {
     // Parse sub-tool names from arguments for labeling
-    let arg_parsed = serde_json::from_str::<Value>(arguments).ok();
-    let calls = arg_parsed
+    let call_input = serde_json::from_str::<Value>(arguments)
+        .ok()
         .as_ref()
-        .and_then(|v| {
-            v.get(tool_arg_keys::TOOL_CALLS_CAMEL)
-                .or_else(|| v.get(tool_arg_keys::TOOL_CALLS))
-        })
-        .and_then(|v| v.as_array());
+        .map(BatchToolInput::from_value)
+        .unwrap_or_default();
 
     // Try to parse the result as JSON array.
     // The batch tool output is: "All N tools...\n\nResults:\n[{...}]"
@@ -608,22 +713,58 @@ fn render_batch_result_block(
         .find("Results:\n")
         .map(|pos| &result_text[pos + "Results:\n".len()..])
         .unwrap_or(result_text);
-    let result_parsed = serde_json::from_str::<Value>(json_text).ok();
-    let result_array = result_parsed.as_ref().and_then(|v| {
-        v.as_array()
-            .or_else(|| v.get(tool_arg_keys::RESULTS).and_then(|r| r.as_array()))
-    });
+    #[derive(Debug, Default, Deserialize)]
+    struct BatchResultEntryWire {
+        #[serde(default, deserialize_with = "rocode_types::deserialize_opt_bool_lossy")]
+        success: Option<bool>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        output: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        result: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
+        )]
+        error: Option<String>,
+    }
 
-    if let Some(results) = result_array {
+    impl BatchResultEntryWire {
+        fn is_ok(&self) -> bool {
+            self.success.unwrap_or(true)
+        }
+
+        fn output_text(&self) -> &str {
+            self.output
+                .as_deref()
+                .or(self.result.as_deref())
+                .or(self.error.as_deref())
+                .unwrap_or("")
+        }
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct BatchResultWrapperWire {
+        #[serde(default)]
+        results: Vec<BatchResultEntryWire>,
+    }
+
+    let parsed_results = serde_json::from_str::<Vec<BatchResultEntryWire>>(json_text)
+        .ok()
+        .or_else(|| {
+            serde_json::from_str::<BatchResultWrapperWire>(json_text)
+                .ok()
+                .map(|wrapper| wrapper.results)
+        });
+
+    if let Some(results) = parsed_results.as_ref() {
         let total = results.len();
-        let ok_count = results
-            .iter()
-            .filter(|r| {
-                r.get(tool_arg_keys::SUCCESS)
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(true)
-            })
-            .count();
+        let ok_count = results.iter().filter(|r| r.is_ok()).count();
         let fail_count = total - ok_count;
 
         // Summary line: "5 tools: 5 ok" or "5 tools: 3 ok, 2 failed"
@@ -650,21 +791,14 @@ fn render_batch_result_block(
 
         // Render each sub-tool as a mini entry
         for (i, result_entry) in results.iter().enumerate() {
-            let sub_name = calls
-                .and_then(|c| c.get(i))
-                .and_then(|c| {
-                    c.get(tool_arg_keys::TOOL)
-                        .or_else(|| c.get(tool_arg_keys::NAME))
-                        .or_else(|| c.get(tool_arg_keys::TOOL_NAME))
-                        .and_then(|v| v.as_str())
-                })
+            let sub_name = call_input
+                .tool_calls
+                .get(i)
+                .and_then(|call| call.tool_name.as_deref())
                 .unwrap_or("?");
             let sub_glyph = tool_glyph(sub_name);
 
-            let is_ok = result_entry
-                .get(tool_arg_keys::SUCCESS)
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
+            let is_ok = result_entry.is_ok();
             let (icon, icon_color) = if is_ok {
                 ("●", theme.success)
             } else {
@@ -672,12 +806,7 @@ fn render_batch_result_block(
             };
 
             // Extract a short preview of the sub-tool result
-            let sub_result = result_entry
-                .get(tool_arg_keys::OUTPUT)
-                .or_else(|| result_entry.get(tool_arg_keys::RESULT))
-                .or_else(|| result_entry.get(tool_arg_keys::ERROR))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let sub_result = result_entry.output_text();
             let first_line = sub_result
                 .lines()
                 .find(|l| !l.trim().is_empty())
@@ -702,20 +831,20 @@ fn render_batch_result_block(
             ];
 
             // Add sub-tool argument preview if available
-            if let Some(call_args) = calls.and_then(|c| c.get(i)) {
-                let sub_args_str = call_args
-                    .get(tool_arg_keys::PARAMETERS)
-                    .map(|v| v.to_string());
-                if let Some(ref args_json) = sub_args_str {
-                    let sub_normalized = normalize_tool_name(sub_name);
-                    if let Some(preview) = tool_argument_preview(&sub_normalized, args_json) {
-                        spans.push(Span::styled(
-                            format!("  {}", format_preview_line(&preview, 40)),
-                            Style::default().fg(theme.text_muted).bg(bg),
-                        ));
-                    }
+            if let Some(args_json) = call_input
+                .tool_calls
+                .get(i)
+                .and_then(|call| call.parameters.as_ref())
+                .map(ToString::to_string)
+            {
+                let sub_normalized = normalize_tool_name(sub_name);
+                if let Some(preview) = tool_argument_preview(&sub_normalized, &args_json) {
+                    spans.push(Span::styled(
+                        format!("  {}", format_preview_line(&preview, 40)),
+                        Style::default().fg(theme.text_muted).bg(bg),
+                    ));
                 }
-            }
+            };
 
             // Add result summary
             if !is_ok {
@@ -772,26 +901,13 @@ fn render_question_result_block(
     bg: ratatui::style::Color,
     lines: &mut Vec<Line<'static>>,
 ) {
-    // Parse questions from arguments
-    let arg_parsed = serde_json::from_str::<Value>(arguments).ok();
-    let questions = arg_parsed
-        .as_ref()
-        .and_then(|v| v.get(wire_fields::QUESTIONS))
-        .and_then(|v| v.as_array());
+    let args = QuestionToolInput::from_json_str(arguments);
+    let result = QuestionToolResult::from_json_str(result_text);
 
-    // Parse answers from result
-    let result_parsed = serde_json::from_str::<Value>(result_text).ok();
-    let answers = result_parsed
-        .as_ref()
-        .and_then(|v| v.get(tool_arg_keys::ANSWERS))
-        .and_then(|v| v.as_array());
-
-    if let Some(qs) = questions {
-        for (i, q) in qs.iter().enumerate() {
-            let q_text = q
-                .get(wire_fields::QUESTION)
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
+    if !args.questions.is_empty() {
+        for (i, q) in args.questions.iter().enumerate() {
+            let q_text = q.question.trim();
+            let q_text = if q_text.is_empty() { "?" } else { q_text };
             // Show question
             lines.push(block_content_line(
                 format!("Q: {}", format_preview_line(q_text, 88)),
@@ -800,14 +916,11 @@ fn render_question_result_block(
                 bg,
             ));
             // Show options if any
-            if let Some(opts) = q.get(wire_fields::OPTIONS).and_then(|v| v.as_array()) {
-                for opt in opts.iter() {
-                    let label = opt
-                        .get(wire_fields::LABEL)
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("?");
-                    let desc = opt.get(tool_arg_keys::DESCRIPTION).and_then(|v| v.as_str());
-                    let opt_text = match desc {
+            if !q.options.is_empty() {
+                for opt in &q.options {
+                    let label = opt.label.trim();
+                    let label = if label.is_empty() { "?" } else { label };
+                    let opt_text = match opt.description.as_deref() {
                         Some(d) => format!("  · {} — {}", label, format_preview_line(d, 64)),
                         None => format!("  · {}", label),
                     };
@@ -820,9 +933,11 @@ fn render_question_result_block(
                 }
             }
             // Show answer
-            let answer = answers
-                .and_then(|a| a.get(i))
-                .and_then(|v| v.as_str())
+            let answer = result
+                .answers
+                .get(i)
+                .map(|value| value.as_str())
+                .filter(|value| !value.trim().is_empty())
                 .unwrap_or("(no answer)");
             lines.push(block_content_line(
                 format!("A: {}", format_preview_line(answer, 88)),
@@ -855,11 +970,15 @@ fn render_write_result_block(
     bg: ratatui::style::Color,
     lines: &mut Vec<Line<'static>>,
 ) {
-    let args_parsed = serde_json::from_str::<Value>(arguments).ok();
+    let raw_args = arguments.trim();
+    let args_parsed = serde_json::from_str::<Value>(raw_args)
+        .ok()
+        .or_else(|| rocode_util::json::try_parse_json_object_robust(raw_args));
     let write_summary = parse_write_summary(result_text);
     let write_path = args_parsed
         .as_ref()
-        .and_then(extract_path)
+        .map(FilePathToolInput::from_value)
+        .and_then(|input| input.file_path)
         .or_else(|| extract_jsonish_path_from_raw(arguments))
         .or_else(|| {
             write_summary
@@ -907,11 +1026,8 @@ fn render_write_result_block(
 
     if show_tool_details {
         // Render inline diff from metadata if available
-        if let Some(diff_str) = metadata
-            .and_then(|m| m.get(patch_keys::DIFF))
-            .and_then(|v| v.as_str())
-            .filter(|d| !d.is_empty())
-        {
+        let diff = metadata.and_then(|metadata| DiffMetadataWire::from_map(metadata).diff);
+        if let Some(diff_str) = diff.as_deref() {
             render_inline_diff(diff_str, theme, bg, lines);
         } else if let Some(first_line) = result_text.lines().find(|line| !line.trim().is_empty()) {
             lines.push(block_content_line(
@@ -972,10 +1088,14 @@ fn render_edit_result_block(
     bg: ratatui::style::Color,
     lines: &mut Vec<Line<'static>>,
 ) {
-    let args_parsed = serde_json::from_str::<Value>(arguments).ok();
+    let raw_args = arguments.trim();
+    let args_parsed = serde_json::from_str::<Value>(raw_args)
+        .ok()
+        .or_else(|| rocode_util::json::try_parse_json_object_robust(raw_args));
     let edit_path = args_parsed
         .as_ref()
-        .and_then(extract_path)
+        .map(FilePathToolInput::from_value)
+        .and_then(|input| input.file_path)
         .or_else(|| extract_jsonish_path_from_raw(arguments));
 
     lines.push(block_content_line(
@@ -998,11 +1118,12 @@ fn render_edit_result_block(
         ));
     }
 
+    let wire = metadata
+        .map(EditResultMetadataWire::from_map)
+        .unwrap_or_default();
+
     // Show replacement count from metadata if available
-    if let Some(replacements) = metadata
-        .and_then(|m| m.get(patch_keys::REPLACEMENTS))
-        .and_then(|v| v.as_u64())
-    {
+    if let Some(replacements) = wire.replacements {
         lines.push(block_content_line(
             format!("{} replacement(s)", replacements),
             Style::default().fg(theme.text_muted),
@@ -1012,26 +1133,17 @@ fn render_edit_result_block(
     }
 
     // Show diagnostics warning if present
-    if let Some(diags) = metadata
-        .and_then(|m| m.get(patch_keys::DIAGNOSTICS))
-        .and_then(|v| v.as_array())
-    {
-        if !diags.is_empty() {
-            lines.push(block_content_line(
-                format!("⚠ {} diagnostic(s)", diags.len()),
-                Style::default().fg(theme.warning),
-                theme,
-                bg,
-            ));
-        }
+    if !wire.diagnostics.is_empty() {
+        lines.push(block_content_line(
+            format!("⚠ {} diagnostic(s)", wire.diagnostics.len()),
+            Style::default().fg(theme.warning),
+            theme,
+            bg,
+        ));
     }
 
     if show_tool_details {
-        if let Some(diff_str) = metadata
-            .and_then(|m| m.get(patch_keys::DIFF))
-            .and_then(|v| v.as_str())
-            .filter(|d| !d.is_empty())
-        {
+        if let Some(diff_str) = wire.diff.as_deref() {
             render_inline_diff(diff_str, theme, bg, lines);
         } else if let Some(first_line) = result_text.lines().find(|line| !line.trim().is_empty()) {
             lines.push(block_content_line(
@@ -1054,23 +1166,22 @@ fn render_patch_result_block(
     bg: ratatui::style::Color,
     lines: &mut Vec<Line<'static>>,
 ) {
-    // Extract file list from metadata
-    let files: Vec<String> = metadata
-        .and_then(|m| m.get(patch_keys::FILES))
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|f| {
-                    // files metadata is array of objects with "path" key, or strings
-                    f.as_str().map(String::from).or_else(|| {
-                        f.get(patch_keys::LEGACY_PATH)
-                            .and_then(|p| p.as_str())
-                            .map(String::from)
-                    })
-                })
-                .collect()
-        })
+    let wire = metadata
+        .map(PatchResultMetadataWire::from_map)
         .unwrap_or_default();
+
+    // Extract file list from metadata
+    let files: Vec<String> = wire
+        .files
+        .iter()
+        .filter_map(|file| match file {
+            PatchFileEntryWire::Path(path) => {
+                let trimmed = path.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            }
+            PatchFileEntryWire::Object(object) => object.relative_path.clone(),
+        })
+        .collect();
 
     lines.push(block_content_line(
         format!("✦ Patch Applied — {} file(s)", files.len().max(1)),
@@ -1100,60 +1211,46 @@ fn render_patch_result_block(
     }
 
     // Show diagnostics warning if present
-    if let Some(diags) = metadata
-        .and_then(|m| m.get(patch_keys::DIAGNOSTICS))
-        .and_then(|v| v.as_array())
-    {
-        if !diags.is_empty() {
-            lines.push(block_content_line(
-                format!("⚠ {} diagnostic(s)", diags.len()),
-                Style::default().fg(theme.warning),
-                theme,
-                bg,
-            ));
-        }
+    if !wire.diagnostics.is_empty() {
+        lines.push(block_content_line(
+            format!("⚠ {} diagnostic(s)", wire.diagnostics.len()),
+            Style::default().fg(theme.warning),
+            theme,
+            bg,
+        ));
     }
 
     if show_tool_details {
         // Try per-file diffs first (richer display with headers)
-        let per_file_diffs: Vec<(String, String, String)> = metadata
-            .and_then(|m| m.get(patch_keys::FILES))
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|f| {
-                        let path = f
-                            .get(patch_keys::RELATIVE_PATH)
-                            .or_else(|| f.get(patch_keys::LEGACY_PATH))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("?")
-                            .to_string();
-                        let change_type = f
-                            .get(patch_keys::CHANGE_TYPE)
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(FileChangeType::Update.as_str())
-                            .to_string();
-                        let diff = f
-                            .get(patch_keys::FILE_DIFF)
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        if diff.is_empty() {
-                            None
-                        } else {
-                            Some((path, change_type, diff.to_string()))
-                        }
-                    })
-                    .collect()
+        let per_file_diffs: Vec<(String, String, String)> = wire
+            .files
+            .iter()
+            .filter_map(|file| match file {
+                PatchFileEntryWire::Object(object) => {
+                    let path = object.relative_path.as_deref().unwrap_or("?").to_string();
+                    let change_type = object
+                        .change_type
+                        .as_deref()
+                        .unwrap_or("update")
+                        .to_string();
+                    let diff = object.diff.as_deref().unwrap_or("");
+                    if diff.is_empty() {
+                        None
+                    } else {
+                        Some((path, change_type, diff.to_string()))
+                    }
+                }
+                _ => None,
             })
-            .unwrap_or_default();
+            .collect();
 
         if !per_file_diffs.is_empty() {
             for (path, change_type, diff_str) in &per_file_diffs {
-                let label = match FileChangeType::parse(change_type) {
-                    Some(FileChangeType::Add) => format!("# Created {}", path),
-                    Some(FileChangeType::Delete) => format!("# Deleted {}", path),
-                    Some(FileChangeType::Move) => format!("# Moved {}", path),
-                    Some(FileChangeType::Update) | None => format!("← Patched {}", path),
+                let label = match change_type.as_str() {
+                    "add" => format!("# Created {}", path),
+                    "delete" => format!("# Deleted {}", path),
+                    "move" => format!("# Moved {}", path),
+                    _ => format!("← Patched {}", path),
                 };
                 lines.push(block_content_line(
                     label,
@@ -1163,11 +1260,7 @@ fn render_patch_result_block(
                 ));
                 render_inline_diff(diff_str, theme, bg, lines);
             }
-        } else if let Some(diff_str) = metadata
-            .and_then(|m| m.get(patch_keys::DIFF))
-            .and_then(|v| v.as_str())
-            .filter(|d| !d.is_empty())
-        {
+        } else if let Some(diff_str) = wire.diff.as_deref() {
             render_inline_diff(diff_str, theme, bg, lines);
         } else if let Some(first_line) = result_text.lines().find(|line| !line.trim().is_empty()) {
             lines.push(block_content_line(
@@ -1188,12 +1281,42 @@ struct TaskResultSummary {
 }
 
 fn parse_task_result_summary(result_text: &str) -> TaskResultSummary {
-    let envelope = TaskResultEnvelope::parse(result_text);
-    TaskResultSummary {
-        task_id: envelope.task_id,
-        task_status: envelope.task_status,
-        body: envelope.body,
+    let mut summary = TaskResultSummary::default();
+    for line in result_text.lines() {
+        let trimmed = line.trim();
+        if let Some(raw) = trimmed.strip_prefix("task_id:") {
+            let id = raw
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if !id.is_empty() {
+                summary.task_id = Some(id);
+            }
+            continue;
+        }
+        if let Some(raw) = trimmed.strip_prefix("task_status:") {
+            let status = raw.trim().to_string();
+            if !status.is_empty() {
+                summary.task_status = Some(status);
+            }
+        }
     }
+
+    if let (Some(start), Some(end)) = (
+        result_text.find("<task_result>"),
+        result_text.find("</task_result>"),
+    ) {
+        if end > start {
+            let body = &result_text[start + "<task_result>".len()..end];
+            summary.body = body.trim().to_string();
+            return summary;
+        }
+    }
+
+    summary.body = result_text.trim().to_string();
+    summary
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1251,16 +1374,11 @@ fn parse_task_argument_summary(arguments: &str) -> TaskArgumentSummary {
         return summary;
     };
 
-    summary.category = extract_string_key(value, &[tool_arg_keys::CATEGORY]);
-    summary.subagent_type = extract_string_key(
-        value,
-        &[
-            tool_arg_keys::SUBAGENT_TYPE,
-            tool_arg_keys::SUBAGENT_TYPE_CAMEL,
-        ],
-    );
-    summary.description = extract_string_key(value, &[tool_arg_keys::DESCRIPTION]);
-    let prompt = extract_string_key(value, &[tool_arg_keys::PROMPT]);
+    let input = TaskToolInput::from_value(value);
+    summary.category = input.category;
+    summary.subagent_type = input.subagent_type;
+    summary.description = input.description;
+    let prompt = input.prompt;
     if let Some(prompt_text) = prompt.as_deref() {
         summary.checklist = parse_markdown_checklist(prompt_text)
             .into_iter()
@@ -1275,11 +1393,7 @@ fn parse_task_argument_summary(arguments: &str) -> TaskArgumentSummary {
             .or_else(|| prompt.lines().map(str::trim).find(|line| !line.is_empty()))
             .map(|line| format_preview_line(line, 88))
     });
-    summary.skill_count = value
-        .get(tool_arg_keys::LOAD_SKILLS)
-        .or_else(|| value.get(tool_arg_keys::LOADED_SKILLS))
-        .and_then(|v| v.as_array())
-        .map(Vec::len);
+    summary.skill_count = input.load_skills.as_ref().map(|skills| skills.len());
 
     summary
 }
@@ -1412,7 +1526,7 @@ fn render_task_result_block(
         ));
     }
     if let Some(task_status) = summary.task_status.as_deref() {
-        let status_color = if task_status.eq_ignore_ascii_case(TASK_STATUS_COMPLETED) {
+        let status_color = if task_status.eq_ignore_ascii_case("completed") {
             theme.success
         } else {
             theme.info
@@ -1425,10 +1539,9 @@ fn render_task_result_block(
         ));
     }
     if let Some(meta) = metadata {
-        if let Some(has_text_output) = meta
-            .get(task_metadata_keys::HAS_TEXT_OUTPUT)
-            .and_then(|v| v.as_bool())
-        {
+        let wire = TaskResultMetadataWire::from_map(meta);
+
+        if let Some(has_text_output) = wire.has_text_output {
             lines.push(block_content_line(
                 format!(
                     "Text Output: {}",
@@ -1439,20 +1552,9 @@ fn render_task_result_block(
                 bg,
             ));
         }
-        if let Some(model) = meta
-            .get(task_metadata_keys::MODEL)
-            .and_then(|v| v.as_object())
-        {
-            let provider = model
-                .get(task_metadata_keys::MODEL_PROVIDER_ID_CAMEL)
-                .or_else(|| model.get(task_metadata_keys::MODEL_PROVIDER_ID_SNAKE))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let model_id = model
-                .get(task_metadata_keys::MODEL_ID_CAMEL)
-                .or_else(|| model.get(task_metadata_keys::MODEL_ID_SNAKE))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+        if let Some(model) = wire.model {
+            let provider = model.provider_id.unwrap_or_default();
+            let model_id = model.model_id.unwrap_or_default();
             if !provider.is_empty() || !model_id.is_empty() {
                 let rendered = if !provider.is_empty() && !model_id.is_empty() {
                     format!("{provider}:{model_id}")
@@ -1903,34 +2005,50 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
         .ok()
         .or_else(|| rocode_util::json::try_parse_json_object_robust(raw));
     let object = parsed.as_ref().and_then(|v| v.as_object());
-    let tool_kind = BuiltinToolName::parse(normalized_name);
 
-    if matches!(tool_kind, Some(BuiltinToolName::Bash)) {
-        let command = parsed
-            .as_ref()
-            .and_then(extract_shell_command)
-            .or_else(|| (!raw.is_empty()).then_some(raw.to_string()))?;
-        return Some(format!("$ {}", command.trim()));
+    if normalized_name == "bash" || normalized_name == "shell" {
+        if let Some(value) = parsed.as_ref() {
+            let input = CommandToolInput::from_value(value);
+            if let Some(command) = input.command {
+                return Some(format!("$ {}", command.trim()));
+            }
+        }
+        return (!raw.is_empty()).then(|| format!("$ {}", raw));
     }
 
-    if matches!(tool_kind, Some(BuiltinToolName::Read)) {
-        if let Some(path) = parsed.as_ref().and_then(extract_path) {
+    if matches!(normalized_name, "read" | "readfile" | "read_file") {
+        if let Some(path) = parsed
+            .as_ref()
+            .map(FilePathToolInput::from_value)
+            .and_then(|input| input.file_path)
+        {
             return Some(format!("→ {}", path));
         }
     }
 
-    if matches!(tool_kind, Some(BuiltinToolName::Ls)) {
-        if let Some(path) = parsed.as_ref().and_then(extract_path) {
+    if matches!(
+        normalized_name,
+        "list" | "ls" | "listdir" | "list_dir" | "list_directory"
+    ) {
+        if let Some(path) = parsed
+            .as_ref()
+            .map(FilePathToolInput::from_value)
+            .and_then(|input| input.file_path)
+        {
             return Some(format!("→ {}", path));
         }
         return Some("→ .".to_string());
     }
 
     if matches!(
-        tool_kind,
-        Some(BuiltinToolName::Write | BuiltinToolName::Edit | BuiltinToolName::MultiEdit)
+        normalized_name,
+        "write" | "writefile" | "write_file" | "edit" | "editfile" | "edit_file"
     ) {
-        if let Some(path) = parsed.as_ref().and_then(extract_path) {
+        if let Some(path) = parsed
+            .as_ref()
+            .map(FilePathToolInput::from_value)
+            .and_then(|input| input.file_path)
+        {
             return Some(format!("← {}", path));
         }
         if let Some(path) = extract_jsonish_path_from_raw(raw) {
@@ -1938,53 +2056,52 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
         }
     }
 
-    if matches!(tool_kind, Some(BuiltinToolName::Glob)) {
-        if let Some(pattern) = parsed
-            .as_ref()
-            .and_then(|value| extract_string_key(value, &[tool_arg_keys::PATTERN]))
-        {
-            let target = parsed.as_ref().and_then(extract_path);
-            return Some(match target {
-                Some(path) => format!("\"{}\" in {}", pattern, path),
-                None => format!("\"{}\"", pattern),
-            });
+    if normalized_name == "glob" {
+        if let Some(value) = parsed.as_ref() {
+            let input = GlobToolInput::from_value(value);
+            if let Some(pattern) = input.pattern {
+                return Some(match input.path {
+                    Some(path) => format!("\"{}\" in {}", pattern, path),
+                    None => format!("\"{}\"", pattern),
+                });
+            }
         }
     }
 
-    if matches!(tool_kind, Some(BuiltinToolName::Grep)) {
-        if let Some(pattern) = parsed.as_ref().and_then(|value| {
-            extract_string_key(value, &[tool_arg_keys::PATTERN, tool_arg_keys::QUERY])
-        }) {
-            let target = parsed.as_ref().and_then(extract_path);
-            return Some(match target {
-                Some(path) => format!("\"{}\" in {}", pattern, path),
-                None => format!("\"{}\"", pattern),
-            });
+    if normalized_name == "grep" {
+        if let Some(value) = parsed.as_ref() {
+            let input = GrepToolInput::from_value(value);
+            if let Some(pattern) = input.pattern {
+                return Some(match input.path {
+                    Some(path) => format!("\"{}\" in {}", pattern, path),
+                    None => format!("\"{}\"", pattern),
+                });
+            }
         }
     }
 
-    if matches!(tool_kind, Some(BuiltinToolName::WebFetch)) {
-        if let Some(url) = parsed
-            .as_ref()
-            .and_then(|value| extract_string_key(value, &[tool_arg_keys::URL]))
-        {
-            return Some(url);
+    if matches!(normalized_name, "webfetch" | "web_fetch") {
+        if let Some(value) = parsed.as_ref() {
+            let input = UrlToolInput::from_value(value);
+            if let Some(url) = input.url {
+                return Some(url);
+            }
         }
     }
 
     if matches!(
-        tool_kind,
-        Some(BuiltinToolName::WebSearch | BuiltinToolName::CodeSearch)
+        normalized_name,
+        "codesearch" | "code_search" | "websearch" | "web_search"
     ) {
-        if let Some(query) = parsed
-            .as_ref()
-            .and_then(|value| extract_string_key(value, &[tool_arg_keys::QUERY]))
-        {
-            return Some(format!("\"{}\"", query));
+        if let Some(value) = parsed.as_ref() {
+            let input = QueryToolInput::from_value(value);
+            if let Some(query) = input.query {
+                return Some(format!("\"{}\"", query));
+            }
         }
     }
 
-    if matches!(tool_kind, Some(BuiltinToolName::Task)) {
+    if normalized_name == "task" {
         let summary = parse_task_argument_summary(arguments);
         let kind = summary
             .category
@@ -2006,33 +2123,30 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
         };
     }
 
-    if matches!(tool_kind, Some(BuiltinToolName::Batch)) {
-        if let Some(calls) = parsed
-            .as_ref()
-            .and_then(|v| {
-                v.get(tool_arg_keys::TOOL_CALLS_CAMEL)
-                    .or_else(|| v.get(tool_arg_keys::TOOL_CALLS))
-            })
-            .and_then(|v| v.as_array())
-        {
-            let count = calls.len();
-            let names: Vec<String> = calls
-                .iter()
-                .filter_map(|call| {
-                    call.get(tool_arg_keys::TOOL)
-                        .or_else(|| call.get(tool_arg_keys::NAME))
-                        .or_else(|| call.get(tool_arg_keys::TOOL_NAME))
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                })
-                .collect();
-            // Deduplicate while preserving order
+    if normalized_name == "batch" {
+        if let Some(value) = parsed.as_ref() {
+            let input = BatchToolInput::from_value(value);
+            let count = input.tool_calls.len();
+            if count == 0 {
+                return None;
+            }
+
             let mut seen = std::collections::HashSet::new();
-            let unique: Vec<&str> = names
-                .iter()
-                .filter(|n| seen.insert(n.as_str()))
-                .map(|n| n.as_str())
-                .collect();
+            let mut unique = Vec::new();
+            for call in &input.tool_calls {
+                let Some(name) = call
+                    .tool_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                else {
+                    continue;
+                };
+                if seen.insert(name.to_string()) {
+                    unique.push(name.to_string());
+                }
+            }
+
             return if unique.is_empty() {
                 Some(format!("{} tools", count))
             } else {
@@ -2041,38 +2155,38 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
         }
     }
 
-    if matches!(tool_kind, Some(BuiltinToolName::Question)) {
-        if let Some(questions) = object
-            .and_then(|value| value.get(wire_fields::QUESTIONS))
-            .and_then(|value| value.as_array())
-        {
-            let count = questions.len();
-            // Show the first question text as preview
-            let first_q = questions
-                .first()
-                .and_then(|q| q.get(wire_fields::QUESTION).and_then(|v| v.as_str()));
-            return match first_q {
-                Some(text) if count == 1 => Some(format_preview_line(text, 72)),
-                Some(text) => Some(format!(
-                    "{} (+{} more)",
-                    format_preview_line(text, 52),
-                    count - 1
-                )),
-                None => Some(format!(
-                    "{} question{}",
-                    count,
-                    if count == 1 { "" } else { "s" }
-                )),
-            };
+    if normalized_name == "question" {
+        let args = parsed
+            .as_ref()
+            .map(QuestionToolInput::from_value)
+            .unwrap_or_default();
+        if args.questions.is_empty() {
+            return None;
         }
+        let count = args.questions.len();
+        let first = args.questions.first().map(|q| q.question.trim());
+        return match first {
+            Some(text) if !text.is_empty() && count == 1 => Some(format_preview_line(text, 72)),
+            Some(text) if !text.is_empty() => Some(format!(
+                "{} (+{} more)",
+                format_preview_line(text, 52),
+                count - 1
+            )),
+            _ => Some(format!(
+                "{} question{}",
+                count,
+                if count == 1 { "" } else { "s" }
+            )),
+        };
     }
 
-    if matches!(tool_kind, Some(BuiltinToolName::TodoWrite)) {
-        if let Some(count) = object
-            .and_then(|value| value.get(todo_keys::TODOS))
-            .and_then(|value| value.as_array())
-            .map(Vec::len)
-        {
+    if matches!(normalized_name, "todowrite" | "todo_write") {
+        let args = parsed
+            .as_ref()
+            .map(TodoWriteToolInput::from_value)
+            .unwrap_or_default();
+        if !args.todos.is_empty() {
+            let count = args.todos.len();
             return Some(format!(
                 "Update {} todo{}",
                 count,
@@ -2082,38 +2196,43 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
         return Some("Update todos".to_string());
     }
 
-    if matches!(tool_kind, Some(BuiltinToolName::Skill)) {
-        if let Some(name) = parsed
-            .as_ref()
-            .and_then(|value| extract_string_key(value, &[tool_arg_keys::NAME]))
-        {
-            return Some(format!("\"{}\"", name));
+    if normalized_name == "skill" {
+        if let Some(value) = parsed.as_ref() {
+            let input = SkillToolInput::from_value(value);
+            if let Some(name) = input.name {
+                return Some(format!("\"{}\"", name));
+            }
         }
     }
 
-    if matches!(tool_kind, Some(BuiltinToolName::ApplyPatch)) {
+    if matches!(normalized_name, "apply_patch" | "applypatch") {
         return Some("Patch".to_string());
     }
 
-    if matches!(tool_kind, Some(BuiltinToolName::Lsp)) {
-        if let Some(operation) = parsed
-            .as_ref()
-            .and_then(|value| extract_string_key(value, &[tool_arg_keys::OPERATION]))
-        {
-            let target = parsed.as_ref().and_then(|value| {
-                extract_string_key(
-                    value,
-                    &[
-                        patch_keys::FILE_PATH,
-                        patch_keys::FILE_PATH_SNAKE,
-                        patch_keys::LEGACY_PATH,
-                    ],
-                )
-            });
-            return Some(match target {
-                Some(path) => format!("{} {}", operation, path),
-                None => operation,
-            });
+    if normalized_name == "lsp" {
+        if let Some(value) = parsed.as_ref() {
+            let input = LspToolInput::from_value(value);
+            if let Some(operation) = input.operation {
+                return Some(match input.file_path {
+                    Some(path) => format!("{} {}", operation, path),
+                    None => operation,
+                });
+            }
+        }
+    }
+
+    if matches!(normalized_name, "notebook_edit" | "notebookedit") {
+        if let Some(value) = parsed.as_ref() {
+            let input = NotebookEditToolInput::from_value(value);
+            let summary = match (input.notebook_path, input.edit_mode) {
+                (Some(path), Some(mode)) => format!("{} {}", mode, path),
+                (Some(path), None) => path,
+                (None, Some(mode)) => mode,
+                (None, None) => String::new(),
+            };
+            if !summary.trim().is_empty() {
+                return Some(summary);
+            }
         }
     }
 
@@ -2125,13 +2244,13 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
         format_primitive_arguments(
             value,
             &[
-                patch_keys::CONTENT,
-                patch_keys::NEW_STRING,
-                patch_keys::OLD_STRING,
+                "content",
+                "new_string",
+                "old_string",
                 "patch",
-                tool_arg_keys::PROMPT,
-                wire_fields::QUESTIONS,
-                todo_keys::TODOS,
+                "prompt",
+                "questions",
+                "todos",
             ],
         )
     }) {
@@ -2144,64 +2263,6 @@ fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<Strin
     } else {
         Some(format_preview_line(first, 84))
     }
-}
-
-fn extract_shell_command(value: &Value) -> Option<String> {
-    let object = value.as_object()?;
-    for key in [
-        tool_arg_keys::COMMAND,
-        tool_arg_keys::CMD,
-        tool_arg_keys::SCRIPT,
-        tool_arg_keys::INPUT,
-        output_keys::TEXT,
-    ] {
-        if let Some(command) = object.get(key).and_then(|v| v.as_str()) {
-            let trimmed = command.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
-        }
-    }
-    None
-}
-
-fn extract_path(value: &Value) -> Option<String> {
-    let object = value.as_object()?;
-    for key in [
-        patch_keys::LEGACY_PATH,
-        patch_keys::FILE_PATH_SNAKE,
-        patch_keys::FILE_PATH,
-        "file",
-        "filename",
-        patch_keys::FILEPATH,
-        "absolute_path",
-        "absolutePath",
-        "target",
-        "destination",
-        "to",
-        "from",
-    ] {
-        if let Some(path) = object.get(key).and_then(|v| v.as_str()) {
-            let trimmed = path.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
-        }
-    }
-    None
-}
-
-fn extract_string_key(value: &Value, keys: &[&str]) -> Option<String> {
-    let object = value.as_object()?;
-    for key in keys {
-        if let Some(content) = object.get(*key).and_then(|value| value.as_str()) {
-            let trimmed = content.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
-        }
-    }
-    None
 }
 
 fn format_primitive_arguments(
@@ -2280,16 +2341,16 @@ fn extract_jsonish_string_field(input: &str, field: &str) -> Option<String> {
 }
 
 fn extract_jsonish_path_from_raw(raw: &str) -> Option<String> {
-    let direct = extract_jsonish_string_field(raw, patch_keys::FILE_PATH_SNAKE)
-        .or_else(|| extract_jsonish_string_field(raw, patch_keys::FILE_PATH));
+    let direct = extract_jsonish_string_field(raw, "file_path")
+        .or_else(|| extract_jsonish_string_field(raw, "filePath"));
     if direct.is_some() {
         return direct;
     }
 
     if raw.contains("\\\"") {
         let de_escaped = raw.replace("\\\"", "\"");
-        return extract_jsonish_string_field(&de_escaped, patch_keys::FILE_PATH_SNAKE)
-            .or_else(|| extract_jsonish_string_field(&de_escaped, patch_keys::FILE_PATH));
+        return extract_jsonish_string_field(&de_escaped, "file_path")
+            .or_else(|| extract_jsonish_string_field(&de_escaped, "filePath"));
     }
 
     None
@@ -2439,21 +2500,16 @@ mod tests {
         format_read_summary, parse_markdown_checklist, parse_read_summary,
         parse_task_argument_summary, parse_write_summary, tool_argument_preview,
     };
-    use rocode_core::contracts::patch::{keys as patch_keys, FileChangeType};
-    use rocode_core::contracts::tools::BuiltinToolName;
 
     #[test]
     fn list_tool_preview_shows_path() {
-        let preview = tool_argument_preview(BuiltinToolName::Ls.as_str(), r#"{"path":"."}"#);
+        let preview = tool_argument_preview("ls", r#"{"path":"."}"#);
         assert_eq!(preview.as_deref(), Some("→ ."));
     }
 
     #[test]
     fn read_tool_preview_supports_file_path_keys() {
-        let preview = tool_argument_preview(
-            BuiltinToolName::Read.as_str(),
-            r#"{"file_path":"/tmp/a.txt"}"#,
-        );
+        let preview = tool_argument_preview("read", r#"{"file_path":"/tmp/a.txt"}"#);
         assert_eq!(preview.as_deref(), Some("→ /tmp/a.txt"));
     }
 
@@ -2465,8 +2521,7 @@ mod tests {
 
     #[test]
     fn apply_patch_preview_hides_patch_body() {
-        let preview =
-            tool_argument_preview(BuiltinToolName::ApplyPatch.as_str(), "*** Begin Patch\n...");
+        let preview = tool_argument_preview("apply_patch", "*** Begin Patch\n...");
         assert_eq!(preview.as_deref(), Some("Patch"));
     }
 
@@ -2483,28 +2538,28 @@ mod tests {
     #[test]
     fn batch_preview_shows_tool_count_and_names() {
         let args = r#"{"toolCalls":[{"tool":"read","parameters":{"file_path":"/tmp/a.txt"}},{"tool":"edit","parameters":{"file_path":"/tmp/b.txt"}},{"tool":"read","parameters":{"file_path":"/tmp/c.txt"}}]}"#;
-        let preview = tool_argument_preview(BuiltinToolName::Batch.as_str(), args);
+        let preview = tool_argument_preview("batch", args);
         assert_eq!(preview.as_deref(), Some("3 tools (read, edit)"));
     }
 
     #[test]
     fn batch_preview_with_no_names_shows_count_only() {
         let args = r#"{"toolCalls":[{},{}]}"#;
-        let preview = tool_argument_preview(BuiltinToolName::Batch.as_str(), args);
+        let preview = tool_argument_preview("batch", args);
         assert_eq!(preview.as_deref(), Some("2 tools"));
     }
 
     #[test]
     fn write_preview_recovers_path_from_jsonish_arguments() {
         let args = "{\"file_path\":\"t2.html\",\"content\":\"<!DOCTYPE html>\n<html";
-        let preview = tool_argument_preview(BuiltinToolName::Write.as_str(), args);
+        let preview = tool_argument_preview("write", args);
         assert_eq!(preview.as_deref(), Some("← t2.html"));
     }
 
     #[test]
     fn task_preview_uses_prompt_when_description_missing() {
         let args = r###"{"category":"quick","prompt":"## 1. TASK\nRedesign t2.html with stronger visual impact."}"###;
-        let preview = tool_argument_preview(BuiltinToolName::Task.as_str(), args);
+        let preview = tool_argument_preview("task", args);
         assert_eq!(
             preview.as_deref(),
             Some("quick task Redesign t2.html with stronger visual impact.")
@@ -2557,14 +2612,8 @@ mod tests {
         let theme = crate::theme::Theme::dark();
         let diff_content = "--- a/test.rs\n+++ b/test.rs\n@@ -1,3 +1,3 @@\n fn main() {\n-    println!(\"old\");\n+    println!(\"new\");\n }";
         let mut metadata = HashMap::new();
-        metadata.insert(
-            patch_keys::DIFF.to_string(),
-            serde_json::json!(diff_content),
-        );
-        metadata.insert(
-            patch_keys::FILEPATH.to_string(),
-            serde_json::json!("test.rs"),
-        );
+        metadata.insert("diff".to_string(), serde_json::json!(diff_content));
+        metadata.insert("filepath".to_string(), serde_json::json!("test.rs"));
         let mut tool_results = HashMap::new();
         tool_results.insert(
             "tc1".to_string(),
@@ -2578,7 +2627,7 @@ mod tests {
 
         let lines = render_tool_call(
             "tc1",
-            BuiltinToolName::Edit.as_str(),
+            "edit",
             r#"{"file_path":"test.rs","old_string":"old","new_string":"new"}"#,
             ToolState::Completed,
             &tool_results,
@@ -2618,40 +2667,22 @@ mod tests {
         let file2_diff = "--- a/bar.rs\n+++ b/bar.rs\n@@ -1 +1 @@\n-x\n+y";
         let mut metadata = HashMap::new();
         metadata.insert(
-            patch_keys::DIFF.to_string(),
+            "diff".to_string(),
             serde_json::json!(format!("{}\n{}", file1_diff, file2_diff)),
         );
         metadata.insert(
-            patch_keys::FILES.to_string(),
-            serde_json::Value::Array(vec![
-                serde_json::Value::Object(serde_json::Map::from_iter([
-                    (
-                        patch_keys::RELATIVE_PATH.to_string(),
-                        serde_json::json!("foo.rs"),
-                    ),
-                    (
-                        patch_keys::CHANGE_TYPE.to_string(),
-                        serde_json::json!(FileChangeType::Update.as_str()),
-                    ),
-                    (
-                        patch_keys::FILE_DIFF.to_string(),
-                        serde_json::json!(file1_diff),
-                    ),
-                ])),
-                serde_json::Value::Object(serde_json::Map::from_iter([
-                    (
-                        patch_keys::RELATIVE_PATH.to_string(),
-                        serde_json::json!("bar.rs"),
-                    ),
-                    (
-                        patch_keys::CHANGE_TYPE.to_string(),
-                        serde_json::json!(FileChangeType::Add.as_str()),
-                    ),
-                    (
-                        patch_keys::FILE_DIFF.to_string(),
-                        serde_json::json!(file2_diff),
-                    ),
-                ])),
+            "files".to_string(),
+            serde_json::json!([
+                {
+                    "relativePath": "foo.rs",
+                    "type": "update",
+                    "diff": file1_diff,
+                },
+                {
+                    "relativePath": "bar.rs",
+                    "type": "add",
+                    "diff": file2_diff,
+                }
             ]),
         );
         let mut tool_results = HashMap::new();
@@ -2667,7 +2698,7 @@ mod tests {
 
         let lines = render_tool_call(
             "tc1",
-            BuiltinToolName::ApplyPatch.as_str(),
+            "apply_patch",
             "",
             ToolState::Completed,
             &tool_results,
@@ -2701,10 +2732,7 @@ mod tests {
         let theme = crate::theme::Theme::dark();
         let diff_content = "--- /dev/null\n+++ b/new_file.txt\n@@ -0,0 +1,2 @@\n+line1\n+line2";
         let mut metadata = HashMap::new();
-        metadata.insert(
-            patch_keys::DIFF.to_string(),
-            serde_json::json!(diff_content),
-        );
+        metadata.insert("diff".to_string(), serde_json::json!(diff_content));
         let mut tool_results = HashMap::new();
         tool_results.insert(
             "tc1".to_string(),
@@ -2718,7 +2746,7 @@ mod tests {
 
         let lines = render_tool_call(
             "tc1",
-            BuiltinToolName::Write.as_str(),
+            "write",
             r#"{"file_path":"./new_file.txt","content":"line1\nline2"}"#,
             ToolState::Completed,
             &tool_results,

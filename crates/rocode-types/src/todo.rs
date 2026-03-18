@@ -67,7 +67,7 @@ impl std::fmt::Display for TodoPriority {
 pub fn parse_status(status: &str) -> TodoStatus {
     match status.to_lowercase().as_str() {
         "pending" => TodoStatus::Pending,
-        "in_progress" | "in progress" => TodoStatus::InProgress,
+        "in_progress" | "in-progress" | "in progress" => TodoStatus::InProgress,
         "completed" => TodoStatus::Completed,
         "cancelled" => TodoStatus::Cancelled,
         _ => TodoStatus::Pending,

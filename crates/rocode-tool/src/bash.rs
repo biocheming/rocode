@@ -11,6 +11,7 @@ use crate::{Metadata, Tool, ToolContext, ToolError, ToolResult};
 use rocode_core::process_registry::{global_registry, ProcessKind};
 use rocode_permission::BashArity;
 use rocode_plugin::{HookContext, HookEvent};
+use rocode_types::BashToolInput;
 
 const DEFAULT_TIMEOUT_MS: u64 = 2 * 60 * 1000;
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;
@@ -127,22 +128,16 @@ impl Tool for BashTool {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let command: String = args["command"]
-            .as_str()
-            .ok_or_else(|| ToolError::InvalidArguments("command is required".into()))?
-            .to_string();
+        let input = BashToolInput::from_value(&args);
 
-        let timeout_ms: u64 = args["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_MS);
-
-        let workdir: String = args["workdir"]
-            .as_str()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| ctx.directory.clone());
-
-        let description: String = args["description"]
-            .as_str()
-            .ok_or_else(|| ToolError::InvalidArguments("description is required".into()))?
-            .to_string();
+        let command = input
+            .command
+            .ok_or_else(|| ToolError::InvalidArguments("command is required".into()))?;
+        let timeout_ms = input.timeout.unwrap_or(DEFAULT_TIMEOUT_MS);
+        let workdir = input.workdir.unwrap_or_else(|| ctx.directory.clone());
+        let description = input
+            .description
+            .ok_or_else(|| ToolError::InvalidArguments("description is required".into()))?;
 
         let title = description.clone();
 
