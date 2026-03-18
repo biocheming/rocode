@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
@@ -242,41 +242,42 @@ impl Tool for ContextDocsTool {
     }
 
     fn parameters(&self) -> serde_json::Value {
-        let operations: Vec<&'static str> =
-            ContextDocsOperation::iter().map(ContextDocsOperation::as_str).collect();
+        let operations: Vec<&'static str> = ContextDocsOperation::iter()
+            .map(ContextDocsOperation::as_str)
+            .collect();
         serde_json::json!({
             "type": "object",
             "properties": {
-                "operation": {
+                (tool_arg_keys::OPERATION): {
                     "type": "string",
                     "enum": operations,
                     "description": "Docs-aware operation to execute"
                 },
-                "library": {
+                (tool_arg_keys::LIBRARY): {
                     "type": "string",
                     "description": "Human-facing library or product name for resolve_library"
                 },
-                "library_id": {
+                (tool_arg_keys::LIBRARY_ID): {
                     "type": "string",
                     "description": "Resolved docs source id for query_docs or get_page"
                 },
-                "query": {
+                (tool_arg_keys::QUERY): {
                     "type": "string",
                     "description": "Docs query text for query_docs"
                 },
-                "page_id": {
+                (tool_arg_keys::PAGE_ID): {
                     "type": "string",
                     "description": "Canonical page id for get_page"
                 },
-                "version": {
+                (tool_arg_keys::VERSION): {
                     "type": "string",
                     "description": "Optional version hint"
                 },
-                "source": {
+                (tool_arg_keys::SOURCE): {
                     "type": "string",
                     "description": "Optional source family hint"
                 },
-                "limit": {
+                (tool_arg_keys::LIMIT): {
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 20,
@@ -284,7 +285,7 @@ impl Tool for ContextDocsTool {
                     "description": "Maximum number of matches to return"
                 }
             },
-            "required": ["operation"]
+            "required": [tool_arg_keys::OPERATION]
         })
     }
 
@@ -297,28 +298,34 @@ impl Tool for ContextDocsTool {
             serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
         validate_input(&input)?;
 
-        let mut permission =
-            crate::PermissionRequest::new(BuiltinToolName::ContextDocs.as_str())
-            .with_metadata("operation", serde_json::json!(input.operation.as_str()))
-            .with_metadata("limit", serde_json::json!(input.limit))
+        let mut permission = crate::PermissionRequest::new(BuiltinToolName::ContextDocs.as_str())
+            .with_metadata(
+                tool_arg_keys::OPERATION,
+                serde_json::json!(input.operation.as_str()),
+            )
+            .with_metadata(tool_arg_keys::LIMIT, serde_json::json!(input.limit))
             .always_allow();
         if let Some(library) = input.library.as_ref() {
-            permission = permission.with_metadata("library", serde_json::json!(library));
+            permission =
+                permission.with_metadata(tool_arg_keys::LIBRARY, serde_json::json!(library));
         }
         if let Some(library_id) = input.library_id.as_ref() {
-            permission = permission.with_metadata("library_id", serde_json::json!(library_id));
+            permission =
+                permission.with_metadata(tool_arg_keys::LIBRARY_ID, serde_json::json!(library_id));
         }
         if let Some(query) = input.query.as_ref() {
-            permission = permission.with_metadata("query", serde_json::json!(query));
+            permission = permission.with_metadata(tool_arg_keys::QUERY, serde_json::json!(query));
         }
         if let Some(page_id) = input.page_id.as_ref() {
-            permission = permission.with_metadata("page_id", serde_json::json!(page_id));
+            permission =
+                permission.with_metadata(tool_arg_keys::PAGE_ID, serde_json::json!(page_id));
         }
         if let Some(version) = input.version.as_ref() {
-            permission = permission.with_metadata("version", serde_json::json!(version));
+            permission =
+                permission.with_metadata(tool_arg_keys::VERSION, serde_json::json!(version));
         }
         if let Some(source) = input.source.as_ref() {
-            permission = permission.with_metadata("source", serde_json::json!(source));
+            permission = permission.with_metadata(tool_arg_keys::SOURCE, serde_json::json!(source));
         }
         ctx.ask_permission(permission).await?;
 
@@ -448,14 +455,23 @@ fn execute_resolve_library(
 
     let mut metadata = Metadata::new();
     metadata.insert(
-        "operation".to_string(),
+        tool_arg_keys::OPERATION.to_string(),
         serde_json::json!(ContextDocsOperation::ResolveLibrary.as_str()),
     );
-    metadata.insert("library".to_string(), serde_json::json!(requested_library));
-    metadata.insert("matches".to_string(), serde_json::json!(matches));
-    metadata.insert("truncated".to_string(), serde_json::json!(truncated));
     metadata.insert(
-        "registry_path".to_string(),
+        tool_arg_keys::LIBRARY.to_string(),
+        serde_json::json!(requested_library),
+    );
+    metadata.insert(
+        tool_arg_keys::MATCHES.to_string(),
+        serde_json::json!(matches),
+    );
+    metadata.insert(
+        tool_arg_keys::TRUNCATED.to_string(),
+        serde_json::json!(truncated),
+    );
+    metadata.insert(
+        tool_arg_keys::REGISTRY_PATH.to_string(),
         serde_json::json!(registry_path.to_string_lossy().to_string()),
     );
 
@@ -525,19 +541,25 @@ fn execute_query_docs(
 
     let mut metadata = Metadata::new();
     metadata.insert(
-        "operation".to_string(),
+        tool_arg_keys::OPERATION.to_string(),
         serde_json::json!(ContextDocsOperation::QueryDocs.as_str()),
     );
     metadata.insert(
-        "library_id".to_string(),
+        tool_arg_keys::LIBRARY_ID.to_string(),
         serde_json::json!(entry.library_id),
     );
-    metadata.insert("query".to_string(), serde_json::json!(query));
-    metadata.insert("results".to_string(), serde_json::json!(hits));
-    metadata.insert("backend".to_string(), serde_json::json!(backend.as_str()));
-    metadata.insert("truncated".to_string(), serde_json::json!(truncated));
+    metadata.insert(tool_arg_keys::QUERY.to_string(), serde_json::json!(query));
+    metadata.insert(tool_arg_keys::RESULTS.to_string(), serde_json::json!(hits));
     metadata.insert(
-        "registry_path".to_string(),
+        tool_arg_keys::BACKEND.to_string(),
+        serde_json::json!(backend.as_str()),
+    );
+    metadata.insert(
+        tool_arg_keys::TRUNCATED.to_string(),
+        serde_json::json!(truncated),
+    );
+    metadata.insert(
+        tool_arg_keys::REGISTRY_PATH.to_string(),
         serde_json::json!(registry_path.to_string_lossy().to_string()),
     );
 
@@ -616,18 +638,24 @@ fn execute_get_page(
 
     let mut metadata = Metadata::new();
     metadata.insert(
-        "operation".to_string(),
+        tool_arg_keys::OPERATION.to_string(),
         serde_json::json!(ContextDocsOperation::GetPage.as_str()),
     );
     metadata.insert(
-        "library_id".to_string(),
+        tool_arg_keys::LIBRARY_ID.to_string(),
         serde_json::json!(entry.library_id),
     );
-    metadata.insert("page".to_string(), serde_json::json!(view));
-    metadata.insert("backend".to_string(), serde_json::json!(backend.as_str()));
-    metadata.insert("truncated".to_string(), serde_json::json!(truncated));
+    metadata.insert(tool_arg_keys::PAGE.to_string(), serde_json::json!(view));
     metadata.insert(
-        "registry_path".to_string(),
+        tool_arg_keys::BACKEND.to_string(),
+        serde_json::json!(backend.as_str()),
+    );
+    metadata.insert(
+        tool_arg_keys::TRUNCATED.to_string(),
+        serde_json::json!(truncated),
+    );
+    metadata.insert(
+        tool_arg_keys::REGISTRY_PATH.to_string(),
         serde_json::json!(registry_path.to_string_lossy().to_string()),
     );
 
@@ -748,7 +776,7 @@ fn validate_registered_library(
     registry_path: &Path,
 ) -> Result<(), ToolError> {
     validate_non_empty(
-        "library_id",
+        tool_arg_keys::LIBRARY_ID,
         &entry.library_id,
         &format!("registry `{}`", registry_path.display()),
     )?;
@@ -844,7 +872,7 @@ pub(crate) fn validate_docs_index_summary(
 ) -> Result<ContextDocsIndexValidationSummary, ToolError> {
     if let Some(index_library_id) = index.library_id.as_deref() {
         validate_non_empty(
-            "library_id",
+            tool_arg_keys::LIBRARY_ID,
             index_library_id,
             &format!("docs index `{}`", index_path.display()),
         )?;
@@ -901,15 +929,15 @@ fn validate_docs_page(page: &DocsPage, index_path: &Path) -> Result<(), ToolErro
         index_path.display(),
         page.page_id
     );
-    validate_non_empty("page_id", &page.page_id, &context)?;
+    validate_non_empty(tool_arg_keys::PAGE_ID, &page.page_id, &context)?;
     validate_non_empty("title", &page.title, &context)?;
-    validate_non_empty("url", &page.url, &context)?;
+    validate_non_empty(tool_arg_keys::URL, &page.url, &context)?;
     validate_non_empty("content", &page.content, &context)?;
     if let Some(summary) = page.summary.as_deref() {
         validate_non_empty("summary", summary, &context)?;
     }
     if let Some(version) = page.version.as_deref() {
-        validate_non_empty("version", version, &context)?;
+        validate_non_empty(tool_arg_keys::VERSION, version, &context)?;
     }
     for heading in &page.headings {
         validate_non_empty("heading", heading, &context)?;

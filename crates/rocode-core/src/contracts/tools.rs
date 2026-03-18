@@ -21,6 +21,22 @@ pub mod arg_keys {
     pub const PATTERN: &str = "pattern";
     pub const URL: &str = "url";
     pub const QUERY: &str = "query";
+    pub const PATH: &str = "path";
+    pub const REPO: &str = "repo";
+    pub const COMMIT: &str = "commit";
+    pub const NUMBER: &str = "number";
+    pub const STATE: &str = "state";
+    pub const LANGUAGE: &str = "language";
+    pub const BRANCH: &str = "branch";
+    pub const DEPTH: &str = "depth";
+    pub const LOCAL_ALIAS: &str = "local_alias";
+    pub const LINE_START: &str = "line_start";
+    pub const LINE_END: &str = "line_end";
+    pub const VERSION: &str = "version";
+    pub const SOURCE: &str = "source";
+    pub const LIBRARY: &str = "library";
+    pub const LIBRARY_ID: &str = "library_id";
+    pub const PAGE_ID: &str = "page_id";
     pub const OPERATION: &str = "operation";
     pub const OFFSET: &str = "offset";
     pub const LIMIT: &str = "limit";
@@ -46,6 +62,25 @@ pub mod arg_keys {
     pub const NAME: &str = "name";
     pub const TOOL_NAME: &str = "tool_name";
     pub const SKILL: &str = "skill";
+    pub const PAGE: &str = "page";
+    pub const MATCHES: &str = "matches";
+    pub const TRUNCATED: &str = "truncated";
+    pub const REGISTRY_PATH: &str = "registry_path";
+    pub const BACKEND: &str = "backend";
+    pub const STATUS: &str = "status";
+    pub const COUNT: &str = "count";
+    pub const HEAD: &str = "head";
+    pub const COMMITS: &str = "commits";
+    pub const BLAME: &str = "blame";
+    pub const REPO_ROOT: &str = "repo_root";
+    pub const SESSION: &str = "session";
+    pub const FORMAT: &str = "format";
+    pub const PARENT_DIR: &str = "parentDir";
+    pub const REQUESTED_CURSOR: &str = "requestedCursor";
+    pub const BUFFER_START: &str = "bufferStart";
+    pub const START_CURSOR: &str = "startCursor";
+    pub const END_CURSOR: &str = "endCursor";
+    pub const TRUNCATED_REPLAY: &str = "truncatedReplay";
 }
 
 /// Canonical built-in tool identifier strings.

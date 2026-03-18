@@ -1,14 +1,15 @@
 use async_trait::async_trait;
 use base64::Engine;
 use reqwest::{header, Client, StatusCode};
-use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use strum_macros::{Display, EnumString, IntoStaticStr};
+use strum::IntoEnumIterator;
+use strum_macros::{Display, EnumIter, EnumString, IntoStaticStr};
 
 use crate::{Metadata, PermissionRequest, Tool, ToolContext, ToolError, ToolResult};
 
@@ -52,6 +53,7 @@ GitHub-native platform operations use the GitHub API:
     Serialize,
     Deserialize,
     Display,
+    EnumIter,
     EnumString,
     IntoStaticStr,
 )]
@@ -1602,54 +1604,42 @@ impl Tool for GitHubResearchTool {
     }
 
     fn parameters(&self) -> serde_json::Value {
+        let operations: Vec<&'static str> = GitHubResearchOperation::iter()
+            .map(GitHubResearchOperation::as_str)
+            .collect();
         serde_json::json!({
             "type": "object",
             "properties": {
-                "operation": {
+                (tool_arg_keys::OPERATION): {
                     "type": "string",
-                    "enum": [
-                        "search_code",
-                        "search_issues",
-                        "search_prs",
-                        "view_issue",
-                        "view_pr",
-                        "view_pr_files",
-                        "get_head_sha",
-                        "build_permalink",
-                        "read_file",
-                        "clone_repo",
-                        "list_releases",
-                        "list_tags",
-                        "git_log",
-                        "git_blame"
-                    ],
+                    "enum": operations,
                     "description": "GitHub research operation to execute"
                 },
-                "repo": {
+                (tool_arg_keys::REPO): {
                     "type": "string",
                     "description": "GitHub repository in owner/name format"
                 },
-                "query": {
+                (tool_arg_keys::QUERY): {
                     "type": "string",
                     "description": "Search query for search_code, search_issues, or search_prs"
                 },
-                "number": {
+                (tool_arg_keys::NUMBER): {
                     "type": "integer",
                     "description": "Issue or pull request number for view_issue, view_pr, or view_pr_files"
                 },
-                "limit": {
+                (tool_arg_keys::LIMIT): {
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 50,
                     "default": 10,
                     "description": "Maximum number of results or entries to return"
                 },
-                "state": {
+                (tool_arg_keys::STATE): {
                     "type": "string",
                     "enum": ["open", "closed", "all"],
                     "description": "Optional state filter for search_issues and search_prs"
                 },
-                "language": {
+                (tool_arg_keys::LANGUAGE): {
                     "type": "string",
                     "description": "Optional language filter for search_code"
                 },
@@ -1663,7 +1653,7 @@ impl Tool for GitHubResearchTool {
                     "default": true,
                     "description": "Whether to include comments for view_issue and view_pr (snake_case alias)"
                 },
-                "path": {
+                (tool_arg_keys::PATH): {
                     "type": "string",
                     "description": "Repository-relative file path for build_permalink, read_file, git_log filtering, or git_blame"
                 },
@@ -1671,7 +1661,7 @@ impl Tool for GitHubResearchTool {
                     "type": "string",
                     "description": "Optional commit SHA used to pin get_head_sha, build_permalink, read_file, clone_repo, git_log, or git_blame"
                 },
-                "branch": {
+                (tool_arg_keys::BRANCH): {
                     "type": "string",
                     "description": "Optional branch name used when sha is not provided"
                 },
@@ -1687,12 +1677,12 @@ impl Tool for GitHubResearchTool {
                     "type": "integer",
                     "description": "Optional ending line for build_permalink or git_blame"
                 },
-                "depth": {
+                (tool_arg_keys::DEPTH): {
                     "type": "integer",
                     "description": "Optional clone/fetch depth for local git-backed operations"
                 }
             },
-            "required": ["operation", "repo"]
+            "required": [tool_arg_keys::OPERATION, tool_arg_keys::REPO]
         })
     }
 
@@ -1708,42 +1698,49 @@ impl Tool for GitHubResearchTool {
 
         let mut permission = PermissionRequest::new(BuiltinToolName::GitHubResearch.as_str())
             .with_pattern(&input.repo)
-            .with_metadata("operation", serde_json::json!(input.operation.as_str()))
-            .with_metadata("repo", serde_json::json!(&input.repo))
-            .with_metadata("limit", serde_json::json!(input.limit))
+            .with_metadata(
+                tool_arg_keys::OPERATION,
+                serde_json::json!(input.operation.as_str()),
+            )
+            .with_metadata(tool_arg_keys::REPO, serde_json::json!(&input.repo))
+            .with_metadata(tool_arg_keys::LIMIT, serde_json::json!(input.limit))
             .always_allow();
         if let Some(query) = input.query.as_ref() {
-            permission = permission.with_metadata("query", serde_json::json!(query));
+            permission = permission.with_metadata(tool_arg_keys::QUERY, serde_json::json!(query));
         }
         if let Some(number) = input.number {
-            permission = permission.with_metadata("number", serde_json::json!(number));
+            permission = permission.with_metadata(tool_arg_keys::NUMBER, serde_json::json!(number));
         }
         if let Some(state) = input.state.as_ref() {
-            permission = permission.with_metadata("state", serde_json::json!(state));
+            permission = permission.with_metadata(tool_arg_keys::STATE, serde_json::json!(state));
         }
         if let Some(language) = input.language.as_ref() {
-            permission = permission.with_metadata("language", serde_json::json!(language));
+            permission =
+                permission.with_metadata(tool_arg_keys::LANGUAGE, serde_json::json!(language));
         }
         if let Some(path) = input.path.as_ref() {
-            permission = permission.with_metadata("path", serde_json::json!(path));
+            permission = permission.with_metadata(tool_arg_keys::PATH, serde_json::json!(path));
         }
         if let Some(sha) = input.sha.as_ref() {
             permission = permission.with_metadata("sha", serde_json::json!(sha));
         }
         if let Some(branch) = input.branch.as_ref() {
-            permission = permission.with_metadata("branch", serde_json::json!(branch));
+            permission = permission.with_metadata(tool_arg_keys::BRANCH, serde_json::json!(branch));
         }
         if let Some(depth) = input.depth {
-            permission = permission.with_metadata("depth", serde_json::json!(depth));
+            permission = permission.with_metadata(tool_arg_keys::DEPTH, serde_json::json!(depth));
         }
         if let Some(local_alias) = input.local_alias.as_ref() {
-            permission = permission.with_metadata("local_alias", serde_json::json!(local_alias));
+            permission = permission
+                .with_metadata(tool_arg_keys::LOCAL_ALIAS, serde_json::json!(local_alias));
         }
         if let Some(line_start) = input.line_start {
-            permission = permission.with_metadata("line_start", serde_json::json!(line_start));
+            permission =
+                permission.with_metadata(tool_arg_keys::LINE_START, serde_json::json!(line_start));
         }
         if let Some(line_end) = input.line_end {
-            permission = permission.with_metadata("line_end", serde_json::json!(line_end));
+            permission =
+                permission.with_metadata(tool_arg_keys::LINE_END, serde_json::json!(line_end));
         }
         ctx.ask_permission(permission).await?;
 
@@ -1946,11 +1943,17 @@ fn limit_patch(patch: String) -> String {
 fn base_metadata(input: &GitHubResearchInput) -> Metadata {
     let mut metadata = Metadata::new();
     metadata.insert(
-        "operation".to_string(),
+        tool_arg_keys::OPERATION.to_string(),
         serde_json::json!(input.operation.as_str()),
     );
-    metadata.insert("repo".to_string(), serde_json::json!(&input.repo));
-    metadata.insert("limit".to_string(), serde_json::json!(input.limit));
+    metadata.insert(
+        tool_arg_keys::REPO.to_string(),
+        serde_json::json!(&input.repo),
+    );
+    metadata.insert(
+        tool_arg_keys::LIMIT.to_string(),
+        serde_json::json!(input.limit),
+    );
     metadata.insert(
         "include_comments".to_string(),
         serde_json::json!(input.include_comments),
@@ -2479,7 +2482,7 @@ fn sanitize_cache_component(value: &str) -> String {
         }
     }
     if out.is_empty() {
-        "repo".to_string()
+        tool_arg_keys::REPO.to_string()
     } else {
         out
     }

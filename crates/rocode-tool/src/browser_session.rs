@@ -1,10 +1,13 @@
 use async_trait::async_trait;
 use regex::Regex;
 use reqwest::Client;
-use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
+use rocode_core::contracts::wire::aliases as wire_aliases;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
+use strum::IntoEnumIterator;
+use strum_macros::{Display, EnumIter, EnumString, IntoStaticStr};
 use tokio::sync::RwLock;
 use url::Url;
 
@@ -25,14 +28,33 @@ Phase 1 operations:
 
 This is not a JS browser. It is the single authority for stateful web page navigation in ROCode."#;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Display,
+    EnumIter,
+    EnumString,
+    IntoStaticStr,
+)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 enum BrowserSessionOperation {
     Start,
     Visit,
     Read,
     Status,
     Terminate,
+}
+
+impl BrowserSessionOperation {
+    fn as_str(self) -> &'static str {
+        self.into()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -236,7 +258,7 @@ impl BrowserSessionTool {
         Ok(ToolResult {
             title: "Browser Session Started".to_string(),
             output: format!("Started browser session {}.", session.id),
-            metadata: session_metadata("start", &session),
+            metadata: session_metadata(BrowserSessionOperation::Start, &session),
             truncated: false,
         })
     }
@@ -252,7 +274,7 @@ impl BrowserSessionTool {
         ctx.ask_permission(
             PermissionRequest::new(BuiltinToolName::WebFetch.as_str())
                 .with_pattern(target_url.as_str())
-                .with_metadata("url", serde_json::json!(target_url.as_str()))
+                .with_metadata(tool_arg_keys::URL, serde_json::json!(target_url.as_str()))
                 .always_allow(),
         )
         .await?;
@@ -265,8 +287,11 @@ impl BrowserSessionTool {
         }
         let session_view = session.view().await;
         let output = render_visit_output(&snapshot);
-        let mut metadata = session_metadata("visit", &session_view);
-        metadata.insert("page".to_string(), serde_json::to_value(&snapshot).unwrap());
+        let mut metadata = session_metadata(BrowserSessionOperation::Visit, &session_view);
+        metadata.insert(
+            tool_arg_keys::PAGE.to_string(),
+            serde_json::to_value(&snapshot).unwrap(),
+        );
         Ok(ToolResult {
             title: format!("Browser Visit: {}", snapshot.url),
             output,
@@ -284,9 +309,15 @@ impl BrowserSessionTool {
             ToolError::ExecutionError("browser session has no current page".to_string())
         })?;
         let output = render_page(page, &input.format)?;
-        let mut metadata = session_metadata("read", &session_view);
-        metadata.insert("page".to_string(), serde_json::to_value(page).unwrap());
-        metadata.insert("format".to_string(), serde_json::json!(input.format));
+        let mut metadata = session_metadata(BrowserSessionOperation::Read, &session_view);
+        metadata.insert(
+            tool_arg_keys::PAGE.to_string(),
+            serde_json::to_value(page).unwrap(),
+        );
+        metadata.insert(
+            tool_arg_keys::FORMAT.to_string(),
+            serde_json::json!(input.format),
+        );
         Ok(ToolResult {
             title: format!("Browser Read: {}", page.url),
             output,
@@ -306,7 +337,7 @@ impl BrowserSessionTool {
                 session_view.id,
                 session_view.current_url.as_deref().unwrap_or("<none>")
             ),
-            metadata: session_metadata("status", &session_view),
+            metadata: session_metadata(BrowserSessionOperation::Status, &session_view),
             truncated: false,
         })
     }
@@ -317,7 +348,7 @@ impl BrowserSessionTool {
         Ok(ToolResult {
             title: "Browser Session Terminated".to_string(),
             output: format!("Removed browser session {}.", session.id),
-            metadata: session_metadata("terminate", &session),
+            metadata: session_metadata(BrowserSessionOperation::Terminate, &session),
             truncated: false,
         })
     }
@@ -340,14 +371,17 @@ impl Tool for BrowserSessionTool {
     }
 
     fn parameters(&self) -> serde_json::Value {
+        let operations: Vec<&'static str> = BrowserSessionOperation::iter()
+            .map(BrowserSessionOperation::as_str)
+            .collect();
         serde_json::json!({
             "type": "object",
             "properties": {
-                "operation": {
+                (tool_arg_keys::OPERATION): {
                     "type": "string",
-                    "enum": ["start", "visit", "read", "status", "terminate"]
+                    "enum": operations
                 },
-                "session_id": {
+                (wire_aliases::SESSION_ID_SNAKE): {
                     "type": "string",
                     "description": "Existing browser session id"
                 },
@@ -355,11 +389,11 @@ impl Tool for BrowserSessionTool {
                     "type": "string",
                     "description": "Optional absolute base URL for relative navigation"
                 },
-                "url": {
+                (tool_arg_keys::URL): {
                     "type": "string",
                     "description": "Absolute or relative target URL for visit"
                 },
-                "path": {
+                (tool_arg_keys::PATH): {
                     "type": "string",
                     "description": "Alias for a relative or absolute target used by visit"
                 },
@@ -372,7 +406,7 @@ impl Tool for BrowserSessionTool {
                     "type": "string",
                     "description": "Optional browser user agent for start"
                 },
-                "format": {
+                (tool_arg_keys::FORMAT): {
                     "type": "string",
                     "enum": ["markdown", "text", "html"],
                     "default": "markdown",
@@ -384,7 +418,7 @@ impl Tool for BrowserSessionTool {
                     "description": "Optional session request timeout in seconds"
                 }
             },
-            "required": ["operation"]
+            "required": [tool_arg_keys::OPERATION]
         })
     }
 
@@ -642,11 +676,14 @@ fn parse_set_cookie_headers<'a>(values: impl Iterator<Item = &'a str>) -> Vec<(S
     cookies
 }
 
-fn session_metadata(operation: &str, session: &BrowserSessionView) -> Metadata {
+fn session_metadata(operation: BrowserSessionOperation, session: &BrowserSessionView) -> Metadata {
     let mut metadata = Metadata::new();
-    metadata.insert("operation".to_string(), serde_json::json!(operation));
     metadata.insert(
-        "session".to_string(),
+        tool_arg_keys::OPERATION.to_string(),
+        serde_json::json!(operation.as_str()),
+    );
+    metadata.insert(
+        tool_arg_keys::SESSION.to_string(),
         serde_json::to_value(session).unwrap(),
     );
     metadata

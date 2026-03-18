@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use rocode_core::contracts::attachments::keys as attachment_keys;
 use rocode_core::contracts::patch::keys as patch_keys;
-use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::permission::keys as permission_keys;
+use rocode_core::contracts::task::metadata_keys as task_metadata_keys;
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
+use rocode_core::contracts::wire::aliases as wire_aliases;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -82,14 +85,23 @@ impl MediaInspectTool {
         let result_text = ctx.do_prompt_subsession(session_id.clone(), prompt).await?;
 
         let mut metadata = Metadata::new();
-        metadata.insert("agent".to_string(), serde_json::json!("media-reader"));
-        metadata.insert("sessionId".to_string(), serde_json::json!(session_id));
+        metadata.insert(
+            tool_arg_keys::AGENT.to_string(),
+            serde_json::json!("media-reader"),
+        );
+        metadata.insert(
+            wire_aliases::SESSION_ID_CAMEL.to_string(),
+            serde_json::json!(session_id),
+        );
         metadata.insert(
             patch_keys::FILE_PATH.to_string(),
             serde_json::json!(resolved_path.to_string_lossy().to_string()),
         );
         if let Some(model) = preferred_model {
-            metadata.insert("model".to_string(), serde_json::json!(model));
+            metadata.insert(
+                task_metadata_keys::MODEL.to_string(),
+                serde_json::json!(model),
+            );
         }
         if let Some(question) = input
             .question
@@ -97,7 +109,10 @@ impl MediaInspectTool {
             .map(|q| q.trim())
             .filter(|q| !q.is_empty())
         {
-            metadata.insert("question".to_string(), serde_json::json!(question));
+            metadata.insert(
+                tool_arg_keys::QUESTION.to_string(),
+                serde_json::json!(question),
+            );
         }
         if let Some(preflight) = preflight {
             metadata.insert(
@@ -152,12 +167,12 @@ impl Tool for MediaInspectTool {
                     "minLength": 1,
                     "description": "Absolute path or session-relative local media file path"
                 },
-                "question": {
+                (tool_arg_keys::QUESTION): {
                     "type": "string",
                     "description": "Optional question to answer about the media file"
                 }
             },
-            "required": ["file_path"]
+            "required": [patch_keys::FILE_PATH_SNAKE]
         })
     }
 
@@ -172,10 +187,14 @@ impl Tool for MediaInspectTool {
 
         let mut permission = PermissionRequest::new(BuiltinToolName::MediaInspect.as_str())
             .with_pattern(&input.file_path)
-            .with_metadata(patch_keys::FILE_PATH_SNAKE, serde_json::json!(&input.file_path))
+            .with_metadata(
+                patch_keys::FILE_PATH_SNAKE,
+                serde_json::json!(&input.file_path),
+            )
             .always_allow();
         if let Some(question) = input.question.as_ref() {
-            permission = permission.with_metadata("question", serde_json::json!(question));
+            permission =
+                permission.with_metadata(permission_keys::QUESTION, serde_json::json!(question));
         }
         ctx.ask_permission(permission).await?;
 

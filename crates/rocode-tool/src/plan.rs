@@ -1,5 +1,11 @@
 use async_trait::async_trait;
-use rocode_core::contracts::{output_blocks::MessageRoleWire, tools::BuiltinToolName, wire};
+use rocode_core::contracts::{
+    output_blocks::MessageRoleWire,
+    session::MessagePartTypeWire,
+    task::metadata_keys as task_metadata_keys,
+    tools::{arg_keys as tool_arg_keys, BuiltinToolName},
+    wire::{self, aliases as wire_aliases},
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -16,7 +22,6 @@ pub struct PlanEnterTool;
 pub struct PlanExitTool;
 
 const PLAN_FILE: &str = "PLAN.md";
-const MESSAGE_PART_TYPE_TEXT: &str = "text";
 
 /// Create a user message and a synthetic text part via the ToolContext callbacks,
 /// matching the TS `Session.updateMessage()` + `Session.updatePart()` pattern.
@@ -39,7 +44,7 @@ async fn create_user_message_with_part(
     });
     user_msg[wire::keys::SESSION_ID] = serde_json::json!(ctx.session_id);
     if let Some(ref m) = model {
-        user_msg["model"] = serde_json::json!(m);
+        user_msg[task_metadata_keys::MODEL] = serde_json::json!(m);
     }
 
     // Persist the message (mirrors TS Session.updateMessage)
@@ -48,7 +53,7 @@ async fn create_user_message_with_part(
     // Build the synthetic text part matching the TS MessageV2.TextPart shape
     let mut text_part = serde_json::json!({
         "id": part_id,
-        "type": MESSAGE_PART_TYPE_TEXT,
+        "type": MessagePartTypeWire::Text.as_str(),
         "text": text,
         "synthetic": true,
     });
@@ -132,10 +137,13 @@ impl Tool for PlanEnterTool {
             .await?;
 
         let mut metadata = Metadata::new();
-        metadata.insert("agent".to_string(), serde_json::json!("plan"));
-        metadata.insert("session_id".to_string(), serde_json::json!(ctx.session_id));
+        metadata.insert(tool_arg_keys::AGENT.to_string(), serde_json::json!("plan"));
+        metadata.insert(
+            wire_aliases::SESSION_ID_SNAKE.to_string(),
+            serde_json::json!(ctx.session_id),
+        );
         if let Some(ref m) = model {
-            metadata.insert("model".to_string(), serde_json::json!(m));
+            metadata.insert(task_metadata_keys::MODEL.to_string(), serde_json::json!(m));
         }
 
         Ok(ToolResult {
@@ -221,10 +229,13 @@ impl Tool for PlanExitTool {
             .await?;
 
         let mut metadata = Metadata::new();
-        metadata.insert("agent".to_string(), serde_json::json!("build"));
-        metadata.insert("session_id".to_string(), serde_json::json!(ctx.session_id));
+        metadata.insert(tool_arg_keys::AGENT.to_string(), serde_json::json!("build"));
+        metadata.insert(
+            wire_aliases::SESSION_ID_SNAKE.to_string(),
+            serde_json::json!(ctx.session_id),
+        );
         if let Some(ref m) = model {
-            metadata.insert("model".to_string(), serde_json::json!(m));
+            metadata.insert(task_metadata_keys::MODEL.to_string(), serde_json::json!(m));
         }
 
         Ok(ToolResult {
