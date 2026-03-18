@@ -13,6 +13,7 @@ export interface Session {
 export interface Provider {
   id: string;
   name: string;
+  base?: string;
   base_url?: string;
   models?: Model[];
   [key: string]: unknown;

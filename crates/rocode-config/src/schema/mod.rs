@@ -667,6 +667,22 @@ pub struct ProviderConfig {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// Inherit models/default settings from another provider id.
+    ///
+    /// This enables creating multiple provider "variants" that share the built-in
+    /// model catalogue (and protocol wiring) without duplicating model entries.
+    #[serde(
+        alias = "baseProvider",
+        alias = "base_provider",
+        alias = "baseProviderId",
+        alias = "base_provider_id",
+        alias = "cloneOf",
+        alias = "clone_of",
+        alias = "inherits",
+        alias = "from",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub base: Option<String>,
     #[serde(
         alias = "apiKey",
         alias = "apikey",

@@ -49,6 +49,17 @@ export const ProviderSection: Component = () => {
                   readOnly
                 />
               </div>
+              <Show when={provider()?.base}>
+                <div class={styles.field}>
+                  <label class={styles.fieldLabel}>Base Provider</label>
+                  <input
+                    class={styles.fieldInput}
+                    type="text"
+                    value={String(provider()?.base ?? "")}
+                    readOnly
+                  />
+                </div>
+              </Show>
               <Show when={provider()?.base_url}>
                 <div class={styles.field}>
                   <label class={styles.fieldLabel}>Base URL</label>

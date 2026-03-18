@@ -386,6 +386,7 @@ impl DeepMerge for ModelVariantConfig {
 impl DeepMerge for ProviderConfig {
     fn deep_merge(&mut self, other: Self) {
         merge_option_replace(&mut self.name, other.name);
+        merge_option_replace(&mut self.base, other.base);
         merge_option_replace(&mut self.api_key, other.api_key);
         merge_option_replace(&mut self.base_url, other.base_url);
         merge_option_map_deep_values(&mut self.models, other.models);

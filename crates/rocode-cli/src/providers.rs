@@ -148,6 +148,7 @@ fn provider_to_bootstrap(provider: &rocode_config::ProviderConfig) -> BootstrapC
 
     BootstrapConfigProvider {
         name: provider.name.clone(),
+        base: provider.base.clone(),
         api: provider.base_url.clone(),
         npm: provider.npm.clone(),
         env: provider.env.clone(),

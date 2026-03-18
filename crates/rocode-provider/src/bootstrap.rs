@@ -205,6 +205,10 @@ pub struct ProviderState {
     pub env: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
+    /// When set, this provider is a "variant" that inherits defaults/models
+    /// from another provider ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_id: Option<String>,
     pub options: HashMap<String, serde_json::Value>,
     pub models: HashMap<String, ProviderModel>,
 }
@@ -1072,6 +1076,7 @@ pub fn from_models_dev_provider(provider: &ModelsProviderInfo) -> ProviderState 
         name: provider.name.clone(),
         env: provider.env.clone(),
         key: None,
+        base_id: None,
         options: HashMap::new(),
         models,
     }
@@ -1161,6 +1166,13 @@ pub struct ConfigModelProvider {
 pub struct ConfigProvider {
     #[serde(default)]
     pub name: Option<String>,
+    /// When set, this provider inherits models/defaults from another provider ID.
+    ///
+    /// This enables creating multiple provider "variants" (e.g. `openai-us`,
+    /// `openai-cn`) that reuse the built-in model catalogue and protocol wiring
+    /// from `openai`, while overriding credentials and base URLs.
+    #[serde(default)]
+    pub base: Option<String>,
     #[serde(default)]
     pub env: Option<Vec<String>>,
     #[serde(default)]
@@ -1249,49 +1261,176 @@ impl ProviderBootstrapState {
             }
         };
 
-        // Extend database from config providers
-        for (provider_id, cfg_provider) in &config.providers {
-            let existing = database.get(provider_id);
-            let mut parsed = ProviderState {
-                id: provider_id.clone(),
-                name: cfg_provider
-                    .name
-                    .clone()
-                    .or_else(|| existing.map(|e| e.name.clone()))
-                    .unwrap_or_else(|| provider_id.clone()),
-                env: cfg_provider
-                    .env
-                    .clone()
-                    .or_else(|| existing.map(|e| e.env.clone()))
-                    .unwrap_or_default(),
-                options: merge_json_maps(
-                    existing.map(|e| &e.options).unwrap_or(&HashMap::new()),
-                    cfg_provider.options.as_ref().unwrap_or(&HashMap::new()),
-                ),
-                source: "config".to_string(),
-                key: None,
-                models: existing.map(|e| e.models.clone()).unwrap_or_default(),
-            };
+        // Extend database from config providers.
+        //
+        // Config entries may define `base` to inherit models/defaults from an
+        // existing provider (typically a built-in models.dev provider).
+        let normalize_base = |provider_id: &str, base: Option<&str>| -> Option<String> {
+            let base = base?.trim();
+            if base.is_empty() || base == provider_id {
+                return None;
+            }
+            Some(base.to_string())
+        };
 
-            // Process config model overrides
-            if let Some(cfg_models) = &cfg_provider.models {
-                for (model_id, cfg_model) in cfg_models {
-                    let existing_model = parsed
-                        .models
-                        .get(&cfg_model.id.clone().unwrap_or_else(|| model_id.clone()));
-                    let pm = config_to_provider_model(
-                        provider_id,
-                        model_id,
-                        cfg_model,
-                        existing_model,
-                        cfg_provider,
-                        models_dev.get(provider_id),
-                    );
-                    parsed.models.insert(model_id.clone(), pm);
-                }
+        let mut pending: Vec<String> = config.providers.keys().cloned().collect();
+        pending.sort();
+
+        // Resolve in dependency order so config providers can inherit from
+        // other config-defined providers regardless of HashMap iteration order.
+        let mut unresolved = pending;
+        let mut iterations = 0usize;
+        while !unresolved.is_empty() {
+            iterations += 1;
+            if iterations > config.providers.len().saturating_add(2) {
+                break;
             }
 
-            database.insert(provider_id.clone(), parsed);
+            let mut progressed = false;
+            let mut next_unresolved = Vec::new();
+
+            for provider_id in unresolved {
+                let Some(cfg_provider) = config.providers.get(&provider_id) else {
+                    continue;
+                };
+
+                let base_id = normalize_base(&provider_id, cfg_provider.base.as_deref());
+                if let Some(ref base_id) = base_id {
+                    if !database.contains_key(base_id) {
+                        next_unresolved.push(provider_id);
+                        continue;
+                    }
+                }
+
+                let template_id = base_id.clone().unwrap_or_else(|| provider_id.clone());
+                let template = database.get(&template_id);
+
+                let options = merge_json_maps(
+                    template.map(|e| &e.options).unwrap_or(&HashMap::new()),
+                    cfg_provider.options.as_ref().unwrap_or(&HashMap::new()),
+                );
+
+                // Inherit models from template provider, but re-bind the model's
+                // provider_id to the new provider.
+                let models: HashMap<String, ProviderModel> = template
+                    .map(|t| {
+                        t.models
+                            .iter()
+                            .map(|(id, model)| {
+                                let mut cloned = model.clone();
+                                cloned.provider_id = provider_id.clone();
+                                (id.clone(), cloned)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let mut parsed = ProviderState {
+                    id: provider_id.clone(),
+                    name: cfg_provider
+                        .name
+                        .clone()
+                        .or_else(|| template.map(|e| e.name.clone()))
+                        .unwrap_or_else(|| provider_id.clone()),
+                    env: cfg_provider
+                        .env
+                        .clone()
+                        .or_else(|| template.map(|e| e.env.clone()))
+                        .unwrap_or_default(),
+                    options,
+                    source: "config".to_string(),
+                    key: None,
+                    base_id,
+                    models,
+                };
+
+                // Process config model overrides.
+                // When `base` is set, use that provider's models.dev metadata as
+                // the default for new/aliased models.
+                if let Some(cfg_models) = &cfg_provider.models {
+                    for (model_id, cfg_model) in cfg_models {
+                        let existing_model = parsed
+                            .models
+                            .get(&cfg_model.id.clone().unwrap_or_else(|| model_id.clone()));
+                        let pm = config_to_provider_model(
+                            &provider_id,
+                            model_id,
+                            cfg_model,
+                            existing_model,
+                            cfg_provider,
+                            models_dev.get(&template_id),
+                        );
+                        parsed.models.insert(model_id.clone(), pm);
+                    }
+                }
+
+                database.insert(provider_id.clone(), parsed);
+                progressed = true;
+            }
+
+            if !progressed {
+                // Unresolvable: missing base provider or inheritance cycle.
+                // Create entries without inherited models so the config remains
+                // visible, and warn for easier troubleshooting.
+                for provider_id in next_unresolved {
+                    let cfg_provider = match config.providers.get(&provider_id) {
+                        Some(v) => v,
+                        None => continue,
+                    };
+                    tracing::warn!(
+                        provider = %provider_id,
+                        base = %cfg_provider.base.as_deref().unwrap_or(""),
+                        "failed to resolve provider base; skipping inheritance"
+                    );
+
+                    let existing = database.get(&provider_id);
+                    let options = merge_json_maps(
+                        existing.map(|e| &e.options).unwrap_or(&HashMap::new()),
+                        cfg_provider.options.as_ref().unwrap_or(&HashMap::new()),
+                    );
+
+                    let mut parsed = ProviderState {
+                        id: provider_id.clone(),
+                        name: cfg_provider
+                            .name
+                            .clone()
+                            .or_else(|| existing.map(|e| e.name.clone()))
+                            .unwrap_or_else(|| provider_id.clone()),
+                        env: cfg_provider
+                            .env
+                            .clone()
+                            .or_else(|| existing.map(|e| e.env.clone()))
+                            .unwrap_or_default(),
+                        options,
+                        source: "config".to_string(),
+                        key: None,
+                        base_id: normalize_base(&provider_id, cfg_provider.base.as_deref()),
+                        models: existing.map(|e| e.models.clone()).unwrap_or_default(),
+                    };
+
+                    if let Some(cfg_models) = &cfg_provider.models {
+                        for (model_id, cfg_model) in cfg_models {
+                            let existing_model = parsed
+                                .models
+                                .get(&cfg_model.id.clone().unwrap_or_else(|| model_id.clone()));
+                            let pm = config_to_provider_model(
+                                &provider_id,
+                                model_id,
+                                cfg_model,
+                                existing_model,
+                                cfg_provider,
+                                models_dev.get(&provider_id),
+                            );
+                            parsed.models.insert(model_id.clone(), pm);
+                        }
+                    }
+
+                    database.insert(provider_id.clone(), parsed);
+                }
+                break;
+            }
+
+            unresolved = next_unresolved;
         }
 
         // Load from env vars
@@ -1348,18 +1487,30 @@ impl ProviderBootstrapState {
             if disabled.contains(provider_id) {
                 continue;
             }
-            if let Some(loader) = get_custom_loader(provider_id) {
-                // Build a ModelsProviderInfo for the loader
-                let models_provider = to_models_provider_info(data, models_dev.get(provider_id));
+            let loader_provider_id = data
+                .base_id
+                .as_deref()
+                .unwrap_or_else(|| provider_id.as_str());
+            if let Some(loader) = get_custom_loader(loader_provider_id) {
+                // Build a ModelsProviderInfo for the loader.
+                //
+                // For variants (`base_id` set), prefer reconstructing from state so
+                // config model overrides are reflected in the loader input.
+                let models_provider = if data.base_id.is_some() {
+                    to_models_provider_info(data, None)
+                } else {
+                    to_models_provider_info(data, models_dev.get(provider_id))
+                };
                 let result = loader.load(&models_provider, Some(data));
 
-                if result.autoload || providers.contains_key(provider_id) {
+                let configured_in_config = config.providers.contains_key(provider_id);
+                if result.autoload || providers.contains_key(provider_id) || configured_in_config {
                     if result.has_custom_get_model {
                         model_loaders.insert(provider_id.clone());
                     }
 
                     let patch = ProviderPatch {
-                        source: if providers.contains_key(provider_id) {
+                        source: if providers.contains_key(provider_id) || configured_in_config {
                             None
                         } else {
                             Some("custom".to_string())
@@ -1413,6 +1564,10 @@ impl ProviderBootstrapState {
                 patch.options = Some(opts.clone());
             }
             merge_provider(&mut providers, &database, provider_id, patch);
+            if let Some(provider) = providers.get_mut(provider_id) {
+                provider.base_id =
+                    normalize_base(provider_id.as_str(), cfg_provider.base.as_deref());
+            }
         }
 
         // Filter and clean up providers
@@ -2195,7 +2350,8 @@ fn resolve_npm_for_provider(provider_id: &str, provider: &ProviderState) -> Stri
         return npm;
     }
 
-    default_npm_for_provider_id(provider_id).to_string()
+    let effective_id = provider.base_id.as_deref().unwrap_or(provider_id);
+    default_npm_for_provider_id(effective_id).to_string()
 }
 
 fn default_secret_env_for_provider(provider_id: &str, protocol: Protocol) -> Vec<&'static str> {
@@ -2494,7 +2650,8 @@ fn provider_config_for_protocol(
     provider: &ProviderState,
     protocol: Protocol,
 ) -> Option<ProviderConfig> {
-    let fallback_env = default_secret_env_for_provider(provider_id, protocol);
+    let base_provider_id = provider.base_id.as_deref().unwrap_or(provider_id);
+    let fallback_env = default_secret_env_for_provider(base_provider_id, protocol);
     let npm = resolve_npm_for_provider(provider_id, provider);
     let headers = collect_provider_headers(provider);
     let mut options = provider.options.clone();
@@ -2502,7 +2659,7 @@ fn provider_config_for_protocol(
 
     // For the OpenAI protocol, mark non-OpenAI providers as legacy-only
     // so they use Chat Completions directly instead of the Responses API.
-    if matches!(protocol, Protocol::OpenAI) && provider_id != "openai" {
+    if matches!(protocol, Protocol::OpenAI) && base_provider_id != "openai" {
         options.insert("legacy_only".to_string(), serde_json::Value::Bool(true));
     }
 
@@ -2947,6 +3104,7 @@ fn register_fallback_env_providers(registry: &mut ProviderRegistry) {
             source: "env".to_string(),
             env: env_keys.into_iter().map(|k| k.to_string()).collect(),
             key: None,
+            base_id: None,
             options: HashMap::new(),
             models: HashMap::new(),
         };
@@ -3219,6 +3377,7 @@ mod tests {
             source: "env".to_string(),
             env: vec![],
             key: None,
+            base_id: None,
             options: HashMap::new(),
             models: HashMap::new(),
         }
@@ -3358,5 +3517,83 @@ mod tests {
             .expect("variants should include generated and explicit values");
         assert!(variants.contains_key("custom"));
         assert!(variants.contains_key("low"));
+    }
+
+    #[test]
+    fn provider_variants_inherit_models_and_apply_base_loader() {
+        // Base provider catalogue (models.dev)
+        let mut models = HashMap::new();
+        models.insert("gpt-5-mini".to_string(), model_info("gpt-5-mini"));
+        models.insert("whisper-1".to_string(), model_info("whisper-1"));
+        let models_dev: ModelsData = HashMap::from([(
+            "openai".to_string(),
+            ModelsProviderInfo {
+                api: Some("https://api.openai.com/v1".to_string()),
+                name: "OpenAI".to_string(),
+                env: vec![],
+                id: "openai".to_string(),
+                npm: Some("@ai-sdk/openai".to_string()),
+                models,
+            },
+        )]);
+
+        let mut providers: HashMap<String, ConfigProvider> = HashMap::new();
+        providers.insert(
+            "openai".to_string(),
+            ConfigProvider {
+                name: Some("OpenAI".to_string()),
+                ..Default::default()
+            },
+        );
+        providers.insert(
+            "openai-relay".to_string(),
+            ConfigProvider {
+                name: Some("OpenAI Relay".to_string()),
+                base: Some("openai".to_string()),
+                options: Some(HashMap::from([(
+                    "baseURL".to_string(),
+                    serde_json::Value::String("https://relay.example.com/v1".to_string()),
+                )])),
+                ..Default::default()
+            },
+        );
+
+        let config = BootstrapConfig {
+            providers,
+            ..Default::default()
+        };
+
+        let state = ProviderBootstrapState::init(&models_dev, &config, &HashMap::new());
+
+        let relay = state
+            .providers
+            .get("openai-relay")
+            .expect("variant provider should exist");
+        assert_eq!(relay.base_id.as_deref(), Some("openai"));
+        assert!(relay.models.contains_key("gpt-5-mini"));
+
+        // OpenAI loader blacklists whisper/tts/etc; ensure it runs for config
+        // providers and for variants based on OpenAI.
+        assert!(!relay.models.contains_key("whisper-1"));
+
+        let model = relay.models.get("gpt-5-mini").expect("model should exist");
+        assert_eq!(model.provider_id, "openai-relay");
+    }
+
+    #[test]
+    fn openai_variant_does_not_force_legacy_only() {
+        let mut state = provider_state("openai-relay");
+        state.base_id = Some("openai".to_string());
+        state.options.insert(
+            "apiKey".to_string(),
+            serde_json::Value::String("sk-test".to_string()),
+        );
+        let mut model = provider_model("gpt-5-mini");
+        model.provider_id = state.id.clone();
+        state.models.insert("gpt-5-mini".to_string(), model);
+
+        let cfg =
+            provider_config_for_protocol("openai-relay", &state, Protocol::OpenAI).unwrap();
+        assert!(cfg.options.get("legacy_only").is_none());
     }
 }

@@ -167,6 +167,35 @@ rocode run --help
 
 建议：先使用项目级最小配置，再逐步增加 provider / mcp / agent / lsp。
 
+### 6.1 Provider 复制变体（`base`）
+
+当你需要在多家「官方 / 中转」provider 之间快速切换（例如 OpenAI 或 Google 的不同网关/代理），可以在 `provider` 配置里创建“复制变体”，而不需要为每个变体重复写一整套 `models`。
+
+做法：给 provider 增加 `base` 字段，指向一个已内置（models.dev）的 provider id，然后只覆盖 `name` / `api_key` / `base_url` 等字段即可。
+
+示例：`rocode.jsonc`
+
+```jsonc
+{
+  "provider": {
+    "openai-relay": {
+      "base": "openai",
+      "name": "OpenAI Relay",
+      "api_key": "sk-***",
+      "base_url": "https://relay.example.com/v1"
+    },
+    "gemini-relay": {
+      "base": "google",
+      "name": "Gemini Relay",
+      "api_key": "***",
+      "base_url": "https://gateway.example.com/v1beta/models"
+    }
+  }
+}
+```
+
+之后选择模型时直接使用 `openai-relay/gpt-5-mini`、`gemini-relay/gemini-2.5-flash` 这类格式即可。
+
 项目纯净性说明：
 
 - 项目级配置入口以 `rocode.jsonc` / `rocode.json` 为准
