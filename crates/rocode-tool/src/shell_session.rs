@@ -1,9 +1,15 @@
 use async_trait::async_trait;
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, PtySize};
+use rocode_core::contracts::patch::keys as patch_keys;
+use rocode_core::contracts::permission::PermissionTypeWire;
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
+use rocode_core::contracts::wire::aliases as wire_aliases;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read as _, Write as _};
 use std::sync::{Arc, Mutex, OnceLock};
+use strum::IntoEnumIterator;
+use strum_macros::{Display, EnumIter, EnumString, IntoStaticStr};
 use tokio::sync::{Notify, RwLock};
 
 use crate::bash::authorize_bash_command;
@@ -26,14 +32,33 @@ Phase 1 operations:
 This tool is the structured authority for interactive shell state.
 It complements the one-shot `bash` tool rather than replacing it."#;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Display,
+    EnumIter,
+    EnumString,
+    IntoStaticStr,
+)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 enum ShellSessionOperation {
     Start,
     Write,
     Read,
     Status,
     Terminate,
+}
+
+impl ShellSessionOperation {
+    fn as_str(self) -> &'static str {
+        self.into()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -357,7 +382,7 @@ impl ShellSessionTool {
         Ok(ToolResult {
             title: "Shell Session Started".to_string(),
             output,
-            metadata: shell_metadata("start", &session),
+            metadata: shell_metadata(ShellSessionOperation::Start, &session),
             truncated: false,
         })
     }
@@ -399,8 +424,8 @@ impl ShellSessionTool {
             ToolError::ExecutionError(format!("failed to join shell write task: {}", e))
         })??;
         let session_view = session.view().await;
-        let mut metadata = shell_metadata("write", &session_view);
-        metadata.insert("bytes".to_string(), serde_json::json!(byte_len));
+        let mut metadata = shell_metadata(ShellSessionOperation::Write, &session_view);
+        metadata.insert(patch_keys::BYTES.to_string(), serde_json::json!(byte_len));
         Ok(ToolResult {
             title: "Shell Session Write".to_string(),
             output: format!("Sent {} bytes to shell session {}.", byte_len, session_id),
@@ -441,16 +466,25 @@ impl ShellSessionTool {
         };
         let output = String::from_utf8_lossy(&bytes).to_string();
         let session_view = session.view().await;
-        let mut metadata = shell_metadata("read", &session_view);
+        let mut metadata = shell_metadata(ShellSessionOperation::Read, &session_view);
         metadata.insert(
-            "requestedCursor".to_string(),
+            tool_arg_keys::REQUESTED_CURSOR.to_string(),
             serde_json::json!(requested_cursor),
         );
-        metadata.insert("bufferStart".to_string(), serde_json::json!(buffer_start));
-        metadata.insert("startCursor".to_string(), serde_json::json!(start_cursor));
-        metadata.insert("endCursor".to_string(), serde_json::json!(cursor));
         metadata.insert(
-            "truncatedReplay".to_string(),
+            tool_arg_keys::BUFFER_START.to_string(),
+            serde_json::json!(buffer_start),
+        );
+        metadata.insert(
+            tool_arg_keys::START_CURSOR.to_string(),
+            serde_json::json!(start_cursor),
+        );
+        metadata.insert(
+            tool_arg_keys::END_CURSOR.to_string(),
+            serde_json::json!(cursor),
+        );
+        metadata.insert(
+            tool_arg_keys::TRUNCATED_REPLAY.to_string(),
             serde_json::json!(requested_cursor < buffer_start),
         );
         Ok(ToolResult {
@@ -472,7 +506,7 @@ impl ShellSessionTool {
         Ok(ToolResult {
             title: "Shell Session Status".to_string(),
             output,
-            metadata: shell_metadata("status", &session_view),
+            metadata: shell_metadata(ShellSessionOperation::Status, &session_view),
             truncated: false,
         })
     }
@@ -494,7 +528,7 @@ impl ShellSessionTool {
         Ok(ToolResult {
             title: "Shell Session Terminating".to_string(),
             output: format!("Termination requested for shell session {}.", session_id),
-            metadata: shell_metadata("terminate", &session_view),
+            metadata: shell_metadata(ShellSessionOperation::Terminate, &session_view),
             truncated: false,
         })
     }
@@ -509,7 +543,7 @@ impl Default for ShellSessionTool {
 #[async_trait]
 impl Tool for ShellSessionTool {
     fn id(&self) -> &str {
-        "shell_session"
+        BuiltinToolName::ShellSession.as_str()
     }
 
     fn description(&self) -> &str {
@@ -517,15 +551,18 @@ impl Tool for ShellSessionTool {
     }
 
     fn parameters(&self) -> serde_json::Value {
+        let operations: Vec<&'static str> = ShellSessionOperation::iter()
+            .map(ShellSessionOperation::as_str)
+            .collect();
         serde_json::json!({
             "type": "object",
             "properties": {
-                "operation": {
+                (tool_arg_keys::OPERATION): {
                     "type": "string",
-                    "enum": ["start", "write", "read", "status", "terminate"],
+                    "enum": operations,
                     "description": "Which shell session operation to execute"
                 },
-                "session_id": {
+                (wire_aliases::SESSION_ID_SNAKE): {
                     "type": "string",
                     "description": "Existing shell session id for write/read/status/terminate"
                 },
@@ -580,7 +617,7 @@ impl Tool for ShellSessionTool {
                     "description": "Human-readable description for permission review on start/write"
                 }
             },
-            "required": ["operation"]
+            "required": [tool_arg_keys::OPERATION]
         })
     }
 
@@ -654,10 +691,10 @@ async fn authorize_cwd(cwd: &str, ctx: &ToolContext) -> Result<(), ToolError> {
         .map(|path| path.to_string_lossy().to_string())
         .unwrap_or_else(|| cwd.to_string());
     ctx.ask_permission(
-        PermissionRequest::new("external_directory")
+        PermissionRequest::new(PermissionTypeWire::ExternalDirectory.as_str())
             .with_pattern(format!("{}/*", parent))
-            .with_metadata("filepath", serde_json::json!(cwd))
-            .with_metadata("parentDir", serde_json::json!(parent)),
+            .with_metadata(patch_keys::FILEPATH, serde_json::json!(cwd))
+            .with_metadata(tool_arg_keys::PARENT_DIR, serde_json::json!(parent)),
     )
     .await
 }
@@ -720,11 +757,14 @@ fn validate_input(input: &ShellSessionInput) -> Result<(), ToolError> {
     Ok(())
 }
 
-fn shell_metadata(operation: &str, session: &ShellSessionView) -> Metadata {
+fn shell_metadata(operation: ShellSessionOperation, session: &ShellSessionView) -> Metadata {
     let mut metadata = Metadata::new();
-    metadata.insert("operation".to_string(), serde_json::json!(operation));
     metadata.insert(
-        "session".to_string(),
+        tool_arg_keys::OPERATION.to_string(),
+        serde_json::json!(operation.as_str()),
+    );
+    metadata.insert(
+        tool_arg_keys::SESSION.to_string(),
         serde_json::to_value(session).unwrap(),
     );
     metadata
@@ -950,7 +990,7 @@ mod tests {
             assert!(
                 permissions
                     .iter()
-                    .filter(|item| item.as_str() == "bash")
+                    .filter(|item| item.as_str() == BuiltinToolName::Bash.as_str())
                     .count()
                     >= 2
             );

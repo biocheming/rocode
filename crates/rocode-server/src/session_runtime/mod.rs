@@ -16,6 +16,21 @@ use rocode_command::output_blocks::{
     SchedulerDecisionBlock, SchedulerDecisionField, SchedulerDecisionRenderSpec,
     SchedulerDecisionSection, SchedulerStageBlock,
 };
+use rocode_core::contracts::output_blocks::{
+    keys as output_keys, scheduler_decision_spec_keys as output_decision_spec_keys,
+};
+use rocode_core::contracts::patch::keys as patch_keys;
+use rocode_core::contracts::scheduler::{
+    decision_keys as scheduler_decision_keys, gate_keys as scheduler_gate_keys,
+    keys as scheduler_keys, SchedulerDecisionFieldLabelEmphasis, SchedulerDecisionFieldOrder,
+    SchedulerDecisionKind, SchedulerDecisionRenderSpecVersion, SchedulerDecisionSectionSpacing,
+    SchedulerDecisionStatusPalette, SchedulerDecisionUpdatePolicy, SchedulerStageName,
+    SchedulerStageStatus, SchedulerStageWaitingOn,
+};
+use rocode_core::contracts::session::keys as session_keys;
+use rocode_core::contracts::todo::{keys as todo_keys, TodoPriority, TodoStatus};
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
+use rocode_core::contracts::wire::fields as wire_fields;
 use rocode_orchestrator::{
     parse_execution_gate_decision, parse_route_decision, scheduler_stage_observability,
     ExecutionContext as OrchestratorExecutionContext, LifecycleHook, RouteDecision,
@@ -301,15 +316,15 @@ pub(crate) async fn request_active_scheduler_stage_abort(
         |message| {
             let info = scheduler_abort_info(message);
             message.metadata.insert(
-                "scheduler_stage_status".to_string(),
-                serde_json::json!("cancelling"),
+                scheduler_keys::STATUS.to_string(),
+                serde_json::json!(SchedulerStageStatus::Cancelling.as_str()),
             );
             message.metadata.insert(
-                "scheduler_stage_waiting_on".to_string(),
-                serde_json::json!("none"),
+                scheduler_keys::WAITING_ON.to_string(),
+                serde_json::json!(SchedulerStageWaitingOn::None.as_str()),
             );
             message.metadata.insert(
-                "scheduler_stage_last_event".to_string(),
+                scheduler_keys::LAST_EVENT.to_string(),
                 serde_json::json!("Cancellation requested by user"),
             );
             Some(info)
@@ -335,17 +350,17 @@ pub(crate) async fn finalize_active_scheduler_stage_cancelled(
         session_id,
         |message| {
             let info = scheduler_abort_info(message);
-            message.metadata.remove("scheduler_stage_streaming");
+            message.metadata.remove(scheduler_keys::STREAMING);
             message.metadata.insert(
-                "scheduler_stage_status".to_string(),
-                serde_json::json!("cancelled"),
+                scheduler_keys::STATUS.to_string(),
+                serde_json::json!(SchedulerStageStatus::Cancelled.as_str()),
             );
             message.metadata.insert(
-                "scheduler_stage_waiting_on".to_string(),
-                serde_json::json!("none"),
+                scheduler_keys::WAITING_ON.to_string(),
+                serde_json::json!(SchedulerStageWaitingOn::None.as_str()),
             );
             message.metadata.insert(
-                "scheduler_stage_last_event".to_string(),
+                scheduler_keys::LAST_EVENT.to_string(),
                 serde_json::json!("Stage cancelled by user"),
             );
             Some(info)
@@ -388,20 +403,28 @@ fn find_active_scheduler_stage_message_mut(session: &mut Session) -> Option<&mut
         message.role == MessageRole::Assistant
             && message
                 .metadata
-                .get("scheduler_stage_emitted")
+                .get(scheduler_keys::EMITTED)
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false)
             && (message
                 .metadata
-                .get("scheduler_stage_streaming")
+                .get(scheduler_keys::STREAMING)
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false)
                 || matches!(
                     message
                         .metadata
-                        .get("scheduler_stage_status")
+                        .get(scheduler_keys::STATUS)
                         .and_then(|value| value.as_str()),
-                    Some("running" | "waiting" | "cancelling")
+                    Some(status)
+                        if matches!(
+                            SchedulerStageStatus::parse(status),
+                            Some(
+                                SchedulerStageStatus::Running
+                                    | SchedulerStageStatus::Waiting
+                                    | SchedulerStageStatus::Cancelling
+                            )
+                        )
                 ))
     })
 }
@@ -410,22 +433,22 @@ fn scheduler_abort_info(message: &SessionMessage) -> SchedulerAbortInfo {
     SchedulerAbortInfo {
         execution_id: message
             .metadata
-            .get("scheduler_stage_id")
+            .get(scheduler_keys::STAGE_ID)
             .and_then(|value| value.as_str())
             .map(str::to_string),
         scheduler_profile: message
             .metadata
-            .get("scheduler_profile")
+            .get(scheduler_keys::PROFILE)
             .and_then(|value| value.as_str())
             .map(str::to_string),
         stage_name: message
             .metadata
-            .get("scheduler_stage")
+            .get(scheduler_keys::STAGE)
             .and_then(|value| value.as_str())
             .map(str::to_string),
         stage_index: message
             .metadata
-            .get("scheduler_stage_index")
+            .get(scheduler_keys::STAGE_INDEX)
             .and_then(|value| value.as_u64())
             .map(|value| value as u32),
     }
@@ -446,11 +469,11 @@ fn write_stage_usage_totals(
 
     let mut has_any_visible_usage = false;
     for (key, value) in [
-        ("scheduler_stage_prompt_tokens", prompt_tokens),
-        ("scheduler_stage_completion_tokens", completion_tokens),
-        ("scheduler_stage_reasoning_tokens", reasoning_tokens),
-        ("scheduler_stage_cache_read_tokens", cache_read_tokens),
-        ("scheduler_stage_cache_write_tokens", cache_write_tokens),
+        (scheduler_keys::PROMPT_TOKENS, prompt_tokens),
+        (scheduler_keys::COMPLETION_TOKENS, completion_tokens),
+        (scheduler_keys::REASONING_TOKENS, reasoning_tokens),
+        (scheduler_keys::CACHE_READ_TOKENS, cache_read_tokens),
+        (scheduler_keys::CACHE_WRITE_TOKENS, cache_write_tokens),
     ] {
         if value > 0 || allow_zero_fields {
             has_any_visible_usage = true;
@@ -490,17 +513,14 @@ fn write_stage_usage_totals(
 /// Returns `true` for tools that modify files on disk (edit, write, apply_patch).
 /// These are the tools that warrant capturing a snapshot after completion.
 fn is_file_modifying_tool(tool_name: &str) -> bool {
-    let lower = tool_name.to_ascii_lowercase();
     matches!(
-        lower.as_str(),
-        "write"
-            | "writefile"
-            | "write_file"
-            | "edit"
-            | "editfile"
-            | "edit_file"
-            | "apply_patch"
-            | "applypatch"
+        BuiltinToolName::parse(tool_name),
+        Some(
+            BuiltinToolName::Write
+                | BuiltinToolName::Edit
+                | BuiltinToolName::MultiEdit
+                | BuiltinToolName::ApplyPatch
+        )
     )
 }
 
@@ -524,7 +544,7 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
         // Capture a "before" snapshot at the first step so compute_diff()
         // can later compare against the final snapshot.
         if step_index == 0 {
-            self.track_snapshot("step_start_snapshot").await;
+            self.track_snapshot(session_keys::STEP_START_SNAPSHOT).await;
         }
 
         self.update_active_stage_message(
@@ -539,20 +559,20 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                     None,
                 );
                 message.metadata.insert(
-                    "scheduler_stage_step".to_string(),
+                    scheduler_keys::STEP.to_string(),
                     serde_json::json!(active.step_count),
                 );
                 message.metadata.insert(
-                    "scheduler_stage_status".to_string(),
-                    serde_json::json!("running"),
+                    scheduler_keys::STATUS.to_string(),
+                    serde_json::json!(SchedulerStageStatus::Running.as_str()),
                 );
                 message.metadata.insert(
-                    "scheduler_stage_last_event".to_string(),
+                    scheduler_keys::LAST_EVENT.to_string(),
                     serde_json::json!(format!("Step {} started", active.step_count)),
                 );
                 message.metadata.insert(
-                    "scheduler_stage_waiting_on".to_string(),
-                    serde_json::json!("model"),
+                    scheduler_keys::WAITING_ON.to_string(),
+                    serde_json::json!(SchedulerStageWaitingOn::Model.as_str()),
                 );
             },
             "prompt.scheduler.stage.step",
@@ -603,34 +623,34 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                 );
                 if let Some(activity) = summarize_tool_activity(tool_name, tool_args) {
                     message.metadata.insert(
-                        "scheduler_stage_activity".to_string(),
+                        scheduler_keys::ACTIVITY.to_string(),
                         serde_json::json!(activity),
                     );
                 }
-                if tool_name.eq_ignore_ascii_case("question") {
+                if BuiltinToolName::parse(tool_name) == Some(BuiltinToolName::Question) {
                     message.metadata.insert(
-                        "scheduler_stage_status".to_string(),
-                        serde_json::json!("waiting"),
+                        scheduler_keys::STATUS.to_string(),
+                        serde_json::json!(SchedulerStageStatus::Waiting.as_str()),
                     );
                     message.metadata.insert(
-                        "scheduler_stage_waiting_on".to_string(),
-                        serde_json::json!("user"),
+                        scheduler_keys::WAITING_ON.to_string(),
+                        serde_json::json!(SchedulerStageWaitingOn::User.as_str()),
                     );
                     message.metadata.insert(
-                        "scheduler_stage_last_event".to_string(),
+                        scheduler_keys::LAST_EVENT.to_string(),
                         serde_json::json!("Waiting for user answer"),
                     );
                 } else {
                     message.metadata.insert(
-                        "scheduler_stage_status".to_string(),
-                        serde_json::json!("running"),
+                        scheduler_keys::STATUS.to_string(),
+                        serde_json::json!(SchedulerStageStatus::Running.as_str()),
                     );
                     message.metadata.insert(
-                        "scheduler_stage_waiting_on".to_string(),
-                        serde_json::json!("tool"),
+                        scheduler_keys::WAITING_ON.to_string(),
+                        serde_json::json!(SchedulerStageWaitingOn::Tool.as_str()),
                     );
                     message.metadata.insert(
-                        "scheduler_stage_last_event".to_string(),
+                        scheduler_keys::LAST_EVENT.to_string(),
                         serde_json::json!(format!(
                             "Tool started: {}",
                             pretty_scheduler_stage_name(tool_name)
@@ -644,9 +664,7 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
 
         // Populate the TodoManager when a todowrite tool is invoked so the
         // /session/{id}/todo endpoint returns live data.
-        if tool_name.eq_ignore_ascii_case("todowrite")
-            || tool_name.eq_ignore_ascii_case("todo_write")
-        {
+        if BuiltinToolName::parse(tool_name) == Some(BuiltinToolName::TodoWrite) {
             if let Some(todos) = extract_todo_items_from_args(tool_args) {
                 self.state
                     .todo_manager
@@ -687,19 +705,20 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                 );
                 if let Some(activity) = summarize_tool_result_activity(tool_name, tool_output) {
                     message.metadata.insert(
-                        "scheduler_stage_activity".to_string(),
+                        scheduler_keys::ACTIVITY.to_string(),
                         serde_json::json!(activity),
                     );
                 }
                 message.metadata.insert(
-                    "scheduler_stage_status".to_string(),
-                    serde_json::json!("running"),
+                    scheduler_keys::STATUS.to_string(),
+                    serde_json::json!(SchedulerStageStatus::Running.as_str()),
                 );
                 message.metadata.insert(
-                    "scheduler_stage_waiting_on".to_string(),
-                    serde_json::json!("model"),
+                    scheduler_keys::WAITING_ON.to_string(),
+                    serde_json::json!(SchedulerStageWaitingOn::Model.as_str()),
                 );
-                let event = if tool_name.eq_ignore_ascii_case("question") {
+                let event = if BuiltinToolName::parse(tool_name) == Some(BuiltinToolName::Question)
+                {
                     if tool_output.is_error {
                         "Question tool failed".to_string()
                     } else {
@@ -711,7 +730,7 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                     format!("Tool finished: {}", pretty_scheduler_stage_name(tool_name))
                 };
                 message.metadata.insert(
-                    "scheduler_stage_last_event".to_string(),
+                    scheduler_keys::LAST_EVENT.to_string(),
                     serde_json::json!(event),
                 );
             },
@@ -722,7 +741,8 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
         // Capture an "after" snapshot when a file-modifying tool completes
         // successfully so that compute_diff() can measure the delta.
         if !tool_output.is_error && is_file_modifying_tool(tool_name) {
-            self.track_snapshot("step_finish_snapshot").await;
+            self.track_snapshot(session_keys::STEP_FINISH_SNAPSHOT)
+                .await;
         }
     }
 
@@ -747,7 +767,7 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                 if from_snapshot.is_none() {
                     if let Some(s) = msg
                         .metadata
-                        .get("step_start_snapshot")
+                        .get(session_keys::STEP_START_SNAPSHOT)
                         .and_then(|v| v.as_str())
                         .filter(|s| !s.is_empty())
                     {
@@ -756,7 +776,7 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                 }
                 if let Some(s) = msg
                     .metadata
-                    .get("step_finish_snapshot")
+                    .get(session_keys::STEP_FINISH_SNAPSHOT)
                     .and_then(|v| v.as_str())
                     .filter(|s| !s.is_empty())
                 {
@@ -908,65 +928,65 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
         let message_id = message.id.clone();
         let execution_id = format!("stage_{}", uuid::Uuid::new_v4().simple());
         message.metadata.insert(
-            "scheduler_stage_id".to_string(),
+            scheduler_keys::STAGE_ID.to_string(),
             serde_json::json!(&execution_id),
         );
         message.metadata.insert(
-            "scheduler_profile".to_string(),
+            scheduler_keys::PROFILE.to_string(),
             serde_json::json!(&self.scheduler_profile),
         );
         message.metadata.insert(
-            "resolved_scheduler_profile".to_string(),
+            scheduler_keys::RESOLVED_PROFILE.to_string(),
             serde_json::json!(&self.scheduler_profile),
+        );
+        message.metadata.insert(
+            scheduler_keys::STAGE.to_string(),
+            serde_json::json!(stage_name),
+        );
+        message.metadata.insert(
+            scheduler_keys::STAGE_INDEX.to_string(),
+            serde_json::json!(stage_index),
         );
         message
             .metadata
-            .insert("scheduler_stage".to_string(), serde_json::json!(stage_name));
+            .insert(scheduler_keys::EMITTED.to_string(), serde_json::json!(true));
         message.metadata.insert(
-            "scheduler_stage_index".to_string(),
-            serde_json::json!(stage_index),
-        );
-        message.metadata.insert(
-            "scheduler_stage_emitted".to_string(),
-            serde_json::json!(true),
-        );
-        message.metadata.insert(
-            "scheduler_stage_agent".to_string(),
+            scheduler_keys::AGENT.to_string(),
             serde_json::json!(&exec_ctx.agent_name),
         );
         message.metadata.insert(
-            "scheduler_stage_streaming".to_string(),
+            scheduler_keys::STREAMING.to_string(),
             serde_json::json!(true),
         );
         message.metadata.insert(
-            "scheduler_stage_status".to_string(),
-            serde_json::json!("running"),
+            scheduler_keys::STATUS.to_string(),
+            serde_json::json!(SchedulerStageStatus::Running.as_str()),
         );
         message.metadata.insert(
-            "scheduler_stage_focus".to_string(),
+            scheduler_keys::FOCUS.to_string(),
             serde_json::json!(scheduler_stage_focus(stage_name)),
         );
         message.metadata.insert(
-            "scheduler_stage_last_event".to_string(),
+            scheduler_keys::LAST_EVENT.to_string(),
             serde_json::json!("Stage started"),
         );
         message.metadata.insert(
-            "scheduler_stage_waiting_on".to_string(),
-            serde_json::json!("model"),
+            scheduler_keys::WAITING_ON.to_string(),
+            serde_json::json!(SchedulerStageWaitingOn::Model.as_str()),
         );
         if let Some(observability) =
             scheduler_stage_observability(&self.scheduler_profile, stage_name)
         {
             message.metadata.insert(
-                "scheduler_stage_projection".to_string(),
+                scheduler_keys::PROJECTION.to_string(),
                 serde_json::json!(observability.projection),
             );
             message.metadata.insert(
-                "scheduler_stage_tool_policy".to_string(),
+                scheduler_keys::TOOL_POLICY.to_string(),
                 serde_json::json!(observability.tool_policy),
             );
             message.metadata.insert(
-                "scheduler_stage_loop_budget".to_string(),
+                scheduler_keys::LOOP_BUDGET.to_string(),
                 serde_json::json!(observability.loop_budget),
             );
         }
@@ -974,35 +994,35 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
         // runtime usage is tracked separately from tool invocations.
         if let Some(caps) = capabilities {
             message.metadata.insert(
-                "scheduler_stage_available_skill_count".to_string(),
+                scheduler_keys::AVAILABLE_SKILL_COUNT.to_string(),
                 serde_json::json!(caps.skill_list.len()),
             );
             message.metadata.insert(
-                "scheduler_stage_available_agent_count".to_string(),
+                scheduler_keys::AVAILABLE_AGENT_COUNT.to_string(),
                 serde_json::json!(caps.agents.len()),
             );
             message.metadata.insert(
-                "scheduler_stage_available_category_count".to_string(),
+                scheduler_keys::AVAILABLE_CATEGORY_COUNT.to_string(),
                 serde_json::json!(caps.categories.len()),
             );
         }
         message.metadata.insert(
-            "scheduler_stage_active_skills".to_string(),
+            scheduler_keys::ACTIVE_SKILLS.to_string(),
             serde_json::json!(Vec::<String>::new()),
         );
         message.metadata.insert(
-            "scheduler_stage_active_agents".to_string(),
+            scheduler_keys::ACTIVE_AGENTS.to_string(),
             serde_json::json!(Vec::<String>::new()),
         );
         message.metadata.insert(
-            "scheduler_stage_active_categories".to_string(),
+            scheduler_keys::ACTIVE_CATEGORIES.to_string(),
             serde_json::json!(Vec::<String>::new()),
         );
 
         // Store child session reference in metadata for persistence/reconstruction.
         if let Some(ref child_id) = child_session_id {
             message.metadata.insert(
-                "scheduler_stage_child_session_id".to_string(),
+                scheduler_keys::CHILD_SESSION_ID.to_string(),
                 serde_json::json!(child_id),
             );
         }
@@ -1308,24 +1328,25 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                 if let Some(message) = session.get_message_mut(&active.message_id) {
                     message.set_text(body.to_string());
                     message.metadata.insert(
-                        "scheduler_stage_total".to_string(),
+                        scheduler_keys::STAGE_TOTAL.to_string(),
                         serde_json::json!(stage_total),
                     );
-                    message.metadata.remove("scheduler_stage_streaming");
+                    message.metadata.remove(scheduler_keys::STREAMING);
+                    let status = if body.starts_with("Stage error:") {
+                        SchedulerStageStatus::Blocked
+                    } else {
+                        SchedulerStageStatus::Done
+                    };
                     message.metadata.insert(
-                        "scheduler_stage_status".to_string(),
-                        serde_json::json!(if body.starts_with("Stage error:") {
-                            "blocked"
-                        } else {
-                            "done"
-                        }),
+                        scheduler_keys::STATUS.to_string(),
+                        serde_json::json!(status.as_str()),
                     );
                     message.metadata.insert(
-                        "scheduler_stage_focus".to_string(),
+                        scheduler_keys::FOCUS.to_string(),
                         serde_json::json!(scheduler_stage_focus(stage_name)),
                     );
                     message.metadata.insert(
-                        "scheduler_stage_last_event".to_string(),
+                        scheduler_keys::LAST_EVENT.to_string(),
                         serde_json::json!(if body.starts_with("Stage error:") {
                             "Stage failed"
                         } else {
@@ -1333,12 +1354,12 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                         }),
                     );
                     message.metadata.insert(
-                        "scheduler_stage_waiting_on".to_string(),
-                        serde_json::json!("none"),
+                        scheduler_keys::WAITING_ON.to_string(),
+                        serde_json::json!(SchedulerStageWaitingOn::None.as_str()),
                     );
                     if active.step_count > 0 {
                         message.metadata.insert(
-                            "scheduler_stage_step".to_string(),
+                            scheduler_keys::STEP.to_string(),
                             serde_json::json!(active.step_count),
                         );
                     }
@@ -1427,19 +1448,19 @@ fn stage_execution_patch_from_message(message: &SessionMessage) -> ExecutionPatc
     ExecutionPatch {
         status: message
             .metadata
-            .get("scheduler_stage_status")
+            .get(scheduler_keys::STATUS)
             .and_then(|value| value.as_str())
             .and_then(runtime_execution_status_from_stage_status),
         waiting_on: message
             .metadata
-            .get("scheduler_stage_waiting_on")
+            .get(scheduler_keys::WAITING_ON)
             .and_then(|value| value.as_str())
-            .filter(|value| *value != "none" && !value.is_empty())
+            .filter(|value| *value != SchedulerStageWaitingOn::None.as_str() && !value.is_empty())
             .map(|value| FieldUpdate::Set(value.to_string()))
             .unwrap_or(FieldUpdate::Clear),
         recent_event: message
             .metadata
-            .get("scheduler_stage_last_event")
+            .get(scheduler_keys::LAST_EVENT)
             .and_then(|value| value.as_str())
             .map(|value| FieldUpdate::Set(value.to_string()))
             .unwrap_or(FieldUpdate::Keep),
@@ -1449,41 +1470,43 @@ fn stage_execution_patch_from_message(message: &SessionMessage) -> ExecutionPatc
 }
 
 fn runtime_execution_status_from_stage_status(value: &str) -> Option<ExecutionStatus> {
-    match value {
-        "running" => Some(ExecutionStatus::Running),
-        "waiting" => Some(ExecutionStatus::Waiting),
-        "cancelling" => Some(ExecutionStatus::Cancelling),
-        "retry" => Some(ExecutionStatus::Retry),
-        _ => None,
+    match SchedulerStageStatus::parse(value)? {
+        SchedulerStageStatus::Running => Some(ExecutionStatus::Running),
+        SchedulerStageStatus::Waiting | SchedulerStageStatus::Blocked => {
+            Some(ExecutionStatus::Waiting)
+        }
+        SchedulerStageStatus::Cancelling => Some(ExecutionStatus::Cancelling),
+        SchedulerStageStatus::Retrying => Some(ExecutionStatus::Retry),
+        SchedulerStageStatus::Done | SchedulerStageStatus::Cancelled => Some(ExecutionStatus::Done),
     }
 }
 
 fn scheduler_stage_runtime_metadata(message: &SessionMessage) -> serde_json::Value {
     let mut metadata = serde_json::Map::new();
     for key in [
-        "scheduler_profile",
-        "resolved_scheduler_profile",
-        "scheduler_stage",
-        "scheduler_stage_index",
-        "scheduler_stage_total",
-        "scheduler_stage_agent",
-        "scheduler_stage_step",
-        "scheduler_stage_focus",
-        "scheduler_stage_projection",
-        "scheduler_stage_tool_policy",
-        "scheduler_stage_loop_budget",
-        "scheduler_stage_activity",
-        "scheduler_stage_available_skill_count",
-        "scheduler_stage_available_agent_count",
-        "scheduler_stage_available_category_count",
-        "scheduler_stage_active_skills",
-        "scheduler_stage_active_agents",
-        "scheduler_stage_active_categories",
-        "scheduler_stage_prompt_tokens",
-        "scheduler_stage_completion_tokens",
-        "scheduler_stage_reasoning_tokens",
-        "scheduler_stage_cache_read_tokens",
-        "scheduler_stage_cache_write_tokens",
+        scheduler_keys::PROFILE,
+        scheduler_keys::RESOLVED_PROFILE,
+        scheduler_keys::STAGE,
+        scheduler_keys::STAGE_INDEX,
+        scheduler_keys::STAGE_TOTAL,
+        scheduler_keys::AGENT,
+        scheduler_keys::STEP,
+        scheduler_keys::FOCUS,
+        scheduler_keys::PROJECTION,
+        scheduler_keys::TOOL_POLICY,
+        scheduler_keys::LOOP_BUDGET,
+        scheduler_keys::ACTIVITY,
+        scheduler_keys::AVAILABLE_SKILL_COUNT,
+        scheduler_keys::AVAILABLE_AGENT_COUNT,
+        scheduler_keys::AVAILABLE_CATEGORY_COUNT,
+        scheduler_keys::ACTIVE_SKILLS,
+        scheduler_keys::ACTIVE_AGENTS,
+        scheduler_keys::ACTIVE_CATEGORIES,
+        scheduler_keys::PROMPT_TOKENS,
+        scheduler_keys::COMPLETION_TOKENS,
+        scheduler_keys::REASONING_TOKENS,
+        scheduler_keys::CACHE_READ_TOKENS,
+        scheduler_keys::CACHE_WRITE_TOKENS,
     ] {
         if let Some(value) = message.metadata.get(key).cloned() {
             metadata.insert(key.to_string(), value);
@@ -1501,54 +1524,57 @@ fn scheduler_stage_execution_metadata(
 ) -> serde_json::Value {
     let mut metadata = serde_json::Map::new();
     metadata.insert(
-        "scheduler_profile".to_string(),
+        scheduler_keys::PROFILE.to_string(),
         serde_json::json!(scheduler_profile),
     );
-    metadata.insert("scheduler_stage".to_string(), serde_json::json!(stage_name));
     metadata.insert(
-        "scheduler_stage_index".to_string(),
+        scheduler_keys::STAGE.to_string(),
+        serde_json::json!(stage_name),
+    );
+    metadata.insert(
+        scheduler_keys::STAGE_INDEX.to_string(),
         serde_json::json!(stage_index),
     );
     if let Some(stage_total) = stage_total {
         metadata.insert(
-            "scheduler_stage_total".to_string(),
+            scheduler_keys::STAGE_TOTAL.to_string(),
             serde_json::json!(stage_total),
         );
     }
     metadata.insert(
-        "scheduler_stage_agent".to_string(),
+        scheduler_keys::AGENT.to_string(),
         serde_json::json!(agent_name),
     );
     metadata.insert(
-        "scheduler_stage_focus".to_string(),
+        scheduler_keys::FOCUS.to_string(),
         serde_json::json!(scheduler_stage_focus(stage_name)),
     );
     serde_json::Value::Object(metadata)
 }
 
 fn summarize_tool_activity(tool_name: &str, tool_args: &serde_json::Value) -> Option<String> {
-    match tool_name.to_ascii_lowercase().as_str() {
-        "question" => summarize_question_args(tool_args),
-        "todowrite" | "todo_write" => summarize_todo_args(tool_args),
-        "todoread" | "todo_read" => Some("Todo list read".to_string()),
-        "task" => summarize_task_args(tool_args),
-        "task_flow" => summarize_task_flow_args(tool_args),
-        "bash" | "shell" => summarize_bash_args(tool_args),
-        "read" | "readfile" | "read_file" => summarize_read_args(tool_args),
-        "write" | "writefile" | "write_file" => summarize_write_args(tool_args),
-        "edit" | "editfile" | "edit_file" => summarize_edit_args(tool_args),
-        "glob" => summarize_glob_args(tool_args),
-        "grep" => summarize_grep_args(tool_args),
-        "webfetch" | "web_fetch" => summarize_webfetch_args(tool_args),
-        "websearch" | "web_search" | "codesearch" | "code_search" => {
+    match BuiltinToolName::parse(tool_name) {
+        Some(BuiltinToolName::Question) => summarize_question_args(tool_args),
+        Some(BuiltinToolName::TodoWrite) => summarize_todo_args(tool_args),
+        Some(BuiltinToolName::TodoRead) => Some("Todo list read".to_string()),
+        Some(BuiltinToolName::Task) => summarize_task_args(tool_args),
+        Some(BuiltinToolName::TaskFlow) => summarize_task_flow_args(tool_args),
+        Some(BuiltinToolName::Bash) => summarize_bash_args(tool_args),
+        Some(BuiltinToolName::Read) => summarize_read_args(tool_args),
+        Some(BuiltinToolName::Write) => summarize_write_args(tool_args),
+        Some(BuiltinToolName::Edit) => summarize_edit_args(tool_args),
+        Some(BuiltinToolName::Glob) => summarize_glob_args(tool_args),
+        Some(BuiltinToolName::Grep) => summarize_grep_args(tool_args),
+        Some(BuiltinToolName::WebFetch) => summarize_webfetch_args(tool_args),
+        Some(BuiltinToolName::WebSearch | BuiltinToolName::CodeSearch) => {
             summarize_search_args(tool_name, tool_args)
         }
-        "lsp" => summarize_lsp_args(tool_args),
-        "batch" => summarize_batch_args(tool_args),
-        "skill" => summarize_skill_args(tool_args),
-        "apply_patch" | "applypatch" => Some("Apply Patch".to_string()),
-        "list" | "ls" | "listdir" | "list_dir" | "list_directory" => summarize_list_args(tool_args),
-        "notebook_edit" | "notebookedit" => summarize_notebook_edit_args(tool_args),
+        Some(BuiltinToolName::Lsp) => summarize_lsp_args(tool_args),
+        Some(BuiltinToolName::Batch) => summarize_batch_args(tool_args),
+        Some(BuiltinToolName::Skill) => summarize_skill_args(tool_args),
+        Some(BuiltinToolName::ApplyPatch) => Some("Apply Patch".to_string()),
+        Some(BuiltinToolName::Ls) => summarize_list_args(tool_args),
+        Some(BuiltinToolName::NotebookEdit) => summarize_notebook_edit_args(tool_args),
         _ => summarize_generic_tool_args(tool_name, tool_args),
     }
 }
@@ -1557,9 +1583,9 @@ fn summarize_tool_result_activity(
     tool_name: &str,
     tool_output: &OrchestratorToolOutput,
 ) -> Option<String> {
-    match tool_name.to_ascii_lowercase().as_str() {
-        "question" => summarize_question_result(tool_output.metadata.as_ref()),
-        "todowrite" | "todo_write" | "todoread" | "todo_read" => {
+    match BuiltinToolName::parse(tool_name) {
+        Some(BuiltinToolName::Question) => summarize_question_result(tool_output.metadata.as_ref()),
+        Some(BuiltinToolName::TodoWrite | BuiltinToolName::TodoRead) => {
             summarize_todo_result(tool_output.metadata.as_ref())
         }
         _ => None,
@@ -1567,19 +1593,19 @@ fn summarize_tool_result_activity(
 }
 
 fn summarize_question_args(tool_args: &serde_json::Value) -> Option<String> {
-    let questions = tool_args.get("questions")?.as_array()?;
+    let questions = tool_args.get(wire_fields::QUESTIONS)?.as_array()?;
     if questions.is_empty() {
         return None;
     }
     let mut lines = vec![format!("Question ({})", questions.len())];
     for question in questions.iter().take(3) {
         let header = question
-            .get("header")
+            .get(wire_fields::HEADER)
             .and_then(|value| value.as_str())
             .filter(|value| !value.is_empty())
             .unwrap_or("Prompt");
         let text = question
-            .get("question")
+            .get(wire_fields::QUESTION)
             .and_then(|value| value.as_str())
             .unwrap_or("");
         if !text.is_empty() {
@@ -1590,17 +1616,19 @@ fn summarize_question_args(tool_args: &serde_json::Value) -> Option<String> {
 }
 
 fn summarize_todo_args(tool_args: &serde_json::Value) -> Option<String> {
-    let todos = tool_args.get("todos")?.as_array()?;
+    let todos = tool_args.get(todo_keys::TODOS)?.as_array()?;
     if todos.is_empty() {
         return None;
     }
     let mut lines = vec![format!("Todo list ({})", todos.len())];
     for todo in todos.iter().take(5) {
-        let content = todo.get("content").and_then(|value| value.as_str())?;
+        let content = todo
+            .get(todo_keys::CONTENT)
+            .and_then(|value| value.as_str())?;
         let status = todo
-            .get("status")
+            .get(todo_keys::STATUS)
             .and_then(|value| value.as_str())
-            .unwrap_or("pending");
+            .unwrap_or(TodoStatus::Pending.as_str());
         lines.push(format!(
             "- [{}] {}",
             prettify_token(status),
@@ -1612,17 +1640,17 @@ fn summarize_todo_args(tool_args: &serde_json::Value) -> Option<String> {
 
 fn summarize_task_args(tool_args: &serde_json::Value) -> Option<String> {
     let agent = tool_args
-        .get("subagent_type")
-        .or_else(|| tool_args.get("subagentType"))
-        .or_else(|| tool_args.get("category"))
+        .get(tool_arg_keys::SUBAGENT_TYPE)
+        .or_else(|| tool_args.get(tool_arg_keys::SUBAGENT_TYPE_CAMEL))
+        .or_else(|| tool_args.get(tool_arg_keys::CATEGORY))
         .and_then(|value| value.as_str())
         .unwrap_or("subagent");
     let description = tool_args
-        .get("description")
+        .get(tool_arg_keys::DESCRIPTION)
         .and_then(|value| value.as_str())
         .unwrap_or("");
     let prompt = tool_args
-        .get("prompt")
+        .get(tool_arg_keys::PROMPT)
         .and_then(|value| value.as_str())
         .unwrap_or("");
     let mut lines = vec![format!("Task → {}", prettify_token(agent))];
@@ -1637,27 +1665,36 @@ fn summarize_task_args(tool_args: &serde_json::Value) -> Option<String> {
 
 fn summarize_task_flow_args(tool_args: &serde_json::Value) -> Option<String> {
     let operation = tool_args
-        .get("operation")
+        .get(tool_arg_keys::OPERATION)
         .and_then(|value| value.as_str())
         .unwrap_or("unknown");
     let mut lines = vec![format!("TaskFlow → {}", prettify_token(operation))];
-    if let Some(agent) = tool_args.get("agent").and_then(|value| value.as_str()) {
+    if let Some(agent) = tool_args
+        .get(tool_arg_keys::AGENT)
+        .and_then(|value| value.as_str())
+    {
         lines.push(format!("- agent: {}", prettify_token(agent)));
     }
     if let Some(description) = tool_args
-        .get("description")
+        .get(tool_arg_keys::DESCRIPTION)
         .and_then(|value| value.as_str())
     {
         lines.push(format!("- label: {}", collapse_text(description, 88)));
     }
-    if let Some(prompt) = tool_args.get("prompt").and_then(|value| value.as_str()) {
+    if let Some(prompt) = tool_args
+        .get(tool_arg_keys::PROMPT)
+        .and_then(|value| value.as_str())
+    {
         lines.push(format!("- prompt: {}", collapse_text(prompt, 88)));
     }
     if let Some(todo_item) = tool_args
-        .get("todo_item")
+        .get(tool_arg_keys::TODO_ITEM)
         .and_then(|value| value.as_object())
     {
-        if let Some(content) = todo_item.get("content").and_then(|value| value.as_str()) {
+        if let Some(content) = todo_item
+            .get(todo_keys::CONTENT)
+            .and_then(|value| value.as_str())
+        {
             lines.push(format!("- todo: {}", collapse_text(content, 88)));
         }
     }
@@ -1731,14 +1768,18 @@ fn extract_stage_capability_activity(
             }
 
             evidence.push_agent(
-                args.get("subagent_type")
-                    .or_else(|| args.get("subagentType"))
-                    .or_else(|| args.get("agent"))
+                args.get(tool_arg_keys::SUBAGENT_TYPE)
+                    .or_else(|| args.get(tool_arg_keys::SUBAGENT_TYPE_CAMEL))
+                    .or_else(|| args.get(tool_arg_keys::AGENT))
                     .and_then(|value| value.as_str()),
             );
-            evidence.push_category(args.get("category").and_then(|value| value.as_str()));
+            evidence.push_category(
+                args.get(tool_arg_keys::CATEGORY)
+                    .and_then(|value| value.as_str()),
+            );
             evidence.push_skills_from_array(
-                args.get("load_skills").or_else(|| args.get("loadedSkills")),
+                args.get(tool_arg_keys::LOAD_SKILLS)
+                    .or_else(|| args.get(tool_arg_keys::LOADED_SKILLS)),
             );
         }
         StageCapabilityActivitySource::ToolOutput(tool_output) => {
@@ -1751,24 +1792,28 @@ fn extract_stage_capability_activity(
 
             evidence.push_agent(
                 metadata
-                    .get("agent")
+                    .get(tool_arg_keys::AGENT)
                     .and_then(|value| value.as_str())
                     .or_else(|| {
                         metadata
-                            .get("task")
-                            .and_then(|value| value.get("agent"))
+                            .get(tool_arg_keys::TASK)
+                            .and_then(|value| value.get(tool_arg_keys::AGENT))
                             .and_then(|value| value.as_str())
                     }),
             );
-            evidence.push_category(metadata.get("category").and_then(|value| value.as_str()));
+            evidence.push_category(
+                metadata
+                    .get(tool_arg_keys::CATEGORY)
+                    .and_then(|value| value.as_str()),
+            );
             evidence.push_skills_from_array(
                 metadata
-                    .get("loadedSkills")
-                    .or_else(|| metadata.get("load_skills"))
+                    .get(tool_arg_keys::LOADED_SKILLS)
+                    .or_else(|| metadata.get(tool_arg_keys::LOAD_SKILLS))
                     .or_else(|| {
                         metadata
-                            .get("task")
-                            .and_then(|value| value.get("loadedSkills"))
+                            .get(tool_arg_keys::TASK)
+                            .and_then(|value| value.get(tool_arg_keys::LOADED_SKILLS))
                     }),
             );
         }
@@ -1778,20 +1823,25 @@ fn extract_stage_capability_activity(
 }
 
 fn tool_supports_stage_capability_activity_args(tool_name: &str) -> bool {
-    matches!(tool_name, "task" | "task_flow")
+    matches!(
+        BuiltinToolName::parse(tool_name),
+        Some(BuiltinToolName::Task | BuiltinToolName::TaskFlow)
+    )
 }
 
 fn tool_supports_stage_capability_activity_output(
     tool_name: &str,
     metadata: &serde_json::Value,
 ) -> bool {
-    matches!(tool_name, "task" | "task_flow")
-        || metadata
-            .get("delegated")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false)
-        || metadata.get("agentTaskId").is_some()
-        || metadata.get("task").is_some()
+    matches!(
+        BuiltinToolName::parse(tool_name),
+        Some(BuiltinToolName::Task | BuiltinToolName::TaskFlow)
+    ) || metadata
+        .get(tool_arg_keys::DELEGATED)
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+        || metadata.get(tool_arg_keys::AGENT_TASK_ID).is_some()
+        || metadata.get(tool_arg_keys::TASK).is_some()
 }
 
 fn apply_stage_capability_activity_evidence(
@@ -1803,13 +1853,13 @@ fn apply_stage_capability_activity_evidence(
     }
 
     for agent in evidence.agents {
-        push_stage_active_value(message, "scheduler_stage_active_agents", &agent);
+        push_stage_active_value(message, scheduler_keys::ACTIVE_AGENTS, &agent);
     }
     for category in evidence.categories {
-        push_stage_active_value(message, "scheduler_stage_active_categories", &category);
+        push_stage_active_value(message, scheduler_keys::ACTIVE_CATEGORIES, &category);
     }
     for skill in evidence.skills {
-        push_stage_active_value(message, "scheduler_stage_active_skills", &skill);
+        push_stage_active_value(message, scheduler_keys::ACTIVE_SKILLS, &skill);
     }
 }
 
@@ -1872,28 +1922,67 @@ fn summarize_generic_tool_args(tool_name: &str, tool_args: &serde_json::Value) -
 // ── Tool-specific activity summarizers ──────────────────────────────────
 
 fn summarize_bash_args(tool_args: &serde_json::Value) -> Option<String> {
-    let command = activity_extract_string(tool_args, &["command", "cmd", "script", "input"])?;
+    let command = activity_extract_string(
+        tool_args,
+        &[
+            tool_arg_keys::COMMAND,
+            tool_arg_keys::CMD,
+            tool_arg_keys::SCRIPT,
+            tool_arg_keys::INPUT,
+        ],
+    )?;
     Some(format!("Bash → $ {}", collapse_text(&command, 120)))
 }
 
 fn summarize_read_args(tool_args: &serde_json::Value) -> Option<String> {
-    let path = activity_extract_string(tool_args, &["file_path", "filePath", "path", "file"])?;
+    let path = activity_extract_string(
+        tool_args,
+        &[
+            patch_keys::FILE_PATH_SNAKE,
+            patch_keys::FILE_PATH,
+            patch_keys::LEGACY_PATH,
+            tool_arg_keys::FILE,
+        ],
+    )?;
     Some(format!("Read → {path}"))
 }
 
 fn summarize_write_args(tool_args: &serde_json::Value) -> Option<String> {
-    let path = activity_extract_string(tool_args, &["file_path", "filePath", "path", "file"])?;
+    let path = activity_extract_string(
+        tool_args,
+        &[
+            patch_keys::FILE_PATH_SNAKE,
+            patch_keys::FILE_PATH,
+            patch_keys::LEGACY_PATH,
+            tool_arg_keys::FILE,
+        ],
+    )?;
     Some(format!("Write ← {path}"))
 }
 
 fn summarize_edit_args(tool_args: &serde_json::Value) -> Option<String> {
-    let path = activity_extract_string(tool_args, &["file_path", "filePath", "path", "file"])?;
+    let path = activity_extract_string(
+        tool_args,
+        &[
+            patch_keys::FILE_PATH_SNAKE,
+            patch_keys::FILE_PATH,
+            patch_keys::LEGACY_PATH,
+            tool_arg_keys::FILE,
+        ],
+    )?;
     Some(format!("Edit ← {path}"))
 }
 
 fn summarize_glob_args(tool_args: &serde_json::Value) -> Option<String> {
-    let pattern = activity_extract_string(tool_args, &["pattern"])?;
-    let target = activity_extract_string(tool_args, &["path", "file_path", "filePath"]);
+    let pattern = activity_extract_string(tool_args, &[tool_arg_keys::PATTERN])?;
+    let target = activity_extract_string(
+        tool_args,
+        &[
+            patch_keys::LEGACY_PATH,
+            patch_keys::FILE_PATH_SNAKE,
+            patch_keys::FILE_PATH,
+        ],
+    );
     let summary = match target {
         Some(path) => format!("Glob → \"{}\" in {}", pattern, path),
         None => format!("Glob → \"{}\"", pattern),
@@ -1902,8 +1991,16 @@ fn summarize_glob_args(tool_args: &serde_json::Value) -> Option<String> {
 }
 
 fn summarize_grep_args(tool_args: &serde_json::Value) -> Option<String> {
-    let pattern = activity_extract_string(tool_args, &["pattern", "query"])?;
-    let target = activity_extract_string(tool_args, &["path", "file_path", "filePath"]);
+    let pattern =
+        activity_extract_string(tool_args, &[tool_arg_keys::PATTERN, tool_arg_keys::QUERY])?;
+    let target = activity_extract_string(
+        tool_args,
+        &[
+            patch_keys::LEGACY_PATH,
+            patch_keys::FILE_PATH_SNAKE,
+            patch_keys::FILE_PATH,
+        ],
+    );
     let summary = match target {
         Some(path) => format!("Grep → \"{}\" in {}", pattern, path),
         None => format!("Grep → \"{}\"", pattern),
@@ -1912,19 +2009,26 @@ fn summarize_grep_args(tool_args: &serde_json::Value) -> Option<String> {
 }
 
 fn summarize_webfetch_args(tool_args: &serde_json::Value) -> Option<String> {
-    let url = activity_extract_string(tool_args, &["url"])?;
+    let url = activity_extract_string(tool_args, &[tool_arg_keys::URL])?;
     Some(format!("Web Fetch → {url}"))
 }
 
 fn summarize_search_args(tool_name: &str, tool_args: &serde_json::Value) -> Option<String> {
-    let query = activity_extract_string(tool_args, &["query"])?;
+    let query = activity_extract_string(tool_args, &[tool_arg_keys::QUERY])?;
     let name = pretty_scheduler_stage_name(tool_name);
     Some(format!("{name} → \"{query}\""))
 }
 
 fn summarize_lsp_args(tool_args: &serde_json::Value) -> Option<String> {
-    let operation = activity_extract_string(tool_args, &["operation"])?;
-    let target = activity_extract_string(tool_args, &["filePath", "file_path", "path"]);
+    let operation = activity_extract_string(tool_args, &[tool_arg_keys::OPERATION])?;
+    let target = activity_extract_string(
+        tool_args,
+        &[
+            patch_keys::FILE_PATH,
+            patch_keys::FILE_PATH_SNAKE,
+            patch_keys::LEGACY_PATH,
+        ],
+    );
     let summary = match target {
         Some(path) => format!("LSP → {} {}", operation, path),
         None => format!("LSP → {}", operation),
@@ -1934,16 +2038,16 @@ fn summarize_lsp_args(tool_args: &serde_json::Value) -> Option<String> {
 
 fn summarize_batch_args(tool_args: &serde_json::Value) -> Option<String> {
     let calls = tool_args
-        .get("toolCalls")
-        .or_else(|| tool_args.get("tool_calls"))
+        .get(tool_arg_keys::TOOL_CALLS_CAMEL)
+        .or_else(|| tool_args.get(tool_arg_keys::TOOL_CALLS))
         .and_then(|v| v.as_array())?;
     let count = calls.len();
     let mut names: Vec<String> = calls
         .iter()
         .filter_map(|call| {
-            call.get("tool")
-                .or_else(|| call.get("name"))
-                .or_else(|| call.get("tool_name"))
+            call.get(tool_arg_keys::TOOL)
+                .or_else(|| call.get(tool_arg_keys::NAME))
+                .or_else(|| call.get(tool_arg_keys::TOOL_NAME))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
         })
@@ -1957,12 +2061,19 @@ fn summarize_batch_args(tool_args: &serde_json::Value) -> Option<String> {
 }
 
 fn summarize_skill_args(tool_args: &serde_json::Value) -> Option<String> {
-    let name = activity_extract_string(tool_args, &["name", "skill"])?;
+    let name = activity_extract_string(tool_args, &[tool_arg_keys::NAME, tool_arg_keys::SKILL])?;
     Some(format!("Skill → \"{}\"", name))
 }
 
 fn summarize_list_args(tool_args: &serde_json::Value) -> Option<String> {
-    let path = activity_extract_string(tool_args, &["path", "file_path", "filePath"]);
+    let path = activity_extract_string(
+        tool_args,
+        &[
+            patch_keys::LEGACY_PATH,
+            patch_keys::FILE_PATH_SNAKE,
+            patch_keys::FILE_PATH,
+        ],
+    );
     match path {
         Some(path) => Some(format!("List → {path}")),
         None => Some("List → .".to_string()),
@@ -1972,7 +2083,12 @@ fn summarize_list_args(tool_args: &serde_json::Value) -> Option<String> {
 fn summarize_notebook_edit_args(tool_args: &serde_json::Value) -> Option<String> {
     let path = activity_extract_string(
         tool_args,
-        &["notebook_path", "notebookPath", "path", "file_path"],
+        &[
+            "notebook_path",
+            "notebookPath",
+            patch_keys::LEGACY_PATH,
+            patch_keys::FILE_PATH_SNAKE,
+        ],
     );
     let mode = activity_extract_string(tool_args, &["edit_mode", "editMode"]);
     let summary = match (path, mode) {
@@ -2006,14 +2122,14 @@ fn format_activity_primitive_args(
     object: &serde_json::Map<String, serde_json::Value>,
 ) -> Option<String> {
     const OMIT: &[&str] = &[
-        "content",
+        todo_keys::CONTENT,
         "new_string",
         "old_string",
         "new_source",
         "patch",
         "prompt",
         "questions",
-        "todos",
+        todo_keys::TODOS,
         "body",
         "text",
     ];
@@ -2045,7 +2161,7 @@ fn format_activity_primitive_args(
 
 fn summarize_question_result(metadata: Option<&serde_json::Value>) -> Option<String> {
     let fields = metadata?
-        .get("display.fields")
+        .get(output_keys::DISPLAY_FIELDS)
         .and_then(|value| value.as_array())?;
     if fields.is_empty() {
         return None;
@@ -2053,11 +2169,11 @@ fn summarize_question_result(metadata: Option<&serde_json::Value>) -> Option<Str
     let mut lines = vec![format!("Answered ({})", fields.len())];
     for field in fields.iter().take(3) {
         let key = field
-            .get("key")
+            .get(output_keys::DISPLAY_FIELD_KEY)
             .and_then(|value| value.as_str())
             .unwrap_or("Question");
         let value = field
-            .get("value")
+            .get(output_keys::DISPLAY_FIELD_VALUE)
             .and_then(|value| value.as_str())
             .unwrap_or("");
         lines.push(format!(
@@ -2070,17 +2186,21 @@ fn summarize_question_result(metadata: Option<&serde_json::Value>) -> Option<Str
 }
 
 fn summarize_todo_result(metadata: Option<&serde_json::Value>) -> Option<String> {
-    let todos = metadata?.get("todos").and_then(|value| value.as_array())?;
+    let todos = metadata?
+        .get(todo_keys::TODOS)
+        .and_then(|value| value.as_array())?;
     if todos.is_empty() {
         return None;
     }
     let mut lines = vec![format!("Todo list ({})", todos.len())];
     for todo in todos.iter().take(5) {
-        let content = todo.get("content").and_then(|value| value.as_str())?;
+        let content = todo
+            .get(todo_keys::CONTENT)
+            .and_then(|value| value.as_str())?;
         let status = todo
-            .get("status")
+            .get(todo_keys::STATUS)
             .and_then(|value| value.as_str())
-            .unwrap_or("pending");
+            .unwrap_or(TodoStatus::Pending.as_str());
         lines.push(format!(
             "- [{}] {}",
             prettify_token(status),
@@ -2108,23 +2228,26 @@ fn collapse_text(input: &str, max_chars: usize) -> String {
 fn extract_todo_items_from_args(
     tool_args: &serde_json::Value,
 ) -> Option<Vec<rocode_session::TodoInfo>> {
-    let todos = tool_args.get("todos")?.as_array()?;
+    let todos = tool_args.get(todo_keys::TODOS)?.as_array()?;
     if todos.is_empty() {
         return None;
     }
     let items = todos
         .iter()
         .filter_map(|todo| {
-            let content = todo.get("content").and_then(|v| v.as_str())?.to_string();
+            let content = todo
+                .get(todo_keys::CONTENT)
+                .and_then(|v| v.as_str())?
+                .to_string();
             let status = todo
-                .get("status")
+                .get(todo_keys::STATUS)
                 .and_then(|v| v.as_str())
-                .unwrap_or("pending")
+                .unwrap_or(TodoStatus::Pending.as_str())
                 .to_string();
             let priority = todo
-                .get("priority")
+                .get(todo_keys::PRIORITY)
                 .and_then(|v| v.as_str())
-                .unwrap_or("medium")
+                .unwrap_or(TodoPriority::Medium.as_str())
                 .to_string();
             Some(rocode_session::TodoInfo {
                 content,
@@ -2144,14 +2267,14 @@ fn apply_scheduler_decision_metadata(stage_name: &str, message: &mut SessionMess
     clear_scheduler_decision_metadata(message);
     let text = message.get_text();
     let body = scheduler_stage_body(&text);
-    match stage_name {
-        "route" => {
+    match SchedulerStageName::parse(stage_name) {
+        Some(SchedulerStageName::Route) => {
             let Some(decision) = parse_route_decision(&body) else {
                 return;
             };
             write_scheduler_route_metadata(message, &decision);
         }
-        "coordination-gate" | "autonomous-gate" => {
+        Some(SchedulerStageName::CoordinationGate | SchedulerStageName::AutonomousGate) => {
             let Some(decision) = parse_execution_gate_decision(&body) else {
                 return;
             };
@@ -2163,14 +2286,14 @@ fn apply_scheduler_decision_metadata(stage_name: &str, message: &mut SessionMess
 
 fn clear_scheduler_decision_metadata(message: &mut SessionMessage) {
     for key in [
-        "scheduler_decision_kind",
-        "scheduler_decision_title",
-        "scheduler_decision_fields",
-        "scheduler_decision_sections",
-        "scheduler_gate_status",
-        "scheduler_gate_summary",
-        "scheduler_gate_next_input",
-        "scheduler_gate_final_response",
+        scheduler_decision_keys::KIND,
+        scheduler_decision_keys::TITLE,
+        scheduler_decision_keys::FIELDS,
+        scheduler_decision_keys::SECTIONS,
+        scheduler_gate_keys::STATUS,
+        scheduler_gate_keys::SUMMARY,
+        scheduler_gate_keys::NEXT_INPUT,
+        scheduler_gate_keys::FINAL_RESPONSE,
     ] {
         message.metadata.remove(key);
     }
@@ -2231,7 +2354,13 @@ fn write_scheduler_route_metadata(message: &mut SessionMessage, decision: &Route
         sections.push(decision_section("Response", direct_response));
     }
 
-    write_scheduler_decision_metadata(message, "route", "Decision", fields, sections);
+    write_scheduler_decision_metadata(
+        message,
+        SchedulerDecisionKind::Route.as_str(),
+        "Decision",
+        fields,
+        sections,
+    );
 }
 
 fn write_scheduler_gate_metadata(
@@ -2262,14 +2391,20 @@ fn write_scheduler_gate_metadata(
     {
         sections.push(decision_section("Final Response", final_response));
     }
-    write_scheduler_decision_metadata(message, "gate", "Decision", fields, sections);
+    write_scheduler_decision_metadata(
+        message,
+        SchedulerDecisionKind::Gate.as_str(),
+        "Decision",
+        fields,
+        sections,
+    );
     message.metadata.insert(
-        "scheduler_gate_status".to_string(),
+        scheduler_gate_keys::STATUS.to_string(),
         serde_json::json!(status),
     );
     if !decision.summary.is_empty() {
         message.metadata.insert(
-            "scheduler_gate_summary".to_string(),
+            scheduler_gate_keys::SUMMARY.to_string(),
             serde_json::json!(decision.summary),
         );
     }
@@ -2279,7 +2414,7 @@ fn write_scheduler_gate_metadata(
         .filter(|value| !value.is_empty())
     {
         message.metadata.insert(
-            "scheduler_gate_next_input".to_string(),
+            scheduler_gate_keys::NEXT_INPUT.to_string(),
             serde_json::json!(next_input),
         );
     }
@@ -2289,7 +2424,7 @@ fn write_scheduler_gate_metadata(
         .filter(|value| !value.is_empty())
     {
         message.metadata.insert(
-            "scheduler_gate_final_response".to_string(),
+            scheduler_gate_keys::FINAL_RESPONSE.to_string(),
             serde_json::json!(final_response),
         );
     }
@@ -2303,51 +2438,51 @@ fn write_scheduler_decision_metadata(
     sections: Vec<serde_json::Value>,
 ) {
     message.metadata.insert(
-        "scheduler_decision_kind".to_string(),
+        scheduler_decision_keys::KIND.to_string(),
         serde_json::json!(kind),
     );
     message.metadata.insert(
-        "scheduler_decision_title".to_string(),
+        scheduler_decision_keys::TITLE.to_string(),
         serde_json::json!(title),
     );
     message.metadata.insert(
-        "scheduler_decision_fields".to_string(),
+        scheduler_decision_keys::FIELDS.to_string(),
         serde_json::json!(fields),
     );
     message.metadata.insert(
-        "scheduler_decision_sections".to_string(),
+        scheduler_decision_keys::SECTIONS.to_string(),
         serde_json::json!(sections),
     );
     message.metadata.insert(
-        "scheduler_decision_spec".to_string(),
+        scheduler_decision_keys::SPEC.to_string(),
         scheduler_decision_render_spec_json(),
     );
 }
 
 fn decision_field(label: &str, value: &str, tone: Option<&str>) -> serde_json::Value {
     serde_json::json!({
-        "label": label,
-        "value": value,
-        "tone": tone,
+        output_keys::LABEL: label,
+        output_keys::VALUE: value,
+        output_keys::TONE: tone,
     })
 }
 
 fn decision_section(title: &str, body: &str) -> serde_json::Value {
     serde_json::json!({
-        "title": title,
-        "body": body,
+        output_keys::TITLE: title,
+        output_keys::BODY: body,
     })
 }
 
 fn scheduler_decision_render_spec_json() -> serde_json::Value {
     serde_json::json!({
-        "version": "decision-card/v1",
-        "show_header_divider": true,
-        "field_order": "as-provided",
-        "field_label_emphasis": "bold",
-        "status_palette": "semantic",
-        "section_spacing": "loose",
-        "update_policy": "stable-shell-live-runtime-append-decision",
+        output_decision_spec_keys::VERSION: SchedulerDecisionRenderSpecVersion::DecisionCardV1.as_str(),
+        output_decision_spec_keys::SHOW_HEADER_DIVIDER: true,
+        output_decision_spec_keys::FIELD_ORDER: SchedulerDecisionFieldOrder::AsProvided.as_str(),
+        output_decision_spec_keys::FIELD_LABEL_EMPHASIS: SchedulerDecisionFieldLabelEmphasis::Bold.as_str(),
+        output_decision_spec_keys::STATUS_PALETTE: SchedulerDecisionStatusPalette::Semantic.as_str(),
+        output_decision_spec_keys::SECTION_SPACING: SchedulerDecisionSectionSpacing::Loose.as_str(),
+        output_decision_spec_keys::UPDATE_POLICY: SchedulerDecisionUpdatePolicy::StableShellLiveRuntimeAppendDecision.as_str(),
     })
 }
 
@@ -2397,20 +2532,40 @@ pub(crate) fn scheduler_stage_title(scheduler_profile: &str, stage_name: &str) -
 }
 
 pub(crate) fn scheduler_stage_focus(stage_name: &str) -> &'static str {
-    match stage_name {
-        "route" => "Decide the correct workflow and preserve request intent.",
-        "interview" => "Clarify scope, requirements, and blocking ambiguities.",
-        "plan" => "Draft the executable plan and its guardrails.",
-        "review" => "Audit the current artifact for gaps and readiness.",
-        "handoff" => "Prepare the next-step handoff for execution or approval.",
-        "execution-orchestration" => "Drive the active execution workflow to concrete results.",
-        "synthesis" => "Merge stage outputs into a final user-facing delivery.",
-        "coordination-verification" => "Verify delegated work against actual evidence.",
-        "coordination-gate" => "Decide whether the coordination loop can finish.",
-        "coordination-retry" => "Prepare the bounded retry focus for the next round.",
-        "autonomous-verification" => "Verify autonomous execution against the task boundary.",
-        "autonomous-gate" => "Decide whether autonomous execution is complete.",
-        "autonomous-retry" => "Prepare the bounded recovery retry.",
+    match SchedulerStageName::parse(stage_name) {
+        Some(SchedulerStageName::Route) => {
+            "Decide the correct workflow and preserve request intent."
+        }
+        Some(SchedulerStageName::Interview) => {
+            "Clarify scope, requirements, and blocking ambiguities."
+        }
+        Some(SchedulerStageName::Plan) => "Draft the executable plan and its guardrails.",
+        Some(SchedulerStageName::Review) => "Audit the current artifact for gaps and readiness.",
+        Some(SchedulerStageName::Handoff) => {
+            "Prepare the next-step handoff for execution or approval."
+        }
+        Some(SchedulerStageName::ExecutionOrchestration) => {
+            "Drive the active execution workflow to concrete results."
+        }
+        Some(SchedulerStageName::Synthesis) => {
+            "Merge stage outputs into a final user-facing delivery."
+        }
+        Some(SchedulerStageName::CoordinationVerification) => {
+            "Verify delegated work against actual evidence."
+        }
+        Some(SchedulerStageName::CoordinationGate) => {
+            "Decide whether the coordination loop can finish."
+        }
+        Some(SchedulerStageName::CoordinationRetry) => {
+            "Prepare the bounded retry focus for the next round."
+        }
+        Some(SchedulerStageName::AutonomousVerification) => {
+            "Verify autonomous execution against the task boundary."
+        }
+        Some(SchedulerStageName::AutonomousGate) => {
+            "Decide whether autonomous execution is complete."
+        }
+        Some(SchedulerStageName::AutonomousRetry) => "Prepare the bounded recovery retry.",
         _ => "Advance the current scheduler stage.",
     }
 }
@@ -2460,50 +2615,51 @@ pub(crate) async fn emit_scheduler_stage_message(input: SchedulerStageMessageInp
     let message = session.add_assistant_message();
     let stage_id = format!("stage_{}", uuid::Uuid::new_v4().simple());
     message.metadata.insert(
-        "scheduler_stage_id".to_string(),
+        scheduler_keys::STAGE_ID.to_string(),
         serde_json::json!(&stage_id),
     );
     message.metadata.insert(
-        "scheduler_profile".to_string(),
+        scheduler_keys::PROFILE.to_string(),
         serde_json::json!(scheduler_profile),
     );
     message.metadata.insert(
-        "resolved_scheduler_profile".to_string(),
+        scheduler_keys::RESOLVED_PROFILE.to_string(),
         serde_json::json!(scheduler_profile),
     );
-    message
-        .metadata
-        .insert("scheduler_stage".to_string(), serde_json::json!(stage_name));
     message.metadata.insert(
-        "scheduler_stage_index".to_string(),
+        scheduler_keys::STAGE.to_string(),
+        serde_json::json!(stage_name),
+    );
+    message.metadata.insert(
+        scheduler_keys::STAGE_INDEX.to_string(),
         serde_json::json!(stage_index),
     );
     message.metadata.insert(
-        "scheduler_stage_total".to_string(),
+        scheduler_keys::STAGE_TOTAL.to_string(),
         serde_json::json!(stage_total),
     );
+    message
+        .metadata
+        .insert(scheduler_keys::EMITTED.to_string(), serde_json::json!(true));
     message.metadata.insert(
-        "scheduler_stage_emitted".to_string(),
-        serde_json::json!(true),
-    );
-    message.metadata.insert(
-        "scheduler_stage_agent".to_string(),
+        scheduler_keys::AGENT.to_string(),
         serde_json::json!(exec_ctx.agent_name.clone()),
     );
+    let status = if body.starts_with("Stage error:") {
+        SchedulerStageStatus::Blocked
+    } else {
+        SchedulerStageStatus::Done
+    };
     message.metadata.insert(
-        "scheduler_stage_status".to_string(),
-        serde_json::json!(if body.starts_with("Stage error:") {
-            "blocked"
-        } else {
-            "done"
-        }),
+        scheduler_keys::STATUS.to_string(),
+        serde_json::json!(status.as_str()),
     );
     message.metadata.insert(
-        "scheduler_stage_focus".to_string(),
+        scheduler_keys::FOCUS.to_string(),
         serde_json::json!(scheduler_stage_focus(stage_name)),
     );
     message.metadata.insert(
-        "scheduler_stage_last_event".to_string(),
+        scheduler_keys::LAST_EVENT.to_string(),
         serde_json::json!(if body.starts_with("Stage error:") {
             "Stage failed"
         } else {
@@ -2511,20 +2667,20 @@ pub(crate) async fn emit_scheduler_stage_message(input: SchedulerStageMessageInp
         }),
     );
     message.metadata.insert(
-        "scheduler_stage_waiting_on".to_string(),
-        serde_json::json!("none"),
+        scheduler_keys::WAITING_ON.to_string(),
+        serde_json::json!(SchedulerStageWaitingOn::None.as_str()),
     );
     if let Some(observability) = scheduler_stage_observability(scheduler_profile, stage_name) {
         message.metadata.insert(
-            "scheduler_stage_projection".to_string(),
+            scheduler_keys::PROJECTION.to_string(),
             serde_json::json!(observability.projection),
         );
         message.metadata.insert(
-            "scheduler_stage_tool_policy".to_string(),
+            scheduler_keys::TOOL_POLICY.to_string(),
             serde_json::json!(observability.tool_policy),
         );
         message.metadata.insert(
-            "scheduler_stage_loop_budget".to_string(),
+            scheduler_keys::LOOP_BUDGET.to_string(),
             serde_json::json!(observability.loop_budget),
         );
     }
@@ -2603,11 +2759,11 @@ fn decision_from_metadata(
     metadata: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Option<SchedulerDecisionBlock> {
     let kind = metadata
-        .get("scheduler_decision_kind")
+        .get(scheduler_decision_keys::KIND)
         .and_then(|value| value.as_str())?
         .to_string();
     let title = metadata
-        .get("scheduler_decision_title")
+        .get(scheduler_decision_keys::TITLE)
         .and_then(|value| value.as_str())
         .unwrap_or("Decision")
         .to_string();
@@ -2616,17 +2772,17 @@ fn decision_from_metadata(
         title,
         spec: decision_spec_from_metadata(metadata).unwrap_or_else(default_decision_render_spec),
         fields: metadata
-            .get("scheduler_decision_fields")
+            .get(scheduler_decision_keys::FIELDS)
             .and_then(|value| value.as_array())
             .map(|fields| {
                 fields
                     .iter()
                     .filter_map(|field| {
                         Some(SchedulerDecisionField {
-                            label: field.get("label")?.as_str()?.to_string(),
-                            value: field.get("value")?.as_str()?.to_string(),
+                            label: field.get(output_keys::LABEL)?.as_str()?.to_string(),
+                            value: field.get(output_keys::VALUE)?.as_str()?.to_string(),
                             tone: field
-                                .get("tone")
+                                .get(output_keys::TONE)
                                 .and_then(|value| value.as_str())
                                 .map(|value| value.to_string()),
                         })
@@ -2635,15 +2791,15 @@ fn decision_from_metadata(
             })
             .unwrap_or_default(),
         sections: metadata
-            .get("scheduler_decision_sections")
+            .get(scheduler_decision_keys::SECTIONS)
             .and_then(|value| value.as_array())
             .map(|sections| {
                 sections
                     .iter()
                     .filter_map(|section| {
                         Some(SchedulerDecisionSection {
-                            title: section.get("title")?.as_str()?.to_string(),
-                            body: section.get("body")?.as_str()?.to_string(),
+                            title: section.get(output_keys::TITLE)?.as_str()?.to_string(),
+                            body: section.get(output_keys::BODY)?.as_str()?.to_string(),
                         })
                     })
                     .collect()
@@ -2654,8 +2810,8 @@ fn decision_from_metadata(
 
 pub fn decision_from_stage_text(stage: &str, text: &str) -> Option<SchedulerDecisionBlock> {
     let body = scheduler_stage_body(text);
-    match stage {
-        "route" => {
+    match SchedulerStageName::parse(stage) {
+        Some(SchedulerStageName::Route) => {
             let decision = parse_route_decision(&body)?;
             let mut fields = Vec::new();
             let (outcome, outcome_tone) = route_outcome_field(&decision);
@@ -2724,14 +2880,14 @@ pub fn decision_from_stage_text(stage: &str, text: &str) -> Option<SchedulerDeci
                 });
             }
             Some(SchedulerDecisionBlock {
-                kind: "route".to_string(),
+                kind: SchedulerDecisionKind::Route.as_str().to_string(),
                 title: "Decision".to_string(),
                 spec: default_decision_render_spec(),
                 fields,
                 sections,
             })
         }
-        "coordination-gate" | "autonomous-gate" => {
+        Some(SchedulerStageName::CoordinationGate | SchedulerStageName::AutonomousGate) => {
             let decision = parse_execution_gate_decision(&body)?;
             let mut fields = vec![SchedulerDecisionField {
                 label: "Outcome".to_string(),
@@ -2763,7 +2919,7 @@ pub fn decision_from_stage_text(stage: &str, text: &str) -> Option<SchedulerDeci
                 })
                 .unwrap_or_default();
             Some(SchedulerDecisionBlock {
-                kind: "gate".to_string(),
+                kind: SchedulerDecisionKind::Gate.as_str().to_string(),
                 title: "Decision".to_string(),
                 spec: default_decision_render_spec(),
                 fields,
@@ -2777,27 +2933,55 @@ pub fn decision_from_stage_text(stage: &str, text: &str) -> Option<SchedulerDeci
 fn decision_spec_from_metadata(
     metadata: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Option<SchedulerDecisionRenderSpec> {
-    let spec = metadata.get("scheduler_decision_spec")?;
+    let spec = metadata.get(scheduler_decision_keys::SPEC)?;
     Some(SchedulerDecisionRenderSpec {
-        version: spec.get("version")?.as_str()?.to_string(),
-        show_header_divider: spec.get("show_header_divider")?.as_bool()?,
-        field_order: spec.get("field_order")?.as_str()?.to_string(),
-        field_label_emphasis: spec.get("field_label_emphasis")?.as_str()?.to_string(),
-        status_palette: spec.get("status_palette")?.as_str()?.to_string(),
-        section_spacing: spec.get("section_spacing")?.as_str()?.to_string(),
-        update_policy: spec.get("update_policy")?.as_str()?.to_string(),
+        version: spec
+            .get(output_decision_spec_keys::VERSION)?
+            .as_str()?
+            .to_string(),
+        show_header_divider: spec
+            .get(output_decision_spec_keys::SHOW_HEADER_DIVIDER)?
+            .as_bool()?,
+        field_order: spec
+            .get(output_decision_spec_keys::FIELD_ORDER)?
+            .as_str()?
+            .to_string(),
+        field_label_emphasis: spec
+            .get(output_decision_spec_keys::FIELD_LABEL_EMPHASIS)?
+            .as_str()?
+            .to_string(),
+        status_palette: spec
+            .get(output_decision_spec_keys::STATUS_PALETTE)?
+            .as_str()?
+            .to_string(),
+        section_spacing: spec
+            .get(output_decision_spec_keys::SECTION_SPACING)?
+            .as_str()?
+            .to_string(),
+        update_policy: spec
+            .get(output_decision_spec_keys::UPDATE_POLICY)?
+            .as_str()?
+            .to_string(),
     })
 }
 
 fn default_decision_render_spec() -> SchedulerDecisionRenderSpec {
     SchedulerDecisionRenderSpec {
-        version: "decision-card/v1".to_string(),
+        version: SchedulerDecisionRenderSpecVersion::DecisionCardV1
+            .as_str()
+            .to_string(),
         show_header_divider: true,
-        field_order: "as-provided".to_string(),
-        field_label_emphasis: "bold".to_string(),
-        status_palette: "semantic".to_string(),
-        section_spacing: "loose".to_string(),
-        update_policy: "stable-shell-live-runtime-append-decision".to_string(),
+        field_order: SchedulerDecisionFieldOrder::AsProvided.as_str().to_string(),
+        field_label_emphasis: SchedulerDecisionFieldLabelEmphasis::Bold
+            .as_str()
+            .to_string(),
+        status_palette: SchedulerDecisionStatusPalette::Semantic
+            .as_str()
+            .to_string(),
+        section_spacing: SchedulerDecisionSectionSpacing::Loose.as_str().to_string(),
+        update_policy: SchedulerDecisionUpdatePolicy::StableShellLiveRuntimeAppendDecision
+            .as_str()
+            .to_string(),
     }
 }
 
@@ -2817,8 +3001,8 @@ fn pretty_scheduler_stage_title(
 ) -> String {
     let stage_title = prettify_decision_value(stage);
     match metadata
-        .get("resolved_scheduler_profile")
-        .or_else(|| metadata.get("scheduler_profile"))
+        .get(scheduler_keys::RESOLVED_PROFILE)
+        .or_else(|| metadata.get(scheduler_keys::PROFILE))
         .and_then(|value| value.as_str())
     {
         Some(profile) if !profile.is_empty() => format!("{profile} · {stage_title}"),
@@ -2977,21 +3161,21 @@ mod tests {
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage")
+                .get(scheduler_keys::STAGE)
                 .and_then(|value| value.as_str()),
             Some("plan")
         );
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage_projection")
+                .get(scheduler_keys::PROJECTION)
                 .and_then(|value| value.as_str()),
             Some("transcript")
         );
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage_loop_budget")
+                .get(scheduler_keys::LOOP_BUDGET)
                 .and_then(|value| value.as_str()),
             Some("unbounded")
         );
@@ -3034,11 +3218,11 @@ mod tests {
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage")
+                .get(scheduler_keys::STAGE)
                 .and_then(|value| value.as_str()),
             Some("coordination-verification")
         );
-        assert!(!message.metadata.contains_key("scheduler_stage_projection"));
+        assert!(!message.metadata.contains_key(scheduler_keys::PROJECTION));
     }
 
     #[tokio::test]
@@ -3067,7 +3251,7 @@ mod tests {
         hook.on_tool_start(
             "prometheus",
             "tc_question_1",
-            "question",
+            BuiltinToolName::Question.as_str(),
             &serde_json::json!({
                 "questions": [{
                     "header": "Scope",
@@ -3081,17 +3265,26 @@ mod tests {
         hook.on_tool_end(
             "prometheus",
             "tc_question_1",
-            "question",
+            BuiltinToolName::Question.as_str(),
             &OrchestratorToolOutput {
                 output: "{}".to_string(),
                 is_error: false,
                 title: Some("User response received".to_string()),
-                metadata: Some(serde_json::json!({
-                    "display.fields": [{
-                        "key": "Proceed with schema migration?",
-                        "value": "Yes"
-                    }]
-                })),
+                metadata: Some(serde_json::Value::Object(serde_json::Map::from_iter([(
+                    output_keys::DISPLAY_FIELDS.to_string(),
+                    serde_json::Value::Array(vec![serde_json::Value::Object(
+                        serde_json::Map::from_iter([
+                            (
+                                output_keys::DISPLAY_FIELD_KEY.to_string(),
+                                serde_json::json!("Proceed with schema migration?"),
+                            ),
+                            (
+                                output_keys::DISPLAY_FIELD_VALUE.to_string(),
+                                serde_json::json!("Yes"),
+                            ),
+                        ]),
+                    )]),
+                )]))),
             },
             &exec_ctx,
         )
@@ -3105,42 +3298,42 @@ mod tests {
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage_step")
+                .get(scheduler_keys::STEP)
                 .and_then(|value| value.as_u64()),
             Some(1)
         );
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage_status")
+                .get(scheduler_keys::STATUS)
                 .and_then(|value| value.as_str()),
-            Some("done")
+            Some(SchedulerStageStatus::Done.as_str())
         );
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage_focus")
+                .get(scheduler_keys::FOCUS)
                 .and_then(|value| value.as_str()),
             Some("Draft the executable plan and its guardrails.")
         );
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage_last_event")
+                .get(scheduler_keys::LAST_EVENT)
                 .and_then(|value| value.as_str()),
             Some("Stage completed")
         );
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage_waiting_on")
+                .get(scheduler_keys::WAITING_ON)
                 .and_then(|value| value.as_str()),
-            Some("none")
+            Some(SchedulerStageWaitingOn::None.as_str())
         );
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage_activity")
+                .get(scheduler_keys::ACTIVITY)
                 .and_then(|value| value.as_str()),
             Some("Answered (1)\n- Proceed with schema migration?: Yes")
         );
@@ -3202,14 +3395,14 @@ mod tests {
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage_prompt_tokens")
+                .get(scheduler_keys::PROMPT_TOKENS)
                 .and_then(|value| value.as_u64()),
             Some(1300)
         );
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage_completion_tokens")
+                .get(scheduler_keys::COMPLETION_TOKENS)
                 .and_then(|value| value.as_u64()),
             Some(340)
         );
@@ -3335,14 +3528,14 @@ mod tests {
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage_prompt_tokens")
+                .get(scheduler_keys::PROMPT_TOKENS)
                 .and_then(|value| value.as_u64()),
             Some(1200)
         );
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage_completion_tokens")
+                .get(scheduler_keys::COMPLETION_TOKENS)
                 .and_then(|value| value.as_u64()),
             Some(320)
         );
@@ -3389,7 +3582,7 @@ mod tests {
         hook.on_tool_start(
             "atlas",
             "tc_task_flow_1",
-            "task_flow",
+            BuiltinToolName::TaskFlow.as_str(),
             &serde_json::json!({
                 "operation": "create",
                 "agent": "build",
@@ -3407,28 +3600,28 @@ mod tests {
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage_available_skill_count")
+                .get(scheduler_keys::AVAILABLE_SKILL_COUNT)
                 .and_then(|value| value.as_u64()),
             Some(2)
         );
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage_available_agent_count")
+                .get(scheduler_keys::AVAILABLE_AGENT_COUNT)
                 .and_then(|value| value.as_u64()),
             Some(2)
         );
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage_available_category_count")
+                .get(scheduler_keys::AVAILABLE_CATEGORY_COUNT)
                 .and_then(|value| value.as_u64()),
             Some(1)
         );
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage_active_agents")
+                .get(scheduler_keys::ACTIVE_AGENTS)
                 .and_then(|value| value.as_array())
                 .and_then(|values| values.first())
                 .and_then(|value| value.as_str()),
@@ -3437,7 +3630,7 @@ mod tests {
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage_active_skills")
+                .get(scheduler_keys::ACTIVE_SKILLS)
                 .and_then(|value| value.as_array())
                 .and_then(|values| values.first())
                 .and_then(|value| value.as_str()),
@@ -3446,7 +3639,7 @@ mod tests {
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage_active_categories")
+                .get(scheduler_keys::ACTIVE_CATEGORIES)
                 .and_then(|value| value.as_array())
                 .and_then(|values| values.first())
                 .and_then(|value| value.as_str()),
@@ -3528,7 +3721,7 @@ mod tests {
         let parent_stage_message = parent.messages.last().expect("parent stage message");
         let child_session_id = parent_stage_message
             .metadata
-            .get("scheduler_stage_child_session_id")
+            .get(scheduler_keys::CHILD_SESSION_ID)
             .and_then(|value| value.as_str())
             .expect("child session id")
             .to_string();
@@ -3696,7 +3889,7 @@ mod tests {
         hook.on_tool_end(
             "atlas",
             "tc_task_flow_2",
-            "task_flow",
+            BuiltinToolName::TaskFlow.as_str(),
             &OrchestratorToolOutput {
                 output: "delegated".to_string(),
                 is_error: false,
@@ -3719,7 +3912,7 @@ mod tests {
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage_active_agents")
+                .get(scheduler_keys::ACTIVE_AGENTS)
                 .and_then(|value| value.as_array())
                 .and_then(|values| values.first())
                 .and_then(|value| value.as_str()),
@@ -3728,7 +3921,7 @@ mod tests {
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage_active_skills")
+                .get(scheduler_keys::ACTIVE_SKILLS)
                 .and_then(|value| value.as_array())
                 .and_then(|values| values.first())
                 .and_then(|value| value.as_str()),
@@ -3769,9 +3962,9 @@ mod tests {
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage_status")
+                .get(scheduler_keys::STATUS)
                 .and_then(|value| value.as_str()),
-            Some("cancelling")
+            Some(SchedulerStageStatus::Cancelling.as_str())
         );
     }
 
@@ -3808,11 +4001,11 @@ mod tests {
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_stage_status")
+                .get(scheduler_keys::STATUS)
                 .and_then(|value| value.as_str()),
-            Some("cancelled")
+            Some(SchedulerStageStatus::Cancelled.as_str())
         );
-        assert!(!message.metadata.contains_key("scheduler_stage_streaming"));
+        assert!(!message.metadata.contains_key(scheduler_keys::STREAMING));
     }
 
     #[tokio::test]
@@ -3852,18 +4045,24 @@ mod tests {
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_decision_kind")
+                .get(scheduler_decision_keys::KIND)
                 .and_then(|value| value.as_str()),
             Some("route")
         );
         let fields = message
             .metadata
-            .get("scheduler_decision_fields")
+            .get(scheduler_decision_keys::FIELDS)
             .and_then(|value| value.as_array())
             .expect("decision fields should exist");
         assert!(fields.iter().any(|field| {
-            field.get("label").and_then(|value| value.as_str()) == Some("Outcome")
-                && field.get("value").and_then(|value| value.as_str()) == Some("Orchestrate")
+            field
+                .get(output_keys::LABEL)
+                .and_then(|value| value.as_str())
+                == Some("Outcome")
+                && field
+                    .get(output_keys::VALUE)
+                    .and_then(|value| value.as_str())
+                    == Some("Orchestrate")
         }));
     }
 
@@ -3904,21 +4103,21 @@ mod tests {
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_gate_status")
+                .get(scheduler_gate_keys::STATUS)
                 .and_then(|value| value.as_str()),
             Some("continue")
         );
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_gate_summary")
+                .get(scheduler_gate_keys::SUMMARY)
                 .and_then(|value| value.as_str()),
             Some("Task B still lacks evidence.")
         );
         assert_eq!(
             message
                 .metadata
-                .get("scheduler_gate_next_input")
+                .get(scheduler_gate_keys::NEXT_INPUT)
                 .and_then(|value| value.as_str()),
             Some("Run one more worker round on task B.")
         );

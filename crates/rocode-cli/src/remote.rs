@@ -8,6 +8,14 @@ use rocode_command::output_blocks::{
 };
 use rocode_config::schema::ShareMode;
 use rocode_config::Config;
+use rocode_core::contracts::events::ServerEventType;
+use rocode_core::contracts::output_blocks::{
+    keys as block_keys, scheduler_decision_keys as decision_keys,
+    scheduler_decision_spec_keys as decision_spec_keys, scheduler_stage_keys as stage_keys,
+    BlockToneWire, MessagePhaseWire, MessageRoleWire, OutputBlockKind, ToolPhaseWire,
+};
+use rocode_core::contracts::session::keys as session_keys;
+use rocode_core::contracts::wire::{fields as wire_fields, keys as wire_keys};
 use serde::Deserialize;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,6 +53,8 @@ pub(crate) struct RemoteAttachOptions {
     pub show_thinking: bool,
 }
 
+const DEFAULT_SSE_EVENT_NAME: &str = "message";
+
 fn remote_show_thinking_from_config(config: &Config) -> Option<bool> {
     config
         .ui_preferences
@@ -58,73 +68,77 @@ async fn fetch_remote_config(client: &reqwest::Client, base_url: &str) -> anyhow
 }
 
 pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBlock> {
-    let kind = payload.get("kind")?.as_str()?;
+    let kind_raw = payload.get(block_keys::KIND)?.as_str()?;
+    let kind = OutputBlockKind::parse(kind_raw)?;
+
     match kind {
-        "status" => {
-            let tone = match payload
-                .get("tone")
+        OutputBlockKind::Status => {
+            let tone_raw = payload
+                .get(block_keys::TONE)
                 .and_then(|v| v.as_str())
-                .unwrap_or("normal")
-            {
-                "title" => BlockTone::Title,
-                "muted" => BlockTone::Muted,
-                "success" => BlockTone::Success,
-                "warning" => BlockTone::Warning,
-                "error" => BlockTone::Error,
+                .unwrap_or(BlockToneWire::Normal.as_str());
+            let tone = match BlockToneWire::parse(tone_raw) {
+                Some(BlockToneWire::Title) => BlockTone::Title,
+                Some(BlockToneWire::Muted) => BlockTone::Muted,
+                Some(BlockToneWire::Success) => BlockTone::Success,
+                Some(BlockToneWire::Warning) => BlockTone::Warning,
+                Some(BlockToneWire::Error) => BlockTone::Error,
                 _ => BlockTone::Normal,
             };
             let text = payload
-                .get("text")
+                .get(block_keys::TEXT)
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string();
             Some(OutputBlock::Status(StatusBlock { tone, text }))
         }
-        "message" => {
-            let role = match payload
-                .get("role")
+        OutputBlockKind::Message => {
+            let role_raw = payload
+                .get(block_keys::ROLE)
                 .and_then(|v| v.as_str())
-                .unwrap_or("assistant")
-            {
-                "user" => MessageRole::User,
-                "system" => MessageRole::System,
+                .unwrap_or(MessageRoleWire::Assistant.as_str());
+            let role = match MessageRoleWire::parse(role_raw) {
+                Some(MessageRoleWire::User) => MessageRole::User,
+                Some(MessageRoleWire::System) => MessageRole::System,
                 _ => MessageRole::Assistant,
             };
-            let phase = match payload
-                .get("phase")
+
+            let phase_raw = payload
+                .get(block_keys::PHASE)
                 .and_then(|v| v.as_str())
-                .unwrap_or("delta")
-            {
-                "start" => MessagePhase::Start,
-                "end" => MessagePhase::End,
-                "full" => MessagePhase::Full,
+                .unwrap_or(MessagePhaseWire::Delta.as_str());
+            let phase = match MessagePhaseWire::parse(phase_raw) {
+                Some(MessagePhaseWire::Start) => MessagePhase::Start,
+                Some(MessagePhaseWire::End) => MessagePhase::End,
+                Some(MessagePhaseWire::Full) => MessagePhase::Full,
                 _ => MessagePhase::Delta,
             };
+
             let text = payload
-                .get("text")
+                .get(block_keys::TEXT)
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string();
             Some(OutputBlock::Message(MessageBlock { role, phase, text }))
         }
-        "tool" => {
+        OutputBlockKind::Tool => {
             let name = payload
-                .get("name")
+                .get(block_keys::NAME)
                 .and_then(|v| v.as_str())
                 .unwrap_or("tool")
                 .to_string();
-            let phase = match payload
-                .get("phase")
+            let phase_raw = payload
+                .get(block_keys::PHASE)
                 .and_then(|v| v.as_str())
-                .unwrap_or("running")
-            {
-                "start" => ToolPhase::Start,
-                "done" | "result" => ToolPhase::Done,
-                "error" => ToolPhase::Error,
+                .unwrap_or(ToolPhaseWire::Running.as_str());
+            let phase = match ToolPhaseWire::parse(phase_raw) {
+                Some(ToolPhaseWire::Start) => ToolPhase::Start,
+                Some(ToolPhaseWire::Done) => ToolPhase::Done,
+                Some(ToolPhaseWire::Error) => ToolPhase::Error,
                 _ => ToolPhase::Running,
             };
             let detail = payload
-                .get("detail")
+                .get(block_keys::DETAIL)
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
             Some(OutputBlock::Tool(ToolBlock {
@@ -134,55 +148,55 @@ pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBl
                 structured: None,
             }))
         }
-        "reasoning" => {
-            let phase = match payload
-                .get("phase")
+        OutputBlockKind::Reasoning => {
+            let phase_raw = payload
+                .get(block_keys::PHASE)
                 .and_then(|v| v.as_str())
-                .unwrap_or("delta")
-            {
-                "start" => MessagePhase::Start,
-                "end" => MessagePhase::End,
-                "full" => MessagePhase::Full,
+                .unwrap_or(MessagePhaseWire::Delta.as_str());
+            let phase = match MessagePhaseWire::parse(phase_raw) {
+                Some(MessagePhaseWire::Start) => MessagePhase::Start,
+                Some(MessagePhaseWire::End) => MessagePhase::End,
+                Some(MessagePhaseWire::Full) => MessagePhase::Full,
                 _ => MessagePhase::Delta,
             };
             let text = payload
-                .get("text")
+                .get(block_keys::TEXT)
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string();
             Some(OutputBlock::Reasoning(ReasoningBlock { phase, text }))
         }
-        "session_event" => Some(OutputBlock::SessionEvent(SessionEventBlock {
+        OutputBlockKind::SessionEvent => Some(OutputBlock::SessionEvent(SessionEventBlock {
             event: payload
-                .get("event")
+                .get(block_keys::EVENT)
                 .and_then(|v| v.as_str())
                 .unwrap_or("event")
                 .to_string(),
             title: payload
-                .get("title")
+                .get(block_keys::TITLE)
                 .and_then(|v| v.as_str())
                 .unwrap_or("Session Event")
                 .to_string(),
             status: payload
-                .get("status")
+                .get(block_keys::STATUS)
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
             summary: payload
-                .get("summary")
+                .get(block_keys::SUMMARY)
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
             fields: payload
-                .get("fields")
+                .get(block_keys::FIELDS)
                 .and_then(|v| v.as_array())
                 .map(|values| {
                     values
                         .iter()
                         .filter_map(|field| {
                             Some(SessionEventField {
-                                label: field.get("label")?.as_str()?.to_string(),
-                                value: field.get("value")?.as_str()?.to_string(),
+                                label: field.get(block_keys::LABEL)?.as_str()?.to_string(),
+                                value: field.get(block_keys::VALUE)?.as_str()?.to_string(),
                                 tone: field
-                                    .get("tone")
+                                    .get(block_keys::TONE)
                                     .and_then(|value| value.as_str())
                                     .map(str::to_string),
                             })
@@ -191,130 +205,146 @@ pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBl
                 })
                 .unwrap_or_default(),
             body: payload
-                .get("body")
+                .get(block_keys::BODY)
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
         })),
-        "queue_item" => Some(OutputBlock::QueueItem(QueueItemBlock {
+        OutputBlockKind::QueueItem => Some(OutputBlock::QueueItem(QueueItemBlock {
             position: payload
-                .get("position")
+                .get(block_keys::POSITION)
                 .and_then(|v| v.as_u64())
                 .unwrap_or(1) as usize,
             text: payload
-                .get("text")
+                .get(block_keys::TEXT)
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string(),
         })),
-        "scheduler_stage" => Some(OutputBlock::SchedulerStage(Box::new(SchedulerStageBlock {
-            stage_id: payload
-                .get("stage_id")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            profile: payload
-                .get("profile")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            stage: payload
-                .get("stage")
-                .and_then(|v| v.as_str())
-                .unwrap_or("stage")
-                .to_string(),
-            title: payload
-                .get("title")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Scheduler Stage")
-                .to_string(),
-            text: payload
-                .get("text")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            stage_index: payload.get("stage_index").and_then(|v| v.as_u64()),
-            stage_total: payload.get("stage_total").and_then(|v| v.as_u64()),
-            step: payload.get("step").and_then(|v| v.as_u64()),
-            status: payload
-                .get("status")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            focus: payload
-                .get("focus")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            last_event: payload
-                .get("last_event")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            waiting_on: payload
-                .get("waiting_on")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            activity: payload
-                .get("activity")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            loop_budget: payload
-                .get("loop_budget")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            available_skill_count: payload
-                .get("available_skill_count")
-                .and_then(|v| v.as_u64()),
-            available_agent_count: payload
-                .get("available_agent_count")
-                .and_then(|v| v.as_u64()),
-            available_category_count: payload
-                .get("available_category_count")
-                .and_then(|v| v.as_u64()),
-            active_skills: payload
-                .get("active_skills")
-                .and_then(|v| v.as_array())
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(|value| value.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            active_agents: payload
-                .get("active_agents")
-                .and_then(|v| v.as_array())
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(|value| value.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            active_categories: payload
-                .get("active_categories")
-                .and_then(|v| v.as_array())
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(|value| value.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            done_agent_count: payload
-                .get("done_agent_count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32,
-            total_agent_count: payload
-                .get("total_agent_count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32,
-            prompt_tokens: payload.get("prompt_tokens").and_then(|v| v.as_u64()),
-            completion_tokens: payload.get("completion_tokens").and_then(|v| v.as_u64()),
-            reasoning_tokens: payload.get("reasoning_tokens").and_then(|v| v.as_u64()),
-            cache_read_tokens: payload.get("cache_read_tokens").and_then(|v| v.as_u64()),
-            cache_write_tokens: payload.get("cache_write_tokens").and_then(|v| v.as_u64()),
-            decision: parse_scheduler_decision(payload.get("decision")),
-            child_session_id: payload
-                .get("child_session_id")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-        }))),
+        OutputBlockKind::SchedulerStage => {
+            Some(OutputBlock::SchedulerStage(Box::new(SchedulerStageBlock {
+                stage_id: payload
+                    .get(stage_keys::STAGE_ID)
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                profile: payload
+                    .get(stage_keys::PROFILE)
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                stage: payload
+                    .get(stage_keys::STAGE)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("stage")
+                    .to_string(),
+                title: payload
+                    .get(block_keys::TITLE)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Scheduler Stage")
+                    .to_string(),
+                text: payload
+                    .get(block_keys::TEXT)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                stage_index: payload
+                    .get(stage_keys::STAGE_INDEX)
+                    .and_then(|v| v.as_u64()),
+                stage_total: payload
+                    .get(stage_keys::STAGE_TOTAL)
+                    .and_then(|v| v.as_u64()),
+                step: payload.get(stage_keys::STEP).and_then(|v| v.as_u64()),
+                status: payload
+                    .get(block_keys::STATUS)
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                focus: payload
+                    .get(stage_keys::FOCUS)
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                last_event: payload
+                    .get(stage_keys::LAST_EVENT)
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                waiting_on: payload
+                    .get(stage_keys::WAITING_ON)
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                activity: payload
+                    .get(stage_keys::ACTIVITY)
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                loop_budget: payload
+                    .get(stage_keys::LOOP_BUDGET)
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                available_skill_count: payload
+                    .get(stage_keys::AVAILABLE_SKILL_COUNT)
+                    .and_then(|v| v.as_u64()),
+                available_agent_count: payload
+                    .get(stage_keys::AVAILABLE_AGENT_COUNT)
+                    .and_then(|v| v.as_u64()),
+                available_category_count: payload
+                    .get(stage_keys::AVAILABLE_CATEGORY_COUNT)
+                    .and_then(|v| v.as_u64()),
+                active_skills: payload
+                    .get(stage_keys::ACTIVE_SKILLS)
+                    .and_then(|v| v.as_array())
+                    .map(|values| {
+                        values
+                            .iter()
+                            .filter_map(|value| value.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                active_agents: payload
+                    .get(stage_keys::ACTIVE_AGENTS)
+                    .and_then(|v| v.as_array())
+                    .map(|values| {
+                        values
+                            .iter()
+                            .filter_map(|value| value.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                active_categories: payload
+                    .get(stage_keys::ACTIVE_CATEGORIES)
+                    .and_then(|v| v.as_array())
+                    .map(|values| {
+                        values
+                            .iter()
+                            .filter_map(|value| value.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                done_agent_count: payload
+                    .get(stage_keys::DONE_AGENT_COUNT)
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32,
+                total_agent_count: payload
+                    .get(stage_keys::TOTAL_AGENT_COUNT)
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32,
+                prompt_tokens: payload
+                    .get(wire_fields::PROMPT_TOKENS)
+                    .and_then(|v| v.as_u64()),
+                completion_tokens: payload
+                    .get(wire_fields::COMPLETION_TOKENS)
+                    .and_then(|v| v.as_u64()),
+                reasoning_tokens: payload
+                    .get(stage_keys::REASONING_TOKENS)
+                    .and_then(|v| v.as_u64()),
+                cache_read_tokens: payload
+                    .get(stage_keys::CACHE_READ_TOKENS)
+                    .and_then(|v| v.as_u64()),
+                cache_write_tokens: payload
+                    .get(stage_keys::CACHE_WRITE_TOKENS)
+                    .and_then(|v| v.as_u64()),
+                decision: parse_scheduler_decision(payload.get(block_keys::DECISION)),
+                child_session_id: payload
+                    .get(stage_keys::CHILD_SESSION_ID)
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+            })))
+        }
         _ => None,
     }
 }
@@ -322,21 +352,21 @@ pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBl
 fn parse_scheduler_decision(payload: Option<&serde_json::Value>) -> Option<SchedulerDecisionBlock> {
     let payload = payload?;
     Some(SchedulerDecisionBlock {
-        kind: payload.get("kind")?.as_str()?.to_string(),
-        title: payload.get("title")?.as_str()?.to_string(),
-        spec: parse_scheduler_decision_spec(payload.get("spec"))?,
+        kind: payload.get(decision_keys::KIND)?.as_str()?.to_string(),
+        title: payload.get(decision_keys::TITLE)?.as_str()?.to_string(),
+        spec: parse_scheduler_decision_spec(payload.get(decision_keys::SPEC))?,
         fields: payload
-            .get("fields")
+            .get(decision_keys::FIELDS)
             .and_then(|value| value.as_array())
             .map(|fields| {
                 fields
                     .iter()
                     .filter_map(|field| {
                         Some(SchedulerDecisionField {
-                            label: field.get("label")?.as_str()?.to_string(),
-                            value: field.get("value")?.as_str()?.to_string(),
+                            label: field.get(block_keys::LABEL)?.as_str()?.to_string(),
+                            value: field.get(block_keys::VALUE)?.as_str()?.to_string(),
                             tone: field
-                                .get("tone")
+                                .get(block_keys::TONE)
                                 .and_then(|value| value.as_str())
                                 .map(|value| value.to_string()),
                         })
@@ -345,15 +375,15 @@ fn parse_scheduler_decision(payload: Option<&serde_json::Value>) -> Option<Sched
             })
             .unwrap_or_default(),
         sections: payload
-            .get("sections")
+            .get(decision_keys::SECTIONS)
             .and_then(|value| value.as_array())
             .map(|sections| {
                 sections
                     .iter()
                     .filter_map(|section| {
                         Some(SchedulerDecisionSection {
-                            title: section.get("title")?.as_str()?.to_string(),
-                            body: section.get("body")?.as_str()?.to_string(),
+                            title: section.get(block_keys::TITLE)?.as_str()?.to_string(),
+                            body: section.get(block_keys::BODY)?.as_str()?.to_string(),
                         })
                     })
                     .collect()
@@ -367,13 +397,33 @@ fn parse_scheduler_decision_spec(
 ) -> Option<SchedulerDecisionRenderSpec> {
     let payload = payload?;
     Some(SchedulerDecisionRenderSpec {
-        version: payload.get("version")?.as_str()?.to_string(),
-        show_header_divider: payload.get("show_header_divider")?.as_bool()?,
-        field_order: payload.get("field_order")?.as_str()?.to_string(),
-        field_label_emphasis: payload.get("field_label_emphasis")?.as_str()?.to_string(),
-        status_palette: payload.get("status_palette")?.as_str()?.to_string(),
-        section_spacing: payload.get("section_spacing")?.as_str()?.to_string(),
-        update_policy: payload.get("update_policy")?.as_str()?.to_string(),
+        version: payload
+            .get(decision_spec_keys::VERSION)?
+            .as_str()?
+            .to_string(),
+        show_header_divider: payload
+            .get(decision_spec_keys::SHOW_HEADER_DIVIDER)?
+            .as_bool()?,
+        field_order: payload
+            .get(decision_spec_keys::FIELD_ORDER)?
+            .as_str()?
+            .to_string(),
+        field_label_emphasis: payload
+            .get(decision_spec_keys::FIELD_LABEL_EMPHASIS)?
+            .as_str()?
+            .to_string(),
+        status_palette: payload
+            .get(decision_spec_keys::STATUS_PALETTE)?
+            .as_str()?
+            .to_string(),
+        section_spacing: payload
+            .get(decision_spec_keys::SECTION_SPACING)?
+            .as_str()?
+            .to_string(),
+        update_policy: payload
+            .get(decision_spec_keys::UPDATE_POLICY)?
+            .as_str()?
+            .to_string(),
     })
 }
 
@@ -537,13 +587,15 @@ async fn dispatch_remote_sse_event(
     let event_type = event_name
         .or_else(|| {
             parsed
-                .get("type")
+                .get(wire_keys::TYPE)
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
         })
-        .unwrap_or_else(|| "message".to_string());
+        .unwrap_or_else(|| DEFAULT_SSE_EVENT_NAME.to_string());
 
-    if event_type == "config.updated" {
+    let event_kind = ServerEventType::parse(&event_type);
+
+    if event_kind == Some(ServerEventType::ConfigUpdated) {
         if let Ok(config) = fetch_remote_config(client, base_url).await {
             if let Some(enabled) = remote_show_thinking_from_config(&config) {
                 show_thinking.store(enabled, Ordering::SeqCst);
@@ -554,7 +606,7 @@ async fn dispatch_remote_sse_event(
     if matches!(format, &RunOutputFormat::Json) {
         let mut output = serde_json::Map::new();
         output.insert(
-            "type".to_string(),
+            wire_keys::TYPE.to_string(),
             serde_json::Value::String(event_type.clone()),
         );
         output.insert(
@@ -562,7 +614,7 @@ async fn dispatch_remote_sse_event(
             serde_json::json!(chrono::Utc::now().timestamp_millis()),
         );
         output.insert(
-            "sessionID".to_string(),
+            wire_keys::SESSION_ID.to_string(),
             serde_json::Value::String(session_id.to_string()),
         );
         match parsed {
@@ -579,8 +631,8 @@ async fn dispatch_remote_sse_event(
         return Ok(());
     }
 
-    if event_type == "output_block" {
-        let payload = parsed.get("block").unwrap_or(&parsed);
+    if event_kind == Some(ServerEventType::OutputBlock) {
+        let payload = parsed.get(wire_keys::BLOCK).unwrap_or(&parsed);
         if let Some(block) = parse_output_block(payload) {
             if matches!(block, OutputBlock::Reasoning(_)) && !show_thinking.load(Ordering::SeqCst) {
                 return Ok(());
@@ -592,11 +644,11 @@ async fn dispatch_remote_sse_event(
         return Ok(());
     }
 
-    if event_type.as_str() == "error" {
+    if event_kind == Some(ServerEventType::Error) {
         let message = parsed
-            .get("error")
+            .get(wire_keys::ERROR)
             .and_then(|v| v.as_str())
-            .or_else(|| parsed.get("message").and_then(|v| v.as_str()))
+            .or_else(|| parsed.get(wire_keys::MESSAGE).and_then(|v| v.as_str()))
             .unwrap_or("unknown remote stream error");
         eprintln!("\nError: {}", message);
     }
@@ -644,7 +696,7 @@ pub(crate) async fn run_non_interactive_attach(options: RemoteAttachOptions) -> 
             "model": model,
             "agent": agent,
             "scheduler_profile": scheduler_profile,
-            "variant": variant,
+            session_keys::MODEL_VARIANT: variant,
             "stream": true
         }))
         .send()
@@ -672,6 +724,7 @@ mod tests {
     use super::parse_output_block;
     use rocode_command::governance_fixtures::canonical_scheduler_stage_fixture;
     use rocode_command::output_blocks::{MessagePhase, OutputBlock};
+    use rocode_core::contracts::output_blocks::{MessagePhaseWire, OutputBlockKind};
 
     #[test]
     fn parses_canonical_scheduler_stage_payload() {
@@ -683,8 +736,8 @@ mod tests {
     #[test]
     fn parses_reasoning_payload() {
         let payload = serde_json::json!({
-            "kind": "reasoning",
-            "phase": "delta",
+            "kind": OutputBlockKind::Reasoning.as_str(),
+            "phase": MessagePhaseWire::Delta.as_str(),
             "text": "thinking"
         });
         let block = parse_output_block(&payload).expect("reasoning block");

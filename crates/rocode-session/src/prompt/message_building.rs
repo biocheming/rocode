@@ -3,6 +3,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use rocode_core::contracts::provider::ProviderFinishReasonWire;
+use rocode_core::contracts::session::keys as session_keys;
 use rocode_provider::{
     get_model_context_limit, ChatResponse, Content, ContentPart, Message, Provider, Role,
 };
@@ -291,16 +293,19 @@ impl SessionPrompt {
                 let mut m = HashMap::new();
                 if let Some(usage) = &response.usage {
                     m.insert(
-                        "tokens_input".to_string(),
+                        session_keys::TOKENS_INPUT.to_string(),
                         serde_json::json!(usage.prompt_tokens),
                     );
                     m.insert(
-                        "tokens_output".to_string(),
+                        session_keys::TOKENS_OUTPUT.to_string(),
                         serde_json::json!(usage.completion_tokens),
                     );
                 }
                 if let Some(ref reason) = finish_reason {
-                    m.insert("finish_reason".to_string(), serde_json::json!(reason));
+                    m.insert(
+                        session_keys::FINISH_REASON.to_string(),
+                        serde_json::json!(reason),
+                    );
                 }
                 m
             },
@@ -366,17 +371,19 @@ impl SessionPrompt {
                     .and_then(|v| v.as_u64())
                     .or_else(|| {
                         msg.metadata
-                            .get("usage")
+                            .get(session_keys::USAGE)
                             .and_then(|v| v.get(usage_key))
                             .and_then(|v| v.as_u64())
                     })
                     .unwrap_or(0)
             };
 
-            usage.input += read_metadata_u64("tokens_input", "prompt_tokens");
-            usage.output += read_metadata_u64("tokens_output", "completion_tokens");
-            usage.cache_read += read_metadata_u64("tokens_cache_read", "cache_read_tokens");
-            usage.cache_write += read_metadata_u64("tokens_cache_write", "cache_write_tokens");
+            usage.input += read_metadata_u64(session_keys::TOKENS_INPUT, "prompt_tokens");
+            usage.output += read_metadata_u64(session_keys::TOKENS_OUTPUT, "completion_tokens");
+            usage.cache_read +=
+                read_metadata_u64(session_keys::TOKENS_CACHE_READ, "cache_read_tokens");
+            usage.cache_write +=
+                read_metadata_u64(session_keys::TOKENS_CACHE_WRITE, "cache_write_tokens");
         }
         usage.total = usage.input + usage.output + usage.cache_read + usage.cache_write;
         usage
@@ -560,8 +567,8 @@ impl SessionPrompt {
 
             if let Some(snapshot) = msg
                 .metadata
-                .get("step_start_snapshot")
-                .or_else(|| msg.metadata.get("snapshot"))
+                .get(session_keys::STEP_START_SNAPSHOT)
+                .or_else(|| msg.metadata.get(session_keys::SNAPSHOT))
                 .and_then(|v| v.as_str())
             {
                 parts.push(V2Part::StepStart(StepStartPart {
@@ -573,18 +580,18 @@ impl SessionPrompt {
             }
             if let Some(snapshot) = msg
                 .metadata
-                .get("step_finish_snapshot")
+                .get(session_keys::STEP_FINISH_SNAPSHOT)
                 .and_then(|v| v.as_str())
             {
                 let input = msg
                     .metadata
-                    .get("tokens_input")
+                    .get(session_keys::TOKENS_INPUT)
                     .and_then(|v| v.as_i64())
                     .unwrap_or(0)
                     .clamp(0, i32::MAX as i64) as i32;
                 let output = msg
                     .metadata
-                    .get("tokens_output")
+                    .get(session_keys::TOKENS_OUTPUT)
                     .and_then(|v| v.as_i64())
                     .unwrap_or(0)
                     .clamp(0, i32::MAX as i64) as i32;
@@ -595,13 +602,17 @@ impl SessionPrompt {
                     reason: msg
                         .finish
                         .as_deref()
-                        .or_else(|| msg.metadata.get("finish_reason").and_then(|v| v.as_str()))
-                        .unwrap_or("stop")
+                        .or_else(|| {
+                            msg.metadata
+                                .get(session_keys::FINISH_REASON)
+                                .and_then(|v| v.as_str())
+                        })
+                        .unwrap_or(ProviderFinishReasonWire::Stop.as_str())
                         .to_string(),
                     snapshot: Some(snapshot.to_string()),
                     cost: msg
                         .metadata
-                        .get("cost")
+                        .get(session_keys::COST)
                         .and_then(|v| v.as_f64())
                         .unwrap_or(0.0),
                     tokens: StepTokens {
@@ -623,20 +634,20 @@ impl SessionPrompt {
                         time: UserTime { created },
                         agent: msg
                             .metadata
-                            .get("agent")
+                            .get(session_keys::AGENT)
                             .and_then(|v| v.as_str())
                             .unwrap_or("general")
                             .to_string(),
                         model: V2ModelRef {
                             provider_id: msg
                                 .metadata
-                                .get("model_provider")
+                                .get(session_keys::MODEL_PROVIDER)
                                 .and_then(|v| v.as_str())
                                 .unwrap_or(provider_id)
                                 .to_string(),
                             model_id: msg
                                 .metadata
-                                .get("model_id")
+                                .get(session_keys::MODEL_ID)
                                 .and_then(|v| v.as_str())
                                 .unwrap_or(model_id)
                                 .to_string(),
@@ -647,7 +658,8 @@ impl SessionPrompt {
                         tools: None,
                         variant: msg
                             .metadata
-                            .get("variant")
+                            .get(session_keys::MODEL_VARIANT)
+                            .or_else(|| msg.metadata.get(session_keys::LEGACY_VARIANT))
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string()),
                     }
@@ -655,13 +667,13 @@ impl SessionPrompt {
                 _ => {
                     let input = msg
                         .metadata
-                        .get("tokens_input")
+                        .get(session_keys::TOKENS_INPUT)
                         .and_then(|v| v.as_i64())
                         .unwrap_or(0)
                         .clamp(0, i32::MAX as i64) as i32;
                     let output = msg
                         .metadata
-                        .get("tokens_output")
+                        .get(session_keys::TOKENS_OUTPUT)
                         .and_then(|v| v.as_i64())
                         .unwrap_or(0)
                         .clamp(0, i32::MAX as i64) as i32;
@@ -679,25 +691,25 @@ impl SessionPrompt {
                         },
                         model_id: msg
                             .metadata
-                            .get("model_id")
+                            .get(session_keys::MODEL_ID)
                             .and_then(|v| v.as_str())
                             .unwrap_or(model_id)
                             .to_string(),
                         provider_id: msg
                             .metadata
-                            .get("model_provider")
+                            .get(session_keys::MODEL_PROVIDER)
                             .and_then(|v| v.as_str())
                             .unwrap_or(provider_id)
                             .to_string(),
                         mode: msg
                             .metadata
-                            .get("mode")
+                            .get(session_keys::MODE)
                             .and_then(|v| v.as_str())
                             .unwrap_or("default")
                             .to_string(),
                         agent: msg
                             .metadata
-                            .get("agent")
+                            .get(session_keys::AGENT)
                             .and_then(|v| v.as_str())
                             .unwrap_or("general")
                             .to_string(),
@@ -708,7 +720,7 @@ impl SessionPrompt {
                         summary: None,
                         cost: msg
                             .metadata
-                            .get("cost")
+                            .get(session_keys::COST)
                             .and_then(|v| v.as_f64())
                             .unwrap_or(0.0),
                         tokens: AssistantTokens {
@@ -722,12 +734,13 @@ impl SessionPrompt {
                         structured: None,
                         variant: msg
                             .metadata
-                            .get("variant")
+                            .get(session_keys::MODEL_VARIANT)
+                            .or_else(|| msg.metadata.get(session_keys::LEGACY_VARIANT))
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string()),
                         finish: msg.finish.clone().or_else(|| {
                             msg.metadata
-                                .get("finish_reason")
+                                .get(session_keys::FINISH_REASON)
                                 .and_then(|v| v.as_str())
                                 .map(|s| s.to_string())
                         }),
@@ -988,6 +1001,8 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use futures::stream;
+    use rocode_core::contracts::attachments::keys as attachment_keys;
+    use rocode_core::contracts::tools::BuiltinToolName;
     use rocode_provider::{ChatRequest, ChatResponse, ModelInfo, ProviderError, StreamResult};
 
     struct StaticModelProvider {
@@ -1100,9 +1115,17 @@ mod tests {
             .push(SessionMessage::user(session_id.clone(), "old user message"));
 
         let mut old_assistant = SessionMessage::assistant(session_id.clone());
-        old_assistant.add_tool_call("call_a", "bash", serde_json::json!({"command": "echo a"}));
+        old_assistant.add_tool_call(
+            "call_a",
+            BuiltinToolName::Bash.as_str(),
+            serde_json::json!({"command": "echo a"}),
+        );
         old_assistant.add_tool_result("call_a", "A".repeat(140_000), false);
-        old_assistant.add_tool_call("call_b", "bash", serde_json::json!({"command": "echo b"}));
+        old_assistant.add_tool_call(
+            "call_b",
+            BuiltinToolName::Bash.as_str(),
+            serde_json::json!({"command": "echo b"}),
+        );
         old_assistant.add_tool_result("call_b", "B".repeat(140_000), false);
         session.messages.push(old_assistant);
         // PLACEHOLDER_TESTS_CONTINUE_2
@@ -1141,8 +1164,10 @@ mod tests {
     fn should_compact_prefers_provider_model_limits() {
         let provider = StaticModelProvider::with_model("tiny-model", 1000, 100);
         let mut msg = SessionMessage::user("ses_test", "hello");
-        msg.metadata
-            .insert("tokens_input".to_string(), serde_json::json!(950_u64));
+        msg.metadata.insert(
+            session_keys::TOKENS_INPUT.to_string(),
+            serde_json::json!(950_u64),
+        );
 
         let compact = SessionPrompt::should_compact(&[msg], &provider, "tiny-model", None);
         assert!(compact);
@@ -1192,8 +1217,10 @@ mod tests {
             }),
         };
         let mut msg = SessionMessage::user("ses_test", "hello");
-        msg.metadata
-            .insert("tokens_input".to_string(), serde_json::json!(48_000_u64));
+        msg.metadata.insert(
+            session_keys::TOKENS_INPUT.to_string(),
+            serde_json::json!(48_000_u64),
+        );
 
         let compact = SessionPrompt::should_compact(&[msg], &provider, "limited-model", None);
         assert!(
@@ -1205,14 +1232,22 @@ mod tests {
     #[test]
     fn token_usage_from_messages_prefers_usage_field_over_metadata() {
         let mut msg = SessionMessage::assistant("ses_test");
-        msg.metadata
-            .insert("tokens_input".to_string(), serde_json::json!(1_u64));
-        msg.metadata
-            .insert("tokens_output".to_string(), serde_json::json!(2_u64));
-        msg.metadata
-            .insert("tokens_cache_read".to_string(), serde_json::json!(3_u64));
-        msg.metadata
-            .insert("tokens_cache_write".to_string(), serde_json::json!(4_u64));
+        msg.metadata.insert(
+            session_keys::TOKENS_INPUT.to_string(),
+            serde_json::json!(1_u64),
+        );
+        msg.metadata.insert(
+            session_keys::TOKENS_OUTPUT.to_string(),
+            serde_json::json!(2_u64),
+        );
+        msg.metadata.insert(
+            session_keys::TOKENS_CACHE_READ.to_string(),
+            serde_json::json!(3_u64),
+        );
+        msg.metadata.insert(
+            session_keys::TOKENS_CACHE_WRITE.to_string(),
+            serde_json::json!(4_u64),
+        );
         msg.usage = Some(crate::message::MessageUsage {
             input_tokens: 100,
             output_tokens: 200,
@@ -1235,7 +1270,7 @@ mod tests {
     fn token_usage_from_messages_falls_back_to_usage_metadata_object() {
         let mut msg = SessionMessage::assistant("ses_test");
         msg.metadata.insert(
-            "usage".to_string(),
+            session_keys::USAGE.to_string(),
             serde_json::json!({
                 "prompt_tokens": 77_u64,
                 "completion_tokens": 33_u64,
@@ -1270,8 +1305,11 @@ mod tests {
     fn legacy_tool_state_to_v2_recovers_attachments_from_tool_result_metadata() {
         let mut metadata = HashMap::new();
         metadata.insert(
-            "attachment".to_string(),
-            serde_json::json!({ "mime": "application/pdf", "url": "data:application/pdf;base64,AA==" }),
+            attachment_keys::ATTACHMENT.to_string(),
+            serde_json::json!({
+                (attachment_keys::MIME): "application/pdf",
+                (attachment_keys::URL): "data:application/pdf;base64,AA=="
+            }),
         );
         metadata.insert(
             "preview".to_string(),
@@ -1281,7 +1319,7 @@ mod tests {
         let tool_result = (
             "PDF read successfully".to_string(),
             false,
-            Some("Read".to_string()),
+            Some(BuiltinToolName::Read.display_name().to_string()),
             Some(metadata),
             None,
         );
@@ -1289,7 +1327,7 @@ mod tests {
         let input = serde_json::json!({ "file_path": "report.pdf" });
         let state = SessionPrompt::legacy_tool_state_to_v2(LegacyToolStateInput {
             tool_call_id: "tool-call-1",
-            tool_name: "read",
+            tool_name: BuiltinToolName::Read.as_str(),
             input: &input,
             status: &crate::ToolCallStatus::Completed,
             raw: "",
@@ -1304,7 +1342,7 @@ mod tests {
                 attachments,
                 ..
             } => {
-                assert!(!metadata.contains_key("attachment"));
+                assert!(!metadata.contains_key(attachment_keys::ATTACHMENT));
                 assert_eq!(attachments.as_ref().map(|v| v.len()), Some(1));
                 assert_eq!(
                     attachments

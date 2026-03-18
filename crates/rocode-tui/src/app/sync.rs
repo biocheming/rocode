@@ -1,4 +1,5 @@
 use super::*;
+use rocode_core::contracts::scheduler::keys as scheduler_keys;
 
 impl App {
     pub(super) fn sync_config_from_server(&mut self) -> anyhow::Result<()> {
@@ -86,7 +87,7 @@ impl App {
                 msgs.iter().rev().find_map(|msg| {
                     msg.metadata
                         .as_ref()
-                        .and_then(|m| m.get("scheduler_stage_child_session_id"))
+                        .and_then(|m| m.get(scheduler_keys::CHILD_SESSION_ID))
                         .and_then(serde_json::Value::as_str)
                         .map(String::from)
                 })

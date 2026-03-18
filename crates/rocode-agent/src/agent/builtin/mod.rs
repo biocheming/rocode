@@ -11,6 +11,7 @@ mod sisyphus_junior;
 use super::*;
 use std::collections::HashMap;
 
+use rocode_core::contracts::tools::BuiltinToolName;
 use rocode_permission::{
     build_agent_ruleset, evaluate_tool_permission, PermissionAction, PermissionRule,
     PermissionRuleset,
@@ -48,43 +49,54 @@ fn base_agent(name: &str, mode: AgentMode) -> AgentInfo {
     }
 }
 
-fn base_allowlist_agent(name: &str, mode: AgentMode, allowed_tools: &[&str]) -> AgentInfo {
+fn base_allowlist_agent(name: &str, mode: AgentMode, allowed_tools: &[BuiltinToolName]) -> AgentInfo {
     let mut agent = base_agent(name, mode);
     agent.allowed_tools = allowed_tools
         .iter()
-        .map(|tool| (*tool).to_string())
+        .map(|tool| tool.as_str().to_string())
         .collect();
     agent
 }
 
-const READ_SEARCH_TOOLS: &[&str] = &["read", "glob", "grep", "ast_grep_search", "bash"];
+const READ_SEARCH_TOOLS: &[BuiltinToolName] = &[
+    BuiltinToolName::Read,
+    BuiltinToolName::Glob,
+    BuiltinToolName::Grep,
+    BuiltinToolName::AstGrepSearch,
+    BuiltinToolName::Bash,
+];
 
-const PRIMARY_BUILTIN_TOOLS: &[&str] = &[
-    "read",
-    "write",
-    "edit",
-    "bash",
-    "shell_session",
-    "glob",
-    "grep",
-    "ls",
-    "task",
-    "task_flow",
-    "question",
-    "webfetch",
-    "websearch",
-    "todoread",
-    "todowrite",
-    "multiedit",
-    "apply_patch",
-    "skill",
-    "lsp",
-    "batch",
-    "codesearch",
-    "ast_grep_search",
-    "ast_grep_replace",
-    "plan_enter",
-    "plan_exit",
+const PRIMARY_BUILTIN_TOOLS: &[BuiltinToolName] = &[
+    BuiltinToolName::Read,
+    BuiltinToolName::Write,
+    BuiltinToolName::Edit,
+    BuiltinToolName::Bash,
+    BuiltinToolName::ShellSession,
+    BuiltinToolName::Glob,
+    BuiltinToolName::Grep,
+    BuiltinToolName::Ls,
+    BuiltinToolName::Task,
+    BuiltinToolName::TaskFlow,
+    BuiltinToolName::Question,
+    BuiltinToolName::WebFetch,
+    BuiltinToolName::WebSearch,
+    BuiltinToolName::TodoRead,
+    BuiltinToolName::TodoWrite,
+    BuiltinToolName::MultiEdit,
+    BuiltinToolName::ApplyPatch,
+    BuiltinToolName::Skill,
+    BuiltinToolName::Lsp,
+    BuiltinToolName::Batch,
+    BuiltinToolName::CodeSearch,
+    BuiltinToolName::AstGrepSearch,
+    BuiltinToolName::AstGrepReplace,
+    BuiltinToolName::PlanEnter,
+    BuiltinToolName::PlanExit,
+    BuiltinToolName::ContextDocs,
+    BuiltinToolName::GitHubResearch,
+    BuiltinToolName::RepoHistory,
+    BuiltinToolName::MediaInspect,
+    BuiltinToolName::BrowserSession,
 ];
 
 fn base_read_only_agent(name: &str, mode: AgentMode) -> AgentInfo {
@@ -132,7 +144,7 @@ impl AgentInfo {
             max_steps: Some(100),
             allowed_tools: PRIMARY_BUILTIN_TOOLS
                 .iter()
-                .map(|tool| (*tool).to_string())
+                .map(|tool| tool.as_str().to_string())
                 .collect(),
             options: HashMap::new(),
             permission: build_agent_ruleset("build", &[]),
@@ -181,7 +193,7 @@ impl AgentInfo {
             max_steps: Some(20),
             allowed_tools: PRIMARY_BUILTIN_TOOLS
                 .iter()
-                .map(|tool| (*tool).to_string())
+                .map(|tool| tool.as_str().to_string())
                 .collect(),
             options: HashMap::new(),
             permission: build_agent_ruleset("general", &[]),
@@ -206,7 +218,7 @@ impl AgentInfo {
             max_steps: Some(30),
             allowed_tools: READ_SEARCH_TOOLS
                 .iter()
-                .map(|tool| (*tool).to_string())
+                .map(|tool| tool.as_str().to_string())
                 .collect(),
             options: HashMap::new(),
             permission: build_agent_ruleset("explore", &[]),

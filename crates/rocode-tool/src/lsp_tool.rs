@@ -1,6 +1,11 @@
 use async_trait::async_trait;
+use rocode_core::contracts::patch::keys as patch_keys;
+use rocode_core::contracts::permission::PermissionTypeWire;
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use strum::IntoEnumIterator;
+use strum_macros::{Display, EnumIter, EnumString, IntoStaticStr};
 
 #[cfg(feature = "lsp")]
 use lsp_types;
@@ -20,8 +25,11 @@ pub struct LspParams {
     pub new_name: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, Display, EnumIter, EnumString, IntoStaticStr,
+)]
 #[serde(rename_all = "camelCase")]
+#[strum(serialize_all = "camelCase", ascii_case_insensitive)]
 pub enum LspOperation {
     GoToDefinition,
     FindReferences,
@@ -37,12 +45,18 @@ pub enum LspOperation {
     OutgoingCalls,
 }
 
+impl LspOperation {
+    fn as_str(self) -> &'static str {
+        self.into()
+    }
+}
+
 pub struct LspTool;
 
 #[async_trait]
 impl Tool for LspTool {
     fn id(&self) -> &str {
-        "lsp"
+        BuiltinToolName::Lsp.as_str()
     }
 
     fn description(&self) -> &str {
@@ -50,15 +64,17 @@ impl Tool for LspTool {
     }
 
     fn parameters(&self) -> serde_json::Value {
+        let operations: Vec<&'static str> =
+            LspOperation::iter().map(LspOperation::as_str).collect();
         serde_json::json!({
             "type": "object",
             "properties": {
-                "operation": {
+                (tool_arg_keys::OPERATION): {
                     "type": "string",
-                    "enum": ["goToDefinition", "findReferences", "hover", "documentSymbol", "workspaceSymbol", "goToImplementation", "typeDefinition", "rename", "diagnostics", "prepareCallHierarchy", "incomingCalls", "outgoingCalls"],
+                    "enum": operations,
                     "description": "The LSP operation to perform"
                 },
-                "filePath": {
+                (patch_keys::FILE_PATH): {
                     "type": "string",
                     "description": "The absolute or relative path to the file"
                 },
@@ -81,7 +97,7 @@ impl Tool for LspTool {
                     "description": "New name for rename operation"
                 }
             },
-            "required": ["operation", "filePath"]
+            "required": [tool_arg_keys::OPERATION, patch_keys::FILE_PATH]
         })
     }
 
@@ -105,15 +121,15 @@ impl Tool for LspTool {
 
         if ctx.is_external_path(&path_str) {
             ctx.ask_permission(
-                crate::PermissionRequest::new("external_directory")
+                crate::PermissionRequest::new(PermissionTypeWire::ExternalDirectory.as_str())
                     .with_pattern(&path_str)
-                    .with_metadata("filepath", serde_json::json!(&path_str)),
+                    .with_metadata(patch_keys::FILEPATH, serde_json::json!(&path_str)),
             )
             .await?;
         }
 
         ctx.ask_permission(
-            crate::PermissionRequest::new("lsp")
+            crate::PermissionRequest::new(BuiltinToolName::Lsp.as_str())
                 .with_patterns(vec!["*".to_string()])
                 .always_allow(),
         )
@@ -132,12 +148,18 @@ impl Tool for LspTool {
             let output =
                 format_lsp_placeholder(&params.operation, &params.file_path, line, character);
             let mut metadata = Metadata::new();
-            metadata.insert("operation".to_string(), serde_json::json!(params.operation));
-            metadata.insert("file_path".to_string(), serde_json::json!(params.file_path));
+            metadata.insert(
+                tool_arg_keys::OPERATION.to_string(),
+                serde_json::json!(params.operation.as_str()),
+            );
+            metadata.insert(
+                patch_keys::FILE_PATH_SNAKE.to_string(),
+                serde_json::json!(params.file_path),
+            );
 
             Ok(ToolResult {
                 output,
-                title: format!("LSP: {:?} {}", params.operation, params.file_path),
+                title: format!("LSP: {} {}", params.operation.as_str(), params.file_path),
                 metadata,
                 truncated: false,
             })
@@ -339,12 +361,18 @@ async fn execute_with_lsp(
     };
 
     let mut metadata = Metadata::new();
-    metadata.insert("operation".to_string(), serde_json::json!(params.operation));
-    metadata.insert("file_path".to_string(), serde_json::json!(params.file_path));
+    metadata.insert(
+        tool_arg_keys::OPERATION.to_string(),
+        serde_json::json!(params.operation.as_str()),
+    );
+    metadata.insert(
+        patch_keys::FILE_PATH_SNAKE.to_string(),
+        serde_json::json!(params.file_path),
+    );
 
     Ok(ToolResult {
         output,
-        title: format!("LSP: {:?} {}", params.operation, params.file_path),
+        title: format!("LSP: {} {}", params.operation.as_str(), params.file_path),
         metadata,
         truncated: false,
     })

@@ -5,6 +5,9 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use rocode_core::bus::{Bus, BusEventDef};
+use rocode_core::contracts::events::BusEventName;
+use rocode_core::contracts::patch::keys as patch_keys;
+use rocode_core::contracts::wire::keys as wire_keys;
 use rocode_plugin::{HookContext, HookEvent};
 
 #[cfg(test)]
@@ -15,19 +18,30 @@ use crate::{MessagePart, MessageRole, SessionMessage};
 // Bus Event Definitions (matches TS Session.Event)
 // ============================================================================
 
-pub static SESSION_CREATED_EVENT: BusEventDef = BusEventDef::new("session.created");
-pub static SESSION_UPDATED_EVENT: BusEventDef = BusEventDef::new("session.updated");
-pub static SESSION_DELETED_EVENT: BusEventDef = BusEventDef::new("session.deleted");
-pub static SESSION_DIFF_EVENT: BusEventDef = BusEventDef::new("session.diff");
-pub static SESSION_ERROR_EVENT: BusEventDef = BusEventDef::new("session.error");
+pub static SESSION_CREATED_EVENT: BusEventDef =
+    BusEventDef::new(BusEventName::SessionCreated.as_str());
+pub static SESSION_UPDATED_EVENT: BusEventDef =
+    BusEventDef::new(BusEventName::SessionUpdated.as_str());
+pub static SESSION_DELETED_EVENT: BusEventDef =
+    BusEventDef::new(BusEventName::SessionDeleted.as_str());
+pub static SESSION_DIFF_EVENT: BusEventDef =
+    BusEventDef::new(BusEventName::SessionDiff.as_str());
+pub static SESSION_ERROR_EVENT: BusEventDef =
+    BusEventDef::new(BusEventName::SessionError.as_str());
 
 // Message-level events (matches TS MessageV2.Event)
-pub static MESSAGE_UPDATED_EVENT: BusEventDef = BusEventDef::new("message.updated");
-pub static MESSAGE_REMOVED_EVENT: BusEventDef = BusEventDef::new("message.removed");
-pub static PART_UPDATED_EVENT: BusEventDef = BusEventDef::new("message.part.updated");
-pub static PART_REMOVED_EVENT: BusEventDef = BusEventDef::new("message.part.removed");
-pub static PART_DELTA_EVENT: BusEventDef = BusEventDef::new("message.part.delta");
-pub static COMMAND_EXECUTED_EVENT: BusEventDef = BusEventDef::new("command.executed");
+pub static MESSAGE_UPDATED_EVENT: BusEventDef =
+    BusEventDef::new(BusEventName::MessageUpdated.as_str());
+pub static MESSAGE_REMOVED_EVENT: BusEventDef =
+    BusEventDef::new(BusEventName::MessageRemoved.as_str());
+pub static PART_UPDATED_EVENT: BusEventDef =
+    BusEventDef::new(BusEventName::MessagePartUpdated.as_str());
+pub static PART_REMOVED_EVENT: BusEventDef =
+    BusEventDef::new(BusEventName::MessagePartRemoved.as_str());
+pub static PART_DELTA_EVENT: BusEventDef =
+    BusEventDef::new(BusEventName::MessagePartDelta.as_str());
+pub static COMMAND_EXECUTED_EVENT: BusEventDef =
+    BusEventDef::new(BusEventName::CommandExecuted.as_str());
 
 pub fn sanitize_display_text(text: &str) -> String {
     let mut lines = Vec::new();
@@ -897,8 +911,8 @@ impl SessionManager {
         self.publish_event(
             &PART_DELTA_EVENT,
             serde_json::json!({
-                "sessionID": session_id,
-                "messageID": message_id,
+                (wire_keys::SESSION_ID): session_id,
+                (wire_keys::MESSAGE_ID): message_id,
                 "partID": part_id,
                 "field": field,
                 "delta": delta,
@@ -1091,9 +1105,9 @@ impl SessionManager {
             &COMMAND_EXECUTED_EVENT,
             serde_json::json!({
                 "name": command_name,
-                "sessionID": session_id,
+                (wire_keys::SESSION_ID): session_id,
                 "arguments": arguments,
-                "messageID": message_id,
+                (wire_keys::MESSAGE_ID): message_id,
             }),
         );
     }
@@ -1217,8 +1231,8 @@ impl SessionManager {
         self.publish_event(
             &MESSAGE_REMOVED_EVENT,
             serde_json::json!({
-                "sessionID": session_id,
-                "messageID": message_id,
+                (wire_keys::SESSION_ID): session_id,
+                (wire_keys::MESSAGE_ID): message_id,
             }),
         );
         Some(msg)
@@ -1249,8 +1263,8 @@ impl SessionManager {
         self.publish_event(
             &PART_REMOVED_EVENT,
             serde_json::json!({
-                "sessionID": session_id,
-                "messageID": message_id,
+                (wire_keys::SESSION_ID): session_id,
+                (wire_keys::MESSAGE_ID): message_id,
                 "partID": part_id,
             }),
         );
@@ -1261,7 +1275,7 @@ impl SessionManager {
     pub fn publish_error(&self, session_id: Option<&str>, error: serde_json::Value) {
         let mut props = serde_json::json!({ "error": error });
         if let Some(sid) = session_id {
-            props["sessionID"] = serde_json::Value::String(sid.to_string());
+            props[wire_keys::SESSION_ID] = serde_json::Value::String(sid.to_string());
         }
         self.publish_event(&SESSION_ERROR_EVENT, props);
     }
@@ -1272,8 +1286,8 @@ impl SessionManager {
             self.publish_event(
                 &SESSION_DIFF_EVENT,
                 serde_json::json!({
-                    "sessionID": session_id,
-                    "diff": diff_json,
+                    (wire_keys::SESSION_ID): session_id,
+                    (patch_keys::DIFF): diff_json,
                 }),
             );
         }
@@ -1631,8 +1645,8 @@ mod tests {
             .expect("event channel closed");
         assert_eq!(event.event_type, COMMAND_EXECUTED_EVENT.event_type);
         assert_eq!(event.properties["name"], "review");
-        assert_eq!(event.properties["sessionID"], "session-1");
+        assert_eq!(event.properties[wire_keys::SESSION_ID], "session-1");
         assert_eq!(event.properties["arguments"][0], "--fast");
-        assert_eq!(event.properties["messageID"], "message-1");
+        assert_eq!(event.properties[wire_keys::MESSAGE_ID], "message-1");
     }
 }

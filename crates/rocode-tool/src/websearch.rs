@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use reqwest::Client;
+use rocode_core::contracts::tools::BuiltinToolName;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -133,7 +134,7 @@ The search returns relevant web pages with their content, optimized for LLM cont
 #[async_trait]
 impl Tool for WebSearchTool {
     fn id(&self) -> &str {
-        "websearch"
+        BuiltinToolName::WebSearch.as_str()
     }
 
     fn description(&self) -> &str {
@@ -196,7 +197,7 @@ impl Tool for WebSearchTool {
         let num_results = input.num_results.unwrap_or(self.default_num_results);
 
         ctx.ask_permission(
-            crate::PermissionRequest::new("websearch")
+            crate::PermissionRequest::new(BuiltinToolName::WebSearch.as_str())
                 .with_pattern(&input.query)
                 .with_metadata("query", serde_json::Value::String(input.query.clone()))
                 .with_metadata("numResults", serde_json::Value::Number(num_results.into()))

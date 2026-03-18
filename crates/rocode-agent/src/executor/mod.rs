@@ -540,6 +540,7 @@ impl AgentExecutor {
 mod tests {
     use super::*;
     use crate::ToolCall;
+    use rocode_core::contracts::tools::BuiltinToolName;
     use rocode_orchestrator::runtime::events::{
         LoopError as RuntimeLoopError, LoopEvent, StepBoundary,
         ToolCallReady as RuntimeToolCallReady, ToolResult as RuntimeToolResult,
@@ -569,7 +570,10 @@ mod tests {
             PersistedSubsessionState {
                 agent: AgentInfo::explore().with_model("gpt-4.1-mini", "openai"),
                 conversation: conversation.clone(),
-                disabled_tools: vec!["write".to_string(), "edit".to_string()],
+                disabled_tools: vec![
+                    BuiltinToolName::Write.as_str().to_string(),
+                    BuiltinToolName::Edit.as_str().to_string(),
+                ],
             },
         );
 
@@ -587,7 +591,13 @@ mod tests {
 
         let mut disabled = state.disabled_tools.clone();
         disabled.sort();
-        assert_eq!(disabled, vec!["edit".to_string(), "write".to_string()]);
+        assert_eq!(
+            disabled,
+            vec![
+                BuiltinToolName::Edit.as_str().to_string(),
+                BuiltinToolName::Write.as_str().to_string(),
+            ]
+        );
     }
 
     #[tokio::test]
@@ -609,10 +619,12 @@ mod tests {
     fn executor_enforces_explore_allowlist() {
         let executor = build_executor(AgentInfo::explore());
 
-        assert!(executor.ensure_tool_allowed("grep").is_ok());
+        assert!(executor
+            .ensure_tool_allowed(BuiltinToolName::Grep.as_str())
+            .is_ok());
 
         let denied = executor
-            .ensure_tool_allowed("write")
+            .ensure_tool_allowed(BuiltinToolName::Write.as_str())
             .expect_err("write should be denied for explore");
         assert!(
             matches!(denied, ToolError::PermissionDenied(_)),
@@ -623,14 +635,14 @@ mod tests {
     #[test]
     fn executor_blocks_ask_permissions_without_user_approval() {
         let agent = AgentInfo::custom("review").with_permission(vec![PermissionRule {
-            permission: "bash".to_string(),
+            permission: BuiltinToolName::Bash.as_str().to_string(),
             pattern: "*".to_string(),
             action: PermissionAction::Ask,
         }]);
         let executor = build_executor(agent);
 
         let denied = executor
-            .ensure_tool_allowed("bash")
+            .ensure_tool_allowed(BuiltinToolName::Bash.as_str())
             .expect_err("ask should block direct execution");
         assert!(
             matches!(denied, ToolError::PermissionDenied(_)),
@@ -640,16 +652,22 @@ mod tests {
 
     #[test]
     fn repair_tool_call_name_fixes_case_when_lower_tool_exists() {
-        let available = vec!["read".to_string(), "invalid".to_string()];
+        let available = vec![
+            BuiltinToolName::Read.as_str().to_string(),
+            BuiltinToolName::Invalid.as_str().to_string(),
+        ];
         let repaired = ToolRunner::repair_tool_call_name("Read", &available);
-        assert_eq!(repaired.as_deref(), Some("read"));
+        assert_eq!(repaired.as_deref(), Some(BuiltinToolName::Read.as_str()));
     }
 
     #[test]
     fn repair_tool_call_name_falls_back_to_invalid_tool() {
-        let available = vec!["read".to_string(), "invalid".to_string()];
+        let available = vec![
+            BuiltinToolName::Read.as_str().to_string(),
+            BuiltinToolName::Invalid.as_str().to_string(),
+        ];
         let repaired = ToolRunner::repair_tool_call_name("missing_tool", &available);
-        assert_eq!(repaired.as_deref(), Some("invalid"));
+        assert_eq!(repaired.as_deref(), Some(BuiltinToolName::Invalid.as_str()));
     }
 
     /// Build a mock stream from a sequence of StreamEvents.
@@ -705,7 +723,7 @@ mod tests {
         let stream = mock_stream(vec![
             StreamEvent::ToolCallStart {
                 id: "tool-call-0".into(),
-                name: "read".into(),
+                name: BuiltinToolName::Read.as_str().into(),
             },
             StreamEvent::ToolCallDelta {
                 id: "tool-call-0".into(),
@@ -713,7 +731,7 @@ mod tests {
             },
             StreamEvent::ToolCallEnd {
                 id: "tool-call-0".into(),
-                name: "read".into(),
+                name: BuiltinToolName::Read.as_str().into(),
                 input: serde_json::json!({"file_path": "/tmp/test"}),
             },
             StreamEvent::Done,
@@ -721,7 +739,7 @@ mod tests {
 
         let (_, tool_calls) = process_stream_fixture(stream).await.unwrap();
         assert_eq!(tool_calls.len(), 1);
-        assert_eq!(tool_calls[0].name, "read");
+        assert_eq!(tool_calls[0].name, BuiltinToolName::Read.as_str());
         assert_eq!(
             tool_calls[0].arguments,
             serde_json::json!({"file_path": "/tmp/test"})
@@ -733,7 +751,7 @@ mod tests {
         let stream = mock_stream(vec![
             StreamEvent::ToolCallStart {
                 id: "tool-call-0".into(),
-                name: "bash".into(),
+                name: BuiltinToolName::Bash.as_str().into(),
             },
             StreamEvent::ToolCallDelta {
                 id: "tool-call-0".into(),
@@ -750,12 +768,12 @@ mod tests {
         let stream = mock_stream(vec![
             StreamEvent::ToolCallEnd {
                 id: "tool-call-0".into(),
-                name: "read".into(),
+                name: BuiltinToolName::Read.as_str().into(),
                 input: serde_json::json!({"file_path": "/tmp/a"}),
             },
             StreamEvent::ToolCallEnd {
                 id: "tool-call-1".into(),
-                name: "bash".into(),
+                name: BuiltinToolName::Bash.as_str().into(),
                 input: serde_json::json!({"command": "ls"}),
             },
             StreamEvent::Done,
@@ -764,13 +782,19 @@ mod tests {
         let (_, tool_calls) = process_stream_fixture(stream).await.unwrap();
         assert_eq!(tool_calls.len(), 2);
 
-        let read_tc = tool_calls.iter().find(|t| t.name == "read").unwrap();
+        let read_tc = tool_calls
+            .iter()
+            .find(|t| t.name == BuiltinToolName::Read.as_str())
+            .unwrap();
         assert_eq!(
             read_tc.arguments,
             serde_json::json!({"file_path": "/tmp/a"})
         );
 
-        let bash_tc = tool_calls.iter().find(|t| t.name == "bash").unwrap();
+        let bash_tc = tool_calls
+            .iter()
+            .find(|t| t.name == BuiltinToolName::Bash.as_str())
+            .unwrap();
         assert_eq!(bash_tc.arguments, serde_json::json!({"command": "ls"}));
     }
 
@@ -784,7 +808,7 @@ mod tests {
             },
             StreamEvent::ToolCallEnd {
                 id: "tool-call-1".into(),
-                name: "ls".into(),
+                name: BuiltinToolName::Ls.as_str().into(),
                 input: serde_json::json!({"path": "."}),
             },
             StreamEvent::Done,
@@ -793,7 +817,7 @@ mod tests {
         let (_, tool_calls) = process_stream_fixture(stream).await.unwrap();
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].id, "tool-call-1");
-        assert_eq!(tool_calls[0].name, "ls");
+        assert_eq!(tool_calls[0].name, BuiltinToolName::Ls.as_str());
         assert_eq!(tool_calls[0].arguments, serde_json::json!({"path": "."}));
     }
 
@@ -811,7 +835,7 @@ mod tests {
             .unwrap();
         sink.on_event(&LoopEvent::ToolCallProgress {
             id: "tool-1".to_string(),
-            name: Some("read".to_string()),
+            name: Some(BuiltinToolName::Read.as_str().to_string()),
             partial_input: "{\"path\":\"a\"}".to_string(),
         })
         .await
@@ -819,7 +843,7 @@ mod tests {
 
         let call = RuntimeToolCallReady {
             id: "tool-1".to_string(),
-            name: "read".to_string(),
+            name: BuiltinToolName::Read.as_str().to_string(),
             arguments: serde_json::json!({"path":"a"}),
         };
         sink.on_event(&LoopEvent::ToolCallReady(call.clone()))
@@ -830,7 +854,7 @@ mod tests {
             &call,
             &RuntimeToolResult {
                 tool_call_id: "tool-1".to_string(),
-                tool_name: "read".to_string(),
+                tool_name: BuiltinToolName::Read.as_str().to_string(),
                 output: "done".to_string(),
                 is_error: false,
                 title: None,
@@ -920,7 +944,7 @@ mod tests {
                 AgentRenderEvent::AssistantDelta("hello ".to_string()),
                 AgentRenderEvent::ToolStart {
                     id: "t1".to_string(),
-                    name: "read".to_string(),
+                    name: BuiltinToolName::Read.as_str().to_string(),
                 },
                 AgentRenderEvent::AssistantDelta("world".to_string()),
                 AgentRenderEvent::AssistantEnd,

@@ -1,4 +1,10 @@
 use async_trait::async_trait;
+use rocode_core::contracts::attachments::keys as attachment_keys;
+use rocode_core::contracts::patch::keys as patch_keys;
+use rocode_core::contracts::permission::keys as permission_keys;
+use rocode_core::contracts::task::metadata_keys as task_metadata_keys;
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
+use rocode_core::contracts::wire::aliases as wire_aliases;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -79,14 +85,23 @@ impl MediaInspectTool {
         let result_text = ctx.do_prompt_subsession(session_id.clone(), prompt).await?;
 
         let mut metadata = Metadata::new();
-        metadata.insert("agent".to_string(), serde_json::json!("media-reader"));
-        metadata.insert("sessionId".to_string(), serde_json::json!(session_id));
         metadata.insert(
-            "filePath".to_string(),
+            tool_arg_keys::AGENT.to_string(),
+            serde_json::json!("media-reader"),
+        );
+        metadata.insert(
+            wire_aliases::SESSION_ID_CAMEL.to_string(),
+            serde_json::json!(session_id),
+        );
+        metadata.insert(
+            patch_keys::FILE_PATH.to_string(),
             serde_json::json!(resolved_path.to_string_lossy().to_string()),
         );
         if let Some(model) = preferred_model {
-            metadata.insert("model".to_string(), serde_json::json!(model));
+            metadata.insert(
+                task_metadata_keys::MODEL.to_string(),
+                serde_json::json!(model),
+            );
         }
         if let Some(question) = input
             .question
@@ -94,7 +109,10 @@ impl MediaInspectTool {
             .map(|q| q.trim())
             .filter(|q| !q.is_empty())
         {
-            metadata.insert("question".to_string(), serde_json::json!(question));
+            metadata.insert(
+                tool_arg_keys::QUESTION.to_string(),
+                serde_json::json!(question),
+            );
         }
         if let Some(preflight) = preflight {
             metadata.insert(
@@ -106,11 +124,11 @@ impl MediaInspectTool {
             );
             if !preflight.attachments.is_empty() {
                 metadata.insert(
-                    "attachments".to_string(),
+                    attachment_keys::ATTACHMENTS.to_string(),
                     serde_json::Value::Array(preflight.attachments.clone()),
                 );
                 if let Some(first) = preflight.attachments.first() {
-                    metadata.insert("attachment".to_string(), first.clone());
+                    metadata.insert(attachment_keys::ATTACHMENT.to_string(), first.clone());
                 }
             }
         }
@@ -133,7 +151,7 @@ impl Default for MediaInspectTool {
 #[async_trait]
 impl Tool for MediaInspectTool {
     fn id(&self) -> &str {
-        "media_inspect"
+        BuiltinToolName::MediaInspect.as_str()
     }
 
     fn description(&self) -> &str {
@@ -149,12 +167,12 @@ impl Tool for MediaInspectTool {
                     "minLength": 1,
                     "description": "Absolute path or session-relative local media file path"
                 },
-                "question": {
+                (tool_arg_keys::QUESTION): {
                     "type": "string",
                     "description": "Optional question to answer about the media file"
                 }
             },
-            "required": ["file_path"]
+            "required": [patch_keys::FILE_PATH_SNAKE]
         })
     }
 
@@ -167,12 +185,16 @@ impl Tool for MediaInspectTool {
             serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
         validate_input(&input)?;
 
-        let mut permission = PermissionRequest::new("media_inspect")
+        let mut permission = PermissionRequest::new(BuiltinToolName::MediaInspect.as_str())
             .with_pattern(&input.file_path)
-            .with_metadata("file_path", serde_json::json!(&input.file_path))
+            .with_metadata(
+                patch_keys::FILE_PATH_SNAKE,
+                serde_json::json!(&input.file_path),
+            )
             .always_allow();
         if let Some(question) = input.question.as_ref() {
-            permission = permission.with_metadata("question", serde_json::json!(question));
+            permission =
+                permission.with_metadata(permission_keys::QUESTION, serde_json::json!(question));
         }
         ctx.ask_permission(permission).await?;
 
@@ -230,7 +252,7 @@ async fn execute_preflight_read(
 ) -> Result<MediaPreflight, ToolError> {
     let result = registry
         .execute(
-            "read",
+            BuiltinToolName::Read.as_str(),
             serde_json::json!({
                 "file_path": resolved_path.to_string_lossy().to_string(),
             }),
@@ -250,25 +272,36 @@ fn build_media_prompt(
     question: Option<&str>,
     preflight: Option<&MediaPreflight>,
 ) -> String {
+    let read_tool = BuiltinToolName::Read.as_str();
+
     let question = question
         .map(str::trim)
         .filter(|q| !q.is_empty())
         .unwrap_or(DEFAULT_QUESTION);
 
     let mut prompt = format!(
-        "Inspect the local media file at `{}`. First call the `read` tool on this exact path. Then answer this question:\n\n{}",
+        "Inspect the local media file at `{}`. First call the `{}` tool on this exact path. Then answer this question:\n\n{}",
         path.display(),
+        read_tool,
         question
     );
 
     if let Some(preflight) = preflight {
         let attachment_summary = summarize_attachment_payloads(&preflight.attachments);
-        prompt.push_str("\n\nPreflight media context from the authoritative `read` tool:\n");
         prompt.push_str(&format!(
-            "- read output: {}\n",
+            "\n\nPreflight media context from the authoritative `{}` tool:\n",
+            read_tool
+        ));
+        prompt.push_str(&format!(
+            "- {} output: {}\n",
+            read_tool,
             sanitize_prompt_line(&preflight.output)
         ));
-        if let Some(mime) = preflight.metadata.get("mime").and_then(|v| v.as_str()) {
+        if let Some(mime) = preflight
+            .metadata
+            .get(attachment_keys::MIME)
+            .and_then(|v| v.as_str())
+        {
             prompt.push_str(&format!("- mime: {}\n", mime));
         }
         if let Some(size) = preflight.metadata.get("size") {
@@ -277,13 +310,15 @@ fn build_media_prompt(
         if let Some(summary) = attachment_summary {
             prompt.push_str(&format!("- attachment summary: {}\n", summary));
         }
-        prompt.push_str(
-            "Use this preflight only as guidance. You must still call `read` on the exact same file path so the session can obtain the attachment payload for interpretation.",
-        );
+        prompt.push_str(&format!(
+            "Use this preflight only as guidance. You must still call `{}` on the exact same file path so the session can obtain the attachment payload for interpretation.",
+            read_tool
+        ));
     } else {
-        prompt.push_str(
-            " If the read result includes an image or PDF attachment payload, use that attachment to interpret the file.",
-        );
+        prompt.push_str(&format!(
+            " If the {} result includes an image or PDF attachment payload, use that attachment to interpret the file.",
+            read_tool
+        ));
     }
 
     prompt
@@ -292,15 +327,15 @@ fn build_media_prompt(
 fn summarize_attachment_payloads(attachments: &[serde_json::Value]) -> Option<String> {
     let first = attachments.first()?;
     let mime = first
-        .get("mime")
+        .get(attachment_keys::MIME)
         .and_then(|value| value.as_str())
         .unwrap_or("unknown");
     let filename = first
-        .get("filename")
+        .get(attachment_keys::FILENAME)
         .and_then(|value| value.as_str())
         .unwrap_or("unknown");
     let url_kind = first
-        .get("url")
+        .get(attachment_keys::URL)
         .and_then(|value| value.as_str())
         .map(|url| {
             if url.starts_with("data:") {
@@ -352,14 +387,17 @@ mod tests {
             output: "PDF read successfully (12 bytes)".to_string(),
             metadata: {
                 let mut metadata = Metadata::new();
-                metadata.insert("mime".to_string(), serde_json::json!("application/pdf"));
+                metadata.insert(
+                    attachment_keys::MIME.to_string(),
+                    serde_json::json!("application/pdf"),
+                );
                 metadata.insert("size".to_string(), serde_json::json!(12));
                 metadata
             },
             attachments: vec![serde_json::json!({
-                "mime": "application/pdf",
-                "filename": "sample.pdf",
-                "url": "data:application/pdf;base64,AA=="
+                (attachment_keys::MIME): "application/pdf",
+                (attachment_keys::FILENAME): "sample.pdf",
+                (attachment_keys::URL): "data:application/pdf;base64,AA=="
             })],
         };
         let prompt = build_media_prompt(
@@ -458,11 +496,14 @@ mod tests {
         assert!(result.metadata.contains_key("preflight"));
         let attachments = result
             .metadata
-            .get("attachments")
+            .get(attachment_keys::ATTACHMENTS)
             .and_then(|value| value.as_array())
             .expect("attachments should exist after preflight read");
         assert_eq!(attachments.len(), 1);
-        assert_eq!(attachments[0]["mime"], serde_json::json!("application/pdf"));
+        assert_eq!(
+            attachments[0][attachment_keys::MIME],
+            serde_json::json!("application/pdf")
+        );
 
         let create_calls = create_calls.lock().await.clone();
         assert_eq!(create_calls.len(), 1);

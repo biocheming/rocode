@@ -8,6 +8,7 @@ use rocode_orchestrator::{
     ToolExecError as OrchestratorToolExecError, ToolExecutor as OrchestratorToolExecutor,
     ToolOutput as OrchestratorToolOutput,
 };
+use rocode_core::contracts::tools::BuiltinToolName;
 use rocode_provider::ProviderRegistry;
 use rocode_tool::{ToolContext, ToolRegistry};
 
@@ -15,9 +16,9 @@ use super::{attach_subsession_callbacks, map_tool_error, SubsessionState};
 use crate::AgentInfo;
 
 fn preferred_tool_order_key(name: &str) -> (u8, &str) {
-    match name {
-        "task_flow" => (0, name),
-        "task" => (1, name),
+    match BuiltinToolName::parse(name) {
+        Some(BuiltinToolName::TaskFlow) => (0, name),
+        Some(BuiltinToolName::Task) => (1, name),
         _ => (2, name),
     }
 }
@@ -260,17 +261,17 @@ mod tests {
     fn prioritize_tool_definitions_prefers_task_flow_over_task() {
         let mut tools = vec![
             rocode_provider::ToolDefinition {
-                name: "task".to_string(),
+                name: BuiltinToolName::Task.as_str().to_string(),
                 description: None,
                 parameters: serde_json::json!({}),
             },
             rocode_provider::ToolDefinition {
-                name: "websearch".to_string(),
+                name: BuiltinToolName::WebSearch.as_str().to_string(),
                 description: None,
                 parameters: serde_json::json!({}),
             },
             rocode_provider::ToolDefinition {
-                name: "task_flow".to_string(),
+                name: BuiltinToolName::TaskFlow.as_str().to_string(),
                 description: None,
                 parameters: serde_json::json!({}),
             },
@@ -278,6 +279,13 @@ mod tests {
 
         prioritize_tool_definitions(&mut tools);
         let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
-        assert_eq!(names, vec!["task_flow", "task", "websearch"]);
+        assert_eq!(
+            names,
+            vec![
+                BuiltinToolName::TaskFlow.as_str(),
+                BuiltinToolName::Task.as_str(),
+                BuiltinToolName::WebSearch.as_str(),
+            ]
+        );
     }
 }

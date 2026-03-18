@@ -1,4 +1,7 @@
 use async_trait::async_trait;
+use rocode_core::contracts::output_blocks::keys as output_keys;
+use rocode_core::contracts::todo::{keys as todo_keys, TodoPriority, TodoStatus};
+use rocode_core::contracts::tools::BuiltinToolName;
 use serde::{Deserialize, Serialize};
 
 use crate::{TodoItemData, Tool, ToolContext, ToolError, ToolResult};
@@ -9,14 +12,14 @@ pub struct TodoWriteTool;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct TodoReadInput {
-    #[serde(default, alias = "sessionId")]
+    #[serde(default, alias = "sessionId", alias = "sessionID")]
     session_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct TodoWriteInput {
     todos: Vec<TodoWriteItem>,
-    #[serde(alias = "sessionId")]
+    #[serde(alias = "sessionId", alias = "sessionID")]
     session_id: Option<String>,
 }
 
@@ -31,7 +34,7 @@ struct TodoWriteItem {
 #[async_trait]
 impl Tool for TodoReadTool {
     fn id(&self) -> &str {
-        "todoread"
+        BuiltinToolName::TodoRead.as_str()
     }
 
     fn description(&self) -> &str {
@@ -42,7 +45,7 @@ impl Tool for TodoReadTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "session_id": {
+                (todo_keys::SESSION_ID): {
                     "type": "string",
                     "description": "Optional session ID. If not provided, uses current session."
                 }
@@ -64,8 +67,8 @@ impl Tool for TodoReadTool {
             .unwrap_or_else(|| ctx.session_id.clone());
 
         ctx.ask_permission(
-            crate::PermissionRequest::new("todoread")
-                .with_metadata("session_id", serde_json::json!(&session_id))
+            crate::PermissionRequest::new(BuiltinToolName::TodoRead.as_str())
+                .with_metadata(todo_keys::SESSION_ID, serde_json::json!(&session_id))
                 .always_allow(),
         )
         .await?;
@@ -78,16 +81,16 @@ impl Tool for TodoReadTool {
             .iter()
             .map(|t| {
                 serde_json::json!({
-                    "content": t.content,
-                    "status": t.status,
-                    "priority": t.priority
+                    todo_keys::CONTENT: t.content,
+                    todo_keys::STATUS: t.status,
+                    todo_keys::PRIORITY: t.priority
                 })
             })
             .collect();
 
         let mut metadata = std::collections::HashMap::new();
-        metadata.insert("todos".to_string(), serde_json::json!(todos_json));
-        metadata.insert("count".to_string(), serde_json::json!(todos.len()));
+        metadata.insert(todo_keys::TODOS.to_string(), serde_json::json!(todos_json));
+        metadata.insert(todo_keys::COUNT.to_string(), serde_json::json!(todos.len()));
 
         Ok(ToolResult {
             title: format!("Todo List ({} items)", todos.len()),
@@ -101,7 +104,7 @@ impl Tool for TodoReadTool {
 #[async_trait]
 impl Tool for TodoWriteTool {
     fn id(&self) -> &str {
-        "todowrite"
+        BuiltinToolName::TodoWrite.as_str()
     }
 
     fn description(&self) -> &str {
@@ -112,26 +115,31 @@ impl Tool for TodoWriteTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "todos": {
+                (todo_keys::TODOS): {
                     "type": "array",
                     "items": {
                         "type": "object",
                         "properties": {
                             "id": { "type": "string" },
-                            "content": { "type": "string" },
-                            "status": { "type": "string", "enum": ["pending", "in_progress", "completed"] },
-                            "priority": { "type": "string" }
+                            (todo_keys::CONTENT): { "type": "string" },
+                            (todo_keys::STATUS): { "type": "string", "enum": [
+                                TodoStatus::Pending.as_str(),
+                                TodoStatus::InProgress.as_str(),
+                                TodoStatus::Completed.as_str(),
+                                TodoStatus::Cancelled.as_str(),
+                            ] },
+                            (todo_keys::PRIORITY): { "type": "string" }
                         },
-                        "required": ["content"]
+                        "required": [todo_keys::CONTENT]
                     },
                     "description": "List of todo items"
                 },
-                "session_id": {
+                (todo_keys::SESSION_ID): {
                     "type": "string",
                     "description": "Optional session ID"
                 }
             },
-            "required": ["todos"]
+            "required": [todo_keys::TODOS]
         })
     }
 
@@ -149,9 +157,9 @@ impl Tool for TodoWriteTool {
             .unwrap_or_else(|| ctx.session_id.clone());
 
         ctx.ask_permission(
-            crate::PermissionRequest::new("todowrite")
-                .with_metadata("session_id", serde_json::json!(&session_id))
-                .with_metadata("count", serde_json::json!(input.todos.len()))
+            crate::PermissionRequest::new(BuiltinToolName::TodoWrite.as_str())
+                .with_metadata(todo_keys::SESSION_ID, serde_json::json!(&session_id))
+                .with_metadata(todo_keys::COUNT, serde_json::json!(input.todos.len()))
                 .always_allow(),
         )
         .await?;
@@ -159,8 +167,9 @@ impl Tool for TodoWriteTool {
         let mut new_todos: Vec<TodoItemData> = Vec::new();
 
         for item in input.todos {
-            let status =
-                normalize_todo_status(item.status.as_deref().unwrap_or("pending")).to_string();
+            let status = normalize_todo_status(item.status.as_deref())
+                .as_str()
+                .to_string();
 
             let _id = item
                 .id
@@ -169,7 +178,8 @@ impl Tool for TodoWriteTool {
             new_todos.push(TodoItemData {
                 content: item.content,
                 status,
-                priority: normalize_todo_priority(item.priority.as_deref().unwrap_or("medium"))
+                priority: normalize_todo_priority(item.priority.as_deref())
+                    .as_str()
                     .to_string(),
             });
         }
@@ -182,10 +192,10 @@ impl Tool for TodoWriteTool {
                 "todowrite deduplicated unchanged todo payload"
             );
             let mut metadata = std::collections::HashMap::new();
-            metadata.insert("count".to_string(), serde_json::json!(new_todos.len()));
-            metadata.insert("no_op".to_string(), serde_json::json!(true));
+            metadata.insert(todo_keys::COUNT.to_string(), serde_json::json!(new_todos.len()));
+            metadata.insert(todo_keys::NO_OP.to_string(), serde_json::json!(true));
             metadata.insert(
-                "display.summary".to_string(),
+                output_keys::DISPLAY_SUMMARY.to_string(),
                 serde_json::json!(format!(
                     "Todo list unchanged ({} items), skipped duplicate update",
                     new_todos.len()
@@ -208,16 +218,19 @@ impl Tool for TodoWriteTool {
             .iter()
             .map(|t| {
                 serde_json::json!({
-                    "content": t.content,
-                    "status": t.status,
-                    "priority": t.priority
+                    todo_keys::CONTENT: t.content,
+                    todo_keys::STATUS: t.status,
+                    todo_keys::PRIORITY: t.priority
                 })
             })
             .collect();
 
         let mut metadata = std::collections::HashMap::new();
-        metadata.insert("todos".to_string(), serde_json::json!(todos_json));
-        metadata.insert("count".to_string(), serde_json::json!(new_todos.len()));
+        metadata.insert(todo_keys::TODOS.to_string(), serde_json::json!(todos_json));
+        metadata.insert(
+            todo_keys::COUNT.to_string(),
+            serde_json::json!(new_todos.len()),
+        );
 
         Ok(ToolResult {
             title: format!("Updated Todo List ({} items)", new_todos.len()),
@@ -232,8 +245,9 @@ fn todos_equivalent(current: &[TodoItemData], next: &[TodoItemData]) -> bool {
     current.len() == next.len()
         && current.iter().zip(next.iter()).all(|(a, b)| {
             normalize_todo_content(&a.content) == normalize_todo_content(&b.content)
-                && normalize_todo_status(&a.status) == normalize_todo_status(&b.status)
-                && normalize_todo_priority(&a.priority) == normalize_todo_priority(&b.priority)
+                && normalize_todo_status(Some(&a.status)) == normalize_todo_status(Some(&b.status))
+                && normalize_todo_priority(Some(&a.priority))
+                    == normalize_todo_priority(Some(&b.priority))
         })
 }
 
@@ -241,21 +255,16 @@ fn normalize_todo_content(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn normalize_todo_status(s: &str) -> &'static str {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "in_progress" | "in-progress" | "in progress" | "doing" => "in_progress",
-        "completed" | "done" => "completed",
-        "cancelled" | "canceled" => "cancelled",
-        _ => "pending",
-    }
+fn normalize_todo_status(value: Option<&str>) -> TodoStatus {
+    value
+        .and_then(|s| TodoStatus::parse(s))
+        .unwrap_or(TodoStatus::Pending)
 }
 
-fn normalize_todo_priority(s: &str) -> &'static str {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "high" => "high",
-        "low" => "low",
-        _ => "medium",
-    }
+fn normalize_todo_priority(value: Option<&str>) -> TodoPriority {
+    value
+        .and_then(|s| TodoPriority::parse(s))
+        .unwrap_or(TodoPriority::Medium)
 }
 
 fn format_todos_from_data(todos: &[TodoItemData]) -> String {
@@ -267,9 +276,10 @@ fn format_todos_from_data(todos: &[TodoItemData]) -> String {
     output.push_str("# Todo List\n\n");
 
     for (i, todo) in todos.iter().enumerate() {
-        let status_icon = match todo.status.as_str() {
-            "in_progress" => "🔄",
-            "completed" => "✅",
+        let status = normalize_todo_status(Some(todo.status.as_str()));
+        let status_icon = match status {
+            TodoStatus::InProgress => "🔄",
+            TodoStatus::Completed => "✅",
             _ => "⬜",
         };
 
@@ -285,9 +295,18 @@ fn format_todos_from_data(todos: &[TodoItemData]) -> String {
         ));
     }
 
-    let pending = todos.iter().filter(|t| t.status == "pending").count();
-    let in_progress = todos.iter().filter(|t| t.status == "in_progress").count();
-    let completed = todos.iter().filter(|t| t.status == "completed").count();
+    let pending = todos
+        .iter()
+        .filter(|t| normalize_todo_status(Some(t.status.as_str())) == TodoStatus::Pending)
+        .count();
+    let in_progress = todos
+        .iter()
+        .filter(|t| normalize_todo_status(Some(t.status.as_str())) == TodoStatus::InProgress)
+        .count();
+    let completed = todos
+        .iter()
+        .filter(|t| normalize_todo_status(Some(t.status.as_str())) == TodoStatus::Completed)
+        .count();
 
     output.push_str(&format!(
         "Summary: {} pending, {} in progress, {} completed",
@@ -324,8 +343,8 @@ mod tests {
 
         let existing = vec![TodoItemData {
             content: "分析 t2.html 当前内容和结构".to_string(),
-            status: "completed".to_string(),
-            priority: "high".to_string(),
+            status: TodoStatus::Completed.as_str().to_string(),
+            priority: TodoPriority::High.as_str().to_string(),
         }];
 
         let ctx = ToolContext::new(
@@ -351,10 +370,10 @@ mod tests {
         let result = TodoWriteTool
             .execute(
                 serde_json::json!({
-                    "todos": [{
-                        "content": "分析 t2.html 当前内容和结构",
-                        "status": "completed",
-                        "priority": "high"
+                    (todo_keys::TODOS): [{
+                        (todo_keys::CONTENT): "分析 t2.html 当前内容和结构",
+                        (todo_keys::STATUS): TodoStatus::Completed.as_str(),
+                        (todo_keys::PRIORITY): TodoPriority::High.as_str()
                     }]
                 }),
                 ctx,
@@ -363,7 +382,10 @@ mod tests {
             .expect("todowrite should succeed");
 
         assert_eq!(update_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(result.metadata.get("no_op"), Some(&serde_json::json!(true)));
+        assert_eq!(
+            result.metadata.get(todo_keys::NO_OP),
+            Some(&serde_json::json!(true))
+        );
         assert!(
             result.output.contains("No todo changes detected"),
             "expected no-op output"
@@ -377,8 +399,8 @@ mod tests {
 
         let existing = vec![TodoItemData {
             content: "分析 t2.html 当前内容和结构".to_string(),
-            status: "pending".to_string(),
-            priority: "high".to_string(),
+            status: TodoStatus::Pending.as_str().to_string(),
+            priority: TodoPriority::High.as_str().to_string(),
         }];
 
         let ctx = ToolContext::new(
@@ -404,10 +426,10 @@ mod tests {
         let result = TodoWriteTool
             .execute(
                 serde_json::json!({
-                    "todos": [{
-                        "content": "分析 t2.html 当前内容和结构",
-                        "status": "completed",
-                        "priority": "high"
+                    (todo_keys::TODOS): [{
+                        (todo_keys::CONTENT): "分析 t2.html 当前内容和结构",
+                        (todo_keys::STATUS): TodoStatus::Completed.as_str(),
+                        (todo_keys::PRIORITY): TodoPriority::High.as_str()
                     }]
                 }),
                 ctx,
@@ -416,7 +438,10 @@ mod tests {
             .expect("todowrite should succeed");
 
         assert_eq!(update_calls.load(Ordering::SeqCst), 1);
-        assert_ne!(result.metadata.get("no_op"), Some(&serde_json::json!(true)));
+        assert_ne!(
+            result.metadata.get(todo_keys::NO_OP),
+            Some(&serde_json::json!(true))
+        );
     }
 
     #[tokio::test]
@@ -453,10 +478,10 @@ mod tests {
         let result = TodoWriteTool
             .execute(
                 serde_json::json!({
-                    "todos": [{
-                        "content": "Analyze t2.html    content",
-                        "status": "in progress",
-                        "priority": "high"
+                    (todo_keys::TODOS): [{
+                        (todo_keys::CONTENT): "Analyze t2.html    content",
+                        (todo_keys::STATUS): "in progress",
+                        (todo_keys::PRIORITY): TodoPriority::High.as_str()
                     }]
                 }),
                 ctx,
@@ -465,6 +490,9 @@ mod tests {
             .expect("todowrite should succeed");
 
         assert_eq!(update_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(result.metadata.get("no_op"), Some(&serde_json::json!(true)));
+        assert_eq!(
+            result.metadata.get(todo_keys::NO_OP),
+            Some(&serde_json::json!(true))
+        );
     }
 }

@@ -10,6 +10,8 @@ use ratatui::{
 use super::markdown::MarkdownRenderer;
 use crate::context::{Message, MessagePart};
 use crate::theme::Theme;
+use rocode_core::contracts::scheduler::keys as scheduler_keys;
+use rocode_core::contracts::session::keys as session_keys;
 
 /// Render a user message with shared left gutter shape.
 pub fn render_user_message(
@@ -23,10 +25,10 @@ pub fn render_user_message(
     let border_char = "┃ ";
     let border_style = Style::default().fg(user_border_color_for_agent(agent, theme));
     if show_system_prompt {
-        let profile_name = metadata_text(msg, "resolved_scheduler_profile");
-        let resolved_agent = metadata_text(msg, "resolved_agent");
-        let system_prompt = metadata_text(msg, "resolved_system_prompt_preview")
-            .or_else(|| metadata_text(msg, "resolved_system_prompt"));
+        let profile_name = metadata_text(msg, scheduler_keys::RESOLVED_PROFILE);
+        let resolved_agent = metadata_text(msg, session_keys::RESOLVED_AGENT);
+        let system_prompt = metadata_text(msg, session_keys::RESOLVED_SYSTEM_PROMPT_PREVIEW)
+            .or_else(|| metadata_text(msg, session_keys::RESOLVED_SYSTEM_PROMPT));
         if let Some(system_prompt) = system_prompt {
             let title = system_prompt_title(system_prompt, profile_name.or(resolved_agent));
             let subtitle = system_prompt_subtitle(profile_name, resolved_agent);
@@ -305,14 +307,17 @@ You are Prometheus - Strategic Planning Consultant.",
     fn render_user_message_hides_prompt_debug_metadata() {
         let mut metadata = HashMap::new();
         metadata.insert(
-            "resolved_scheduler_profile".to_string(),
+            scheduler_keys::RESOLVED_PROFILE.to_string(),
             serde_json::json!("prometheus"),
         );
         metadata.insert(
-            "resolved_system_prompt".to_string(),
+            session_keys::RESOLVED_SYSTEM_PROMPT.to_string(),
             serde_json::json!("You are Prometheus"),
         );
-        metadata.insert("resolved_user_prompt".to_string(), serde_json::json!("hi"));
+        metadata.insert(
+            session_keys::RESOLVED_USER_PROMPT.to_string(),
+            serde_json::json!("hi"),
+        );
         let msg = Message {
             id: "m1".to_string(),
             role: crate::context::MessageRole::User,
@@ -345,7 +350,7 @@ You are Prometheus - Strategic Planning Consultant.",
     fn render_user_message_shows_first_turn_system_prompt_when_requested() {
         let mut metadata = HashMap::new();
         metadata.insert(
-            "resolved_system_prompt_preview".to_string(),
+            session_keys::RESOLVED_SYSTEM_PROMPT_PREVIEW.to_string(),
             serde_json::json!(
                 "You are Prometheus — strategic planning consultant.
 Bias: interview first, clarify scope, then produce one reviewed work plan.

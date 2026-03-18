@@ -13,6 +13,9 @@ use crate::runtime::{Pipeline, ProtocolSource, ProviderRuntime, RuntimeConfig, R
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use regex::Regex;
+use rocode_core::contracts::provider::{
+    option_keys as provider_option_keys, option_keysets as provider_option_keysets,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -271,7 +274,9 @@ impl CustomLoader for OpenCodeLoader {
 
         let has_key = provider.env.iter().any(|e| std::env::var(e).is_ok())
             || provider_state
-                .and_then(|state| provider_option_string(state, &["apiKey", "api_key", "apikey"]))
+                .and_then(|state| {
+                    provider_option_string(state, provider_option_keysets::API_KEY_ANY)
+                })
                 .is_some();
 
         if !has_key {
@@ -292,7 +297,7 @@ impl CustomLoader for OpenCodeLoader {
 
         if !has_key {
             result.options.insert(
-                "apiKey".to_string(),
+                provider_option_keys::API_KEY.to_string(),
                 serde_json::Value::String("public".to_string()),
             );
         }
@@ -390,7 +395,7 @@ impl CustomLoader for AzureCognitiveServicesLoader {
 
         if let Ok(resource_name) = std::env::var("AZURE_COGNITIVE_SERVICES_RESOURCE_NAME") {
             result.options.insert(
-                "baseURL".to_string(),
+                provider_option_keys::BASE_URL.to_string(),
                 serde_json::Value::String(format!(
                     "https://{}.cognitiveservices.azure.com/openai",
                     resource_name
@@ -767,9 +772,10 @@ impl CustomLoader for GitLabLoader {
             serde_json::Value::String(instance_url),
         );
         if let Some(key) = api_key {
-            result
-                .options
-                .insert("apiKey".to_string(), serde_json::Value::String(key));
+            result.options.insert(
+                provider_option_keys::API_KEY.to_string(),
+                serde_json::Value::String(key),
+            );
         }
 
         // User-Agent header
@@ -832,12 +838,13 @@ impl CustomLoader for CloudflareWorkersAiLoader {
         result.autoload = api_key.is_some();
 
         if let Some(key) = api_key {
-            result
-                .options
-                .insert("apiKey".to_string(), serde_json::Value::String(key));
+            result.options.insert(
+                provider_option_keys::API_KEY.to_string(),
+                serde_json::Value::String(key),
+            );
         }
         result.options.insert(
-            "baseURL".to_string(),
+            provider_option_keys::BASE_URL.to_string(),
             serde_json::Value::String(format!(
                 "https://api.cloudflare.com/client/v4/accounts/{}/ai/v1",
                 account_id
@@ -876,13 +883,13 @@ impl CustomLoader for CloudflareAiGatewayLoader {
 
         if let Some(ref token) = api_token {
             result.options.insert(
-                "apiKey".to_string(),
+                provider_option_keys::API_KEY.to_string(),
                 serde_json::Value::String(token.clone()),
             );
         }
         if let Some(ref acc) = account_id {
             result.options.insert(
-                "accountId".to_string(),
+                provider_option_keys::ACCOUNT_ID.to_string(),
                 serde_json::Value::String(acc.clone()),
             );
         }
@@ -2135,7 +2142,7 @@ fn options_get_insensitive<'a>(
 }
 
 fn provider_secret(provider: &ProviderState, fallback_env: &[&str]) -> Option<String> {
-    provider_option_string(provider, &["apiKey", "api_key", "apikey"])
+    provider_option_string(provider, provider_option_keysets::API_KEY_ANY)
         .or_else(|| provider.key.clone().filter(|k| !k.trim().is_empty()))
         .or_else(|| {
             provider
@@ -2148,7 +2155,7 @@ fn provider_secret(provider: &ProviderState, fallback_env: &[&str]) -> Option<St
 }
 
 fn provider_base_url(provider: &ProviderState) -> Option<String> {
-    provider_option_string(provider, &["baseURL", "baseUrl", "url", "api"])
+    provider_option_string(provider, provider_option_keysets::BASE_URL_ANY)
         .or_else(|| {
             provider
                 .models
@@ -2680,9 +2687,16 @@ fn create_legacy_provider(
     match provider_id {
         "azure" => {
             let api_key = provider_secret(provider, &["AZURE_API_KEY", "AZURE_OPENAI_API_KEY"])?;
-            let endpoint =
-                provider_option_string(provider, &["endpoint", "baseURL", "baseUrl", "url"])
-                    .or_else(|| env_any(&["AZURE_ENDPOINT", "AZURE_OPENAI_ENDPOINT"]))?;
+            let endpoint = provider_option_string(
+                provider,
+                &[
+                    "endpoint",
+                    provider_option_keys::BASE_URL,
+                    provider_option_keys::BASE_URL_CAMEL,
+                    provider_option_keys::URL,
+                ],
+            )
+            .or_else(|| env_any(&["AZURE_ENDPOINT", "AZURE_OPENAI_ENDPOINT"]))?;
             Some(Arc::new(AzureProvider::new(api_key, endpoint)))
         }
         _ => {

@@ -3,10 +3,18 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::{Tool, ToolContext, ToolError, ToolResult};
+use rocode_core::contracts::patch::keys as patch_keys;
+use rocode_core::contracts::plugin_hooks::{aliases as hook_aliases, keys as hook_keys};
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use rocode_plugin::{HookContext, HookEvent};
 
 /// Tools that should not appear in suggestion lists when a tool is not found.
-const FILTERED_FROM_SUGGESTIONS: &[&str] = &["invalid", "patch", "batch"];
+fn is_filtered_from_suggestions(name: &str) -> bool {
+    matches!(
+        BuiltinToolName::parse(name),
+        Some(BuiltinToolName::Invalid | BuiltinToolName::ApplyPatch | BuiltinToolName::Batch)
+    )
+}
 
 fn looks_like_jsonish_payload(s: &str) -> bool {
     let trimmed = s.trim_start();
@@ -109,12 +117,12 @@ fn recover_write_args_from_jsonish(input: &str) -> Option<serde_json::Value> {
     }
 
     fn recover_once(input: &str) -> Option<serde_json::Value> {
-        let file_path = parse_jsonish_string_field(input, "file_path")
-            .or_else(|| parse_jsonish_string_field(input, "filePath"))?;
-        let content = parse_jsonish_string_field(input, "content").unwrap_or_default();
+        let file_path = parse_jsonish_string_field(input, patch_keys::FILE_PATH_SNAKE)
+            .or_else(|| parse_jsonish_string_field(input, patch_keys::FILE_PATH))?;
+        let content = parse_jsonish_string_field(input, patch_keys::CONTENT).unwrap_or_default();
         Some(serde_json::json!({
-            "file_path": file_path,
-            "content": content
+            (patch_keys::FILE_PATH_SNAKE): file_path,
+            (patch_keys::CONTENT): content
         }))
     }
 
@@ -161,14 +169,17 @@ fn recover_bash_args_from_jsonish(input: &str) -> Option<serde_json::Value> {
     }
 
     fn recover_once(input: &str) -> Option<serde_json::Value> {
-        let command = parse_jsonish_string_field(input, "command")
-            .or_else(|| parse_jsonish_string_field(input, "cmd"))?;
-        let description = parse_jsonish_string_field(input, "description")
+        let command = parse_jsonish_string_field(input, tool_arg_keys::COMMAND)
+            .or_else(|| parse_jsonish_string_field(input, tool_arg_keys::CMD))?;
+        let description = parse_jsonish_string_field(input, tool_arg_keys::DESCRIPTION)
             .unwrap_or_else(|| "Execute shell command".to_string());
         let mut obj = serde_json::Map::new();
-        obj.insert("command".to_string(), serde_json::Value::String(command));
         obj.insert(
-            "description".to_string(),
+            tool_arg_keys::COMMAND.to_string(),
+            serde_json::Value::String(command),
+        );
+        obj.insert(
+            tool_arg_keys::DESCRIPTION.to_string(),
             serde_json::Value::String(description),
         );
         if let Some(workdir) = parse_jsonish_string_field(input, "workdir")
@@ -197,6 +208,8 @@ fn recover_bash_args_from_jsonish(input: &str) -> Option<serde_json::Value> {
 }
 
 pub fn normalize_tool_arguments(tool_id: &str, mut args: serde_json::Value) -> serde_json::Value {
+    let builtin_tool = BuiltinToolName::parse(tool_id);
+
     // Normalize: if args is a JSON array of objects, merge them into a single
     // object. Some models produce `[{"file_path":"x"},{"content":"y"}]` instead
     // of `{"file_path":"x","content":"y"}`.
@@ -242,7 +255,7 @@ pub fn normalize_tool_arguments(tool_id: &str, mut args: serde_json::Value) -> s
                     "recovered tool arguments from JSON-ish payload"
                 );
                 args = parsed;
-            } else if tool_id == "write" {
+            } else if builtin_tool == Some(BuiltinToolName::Write) {
                 if let Some(parsed) = recover_write_args_from_jsonish(&s) {
                     tracing::info!(
                         tool = %tool_id,
@@ -250,7 +263,7 @@ pub fn normalize_tool_arguments(tool_id: &str, mut args: serde_json::Value) -> s
                     );
                     args = parsed;
                 }
-            } else if tool_id == "bash" {
+            } else if builtin_tool == Some(BuiltinToolName::Bash) {
                 if let Some(parsed) = recover_bash_args_from_jsonish(&s) {
                     tracing::info!(
                         tool = %tool_id,
@@ -302,7 +315,7 @@ pub fn normalize_tool_arguments(tool_id: &str, mut args: serde_json::Value) -> s
     }
 
     // Normalize bash schema defaults regardless of which recovery path succeeded.
-    if tool_id == "bash" {
+    if builtin_tool == Some(BuiltinToolName::Bash) {
         if let Some(obj) = args.as_object_mut() {
             let needs_description = obj
                 .get("description")
@@ -369,12 +382,12 @@ impl ToolRegistry {
     }
 
     /// Given a tool name that was not found, returns a list of available tool names
-    /// filtered to exclude tools in `FILTERED_FROM_SUGGESTIONS`.
+    /// filtered to exclude internal tools from `is_filtered_from_suggestions()`.
     pub async fn suggest_tools(&self, _requested: &str) -> Vec<String> {
         let tools = self.tools.read().await;
         let mut names: Vec<String> = tools
             .keys()
-            .filter(|name| !FILTERED_FROM_SUGGESTIONS.contains(&name.as_str()))
+            .filter(|name| !is_filtered_from_suggestions(name))
             .cloned()
             .collect();
         names.sort();
@@ -396,9 +409,12 @@ impl ToolRegistry {
         for schema in &mut schemas {
             let hook_outputs = rocode_plugin::trigger_collect(
                 HookContext::new(HookEvent::ToolDefinition)
-                    .with_data("tool_id", serde_json::json!(&schema.name))
-                    .with_data("description", serde_json::json!(&schema.description))
-                    .with_data("parameters", schema.parameters.clone()),
+                    .with_data(hook_aliases::TOOL_ID_SNAKE, serde_json::json!(&schema.name))
+                    .with_data(
+                        hook_keys::DESCRIPTION,
+                        serde_json::json!(&schema.description),
+                    )
+                    .with_data(hook_keys::PARAMETERS, schema.parameters.clone()),
             )
             .await;
             for output in hook_outputs {
@@ -452,10 +468,11 @@ impl ToolRegistry {
         {
             let mut before_hook_ctx = HookContext::new(HookEvent::ToolExecuteBefore)
                 .with_session(&ctx.session_id)
-                .with_data("tool", serde_json::json!(tool_id))
-                .with_data("args", args.clone());
+                .with_data(hook_keys::TOOL, serde_json::json!(tool_id))
+                .with_data(hook_keys::ARGS, args.clone());
             if let Some(call_id) = &ctx.call_id {
-                before_hook_ctx = before_hook_ctx.with_data("callID", serde_json::json!(call_id));
+                before_hook_ctx =
+                    before_hook_ctx.with_data(hook_keys::CALL_ID, serde_json::json!(call_id));
             }
             let before_outputs = rocode_plugin::trigger_collect(before_hook_ctx).await;
             for output in before_outputs {
@@ -506,21 +523,21 @@ impl ToolRegistry {
         {
             let mut hook_ctx = HookContext::new(HookEvent::ToolExecuteAfter)
                 .with_session(&ctx.session_id)
-                .with_data("tool", serde_json::json!(tool_id))
-                .with_data("args", args);
+                .with_data(hook_keys::TOOL, serde_json::json!(tool_id))
+                .with_data(hook_keys::ARGS, args);
             if let Some(call_id) = &ctx.call_id {
-                hook_ctx = hook_ctx.with_data("callID", serde_json::json!(call_id));
+                hook_ctx = hook_ctx.with_data(hook_keys::CALL_ID, serde_json::json!(call_id));
             }
 
             hook_ctx = match &result {
                 Ok(r) => hook_ctx
-                    .with_data("title", serde_json::json!(&r.title))
-                    .with_data("output", serde_json::json!(&r.output))
-                    .with_data("metadata", serde_json::json!(&r.metadata))
-                    .with_data("error", serde_json::json!(false)),
+                    .with_data(hook_keys::TITLE, serde_json::json!(&r.title))
+                    .with_data(hook_keys::OUTPUT, serde_json::json!(&r.output))
+                    .with_data(hook_keys::METADATA, serde_json::json!(&r.metadata))
+                    .with_data(hook_keys::ERROR, serde_json::json!(false)),
                 Err(e) => hook_ctx
-                    .with_data("output", serde_json::json!(e.to_string()))
-                    .with_data("error", serde_json::json!(true)),
+                    .with_data(hook_keys::OUTPUT, serde_json::json!(e.to_string()))
+                    .with_data(hook_keys::ERROR, serde_json::json!(true)),
             };
 
             let after_outputs = rocode_plugin::trigger_collect(hook_ctx).await;
@@ -541,20 +558,27 @@ fn hook_payload_object(
     payload: &serde_json::Value,
 ) -> Option<&serde_json::Map<String, serde_json::Value>> {
     payload
-        .get("output")
+        .get(hook_keys::OUTPUT)
         .and_then(|value| value.as_object())
         .or_else(|| payload.as_object())
-        .or_else(|| payload.get("data").and_then(|value| value.as_object()))
+        .or_else(|| {
+            payload
+                .get(hook_keys::DATA)
+                .and_then(|value| value.as_object())
+        })
 }
 
 fn apply_tool_definition_payload(schema: &mut ToolSchema, payload: &serde_json::Value) {
     let Some(object) = hook_payload_object(payload) else {
         return;
     };
-    if let Some(description) = object.get("description").and_then(|value| value.as_str()) {
+    if let Some(description) = object
+        .get(hook_keys::DESCRIPTION)
+        .and_then(|value| value.as_str())
+    {
         schema.description = description.to_string();
     }
-    if let Some(parameters) = object.get("parameters") {
+    if let Some(parameters) = object.get(hook_keys::PARAMETERS) {
         schema.parameters = parameters.clone();
     }
 }
@@ -563,7 +587,7 @@ fn apply_tool_before_payload(args: &mut serde_json::Value, payload: &serde_json:
     let Some(object) = hook_payload_object(payload) else {
         return;
     };
-    if let Some(next_args) = object.get("args") {
+    if let Some(next_args) = object.get(hook_keys::ARGS) {
         *args = next_args.clone();
     }
 }
@@ -572,17 +596,23 @@ fn apply_tool_after_payload(result: &mut ToolResult, payload: &serde_json::Value
     let Some(object) = hook_payload_object(payload) else {
         return;
     };
-    if let Some(title) = object.get("title").and_then(|value| value.as_str()) {
+    if let Some(title) = object
+        .get(hook_keys::TITLE)
+        .and_then(|value| value.as_str())
+    {
         result.title = title.to_string();
     }
-    if let Some(output) = object.get("output") {
+    if let Some(output) = object.get(hook_keys::OUTPUT) {
         if let Some(output_str) = output.as_str() {
             result.output = output_str.to_string();
         } else if !output.is_null() {
             result.output = output.to_string();
         }
     }
-    if let Some(metadata) = object.get("metadata").and_then(|value| value.as_object()) {
+    if let Some(metadata) = object
+        .get(hook_keys::METADATA)
+        .and_then(|value| value.as_object())
+    {
         result.metadata = metadata
             .iter()
             .map(|(key, value)| (key.clone(), value.clone()))
@@ -718,6 +748,7 @@ async fn register_plugin_tools(
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use rocode_core::contracts::tools::BuiltinToolName;
     use std::sync::{Arc, Mutex};
 
     struct CaptureTool {
@@ -851,7 +882,7 @@ mod tests {
         registry
             .register(CaptureTool {
                 captured: captured.clone(),
-                id: "write",
+                id: BuiltinToolName::Write.as_str(),
             })
             .await;
 
@@ -861,7 +892,11 @@ mod tests {
         );
 
         let result = registry
-            .execute("write", malformed, test_tool_context())
+            .execute(
+                BuiltinToolName::Write.as_str(),
+                malformed,
+                test_tool_context(),
+            )
             .await
             .expect("tool should execute");
 
@@ -882,7 +917,7 @@ mod tests {
         registry
             .register(CaptureTool {
                 captured: captured.clone(),
-                id: "write",
+                id: BuiltinToolName::Write.as_str(),
             })
             .await;
 
@@ -891,7 +926,11 @@ mod tests {
         );
 
         let result = registry
-            .execute("write", malformed, test_tool_context())
+            .execute(
+                BuiltinToolName::Write.as_str(),
+                malformed,
+                test_tool_context(),
+            )
             .await
             .expect("tool should execute");
 
@@ -916,7 +955,7 @@ mod tests {
         registry
             .register(CaptureTool {
                 captured: captured.clone(),
-                id: "bash",
+                id: BuiltinToolName::Bash.as_str(),
             })
             .await;
 
@@ -925,7 +964,11 @@ mod tests {
         );
 
         let result = registry
-            .execute("bash", malformed, test_tool_context())
+            .execute(
+                BuiltinToolName::Bash.as_str(),
+                malformed,
+                test_tool_context(),
+            )
             .await
             .expect("tool should execute");
 
@@ -946,7 +989,7 @@ mod tests {
     #[test]
     fn normalize_tool_arguments_recovers_bash_jsonish_payload() {
         let malformed = serde_json::Value::String("{\"command\":\"echo hello\nworld".to_string());
-        let normalized = normalize_tool_arguments("bash", malformed);
+        let normalized = normalize_tool_arguments(BuiltinToolName::Bash.as_str(), malformed);
         assert!(normalized.is_object());
         assert_eq!(normalized["command"], "echo hello\nworld");
         assert_eq!(normalized["description"], "Execute shell command");
@@ -958,7 +1001,7 @@ mod tests {
             {"file_path": "test.py"},
             {"content": "print('hello')"}
         ]);
-        let normalized = normalize_tool_arguments("write", arr);
+        let normalized = normalize_tool_arguments(BuiltinToolName::Write.as_str(), arr);
         assert!(normalized.is_object(), "array should be merged into object");
         assert_eq!(normalized["file_path"], "test.py");
         assert_eq!(normalized["content"], "print('hello')");
@@ -969,7 +1012,7 @@ mod tests {
         let arr = serde_json::json!([
             {"file_path": "test.py", "content": "ok"}
         ]);
-        let normalized = normalize_tool_arguments("write", arr);
+        let normalized = normalize_tool_arguments(BuiltinToolName::Write.as_str(), arr);
         assert!(normalized.is_object());
         assert_eq!(normalized["file_path"], "test.py");
         assert_eq!(normalized["content"], "ok");
@@ -981,7 +1024,7 @@ mod tests {
         // Existing recovery fails; ultra structural recovery should succeed.
         let raw = r#"{"content":"<html lang="en"><body>Hello</body></html>","file_path":"/tmp/test.html"}"#;
         let input = serde_json::Value::String(raw.to_string());
-        let normalized = normalize_tool_arguments("write", input);
+        let normalized = normalize_tool_arguments(BuiltinToolName::Write.as_str(), input);
         assert!(normalized.is_object(), "ultra should recover to object");
         assert_eq!(normalized["file_path"], "/tmp/test.html");
         let content = normalized["content"].as_str().unwrap();
@@ -991,22 +1034,38 @@ mod tests {
 
 #[cfg(test)]
 mod task_flow_registry_tests {
+    use rocode_core::contracts::tools::BuiltinToolName;
+
     #[tokio::test]
     async fn create_default_registry_registers_task_flow() {
         let registry = super::create_default_registry().await;
         let ids = registry.list_ids().await;
-        assert!(ids.iter().any(|id| id == "task_flow"));
+        assert!(ids
+            .iter()
+            .any(|id| id == BuiltinToolName::TaskFlow.as_str()));
     }
 
     #[tokio::test]
     async fn create_default_registry_registers_context_docs() {
         let registry = super::create_default_registry().await;
         let ids = registry.list_ids().await;
-        assert!(ids.iter().any(|id| id == "context_docs"));
-        assert!(ids.iter().any(|id| id == "ast_grep_replace"));
-        assert!(ids.iter().any(|id| id == "repo_history"));
-        assert!(ids.iter().any(|id| id == "media_inspect"));
-        assert!(ids.iter().any(|id| id == "shell_session"));
-        assert!(ids.iter().any(|id| id == "browser_session"));
+        assert!(ids
+            .iter()
+            .any(|id| id == BuiltinToolName::ContextDocs.as_str()));
+        assert!(ids
+            .iter()
+            .any(|id| id == BuiltinToolName::AstGrepReplace.as_str()));
+        assert!(ids
+            .iter()
+            .any(|id| id == BuiltinToolName::RepoHistory.as_str()));
+        assert!(ids
+            .iter()
+            .any(|id| id == BuiltinToolName::MediaInspect.as_str()));
+        assert!(ids
+            .iter()
+            .any(|id| id == BuiltinToolName::ShellSession.as_str()));
+        assert!(ids
+            .iter()
+            .any(|id| id == BuiltinToolName::BrowserSession.as_str()));
     }
 }

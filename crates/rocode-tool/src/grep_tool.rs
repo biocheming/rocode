@@ -1,5 +1,7 @@
 use async_trait::async_trait;
 use regex::Regex;
+use rocode_core::contracts::permission::PermissionTypeWire;
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -38,7 +40,7 @@ struct GrepMatch {
 #[async_trait]
 impl Tool for GrepTool {
     fn id(&self) -> &str {
-        "grep"
+        BuiltinToolName::Grep.as_str()
     }
 
     fn description(&self) -> &str {
@@ -49,11 +51,11 @@ impl Tool for GrepTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "pattern": {
+                (tool_arg_keys::PATTERN): {
                     "type": "string",
                     "description": "The regex pattern to search for"
                 },
-                "path": {
+                (tool_arg_keys::PATH): {
                     "type": "string",
                     "description": "The directory to search in"
                 },
@@ -70,7 +72,7 @@ impl Tool for GrepTool {
                     "description": "Search hidden files and directories (default: false)"
                 }
             },
-            "required": ["pattern"]
+            "required": [tool_arg_keys::PATTERN]
         })
     }
 
@@ -79,12 +81,12 @@ impl Tool for GrepTool {
         args: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let pattern: String = args["pattern"]
+        let pattern: String = args[tool_arg_keys::PATTERN]
             .as_str()
             .ok_or_else(|| ToolError::InvalidArguments("pattern is required".into()))?
             .to_string();
 
-        let search_path: String = args["path"]
+        let search_path: String = args[tool_arg_keys::PATH]
             .as_str()
             .map(|s| s.to_string())
             .unwrap_or_else(|| ctx.directory.clone());
@@ -109,18 +111,18 @@ impl Tool for GrepTool {
 
         if ctx.is_external_path(&base_dir_str) {
             ctx.ask_permission(
-                crate::PermissionRequest::new("external_directory")
+                crate::PermissionRequest::new(PermissionTypeWire::ExternalDirectory.as_str())
                     .with_pattern(format!("{}/*", base_dir_str))
-                    .with_metadata("path", serde_json::json!(&base_dir_str)),
+                    .with_metadata(tool_arg_keys::PATH, serde_json::json!(&base_dir_str)),
             )
             .await?;
         }
 
         ctx.ask_permission(
-            crate::PermissionRequest::new("grep")
+            crate::PermissionRequest::new(BuiltinToolName::Grep.as_str())
                 .with_pattern(&pattern)
                 .always_allow()
-                .with_metadata("path", serde_json::json!(&base_dir_str)),
+                .with_metadata(tool_arg_keys::PATH, serde_json::json!(&base_dir_str)),
         )
         .await?;
 
@@ -256,7 +258,10 @@ impl Tool for GrepTool {
             metadata: {
                 let mut m = Metadata::new();
                 m.insert("matches".into(), serde_json::json!(total_matches));
-                m.insert("truncated".into(), serde_json::json!(truncated));
+                m.insert(
+                    tool_arg_keys::TRUNCATED.into(),
+                    serde_json::json!(truncated),
+                );
                 m.insert("hasErrors".into(), serde_json::json!(has_errors));
                 m
             },

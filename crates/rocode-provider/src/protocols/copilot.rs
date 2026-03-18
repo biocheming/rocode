@@ -6,6 +6,8 @@ use std::future::Future;
 use std::sync::Arc;
 use tracing;
 
+use rocode_core::contracts::provider::ProviderFinishReasonWire;
+
 use crate::bootstrap::should_use_copilot_responses_api;
 use crate::custom_fetch::get_custom_fetch_proxy;
 use crate::responses::{
@@ -271,12 +273,12 @@ impl CopilotProtocol {
 
     fn finish_reason_to_string(reason: FinishReason) -> String {
         match reason {
-            FinishReason::Stop => "stop".to_string(),
-            FinishReason::Length => "length".to_string(),
-            FinishReason::ContentFilter => "content_filter".to_string(),
-            FinishReason::ToolCalls => "tool-calls".to_string(),
-            FinishReason::Error => "error".to_string(),
-            FinishReason::Unknown => "unknown".to_string(),
+            FinishReason::Stop => ProviderFinishReasonWire::Stop.as_str().to_string(),
+            FinishReason::Length => ProviderFinishReasonWire::Length.as_str().to_string(),
+            FinishReason::ContentFilter => ProviderFinishReasonWire::ContentFilter.as_str().to_string(),
+            FinishReason::ToolCalls => ProviderFinishReasonWire::ToolCalls.as_str().to_string(),
+            FinishReason::Error => ProviderFinishReasonWire::Error.as_str().to_string(),
+            FinishReason::Unknown => ProviderFinishReasonWire::Unknown.as_str().to_string(),
         }
     }
 
@@ -688,10 +690,12 @@ fn parse_copilot_sse(data: &str) -> Option<StreamEvent> {
         }
     }
 
-    if let Some(reason) = &choice.finish_reason {
-        if reason == "tool_calls" {
-            return Some(StreamEvent::Done);
-        }
+    if choice
+        .finish_reason
+        .as_deref()
+        .is_some_and(|reason| ProviderFinishReasonWire::parse(reason) == Some(ProviderFinishReasonWire::ToolCalls))
+    {
+        return Some(StreamEvent::Done);
     }
 
     None

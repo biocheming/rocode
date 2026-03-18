@@ -16,6 +16,8 @@ tracing = "0.1"
 which = "7"
 dirs = "6"
 libloading = "0.8"
+strum = { workspace = true }
+strum_macros = { workspace = true }
 
 [dev-dependencies]
 rocode-config = { path = "../rocode-config" }

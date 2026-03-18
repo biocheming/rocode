@@ -1,4 +1,5 @@
 use chrono::Utc;
+use rocode_core::contracts::mcp::McpConnectionStatusWire;
 use rocode_mcp::client::{McpClientRegistry, McpServerConfig as McpClientConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -159,7 +160,7 @@ impl McpOAuthManager {
         if !managed.enabled {
             let info = McpServerInfo {
                 name: server_name.to_string(),
-                status: "disabled".to_string(),
+                status: McpConnectionStatusWire::Disabled.as_str().to_string(),
                 tools: 0,
                 resources: 0,
                 error: None,
@@ -207,7 +208,7 @@ impl McpOAuthManager {
                             .await;
                         McpServerInfo {
                             name: server_name.to_string(),
-                            status: "connected".to_string(),
+                            status: McpConnectionStatusWire::Connected.as_str().to_string(),
                             tools: tool_count,
                             resources: 0,
                             error: None,
@@ -220,7 +221,7 @@ impl McpOAuthManager {
                             .await;
                         McpServerInfo {
                             name: server_name.to_string(),
-                            status: "failed".to_string(),
+                            status: McpConnectionStatusWire::Failed.as_str().to_string(),
                             tools: 0,
                             resources: 0,
                             error: Some(error.to_string()),
@@ -236,7 +237,7 @@ impl McpOAuthManager {
                         .await;
                     McpServerInfo {
                         name: server_name.to_string(),
-                        status: "needs_auth".to_string(),
+                        status: McpConnectionStatusWire::NeedsAuth.as_str().to_string(),
                         tools: 0,
                         resources: 0,
                         error: None,
@@ -252,7 +253,7 @@ impl McpOAuthManager {
                     .await;
                     McpServerInfo {
                         name: server_name.to_string(),
-                        status: "failed".to_string(),
+                        status: McpConnectionStatusWire::Failed.as_str().to_string(),
                         tools: 0,
                         resources: 0,
                         error: Some(
@@ -291,7 +292,7 @@ impl McpOAuthManager {
 
         let info = McpServerInfo {
             name: server_name.to_string(),
-            status: "disabled".to_string(),
+            status: McpConnectionStatusWire::Disabled.as_str().to_string(),
             tools: 0,
             resources: 0,
             error: None,
@@ -354,14 +355,14 @@ impl McpOAuthManager {
             .entry(server_name.to_string())
             .or_insert_with(|| McpServerInfo {
                 name: server_name.to_string(),
-                status: "needs_auth".to_string(),
+                status: McpConnectionStatusWire::NeedsAuth.as_str().to_string(),
                 tools: 0,
                 resources: 0,
                 error: None,
                 oauth_required: true,
                 oauth_status: Some(McpOAuthStatus::Pending),
             });
-        info.status = "needs_auth".to_string();
+        info.status = McpConnectionStatusWire::NeedsAuth.as_str().to_string();
         info.error = None;
         info.oauth_required = true;
         info.oauth_status = Some(McpOAuthStatus::Pending);
@@ -481,7 +482,7 @@ impl McpOAuthManager {
                 .cloned()
                 .unwrap_or_else(|| McpServerInfo {
                     name: server_name.to_string(),
-                    status: "disabled".to_string(),
+                    status: McpConnectionStatusWire::Disabled.as_str().to_string(),
                     tools: 0,
                     resources: 0,
                     error: None,
@@ -492,9 +493,9 @@ impl McpOAuthManager {
             info.oauth_status = None;
             if managed.config.oauth_required() {
                 info.status = if managed.enabled {
-                    "needs_auth".to_string()
+                    McpConnectionStatusWire::NeedsAuth.as_str().to_string()
                 } else {
-                    "disabled".to_string()
+                    McpConnectionStatusWire::Disabled.as_str().to_string()
                 };
                 info.error = None;
             }
@@ -532,16 +533,16 @@ impl McpOAuthManager {
     ) -> McpServerInfo {
         let oauth_required = managed.config.oauth_required();
         let status = if !managed.enabled {
-            "disabled"
+            McpConnectionStatusWire::Disabled
         } else if oauth_required && oauth_status != Some(McpOAuthStatus::Authorized) {
-            "needs_auth"
+            McpConnectionStatusWire::NeedsAuth
         } else {
-            "disabled"
+            McpConnectionStatusWire::Disabled
         };
 
         McpServerInfo {
             name: server_name.to_string(),
-            status: status.to_string(),
+            status: status.as_str().to_string(),
             tools: 0,
             resources: 0,
             error: None,
@@ -599,7 +600,7 @@ mod tests {
             .connect("remote")
             .await
             .expect("connect should return runtime status");
-        assert_eq!(status.status, "needs_auth");
+        assert_eq!(status.status, McpConnectionStatusWire::NeedsAuth.as_str());
         assert_eq!(status.oauth_status, None);
     }
 
@@ -666,7 +667,7 @@ mod tests {
             .get_server("remote")
             .await
             .expect("remote server should exist");
-        assert_eq!(status.status, "needs_auth");
+        assert_eq!(status.status, McpConnectionStatusWire::NeedsAuth.as_str());
         assert_eq!(status.oauth_status, None);
     }
 }

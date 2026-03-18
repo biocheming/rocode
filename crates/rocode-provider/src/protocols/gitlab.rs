@@ -3,6 +3,8 @@ use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
+use rocode_core::contracts::provider::ProviderFinishReasonWire;
+
 use crate::{
     ChatRequest, ChatResponse, Choice, Content, Message, ProtocolImpl, ProviderConfig,
     ProviderError, Role, StreamEvent, StreamResult, Usage,
@@ -333,10 +335,12 @@ fn parse_gitlab_sse(data: &str) -> Option<StreamEvent> {
         }
     }
 
-    if let Some(reason) = &choice.finish_reason {
-        if reason == "tool_calls" {
-            return Some(StreamEvent::Done);
-        }
+    if choice
+        .finish_reason
+        .as_deref()
+        .is_some_and(|reason| ProviderFinishReasonWire::parse(reason) == Some(ProviderFinishReasonWire::ToolCalls))
+    {
+        return Some(StreamEvent::Done);
     }
 
     None

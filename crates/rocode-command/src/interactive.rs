@@ -1,4 +1,5 @@
 use crate::{ui_command_argument_kind, ResolvedUiCommand, UiActionId};
+use strum_macros::EnumString;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InteractiveCommand {
@@ -80,25 +81,126 @@ impl InteractiveCommand {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString)]
+#[strum(ascii_case_insensitive)]
+enum PlainCommandWord {
+    #[strum(serialize = "exit", serialize = "quit")]
+    Exit,
+    #[strum(serialize = "help")]
+    Help,
+    #[strum(serialize = "clear")]
+    Clear,
+    #[strum(serialize = "stats")]
+    Stats,
+    #[strum(serialize = "models")]
+    Models,
+    #[strum(serialize = "providers")]
+    Providers,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString)]
+#[strum(ascii_case_insensitive)]
+enum SlashCommandWord {
+    #[strum(serialize = "help", serialize = "commands")]
+    Help,
+    #[strum(serialize = "exit", serialize = "quit", serialize = "q")]
+    Exit,
+    #[strum(serialize = "abort")]
+    Abort,
+    #[strum(serialize = "recover", serialize = "recovery")]
+    Recover,
+    #[strum(serialize = "new")]
+    NewSession,
+    #[strum(serialize = "clear")]
+    ClearScreen,
+    #[strum(serialize = "status", serialize = "stats")]
+    Status,
+    #[strum(serialize = "models")]
+    Models,
+    #[strum(serialize = "model")]
+    Model,
+    #[strum(serialize = "providers")]
+    Providers,
+    #[strum(serialize = "theme", serialize = "themes")]
+    Themes,
+    #[strum(serialize = "preset", serialize = "presets")]
+    Presets,
+    #[strum(
+        serialize = "session",
+        serialize = "sessions",
+        serialize = "resume",
+        serialize = "continue"
+    )]
+    Sessions,
+    #[strum(serialize = "parent", serialize = "back")]
+    Parent,
+    #[strum(serialize = "child", serialize = "children")]
+    Child,
+    #[strum(serialize = "compact")]
+    Compact,
+    #[strum(serialize = "copy")]
+    Copy,
+    #[strum(serialize = "agent", serialize = "agents")]
+    Agent,
+    #[strum(serialize = "sidebar")]
+    Sidebar,
+    #[strum(serialize = "active")]
+    Active,
+    #[strum(serialize = "inspect", serialize = "stage", serialize = "stages")]
+    InspectStage,
+    #[strum(serialize = "up", serialize = "pageup")]
+    Up,
+    #[strum(serialize = "down", serialize = "pagedown")]
+    Down,
+    #[strum(serialize = "bottom", serialize = "end")]
+    Bottom,
+    #[strum(serialize = "tasks", serialize = "task")]
+    Tasks,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString)]
+#[strum(ascii_case_insensitive)]
+enum ChildSubcommand {
+    #[strum(serialize = "list")]
+    List,
+    #[strum(serialize = "focus")]
+    Focus,
+    #[strum(serialize = "next")]
+    Next,
+    #[strum(serialize = "prev", serialize = "previous")]
+    Previous,
+    #[strum(serialize = "back", serialize = "root")]
+    BackToRoot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString)]
+#[strum(ascii_case_insensitive)]
+enum TasksSubcommand {
+    #[strum(serialize = "show")]
+    Show,
+    #[strum(serialize = "kill", serialize = "cancel")]
+    Kill,
+}
+
 pub fn parse_interactive_command(input: &str) -> Option<InteractiveCommand> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return None;
     }
 
-    let plain = trimmed.to_ascii_lowercase();
-    match plain.as_str() {
-        "exit" | "quit" => return Some(InteractiveCommand::Exit),
-        "help" => return Some(InteractiveCommand::ShowHelp),
-        "clear" => return Some(InteractiveCommand::ClearScreen),
-        "stats" => return Some(InteractiveCommand::ShowStatus),
-        "models" => return Some(InteractiveCommand::ListModels),
-        "providers" => return Some(InteractiveCommand::ListProviders),
-        _ => {}
-    }
-
     if !trimmed.starts_with('/') {
-        return None;
+        let plain = trimmed.to_ascii_lowercase();
+        let Ok(word) = plain.parse::<PlainCommandWord>() else {
+            return None;
+        };
+        return Some(match word {
+            PlainCommandWord::Exit => InteractiveCommand::Exit,
+            PlainCommandWord::Help => InteractiveCommand::ShowHelp,
+            PlainCommandWord::Clear => InteractiveCommand::ClearScreen,
+            PlainCommandWord::Stats => InteractiveCommand::ShowStatus,
+            PlainCommandWord::Models => InteractiveCommand::ListModels,
+            PlainCommandWord::Providers => InteractiveCommand::ListProviders,
+        });
     }
 
     let body = trimmed[1..].trim();
@@ -107,100 +209,106 @@ pub fn parse_interactive_command(input: &str) -> Option<InteractiveCommand> {
     }
 
     let mut parts = body.split_whitespace();
-    let name = parts.next()?.to_ascii_lowercase();
+    let name = parts.next()?.trim().to_ascii_lowercase();
     let arg = parts.collect::<Vec<_>>().join(" ");
 
-    match name.as_str() {
-        "help" | "commands" => Some(InteractiveCommand::ShowHelp),
-        "exit" | "quit" | "q" => Some(InteractiveCommand::Exit),
-        "abort" => Some(InteractiveCommand::Abort),
-        "recover" | "recovery" => {
-            if arg.is_empty() {
-                Some(InteractiveCommand::ShowRecovery)
-            } else {
-                Some(InteractiveCommand::ExecuteRecovery(arg))
-            }
-        }
-        "new" => Some(InteractiveCommand::NewSession),
-        "clear" => Some(InteractiveCommand::ClearScreen),
-        "status" | "stats" => Some(InteractiveCommand::ShowStatus),
-        "models" => Some(InteractiveCommand::ListModels),
-        "model" => {
-            if arg.is_empty() {
-                Some(InteractiveCommand::ListModels)
-            } else {
-                Some(InteractiveCommand::SelectModel(arg))
-            }
-        }
-        "providers" => Some(InteractiveCommand::ListProviders),
-        "theme" | "themes" => Some(InteractiveCommand::ListThemes),
-        "preset" | "presets" => {
-            if arg.is_empty() {
-                Some(InteractiveCommand::ListPresets)
-            } else {
-                Some(InteractiveCommand::SelectPreset(arg))
-            }
-        }
-        "session" | "sessions" | "resume" | "continue" => Some(InteractiveCommand::ListSessions),
-        "parent" | "back" => Some(InteractiveCommand::ParentSession),
-        "child" | "children" => {
-            if arg.is_empty() {
-                Some(InteractiveCommand::ListChildSessions)
-            } else {
-                let mut sub_parts = arg.split_whitespace();
-                let sub_cmd = sub_parts.next().unwrap_or("");
-                let sub_arg = sub_parts.collect::<Vec<_>>().join(" ");
-                match sub_cmd {
-                    "list" => Some(InteractiveCommand::ListChildSessions),
-                    "focus" if !sub_arg.is_empty() => {
-                        Some(InteractiveCommand::FocusChildSession(sub_arg))
-                    }
-                    "focus" => Some(InteractiveCommand::ListChildSessions),
-                    "next" => Some(InteractiveCommand::FocusNextChildSession),
-                    "prev" | "previous" => Some(InteractiveCommand::FocusPreviousChildSession),
-                    "back" | "root" => Some(InteractiveCommand::BackToRootSession),
-                    _ => Some(InteractiveCommand::ListChildSessions),
+    match name.parse::<SlashCommandWord>() {
+        Ok(word) => Some(match word {
+            SlashCommandWord::Help => InteractiveCommand::ShowHelp,
+            SlashCommandWord::Exit => InteractiveCommand::Exit,
+            SlashCommandWord::Abort => InteractiveCommand::Abort,
+            SlashCommandWord::Recover => {
+                if arg.is_empty() {
+                    InteractiveCommand::ShowRecovery
+                } else {
+                    InteractiveCommand::ExecuteRecovery(arg)
                 }
             }
-        }
-        "compact" => Some(InteractiveCommand::Compact),
-        "copy" => Some(InteractiveCommand::Copy),
-        "agent" | "agents" => {
-            if arg.is_empty() {
-                Some(InteractiveCommand::ListAgents)
-            } else {
-                Some(InteractiveCommand::SelectAgent(arg))
-            }
-        }
-        "sidebar" => Some(InteractiveCommand::ToggleSidebar),
-        "active" => Some(InteractiveCommand::ToggleActive),
-        "inspect" | "stage" | "stages" => {
-            if arg.is_empty() {
-                Some(InteractiveCommand::InspectStage(None))
-            } else {
-                Some(InteractiveCommand::InspectStage(Some(arg)))
-            }
-        }
-        "up" | "pageup" => Some(InteractiveCommand::ScrollUp),
-        "down" | "pagedown" => Some(InteractiveCommand::ScrollDown),
-        "bottom" | "end" => Some(InteractiveCommand::ScrollBottom),
-        "tasks" | "task" => {
-            if arg.is_empty() {
-                Some(InteractiveCommand::ListTasks)
-            } else {
-                let mut sub_parts = arg.split_whitespace();
-                let sub_cmd = sub_parts.next().unwrap_or("");
-                let sub_arg = sub_parts.collect::<Vec<_>>().join(" ");
-                match sub_cmd {
-                    "show" if !sub_arg.is_empty() => Some(InteractiveCommand::ShowTask(sub_arg)),
-                    "kill" | "cancel" if !sub_arg.is_empty() => {
-                        Some(InteractiveCommand::KillTask(sub_arg))
-                    }
-                    _ => Some(InteractiveCommand::ListTasks),
+            SlashCommandWord::NewSession => InteractiveCommand::NewSession,
+            SlashCommandWord::ClearScreen => InteractiveCommand::ClearScreen,
+            SlashCommandWord::Status => InteractiveCommand::ShowStatus,
+            SlashCommandWord::Models => InteractiveCommand::ListModels,
+            SlashCommandWord::Model => {
+                if arg.is_empty() {
+                    InteractiveCommand::ListModels
+                } else {
+                    InteractiveCommand::SelectModel(arg)
                 }
             }
-        }
-        _ => Some(InteractiveCommand::Unknown(name)),
+            SlashCommandWord::Providers => InteractiveCommand::ListProviders,
+            SlashCommandWord::Themes => InteractiveCommand::ListThemes,
+            SlashCommandWord::Presets => {
+                if arg.is_empty() {
+                    InteractiveCommand::ListPresets
+                } else {
+                    InteractiveCommand::SelectPreset(arg)
+                }
+            }
+            SlashCommandWord::Sessions => InteractiveCommand::ListSessions,
+            SlashCommandWord::Parent => InteractiveCommand::ParentSession,
+            SlashCommandWord::Child => {
+                if arg.is_empty() {
+                    InteractiveCommand::ListChildSessions
+                } else {
+                    let mut sub_parts = arg.split_whitespace();
+                    let sub_cmd = sub_parts.next().unwrap_or("").trim();
+                    let sub_arg = sub_parts.collect::<Vec<_>>().join(" ");
+                    match sub_cmd.parse::<ChildSubcommand>() {
+                        Ok(ChildSubcommand::List) => InteractiveCommand::ListChildSessions,
+                        Ok(ChildSubcommand::Focus) if !sub_arg.is_empty() => {
+                            InteractiveCommand::FocusChildSession(sub_arg)
+                        }
+                        Ok(ChildSubcommand::Focus) => InteractiveCommand::ListChildSessions,
+                        Ok(ChildSubcommand::Next) => InteractiveCommand::FocusNextChildSession,
+                        Ok(ChildSubcommand::Previous) => {
+                            InteractiveCommand::FocusPreviousChildSession
+                        }
+                        Ok(ChildSubcommand::BackToRoot) => InteractiveCommand::BackToRootSession,
+                        Err(_) => InteractiveCommand::ListChildSessions,
+                    }
+                }
+            }
+            SlashCommandWord::Compact => InteractiveCommand::Compact,
+            SlashCommandWord::Copy => InteractiveCommand::Copy,
+            SlashCommandWord::Agent => {
+                if arg.is_empty() {
+                    InteractiveCommand::ListAgents
+                } else {
+                    InteractiveCommand::SelectAgent(arg)
+                }
+            }
+            SlashCommandWord::Sidebar => InteractiveCommand::ToggleSidebar,
+            SlashCommandWord::Active => InteractiveCommand::ToggleActive,
+            SlashCommandWord::InspectStage => {
+                if arg.is_empty() {
+                    InteractiveCommand::InspectStage(None)
+                } else {
+                    InteractiveCommand::InspectStage(Some(arg))
+                }
+            }
+            SlashCommandWord::Up => InteractiveCommand::ScrollUp,
+            SlashCommandWord::Down => InteractiveCommand::ScrollDown,
+            SlashCommandWord::Bottom => InteractiveCommand::ScrollBottom,
+            SlashCommandWord::Tasks => {
+                if arg.is_empty() {
+                    InteractiveCommand::ListTasks
+                } else {
+                    let mut sub_parts = arg.split_whitespace();
+                    let sub_cmd = sub_parts.next().unwrap_or("").trim();
+                    let sub_arg = sub_parts.collect::<Vec<_>>().join(" ");
+                    match sub_cmd.parse::<TasksSubcommand>() {
+                        Ok(TasksSubcommand::Show) if !sub_arg.is_empty() => {
+                            InteractiveCommand::ShowTask(sub_arg)
+                        }
+                        Ok(TasksSubcommand::Kill) if !sub_arg.is_empty() => {
+                            InteractiveCommand::KillTask(sub_arg)
+                        }
+                        _ => InteractiveCommand::ListTasks,
+                    }
+                }
+            }
+        }),
+        Err(_) => Some(InteractiveCommand::Unknown(name)),
     }
 }
 

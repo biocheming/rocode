@@ -4,26 +4,15 @@ use std::sync::Arc;
 use axum::response::sse::Event;
 use rocode_command::agent_presenter::output_block_to_web;
 use rocode_command::output_blocks::OutputBlock;
+use rocode_core::contracts::events::ServerEventType;
+use rocode_core::contracts::permission::PermissionReplyWire;
 use rocode_session::prompt::{OutputBlockEvent, OutputBlockHook};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::ServerState;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum QuestionResolutionKind {
-    Answered,
-    Rejected,
-    Cancelled,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolCallPhase {
-    Start,
-    Complete,
-}
+pub use rocode_core::contracts::events::{QuestionResolutionKind, ToolCallPhase};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiffEntry {
@@ -73,7 +62,7 @@ pub enum ServerEvent {
     SessionStatus {
         #[serde(rename = "sessionID")]
         session_id: String,
-        status: String,
+        status: crate::runtime_control::SessionRunStatus,
     },
     #[serde(rename = "question.created")]
     QuestionCreated {
@@ -114,7 +103,7 @@ pub enum ServerEvent {
         session_id: String,
         #[serde(rename = "permissionID", alias = "requestID")]
         permission_id: String,
-        reply: String,
+        reply: PermissionReplyWire,
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
     },
@@ -212,23 +201,24 @@ impl ServerEvent {
     }
 
     pub(crate) fn event_name(&self) -> &'static str {
-        match self {
-            Self::OutputBlock { .. } => "output_block",
-            Self::Usage { .. } => "usage",
-            Self::Error { .. } => "error",
-            Self::SessionUpdated { .. } => "session.updated",
-            Self::SessionStatus { .. } => "session.status",
-            Self::QuestionCreated { .. } => "question.created",
-            Self::QuestionResolved { .. } => "question.resolved",
-            Self::PermissionRequested { .. } => "permission.requested",
-            Self::PermissionResolved { .. } => "permission.resolved",
-            Self::ConfigUpdated => "config.updated",
-            Self::ToolCallLifecycle { .. } => "tool_call.lifecycle",
-            Self::TopologyChanged { .. } => "execution.topology.changed",
-            Self::ChildSessionAttached { .. } => "child_session.attached",
-            Self::ChildSessionDetached { .. } => "child_session.detached",
-            Self::DiffUpdated { .. } => "diff.updated",
-        }
+        let event_type = match self {
+            Self::OutputBlock { .. } => ServerEventType::OutputBlock,
+            Self::Usage { .. } => ServerEventType::Usage,
+            Self::Error { .. } => ServerEventType::Error,
+            Self::SessionUpdated { .. } => ServerEventType::SessionUpdated,
+            Self::SessionStatus { .. } => ServerEventType::SessionStatus,
+            Self::QuestionCreated { .. } => ServerEventType::QuestionCreated,
+            Self::QuestionResolved { .. } => ServerEventType::QuestionResolved,
+            Self::PermissionRequested { .. } => ServerEventType::PermissionRequested,
+            Self::PermissionResolved { .. } => ServerEventType::PermissionResolved,
+            Self::ConfigUpdated => ServerEventType::ConfigUpdated,
+            Self::ToolCallLifecycle { .. } => ServerEventType::ToolCallLifecycle,
+            Self::TopologyChanged { .. } => ServerEventType::ExecutionTopologyChanged,
+            Self::ChildSessionAttached { .. } => ServerEventType::ChildSessionAttached,
+            Self::ChildSessionDetached { .. } => ServerEventType::ChildSessionDetached,
+            Self::DiffUpdated { .. } => ServerEventType::DiffUpdated,
+        };
+        event_type.as_str()
     }
 
     pub(crate) fn to_json_string(&self) -> Option<String> {
@@ -352,6 +342,9 @@ pub(crate) fn broadcast_child_session_detached(
 mod tests {
     use super::{DiffEntry, QuestionResolutionKind, ServerEvent, ToolCallPhase};
     use rocode_command::output_blocks::{OutputBlock, StatusBlock};
+    use rocode_core::contracts::events::ServerEventType;
+    use rocode_core::contracts::output_blocks::{BlockToneWire, OutputBlockKind};
+    use rocode_core::contracts::tools::BuiltinToolName;
 
     #[test]
     fn server_event_serializes_output_block_wrapper() {
@@ -362,11 +355,11 @@ mod tests {
         );
 
         let value = event.to_json_value().expect("event json");
-        assert_eq!(value["type"], "output_block");
+        assert_eq!(value["type"], ServerEventType::OutputBlock.as_str());
         assert_eq!(value["sessionID"], "session-1");
         assert_eq!(value["id"], "block-1");
-        assert_eq!(value["block"]["kind"], "status");
-        assert_eq!(value["block"]["tone"], "success");
+        assert_eq!(value["block"]["kind"], OutputBlockKind::Status.as_str());
+        assert_eq!(value["block"]["tone"], BlockToneWire::Success.as_str());
         assert_eq!(value["block"]["text"], "ok");
     }
 
@@ -375,7 +368,10 @@ mod tests {
         let value = ServerEvent::ConfigUpdated
             .to_json_value()
             .expect("event json");
-        assert_eq!(value, serde_json::json!({ "type": "config.updated" }));
+        assert_eq!(
+            value,
+            serde_json::json!({ "type": ServerEventType::ConfigUpdated.as_str() })
+        );
     }
 
     #[test]
@@ -386,7 +382,10 @@ mod tests {
         }
         .to_json_value()
         .expect("event json");
-        assert_eq!(value["type"], "child_session.attached");
+        assert_eq!(
+            value["type"],
+            ServerEventType::ChildSessionAttached.as_str()
+        );
         assert_eq!(value["parentID"], "parent-1");
         assert_eq!(value["childID"], "child-1");
     }
@@ -403,8 +402,11 @@ mod tests {
         .to_json_value()
         .expect("event json");
 
-        assert_eq!(value["type"], "question.resolved");
-        assert_eq!(value["resolution"], "answered");
+        assert_eq!(value["type"], ServerEventType::QuestionResolved.as_str());
+        assert_eq!(
+            value[rocode_core::contracts::wire::fields::RESOLUTION],
+            QuestionResolutionKind::Answered.as_str()
+        );
         assert_eq!(value["requestID"], "question-1");
     }
 
@@ -414,14 +416,14 @@ mod tests {
             session_id: "session-1".to_string(),
             tool_call_id: "tool-1".to_string(),
             phase: ToolCallPhase::Start,
-            tool_name: Some("shell".to_string()),
+            tool_name: Some(BuiltinToolName::Bash.as_str().to_string()),
         }
         .to_json_value()
         .expect("event json");
 
-        assert_eq!(value["type"], "tool_call.lifecycle");
-        assert_eq!(value["phase"], "start");
-        assert_eq!(value["toolName"], "shell");
+        assert_eq!(value["type"], ServerEventType::ToolCallLifecycle.as_str());
+        assert_eq!(value["phase"], ToolCallPhase::Start.as_str());
+        assert_eq!(value["toolName"], BuiltinToolName::Bash.as_str());
     }
 
     #[test]
@@ -437,7 +439,7 @@ mod tests {
         .to_json_value()
         .expect("event json");
 
-        assert_eq!(value["type"], "diff.updated");
+        assert_eq!(value["type"], ServerEventType::DiffUpdated.as_str());
         assert_eq!(value["sessionID"], "session-1");
         assert_eq!(value["diff"][0]["path"], "src/main.rs");
     }
@@ -464,7 +466,7 @@ mod tests {
             "type": "permission.replied",
             "sessionID": "session-1",
             "requestID": "permission-1",
-            "reply": "once",
+            "reply": rocode_core::contracts::permission::PermissionReplyWire::Once.as_str(),
         }))
         .expect("legacy event");
 

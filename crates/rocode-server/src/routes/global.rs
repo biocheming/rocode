@@ -14,6 +14,7 @@ use std::sync::Arc;
 use crate::worktree::{self, WorktreeInfo as WorktreeInfoStruct};
 use crate::{ApiError, Result, ServerState};
 use rocode_config::Config as AppConfig;
+use rocode_core::contracts::tools::BuiltinToolName;
 
 pub(crate) fn global_routes() -> Router<Arc<ServerState>> {
     Router::new()
@@ -189,50 +190,57 @@ pub struct ToolInfo {
 }
 
 async fn list_tool_ids() -> Json<Vec<String>> {
-    Json(vec![
-        "read".to_string(),
-        "write".to_string(),
-        "edit".to_string(),
-        "bash".to_string(),
-        "glob".to_string(),
-        "grep".to_string(),
-        "ls".to_string(),
-        "webfetch".to_string(),
-        "websearch".to_string(),
-        "task".to_string(),
-        "lsp".to_string(),
-        "batch".to_string(),
-        "plan_enter".to_string(),
-        "plan_exit".to_string(),
-        "todoread".to_string(),
-        "todowrite".to_string(),
-        "codesearch".to_string(),
-        "apply_patch".to_string(),
-        "skill".to_string(),
-        "multiedit".to_string(),
-    ])
+    const TOOL_IDS: &[BuiltinToolName] = &[
+        BuiltinToolName::Read,
+        BuiltinToolName::Write,
+        BuiltinToolName::Edit,
+        BuiltinToolName::Bash,
+        BuiltinToolName::Glob,
+        BuiltinToolName::Grep,
+        BuiltinToolName::Ls,
+        BuiltinToolName::WebFetch,
+        BuiltinToolName::WebSearch,
+        BuiltinToolName::Task,
+        BuiltinToolName::Lsp,
+        BuiltinToolName::Batch,
+        BuiltinToolName::PlanEnter,
+        BuiltinToolName::PlanExit,
+        BuiltinToolName::TodoRead,
+        BuiltinToolName::TodoWrite,
+        BuiltinToolName::CodeSearch,
+        BuiltinToolName::ApplyPatch,
+        BuiltinToolName::Skill,
+        BuiltinToolName::MultiEdit,
+    ];
+
+    Json(
+        TOOL_IDS
+            .iter()
+            .map(|tool| tool.as_str().to_string())
+            .collect(),
+    )
 }
 
 async fn list_tools(Query(_params): Query<HashMap<String, String>>) -> Json<Vec<ToolInfo>> {
     Json(vec![
         ToolInfo {
-            id: "read".to_string(),
-            name: "Read".to_string(),
+            id: BuiltinToolName::Read.as_str().to_string(),
+            name: BuiltinToolName::Read.display_name().to_string(),
             description: "Read files".to_string(),
         },
         ToolInfo {
-            id: "write".to_string(),
-            name: "Write".to_string(),
+            id: BuiltinToolName::Write.as_str().to_string(),
+            name: BuiltinToolName::Write.display_name().to_string(),
             description: "Write files".to_string(),
         },
         ToolInfo {
-            id: "edit".to_string(),
-            name: "Edit".to_string(),
+            id: BuiltinToolName::Edit.as_str().to_string(),
+            name: BuiltinToolName::Edit.display_name().to_string(),
             description: "Edit files".to_string(),
         },
         ToolInfo {
-            id: "bash".to_string(),
-            name: "Bash".to_string(),
+            id: BuiltinToolName::Bash.as_str().to_string(),
+            name: BuiltinToolName::Bash.display_name().to_string(),
             description: "Execute commands".to_string(),
         },
     ])

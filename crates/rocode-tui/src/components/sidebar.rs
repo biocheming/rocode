@@ -15,6 +15,9 @@ use crate::context::{
     AppContext, LspConnectionStatus, McpConnectionStatus, MessageRole, TodoStatus,
 };
 use crate::theme::Theme;
+use rocode_core::contracts::mcp::McpConnectionStatusWire;
+use rocode_core::contracts::scheduler::keys as scheduler_keys;
+use rocode_core::contracts::session::keys as session_keys;
 use rocode_core::process_registry::ProcessKind;
 
 pub struct Sidebar {
@@ -327,7 +330,7 @@ impl Sidebar {
             Style::default().fg(theme.text).bold(),
         ))];
         if let Some(session_meta) = session.and_then(|s| s.metadata.as_ref()) {
-            if let Some(agent) = sidebar_metadata_text(session_meta, "agent") {
+            if let Some(agent) = sidebar_metadata_text(session_meta, session_keys::AGENT) {
                 session_lines.push(sidebar_meta_line(theme, "agent", agent));
             }
             if let Some(model) = sidebar_model_summary(session_meta) {
@@ -455,14 +458,22 @@ impl Sidebar {
         } else {
             for server in mcp_servers.iter() {
                 let (status_text, color) = match server.status {
-                    McpConnectionStatus::Connected => ("connected", theme.success),
-                    McpConnectionStatus::Failed => ("failed", theme.error),
+                    McpConnectionStatus::Connected => {
+                        (McpConnectionStatusWire::Connected.as_str(), theme.success)
+                    }
+                    McpConnectionStatus::Failed => {
+                        (McpConnectionStatusWire::Failed.as_str(), theme.error)
+                    }
                     McpConnectionStatus::NeedsAuth => ("needs auth", theme.warning),
                     McpConnectionStatus::NeedsClientRegistration => {
                         ("needs client ID", theme.warning)
                     }
-                    McpConnectionStatus::Disabled => ("disabled", theme.text_muted),
-                    McpConnectionStatus::Disconnected => ("disconnected", theme.text_muted),
+                    McpConnectionStatus::Disabled => {
+                        (McpConnectionStatusWire::Disabled.as_str(), theme.text_muted)
+                    }
+                    McpConnectionStatus::Disconnected => {
+                        (McpConnectionStatusWire::Disconnected.as_str(), theme.text_muted)
+                    }
                 };
                 mcp_lines.push(Line::from(vec![
                     Span::styled("• ", Style::default().fg(color)),
@@ -972,8 +983,8 @@ fn sidebar_metadata_bool(metadata: &HashMap<String, serde_json::Value>, key: &st
 }
 
 fn sidebar_model_summary(metadata: &HashMap<String, serde_json::Value>) -> Option<String> {
-    let provider = sidebar_metadata_text(metadata, "model_provider");
-    let model_id = sidebar_metadata_text(metadata, "model_id");
+    let provider = sidebar_metadata_text(metadata, session_keys::MODEL_PROVIDER);
+    let model_id = sidebar_metadata_text(metadata, session_keys::MODEL_ID);
     match (provider, model_id) {
         (Some(provider), Some(model_id)) => Some(format!("{}/{}", provider, model_id)),
         (None, Some(model_id)) => Some(model_id),
@@ -982,13 +993,14 @@ fn sidebar_model_summary(metadata: &HashMap<String, serde_json::Value>) -> Optio
 }
 
 fn sidebar_scheduler_summary(metadata: &HashMap<String, serde_json::Value>) -> Option<String> {
-    if !sidebar_metadata_bool(metadata, "scheduler_applied") {
+    if !sidebar_metadata_bool(metadata, session_keys::SCHEDULER_APPLIED) {
         return None;
     }
 
-    let profile = sidebar_metadata_text(metadata, "scheduler_profile");
-    let root_agent = sidebar_metadata_text(metadata, "scheduler_root_agent");
-    let skill_tree_applied = sidebar_metadata_bool(metadata, "scheduler_skill_tree_applied");
+    let profile = sidebar_metadata_text(metadata, scheduler_keys::PROFILE);
+    let root_agent = sidebar_metadata_text(metadata, session_keys::SCHEDULER_ROOT_AGENT);
+    let skill_tree_applied =
+        sidebar_metadata_bool(metadata, session_keys::SCHEDULER_SKILL_TREE_APPLIED);
 
     let mut parts = Vec::new();
     if let Some(profile) = profile {

@@ -1190,6 +1190,8 @@ mod tests {
     use super::*;
     use crate::Database;
     use chrono::Utc;
+    use rocode_core::contracts::scheduler::keys as scheduler_keys;
+    use rocode_core::contracts::session::keys as session_keys;
     use rocode_types::{MessageRole, Session, SessionMessage, SessionStatus, SessionTime};
     use std::collections::HashMap;
 
@@ -1235,22 +1237,23 @@ mod tests {
 
         let mut session = make_session("s_meta");
         session.metadata.insert(
-            "scheduler_profile".to_string(),
+            scheduler_keys::PROFILE.to_string(),
             serde_json::json!("sisyphus"),
         );
-        session
-            .metadata
-            .insert("scheduler_applied".to_string(), serde_json::json!(true));
+        session.metadata.insert(
+            session_keys::SCHEDULER_APPLIED.to_string(),
+            serde_json::json!(true),
+        );
 
         session_repo.upsert(&session).await.unwrap();
 
         let loaded = session_repo.get("s_meta").await.unwrap().unwrap();
         assert_eq!(
-            loaded.metadata.get("scheduler_profile"),
+            loaded.metadata.get(scheduler_keys::PROFILE),
             Some(&serde_json::json!("sisyphus"))
         );
         assert_eq!(
-            loaded.metadata.get("scheduler_applied"),
+            loaded.metadata.get(session_keys::SCHEDULER_APPLIED),
             Some(&serde_json::json!(true))
         );
     }
@@ -1265,11 +1268,11 @@ mod tests {
 
         let mut message = make_message("m_meta", "s_meta", MessageRole::User);
         message.metadata.insert(
-            "resolved_system_prompt".to_string(),
+            session_keys::RESOLVED_SYSTEM_PROMPT.to_string(),
             serde_json::json!("You are Sisyphus"),
         );
         message.metadata.insert(
-            "resolved_scheduler_profile".to_string(),
+            scheduler_keys::RESOLVED_PROFILE.to_string(),
             serde_json::json!("sisyphus"),
         );
         message
@@ -1280,11 +1283,11 @@ mod tests {
 
         let loaded = message_repo.get("m_meta").await.unwrap().unwrap();
         assert_eq!(
-            loaded.metadata.get("resolved_system_prompt"),
+            loaded.metadata.get(session_keys::RESOLVED_SYSTEM_PROMPT),
             Some(&serde_json::json!("You are Sisyphus"))
         );
         assert_eq!(
-            loaded.metadata.get("resolved_scheduler_profile"),
+            loaded.metadata.get(scheduler_keys::RESOLVED_PROFILE),
             Some(&serde_json::json!("sisyphus"))
         );
         assert_eq!(

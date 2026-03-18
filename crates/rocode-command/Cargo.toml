@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 rocode-content = { path = "../rocode-content" }
+rocode-core = { path = "../rocode-core" }
 rocode-agent = { path = "../rocode-agent" }
 rocode-plugin = { path = "../rocode-plugin" }
 rocode-tool = { path = "../rocode-tool" }
@@ -22,3 +23,5 @@ unicode-width = "0.1"
 
 chrono = { workspace = true }
 uuid = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }

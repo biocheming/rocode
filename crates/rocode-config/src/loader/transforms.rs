@@ -4,6 +4,7 @@ use crate::schema::{
 };
 use crate::Config;
 use anyhow::{Context, Result};
+use rocode_core::contracts::tools::BuiltinToolName;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -166,8 +167,19 @@ pub(super) fn apply_post_load_transforms(config: &mut Config) {
                 PermissionAction::Deny
             };
             // write, edit, patch, multiedit all map to "edit" permission
-            if tool == "write" || tool == "edit" || tool == "patch" || tool == "multiedit" {
-                perms.insert("edit".to_string(), PermissionRule::Action(action));
+            if matches!(
+                BuiltinToolName::parse(&tool),
+                Some(
+                    BuiltinToolName::Write
+                        | BuiltinToolName::Edit
+                        | BuiltinToolName::ApplyPatch
+                        | BuiltinToolName::MultiEdit
+                )
+            ) {
+                perms.insert(
+                    BuiltinToolName::Edit.as_str().to_string(),
+                    PermissionRule::Action(action),
+                );
             } else {
                 perms.insert(tool, PermissionRule::Action(action));
             }

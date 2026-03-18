@@ -9,6 +9,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tracing;
 
+use rocode_core::contracts::provider::ProviderFinishReasonWire;
+use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::wire::keys as wire_keys;
+
 use crate::custom_fetch::get_custom_fetch_proxy;
 use crate::responses::*;
 use crate::tools::InputTool;
@@ -307,8 +311,8 @@ fn invalid_tool_payload_for_history(
 ) -> Value {
     json!({
         "tool": tool_name,
-        "toolCallId": tool_call_id,
-        "error": error,
+        wire_keys::TOOL_CALL_ID: tool_call_id,
+        wire_keys::ERROR: error,
         "receivedArgs": received_args,
     })
 }
@@ -352,7 +356,7 @@ fn normalize_tool_call_arguments_for_request(
             );
             increment_tool_args_invalid(tool_name, "history", 0);
             NormalizedHistoricalToolCall {
-                tool_name: "invalid".to_string(),
+                tool_name: BuiltinToolName::Invalid.as_str().to_string(),
                 arguments: payload.to_string(),
             }
         }
@@ -397,7 +401,7 @@ fn normalize_tool_call_arguments_for_request(
             );
             increment_tool_args_invalid(tool_name, "history", raw.len());
             NormalizedHistoricalToolCall {
-                tool_name: "invalid".to_string(),
+                tool_name: BuiltinToolName::Invalid.as_str().to_string(),
                 arguments: payload.to_string(),
             }
         }
@@ -426,7 +430,7 @@ fn normalize_tool_call_arguments_for_request(
             );
             increment_tool_args_invalid(tool_name, "history", 0);
             NormalizedHistoricalToolCall {
-                tool_name: "invalid".to_string(),
+                tool_name: BuiltinToolName::Invalid.as_str().to_string(),
                 arguments: payload.to_string(),
             }
         }
@@ -642,11 +646,9 @@ fn parse_legacy_sse_data(data: &str, state: &mut LegacySseParserState) -> Vec<St
                         id: "reasoning-0".to_string(),
                     });
                 }
-                let normalized_reason = if reason == "tool_calls" {
-                    "tool-calls".to_string()
-                } else {
-                    reason.to_string()
-                };
+                let normalized_reason = ProviderFinishReasonWire::parse(reason)
+                    .map(|parsed| parsed.as_str().to_string())
+                    .unwrap_or_else(|| reason.to_string());
                 events.push(StreamEvent::FinishStep {
                     finish_reason: Some(normalized_reason),
                     usage: crate::stream::StreamUsage {
@@ -1094,12 +1096,12 @@ fn tools_to_input_tools(tools: Option<&Vec<crate::ToolDefinition>>) -> Option<Ve
 
 fn finish_reason_to_string(reason: FinishReason) -> String {
     match reason {
-        FinishReason::Stop => "stop".to_string(),
-        FinishReason::Length => "length".to_string(),
-        FinishReason::ContentFilter => "content_filter".to_string(),
-        FinishReason::ToolCalls => "tool-calls".to_string(),
-        FinishReason::Error => "error".to_string(),
-        FinishReason::Unknown => "unknown".to_string(),
+        FinishReason::Stop => ProviderFinishReasonWire::Stop.as_str().to_string(),
+        FinishReason::Length => ProviderFinishReasonWire::Length.as_str().to_string(),
+        FinishReason::ContentFilter => ProviderFinishReasonWire::ContentFilter.as_str().to_string(),
+        FinishReason::ToolCalls => ProviderFinishReasonWire::ToolCalls.as_str().to_string(),
+        FinishReason::Error => ProviderFinishReasonWire::Error.as_str().to_string(),
+        FinishReason::Unknown => ProviderFinishReasonWire::Unknown.as_str().to_string(),
     }
 }
 
@@ -1744,12 +1746,15 @@ mod tests {
     fn parse_legacy_sse_data_uses_stable_tool_call_id_when_missing() {
         let mut state = LegacySseParserState::default();
         let start = parse_legacy_sse_data(
-            "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"bash\"}}]}}]}",
+            &format!(
+                r#"{{"choices":[{{"delta":{{"tool_calls":[{{"index":0,"function":{{"name":"{}"}}}}]}}}}]}}"#,
+                BuiltinToolName::Bash.as_str()
+            ),
             &mut state,
         );
         assert!(matches!(
             start.first(),
-            Some(StreamEvent::ToolCallStart { id, name }) if id == "tool-call-0" && name == "bash"
+            Some(StreamEvent::ToolCallStart { id, name }) if id == "tool-call-0" && name == BuiltinToolName::Bash.as_str()
         ));
 
         let delta = parse_legacy_sse_data(
@@ -1776,7 +1781,7 @@ mod tests {
                     content_type: "tool_use".to_string(),
                     tool_use: Some(crate::ToolUse {
                         id: "call_1".to_string(),
-                        name: "bash".to_string(),
+                        name: BuiltinToolName::Bash.as_str().to_string(),
                         input: serde_json::json!({ "cmd": "ls" }),
                     }),
                     ..Default::default()
@@ -1805,7 +1810,10 @@ mod tests {
         assert_eq!(converted.len(), 2);
         assert_eq!(converted[0]["role"], "assistant");
         assert_eq!(converted[0]["tool_calls"][0]["type"], "function");
-        assert_eq!(converted[0]["tool_calls"][0]["function"]["name"], "bash");
+        assert_eq!(
+            converted[0]["tool_calls"][0]["function"]["name"],
+            BuiltinToolName::Bash.as_str()
+        );
         assert_eq!(converted[1]["role"], "tool");
         assert_eq!(converted[1]["tool_call_id"], "call_1");
         assert_eq!(converted[1]["content"], "ok");

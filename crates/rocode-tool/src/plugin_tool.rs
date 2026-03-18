@@ -11,6 +11,9 @@ use serde_json::Value;
 
 use rocode_plugin::subprocess::client::PluginToolDef;
 use rocode_plugin::subprocess::loader::PluginLoader;
+use rocode_core::contracts::attachments::{keys as attachment_keys, AttachmentTypeWire};
+use rocode_core::contracts::wire::keys as wire_keys;
+use rocode_core::contracts::plugin_hooks::keys as hook_keys;
 
 use crate::tool::{Metadata, Tool, ToolContext, ToolError, ToolResult};
 use crate::truncation;
@@ -55,13 +58,25 @@ impl Tool for PluginTool {
     }
 
     async fn execute(&self, args: Value, ctx: ToolContext) -> Result<ToolResult, ToolError> {
-        let context = serde_json::json!({
-            "sessionID": ctx.session_id,
-            "messageID": ctx.message_id,
-            "agent": ctx.agent,
-            "directory": ctx.directory,
-            "worktree": ctx.worktree,
-        });
+        let mut context = serde_json::Map::new();
+        context.insert(
+            wire_keys::SESSION_ID.to_string(),
+            serde_json::json!(&ctx.session_id),
+        );
+        context.insert(
+            wire_keys::MESSAGE_ID.to_string(),
+            serde_json::json!(&ctx.message_id),
+        );
+        context.insert(hook_keys::AGENT.to_string(), serde_json::json!(&ctx.agent));
+        context.insert(
+            hook_keys::DIRECTORY.to_string(),
+            serde_json::json!(&ctx.directory),
+        );
+        context.insert(
+            hook_keys::WORKTREE.to_string(),
+            serde_json::json!(&ctx.worktree),
+        );
+        let context = Value::Object(context);
         let result = self
             .loader
             .invoke_plugin_tool(&self.plugin_id, &self.tool_id, args, context)
@@ -105,18 +120,36 @@ impl Tool for PluginTool {
 
         let path_str = saved_path.display().to_string();
         let mut attachment = serde_json::Map::new();
-        attachment.insert("type".into(), serde_json::json!("file"));
-        attachment.insert("path".into(), serde_json::json!(path_str));
-        attachment.insert("original_bytes".into(), serde_json::json!(original_bytes));
-        attachment.insert("original_lines".into(), serde_json::json!(original_lines));
+        attachment.insert(
+            attachment_keys::TYPE.into(),
+            serde_json::json!(AttachmentTypeWire::File.as_str()),
+        );
+        attachment.insert(attachment_keys::PATH.into(), serde_json::json!(path_str));
+        attachment.insert(
+            attachment_keys::ORIGINAL_BYTES.into(),
+            serde_json::json!(original_bytes),
+        );
+        attachment.insert(
+            attachment_keys::ORIGINAL_LINES.into(),
+            serde_json::json!(original_lines),
+        );
         let attachment_value = Value::Object(attachment);
 
         let mut metadata = Metadata::new();
         metadata.insert("truncated".into(), serde_json::json!(true));
-        metadata.insert("original_bytes".into(), serde_json::json!(original_bytes));
-        metadata.insert("original_lines".into(), serde_json::json!(original_lines));
-        metadata.insert("attachment".into(), attachment_value.clone());
-        metadata.insert("attachments".into(), serde_json::json!([attachment_value]));
+        metadata.insert(
+            attachment_keys::ORIGINAL_BYTES.into(),
+            serde_json::json!(original_bytes),
+        );
+        metadata.insert(
+            attachment_keys::ORIGINAL_LINES.into(),
+            serde_json::json!(original_lines),
+        );
+        metadata.insert(attachment_keys::ATTACHMENT.into(), attachment_value.clone());
+        metadata.insert(
+            attachment_keys::ATTACHMENTS.into(),
+            serde_json::json!([attachment_value]),
+        );
 
         Ok(ToolResult {
             title: String::new(),

@@ -16,10 +16,12 @@ use crate::{
     SchedulerStageOverride, StageToolPolicyOverride,
 };
 use async_trait::async_trait;
+use rocode_core::contracts::tools::BuiltinToolName;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
+use strum_macros::{Display, EnumString, IntoStaticStr};
 
 use self::adapters::{SchedulerEffectAdapter, SchedulerExecutionStageAdapter};
 
@@ -71,8 +73,11 @@ struct StageEffectsRequest<'a> {
     ctx: &'a OrchestratorContext,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString, IntoStaticStr,
+)]
 #[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case", ascii_case_insensitive)]
 pub enum SchedulerStageKind {
     RequestAnalysis,
     Route,
@@ -87,17 +92,7 @@ pub enum SchedulerStageKind {
 
 impl SchedulerStageKind {
     fn as_event_name(self) -> &'static str {
-        match self {
-            SchedulerStageKind::RequestAnalysis => "request-analysis",
-            SchedulerStageKind::Route => "route",
-            SchedulerStageKind::Interview => "interview",
-            SchedulerStageKind::Plan => "plan",
-            SchedulerStageKind::Delegation => "delegation",
-            SchedulerStageKind::Review => "review",
-            SchedulerStageKind::ExecutionOrchestration => "execution-orchestration",
-            SchedulerStageKind::Synthesis => "synthesis",
-            SchedulerStageKind::Handoff => "handoff",
-        }
+        self.into()
     }
 
     pub fn event_name(self) -> &'static str {
@@ -105,18 +100,14 @@ impl SchedulerStageKind {
     }
 
     pub fn from_event_name(value: &str) -> Option<Self> {
-        match value {
-            "request-analysis" => Some(Self::RequestAnalysis),
-            "route" => Some(Self::Route),
-            "interview" => Some(Self::Interview),
-            "plan" => Some(Self::Plan),
-            "delegation" => Some(Self::Delegation),
-            "review" => Some(Self::Review),
-            "execution-orchestration" => Some(Self::ExecutionOrchestration),
-            "synthesis" => Some(Self::Synthesis),
-            "handoff" => Some(Self::Handoff),
-            _ => None,
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return None;
         }
+        if trimmed.contains('_') {
+            return trimmed.replace('_', "-").parse().ok();
+        }
+        trimmed.parse().ok()
     }
 
     /// Whether this stage kind inherently delegates work and thus needs
@@ -939,7 +930,15 @@ impl SchedulerProfileOrchestrator {
             return;
         };
 
-        match Self::execute_orchestration_tool("todowrite", payload, plan, state, ctx).await {
+        match Self::execute_orchestration_tool(
+            BuiltinToolName::TodoWrite.as_str(),
+            payload,
+            plan,
+            state,
+            ctx,
+        )
+        .await
+        {
             Ok(_) => {
                 state.preset_runtime.workflow_todos_registered = true;
             }

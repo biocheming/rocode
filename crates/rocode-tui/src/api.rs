@@ -1,5 +1,6 @@
 use reqwest::blocking::Client;
 use rocode_config::Config as AppConfig;
+use rocode_core::contracts::tools::arg_keys as tool_arg_keys;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -759,7 +760,7 @@ impl ApiClient {
         answers: Vec<Vec<String>>,
     ) -> anyhow::Result<()> {
         let url = format!("{}/question/{}/reply", self.base_url, question_id);
-        let body = serde_json::json!({ "answers": answers });
+        let body = serde_json::json!({ (tool_arg_keys::ANSWERS): answers });
         let response = self.client.post(&url).json(&body).send()?;
         if !response.status().is_success() {
             let status = response.status();

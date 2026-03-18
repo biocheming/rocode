@@ -31,6 +31,7 @@ use super::{
 };
 use crate::ExecutionContext;
 use crate::OrchestratorContext;
+use rocode_core::contracts::scheduler::stage_names as scheduler_stage_names;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -1211,7 +1212,7 @@ fn default_autonomous_gate_prompt(_profile_suffix: &str) -> String {
 
 pub(super) const DEFAULT_SINGLE_PASS_EXECUTOR_STAGE: SchedulerInternalStageSpec =
     SchedulerInternalStageSpec {
-        event_name: "single-pass-executor",
+        event_name: scheduler_stage_names::SINGLE_PASS_EXECUTOR,
         agent_name: "scheduler-single-pass-executor",
         tool_policy: StageToolPolicy::AllowAll,
         fallback_prompt: default_single_pass_executor_prompt,
@@ -1219,7 +1220,7 @@ pub(super) const DEFAULT_SINGLE_PASS_EXECUTOR_STAGE: SchedulerInternalStageSpec 
 
 pub(super) const DEFAULT_COORDINATION_VERIFICATION_STAGE: SchedulerInternalStageSpec =
     SchedulerInternalStageSpec {
-        event_name: "coordination-verification",
+        event_name: scheduler_stage_names::COORDINATION_VERIFICATION,
         agent_name: "scheduler-coordination-verification",
         tool_policy: StageToolPolicy::AllowReadOnly,
         fallback_prompt: default_autonomous_verification_prompt,
@@ -1227,7 +1228,7 @@ pub(super) const DEFAULT_COORDINATION_VERIFICATION_STAGE: SchedulerInternalStage
 
 pub(super) const DEFAULT_COORDINATION_GATE_STAGE: SchedulerInternalStageSpec =
     SchedulerInternalStageSpec {
-        event_name: "coordination-gate",
+        event_name: scheduler_stage_names::COORDINATION_GATE,
         agent_name: "scheduler-coordination-gate",
         tool_policy: StageToolPolicy::DisableAll,
         fallback_prompt: default_coordination_gate_prompt,
@@ -1235,7 +1236,7 @@ pub(super) const DEFAULT_COORDINATION_GATE_STAGE: SchedulerInternalStageSpec =
 
 pub(super) const DEFAULT_AUTONOMOUS_VERIFICATION_STAGE: SchedulerInternalStageSpec =
     SchedulerInternalStageSpec {
-        event_name: "autonomous-verification",
+        event_name: scheduler_stage_names::AUTONOMOUS_VERIFICATION,
         agent_name: "scheduler-autonomous-verification",
         tool_policy: StageToolPolicy::AllowReadOnly,
         fallback_prompt: default_autonomous_verification_prompt,
@@ -1243,7 +1244,7 @@ pub(super) const DEFAULT_AUTONOMOUS_VERIFICATION_STAGE: SchedulerInternalStageSp
 
 pub(super) const DEFAULT_AUTONOMOUS_GATE_STAGE: SchedulerInternalStageSpec =
     SchedulerInternalStageSpec {
-        event_name: "autonomous-gate",
+        event_name: scheduler_stage_names::AUTONOMOUS_GATE,
         agent_name: "scheduler-autonomous-gate",
         tool_policy: StageToolPolicy::DisableAll,
         fallback_prompt: default_autonomous_gate_prompt,
@@ -1254,10 +1255,10 @@ pub(super) const DEFAULT_INTERNAL_STAGE_HOOKS: SchedulerPresetInternalStageHooks
         single_pass_executor: DEFAULT_SINGLE_PASS_EXECUTOR_STAGE,
         coordination_verification: DEFAULT_COORDINATION_VERIFICATION_STAGE,
         coordination_gate: DEFAULT_COORDINATION_GATE_STAGE,
-        coordination_retry_event: "coordination-retry",
+        coordination_retry_event: scheduler_stage_names::COORDINATION_RETRY,
         autonomous_verification: DEFAULT_AUTONOMOUS_VERIFICATION_STAGE,
         autonomous_gate: DEFAULT_AUTONOMOUS_GATE_STAGE,
-        autonomous_retry_event: "autonomous-retry",
+        autonomous_retry_event: scheduler_stage_names::AUTONOMOUS_RETRY,
         coordination_verification_fallback: SchedulerVerificationFallback::ReviewStage,
         autonomous_verification_failure: SchedulerVerificationFailurePolicy::Error,
         coordination_semantics_error: "coordination execution semantics unavailable",

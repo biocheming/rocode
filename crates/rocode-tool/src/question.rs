@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+use rocode_core::contracts::output_blocks::keys as output_keys;
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use serde::{Deserialize, Serialize};
 use std::io::{self, BufRead, Write};
 
@@ -14,27 +16,23 @@ impl QuestionTool {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct QuestionInput {
-    #[serde(rename = "questions")]
     questions: Vec<QuestionDef>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct QuestionDef {
-    #[serde(rename = "question")]
     question: String,
-    #[serde(rename = "header")]
     header: Option<String>,
-    #[serde(rename = "options", default)]
+    #[serde(default)]
     options: Vec<QuestionOption>,
-    #[serde(rename = "multiple", default)]
+    #[serde(default)]
     multiple: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct QuestionOption {
-    #[serde(rename = "label")]
     label: String,
-    #[serde(rename = "description", default)]
+    #[serde(default)]
     description: Option<String>,
 }
 
@@ -46,7 +44,7 @@ struct QuestionResponse {
 #[async_trait]
 impl Tool for QuestionTool {
     fn id(&self) -> &str {
-        "question"
+        BuiltinToolName::Question.as_str()
     }
 
     fn description(&self) -> &str {
@@ -57,16 +55,16 @@ impl Tool for QuestionTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "questions": {
+                (tool_arg_keys::QUESTIONS): {
                     "type": "array",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "question": {
+                            (tool_arg_keys::QUESTION): {
                                 "type": "string",
                                 "description": "The complete question to ask"
                             },
-                            "header": {
+                            (tool_arg_keys::HEADER): {
                                 "type": "string",
                                 "description": "Short label for the question (max 30 chars)"
                             },
@@ -75,24 +73,24 @@ impl Tool for QuestionTool {
                                 "default": false,
                                 "description": "Allow selecting multiple options"
                             },
-                            "options": {
+                            (tool_arg_keys::OPTIONS): {
                                 "type": "array",
                                 "items": {
                                     "type": "object",
                                     "properties": {
                                         "label": {"type": "string"},
-                                        "description": {"type": "string"}
+                                        (tool_arg_keys::DESCRIPTION): {"type": "string"}
                                     },
                                     "required": ["label"]
                                 },
                                 "description": "Available choices for the user"
                             }
                         },
-                        "required": ["question"]
+                        "required": [tool_arg_keys::QUESTION]
                     }
                 }
             },
-            "required": ["questions"]
+            "required": [tool_arg_keys::QUESTIONS]
         })
     }
 
@@ -141,10 +139,16 @@ impl Tool for QuestionTool {
             let answers = answers_by_question.get(idx).cloned().unwrap_or_default();
             let answer_text = answers.join(", ");
             all_answers.extend(answers);
-            display_fields.push(serde_json::json!({
-                "key": q.question,
-                "value": answer_text,
-            }));
+            display_fields.push(serde_json::Value::Object(serde_json::Map::from_iter([
+                (
+                    output_keys::DISPLAY_FIELD_KEY.to_string(),
+                    serde_json::json!(q.question),
+                ),
+                (
+                    output_keys::DISPLAY_FIELD_VALUE.to_string(),
+                    serde_json::json!(answer_text),
+                ),
+            ])));
         }
 
         let response = QuestionResponse {
@@ -158,7 +162,7 @@ impl Tool for QuestionTool {
         let mut metadata = std::collections::HashMap::new();
 
         metadata.insert(
-            "display.fields".to_string(),
+            output_keys::DISPLAY_FIELDS.to_string(),
             serde_json::Value::Array(display_fields),
         );
 
@@ -169,7 +173,7 @@ impl Tool for QuestionTool {
             format!("{} questions answered", input.questions.len())
         };
         metadata.insert(
-            "display.summary".to_string(),
+            output_keys::DISPLAY_SUMMARY.to_string(),
             serde_json::Value::String(summary),
         );
 
@@ -281,7 +285,7 @@ fn parse_question_input(args: serde_json::Value) -> Result<QuestionInput, ToolEr
         .as_object()
         .ok_or_else(|| ToolError::InvalidArguments("question input must be an object".into()))?;
     let questions_value = obj
-        .get("questions")
+        .get(tool_arg_keys::QUESTIONS)
         .ok_or_else(|| ToolError::InvalidArguments("questions is required".into()))?;
     let questions = parse_questions_value(questions_value).map_err(ToolError::InvalidArguments)?;
     Ok(QuestionInput { questions })
@@ -312,7 +316,7 @@ fn parse_questions_value(value: &serde_json::Value) -> Result<Vec<QuestionDef>, 
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_question_input, QuestionInput, QuestionTool};
+    use super::{output_keys, parse_question_input, QuestionInput, QuestionTool};
     use crate::{Tool, ToolContext};
 
     #[test]
@@ -383,7 +387,7 @@ mod tests {
         assert_eq!(
             result
                 .metadata
-                .get("display.summary")
+                .get(output_keys::DISPLAY_SUMMARY)
                 .and_then(|v| v.as_str())
                 .unwrap_or_default(),
             "1 question answered"

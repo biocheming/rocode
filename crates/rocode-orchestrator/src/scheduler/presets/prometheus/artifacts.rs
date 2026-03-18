@@ -7,18 +7,23 @@ use crate::{ExecutionContext, ToolExecError};
 use super::super::runtime_enforcement::{
     validate_runtime_artifact_path, validate_runtime_orchestration_tool, RuntimeArtifactPolicy,
 };
+use rocode_core::contracts::patch::keys as patch_keys;
+use rocode_core::contracts::tools::BuiltinToolName;
 
 pub const PROMETHEUS_PLANNING_STAGE_TOOLS: &[&str] = &[
-    "read",
-    "glob",
-    "grep",
-    "ls",
-    "ast_grep_search",
-    "question",
-    "write",
-    "edit",
+    BuiltinToolName::Read.as_str(),
+    BuiltinToolName::Glob.as_str(),
+    BuiltinToolName::Grep.as_str(),
+    BuiltinToolName::Ls.as_str(),
+    BuiltinToolName::AstGrepSearch.as_str(),
+    BuiltinToolName::Question.as_str(),
+    BuiltinToolName::Write.as_str(),
+    BuiltinToolName::Edit.as_str(),
 ];
-pub const PROMETHEUS_RUNTIME_ORCHESTRATION_TOOLS: &[&str] = &["question", "todowrite"];
+pub const PROMETHEUS_RUNTIME_ORCHESTRATION_TOOLS: &[&str] = &[
+    BuiltinToolName::Question.as_str(),
+    BuiltinToolName::TodoWrite.as_str(),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrometheusArtifactKind {
@@ -129,8 +134,8 @@ pub fn compose_prometheus_planning_artifact(input: SchedulerPlanningArtifactInpu
 
 fn extract_tool_file_path(arguments: &serde_json::Value) -> Option<&str> {
     arguments
-        .get("file_path")
-        .or_else(|| arguments.get("filePath"))
+        .get(patch_keys::FILE_PATH_SNAKE)
+        .or_else(|| arguments.get(patch_keys::FILE_PATH))
         .and_then(|value| value.as_str())
         .map(str::trim)
         .filter(|value| !value.is_empty())

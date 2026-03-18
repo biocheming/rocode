@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use rocode_core::contracts::session::keys as session_keys;
+use rocode_core::contracts::tools::BuiltinToolName;
 use rocode_orchestrator::session_title_request;
 use rocode_provider::{Content, Message, Provider, Role, ToolDefinition};
 
@@ -129,7 +131,7 @@ pub fn insert_reminders(
 
 pub fn was_plan_agent(messages: &[SessionMessage]) -> bool {
     messages.iter().any(|m| {
-        if let Some(agent) = m.metadata.get("agent") {
+        if let Some(agent) = m.metadata.get(session_keys::AGENT) {
             agent.as_str() == Some("plan")
         } else {
             false
@@ -146,9 +148,9 @@ pub struct ResolvedTool {
 }
 
 fn preferred_tool_order_key(name: &str) -> (u8, &str) {
-    match name {
-        "task_flow" => (0, name),
-        "task" => (1, name),
+    match BuiltinToolName::parse(name) {
+        Some(BuiltinToolName::TaskFlow) => (0, name),
+        Some(BuiltinToolName::Task) => (1, name),
         _ => (2, name),
     }
 }
@@ -223,17 +225,17 @@ mod title_tests {
     fn prioritize_tool_definitions_prefers_task_flow_over_task() {
         let mut tools = vec![
             ToolDefinition {
-                name: "websearch".to_string(),
+                name: BuiltinToolName::WebSearch.as_str().to_string(),
                 description: None,
                 parameters: serde_json::json!({}),
             },
             ToolDefinition {
-                name: "task".to_string(),
+                name: BuiltinToolName::Task.as_str().to_string(),
                 description: None,
                 parameters: serde_json::json!({}),
             },
             ToolDefinition {
-                name: "task_flow".to_string(),
+                name: BuiltinToolName::TaskFlow.as_str().to_string(),
                 description: None,
                 parameters: serde_json::json!({}),
             },
@@ -241,7 +243,14 @@ mod title_tests {
 
         prioritize_tool_definitions(&mut tools);
         let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
-        assert_eq!(names, vec!["task_flow", "task", "websearch"]);
+        assert_eq!(
+            names,
+            vec![
+                BuiltinToolName::TaskFlow.as_str(),
+                BuiltinToolName::Task.as_str(),
+                BuiltinToolName::WebSearch.as_str(),
+            ]
+        );
     }
 }
 
@@ -442,6 +451,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use futures::stream;
+    use rocode_core::contracts::provider::ProviderFinishReasonWire;
     use rocode_provider::{
         ChatRequest, ChatResponse, Choice, Message as ProviderMessage, ModelInfo, ProviderError,
         StreamResult,
@@ -497,7 +507,7 @@ mod tests {
                         cache_control: None,
                         provider_options: None,
                     },
-                    finish_reason: Some("stop".to_string()),
+                    finish_reason: Some(ProviderFinishReasonWire::Stop.as_str().to_string()),
                 }],
                 usage: None,
             })

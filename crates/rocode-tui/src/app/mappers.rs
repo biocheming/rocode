@@ -1,5 +1,7 @@
 use super::*;
 
+use rocode_core::contracts::mcp::McpConnectionStatusWire;
+
 pub(super) fn apply_incremental_session_sync(
     session_ctx: &mut crate::context::SessionContext,
     session_id: &str,
@@ -222,13 +224,15 @@ fn task_kind_from_tool_name(name: &str) -> TaskKind {
 }
 
 pub(super) fn map_mcp_status(server: &McpStatusInfo) -> McpConnectionStatus {
-    match server.status.as_str() {
-        "connected" => McpConnectionStatus::Connected,
-        "failed" => McpConnectionStatus::Failed,
-        "needs_auth" => McpConnectionStatus::NeedsAuth,
-        "needs_client_registration" => McpConnectionStatus::NeedsClientRegistration,
-        "disabled" => McpConnectionStatus::Disabled,
-        _ => McpConnectionStatus::Disconnected,
+    match McpConnectionStatusWire::parse(server.status.as_str()) {
+        Some(McpConnectionStatusWire::Connected) => McpConnectionStatus::Connected,
+        Some(McpConnectionStatusWire::Failed) => McpConnectionStatus::Failed,
+        Some(McpConnectionStatusWire::NeedsAuth) => McpConnectionStatus::NeedsAuth,
+        Some(McpConnectionStatusWire::NeedsClientRegistration) => {
+            McpConnectionStatus::NeedsClientRegistration
+        }
+        Some(McpConnectionStatusWire::Disabled) => McpConnectionStatus::Disabled,
+        Some(McpConnectionStatusWire::Disconnected) | None => McpConnectionStatus::Disconnected,
     }
 }
 
@@ -273,12 +277,7 @@ pub(super) fn provider_from_model(model: &str) -> Option<String> {
 
 pub(super) fn map_api_todo(item: &crate::api::ApiTodoItem) -> crate::context::TodoItem {
     use crate::context::{TodoItem, TodoStatus};
-    let status = match item.status.as_str() {
-        "in_progress" => TodoStatus::InProgress,
-        "completed" | "done" => TodoStatus::Completed,
-        "cancelled" | "canceled" => TodoStatus::Cancelled,
-        _ => TodoStatus::Pending,
-    };
+    let status = TodoStatus::parse(item.status.as_str()).unwrap_or(TodoStatus::Pending);
     TodoItem {
         content: item.content.clone(),
         status,

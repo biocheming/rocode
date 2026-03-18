@@ -1,4 +1,5 @@
 use serde_json::json;
+use rocode_core::contracts::todo::{TodoPriority, TodoStatus};
 
 pub fn plan_start_work_command(plan_path: Option<&str>) -> String {
     let Some(plan_path) = plan_path.map(str::trim).filter(|value| !value.is_empty()) else {
@@ -16,14 +17,14 @@ pub fn plan_start_work_command(plan_path: Option<&str>) -> String {
 pub fn prometheus_workflow_todos_payload() -> serde_json::Value {
     json!({
         "todos": [
-            { "id": "plan-1", "content": "Consult Metis for gap analysis (auto-proceed)", "status": "pending", "priority": "high" },
-            { "id": "plan-2", "content": "Generate work plan to .sisyphus/plans/{name}.md", "status": "pending", "priority": "high" },
-            { "id": "plan-3", "content": "Self-review: classify gaps (critical/minor/ambiguous)", "status": "pending", "priority": "high" },
-            { "id": "plan-4", "content": "Present summary with auto-resolved items and decisions needed", "status": "pending", "priority": "high" },
-            { "id": "plan-5", "content": "If decisions needed: wait for user, update plan", "status": "pending", "priority": "high" },
-            { "id": "plan-6", "content": "Ask user about high accuracy mode (Momus review)", "status": "pending", "priority": "high" },
-            { "id": "plan-7", "content": "If high accuracy: submit to Momus and iterate until OKAY", "status": "pending", "priority": "medium" },
-            { "id": "plan-8", "content": "Delete draft file and hand the reviewed plan to Atlas via /start-work {name}", "status": "pending", "priority": "medium" }
+            { "id": "plan-1", "content": "Consult Metis for gap analysis (auto-proceed)", "status": TodoStatus::Pending.as_str(), "priority": TodoPriority::High.as_str() },
+            { "id": "plan-2", "content": "Generate work plan to .sisyphus/plans/{name}.md", "status": TodoStatus::Pending.as_str(), "priority": TodoPriority::High.as_str() },
+            { "id": "plan-3", "content": "Self-review: classify gaps (critical/minor/ambiguous)", "status": TodoStatus::Pending.as_str(), "priority": TodoPriority::High.as_str() },
+            { "id": "plan-4", "content": "Present summary with auto-resolved items and decisions needed", "status": TodoStatus::Pending.as_str(), "priority": TodoPriority::High.as_str() },
+            { "id": "plan-5", "content": "If decisions needed: wait for user, update plan", "status": TodoStatus::Pending.as_str(), "priority": TodoPriority::High.as_str() },
+            { "id": "plan-6", "content": "Ask user about high accuracy mode (Momus review)", "status": TodoStatus::Pending.as_str(), "priority": TodoPriority::High.as_str() },
+            { "id": "plan-7", "content": "If high accuracy: submit to Momus and iterate until OKAY", "status": TodoStatus::Pending.as_str(), "priority": TodoPriority::Medium.as_str() },
+            { "id": "plan-8", "content": "Delete draft file and hand the reviewed plan to Atlas via /start-work {name}", "status": TodoStatus::Pending.as_str(), "priority": TodoPriority::Medium.as_str() }
         ]
     })
 }

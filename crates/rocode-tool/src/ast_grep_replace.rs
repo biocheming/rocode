@@ -3,6 +3,10 @@ use ast_grep_core::source::Edit;
 use ast_grep_language::{LanguageExt, SupportLang};
 use async_trait::async_trait;
 use glob::Pattern;
+use rocode_core::contracts::events::BusEventName;
+use rocode_core::contracts::fs::{keys as fs_keys, FileWatcherEventKind};
+use rocode_core::contracts::patch::keys as patch_keys;
+use rocode_core::contracts::tools::BuiltinToolName;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -103,7 +107,7 @@ impl Default for AstGrepReplaceTool {
 #[async_trait]
 impl Tool for AstGrepReplaceTool {
     fn id(&self) -> &str {
-        "ast_grep_replace"
+        BuiltinToolName::AstGrepReplace.as_str()
     }
 
     fn description(&self) -> &str {
@@ -185,7 +189,7 @@ impl Tool for AstGrepReplaceTool {
         .await?;
 
         ctx.ask_permission(
-            PermissionRequest::new("ast_grep_replace")
+            PermissionRequest::new(BuiltinToolName::AstGrepReplace.as_str())
                 .with_pattern(&input.pattern)
                 .with_metadata("language", serde_json::json!(input.language.as_str()))
                 .with_metadata(
@@ -227,9 +231,9 @@ impl Tool for AstGrepReplaceTool {
                 target_path.to_string_lossy().to_string()
             };
             ctx.ask_permission(
-                PermissionRequest::new("edit")
+                PermissionRequest::new(BuiltinToolName::Edit.as_str())
                     .with_pattern(permission_pattern)
-                    .with_metadata("diff", serde_json::json!(diff_summary))
+                    .with_metadata(patch_keys::DIFF, serde_json::json!(diff_summary))
                     .always_allow(),
             )
             .await?;
@@ -498,17 +502,17 @@ async fn apply_changes(ctx: &ToolContext, changes: &[FileChange]) -> Result<(), 
         .map_err(|err| ToolError::ExecutionError(format!("Failed to write file: {}", err)))?;
 
         ctx.do_publish_bus(
-            "file.edited",
+            BusEventName::FileEdited.as_str(),
             serde_json::json!({
-                "file": path_str,
+                (fs_keys::FILE): path_str.as_str(),
             }),
         )
         .await;
         ctx.do_publish_bus(
-            "file_watcher.updated",
+            BusEventName::FileWatcherUpdated.as_str(),
             serde_json::json!({
-                "file": path.to_string_lossy().to_string(),
-                "event": "change"
+                (fs_keys::FILE): path_str.as_str(),
+                (fs_keys::EVENT): FileWatcherEventKind::Change.as_str(),
             }),
         )
         .await;

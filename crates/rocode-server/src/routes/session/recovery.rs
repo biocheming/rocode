@@ -6,6 +6,8 @@ use axum::{
     Json,
 };
 
+use rocode_core::contracts::session::keys as session_keys;
+
 use crate::recovery::{
     build_session_recovery_protocol, collect_stage_recovery_targets,
     collect_subtask_recovery_targets, compose_restart_stage_prompt, compose_resume_prompt,
@@ -95,9 +97,12 @@ pub(super) async fn execute_session_recovery(
         .await;
         let mut value = response;
         if let Some(object) = value.as_object_mut() {
-            object.insert("recovery_action".to_string(), serde_json::json!(req.action));
             object.insert(
-                "recovery_target_id".to_string(),
+                session_keys::RECOVERY_ACTION.to_string(),
+                serde_json::json!(req.action),
+            );
+            object.insert(
+                session_keys::RECOVERY_TARGET_ID.to_string(),
                 serde_json::json!(req.target_id),
             );
         }
@@ -196,17 +201,20 @@ pub(super) async fn execute_session_recovery(
 
     let mut value = response.0;
     if let Some(object) = value.as_object_mut() {
-        object.insert("recovery_action".to_string(), serde_json::json!(req.action));
         object.insert(
-            "recovery_target_kind".to_string(),
+            session_keys::RECOVERY_ACTION.to_string(),
+            serde_json::json!(req.action),
+        );
+        object.insert(
+            session_keys::RECOVERY_TARGET_KIND.to_string(),
             serde_json::json!(target_kind),
         );
         object.insert(
-            "recovery_target_id".to_string(),
+            session_keys::RECOVERY_TARGET_ID.to_string(),
             serde_json::json!(req.target_id.clone()),
         );
         object.insert(
-            "recovery_target_label".to_string(),
+            session_keys::RECOVERY_TARGET_LABEL.to_string(),
             serde_json::json!(target_label),
         );
     }

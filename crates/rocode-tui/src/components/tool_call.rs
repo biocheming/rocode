@@ -5,6 +5,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
+use rocode_core::contracts::tools::BuiltinToolName;
 
 use crate::theme::Theme;
 
@@ -24,13 +25,26 @@ pub struct ToolCall {
 
 impl ToolCall {
     pub fn render_mode(&self) -> ToolRenderMode {
-        match self.name.as_str() {
-            "glob" | "grep" | "list" | "webfetch" | "websearch" | "skill" | "read" => {
-                ToolRenderMode::Inline
-            }
-            "bash" | "write" | "edit" | "apply_patch" | "task" | "todowrite" | "question" => {
-                ToolRenderMode::Block
-            }
+        match BuiltinToolName::parse(self.name.as_str()) {
+            Some(
+                BuiltinToolName::Glob
+                | BuiltinToolName::Grep
+                | BuiltinToolName::Ls
+                | BuiltinToolName::WebFetch
+                | BuiltinToolName::WebSearch
+                | BuiltinToolName::CodeSearch
+                | BuiltinToolName::Skill
+                | BuiltinToolName::Read,
+            ) => ToolRenderMode::Inline,
+            Some(
+                BuiltinToolName::Bash
+                | BuiltinToolName::Write
+                | BuiltinToolName::Edit
+                | BuiltinToolName::ApplyPatch
+                | BuiltinToolName::Task
+                | BuiltinToolName::TodoWrite
+                | BuiltinToolName::Question,
+            ) => ToolRenderMode::Block,
             _ => ToolRenderMode::Block,
         }
     }

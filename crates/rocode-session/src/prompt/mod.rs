@@ -36,6 +36,12 @@ use tokio_util::sync::CancellationToken;
 use rocode_content::output_blocks::{
     MessageBlock, MessageRole as OutputMessageRole, OutputBlock, ReasoningBlock, ToolBlock,
 };
+use rocode_core::contracts::events::{ServerEventType, ToolCallPhase};
+use rocode_core::contracts::plugin_hooks;
+use rocode_core::contracts::provider::ProviderFinishReasonWire;
+use rocode_core::contracts::session::keys as session_keys;
+use rocode_core::contracts::tools::ToolCallStatusWire;
+use rocode_core::contracts::wire::{fields as wire_fields, keys as wire_keys};
 use rocode_orchestrator::runtime::events::{
     CancelToken as RuntimeCancelToken, FinishReason as RuntimeFinishReason,
     LoopError as RuntimeLoopError, LoopEvent, StepBoundary, ToolCallReady as RuntimeToolCallReady,
@@ -60,10 +66,14 @@ const STREAM_UPDATE_INTERVAL_MS: u64 = 120;
 /// Returns `true` when the finish reason indicates the conversation turn is
 /// complete (i.e. not a tool-use continuation or unknown state).
 fn is_terminal_finish(reason: Option<&str>) -> bool {
-    !matches!(
-        reason,
-        None | Some("tool-calls") | Some("tool_calls") | Some("unknown")
-    )
+    let Some(raw) = reason else {
+        return false;
+    };
+
+    match ProviderFinishReasonWire::parse(raw) {
+        Some(ProviderFinishReasonWire::ToolCalls | ProviderFinishReasonWire::Unknown) => false,
+        _ => true,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -699,11 +709,11 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                     // Broadcast canonical tool lifecycle event.
                     if let Some(broadcast) = &self.event_broadcast {
                         let event = serde_json::json!({
-                            "type": "tool_call.lifecycle",
-                            "sessionID": self.session.id,
-                            "toolCallId": id,
-                            "phase": "start",
-                            "toolName": next_name,
+                            wire_keys::TYPE: ServerEventType::ToolCallLifecycle.as_str(),
+                            wire_keys::SESSION_ID: self.session.id,
+                            wire_keys::TOOL_CALL_ID: id,
+                            wire_fields::PHASE: ToolCallPhase::Start.as_str(),
+                            wire_fields::TOOL_NAME: next_name,
                         });
                         broadcast(event);
                     }
@@ -843,11 +853,11 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                 // Broadcast canonical tool lifecycle event.
                 if let Some(broadcast) = &self.event_broadcast {
                     let event = serde_json::json!({
-                        "type": "tool_call.lifecycle",
-                        "sessionID": self.session.id,
-                        "toolCallId": &call.id,
-                        "phase": "complete",
-                        "toolName": &call.name,
+                        wire_keys::TYPE: ServerEventType::ToolCallLifecycle.as_str(),
+                        wire_keys::SESSION_ID: self.session.id,
+                        wire_keys::TOOL_CALL_ID: &call.id,
+                        wire_fields::PHASE: ToolCallPhase::Complete.as_str(),
+                        wire_fields::TOOL_NAME: &call.name,
                     });
                     broadcast(event);
                 }
@@ -942,8 +952,12 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                 usage,
             } => {
                 self.finish_reason = Some(match finish_reason {
-                    RuntimeFinishReason::ToolUse => "tool-calls".to_string(),
-                    RuntimeFinishReason::EndTurn => "stop".to_string(),
+                    RuntimeFinishReason::ToolUse => {
+                        ProviderFinishReasonWire::ToolCalls.as_str().to_string()
+                    }
+                    RuntimeFinishReason::EndTurn => {
+                        ProviderFinishReasonWire::Stop.as_str().to_string()
+                    }
                     RuntimeFinishReason::Provider(reason) => reason.clone(),
                     RuntimeFinishReason::MaxSteps => "max_steps".to_string(),
                     RuntimeFinishReason::Cancelled => "cancelled".to_string(),
@@ -1179,23 +1193,24 @@ impl SessionPrompt {
         };
 
         if let Some(agent) = input.agent.as_deref() {
-            user_msg
-                .metadata
-                .insert("resolved_agent".to_string(), serde_json::json!(agent));
+            user_msg.metadata.insert(
+                session_keys::RESOLVED_AGENT.to_string(),
+                serde_json::json!(agent),
+            );
         }
 
         if let Some(system) = system_prompt {
             user_msg.metadata.insert(
-                "resolved_system_prompt".to_string(),
+                session_keys::RESOLVED_SYSTEM_PROMPT.to_string(),
                 serde_json::json!(Self::truncate_debug_text(system, 8000)),
             );
             user_msg.metadata.insert(
-                "resolved_system_prompt_applied".to_string(),
+                session_keys::RESOLVED_SYSTEM_PROMPT_APPLIED.to_string(),
                 serde_json::json!(true),
             );
         } else if input.agent.is_some() {
             user_msg.metadata.insert(
-                "resolved_system_prompt_applied".to_string(),
+                session_keys::RESOLVED_SYSTEM_PROMPT_APPLIED.to_string(),
                 serde_json::json!(false),
             );
         }
@@ -1203,7 +1218,7 @@ impl SessionPrompt {
         let user_prompt = Self::text_from_prompt_parts(&input.parts);
         if !user_prompt.is_empty() {
             user_msg.metadata.insert(
-                "resolved_user_prompt".to_string(),
+                session_keys::RESOLVED_USER_PROMPT.to_string(),
                 serde_json::json!(Self::truncate_debug_text(&user_prompt, 8000)),
             );
         }
@@ -1315,18 +1330,18 @@ impl SessionPrompt {
                     msg.add_subtask(subtask_id.clone(), description.clone());
                     let mut pending = msg
                         .metadata
-                        .get("pending_subtasks")
+                        .get(session_keys::PENDING_SUBTASKS)
                         .and_then(|v| v.as_array())
                         .cloned()
                         .unwrap_or_default();
                     pending.push(serde_json::json!({
-                        "id": subtask_id,
-                        "agent": agent,
-                        "prompt": prompt,
-                        "description": description,
+                        wire_fields::ID: subtask_id,
+                        session_keys::SUBTASK_AGENT: agent,
+                        session_keys::SUBTASK_PROMPT: prompt,
+                        session_keys::SUBTASK_DESCRIPTION: description,
                     }));
                     msg.metadata.insert(
-                        "pending_subtasks".to_string(),
+                        session_keys::PENDING_SUBTASKS.to_string(),
                         serde_json::Value::Array(pending),
                     );
                 }
@@ -1530,9 +1545,14 @@ impl SessionPrompt {
         let model = session.messages.iter().rev().find_map(|m| match m.role {
             MessageRole::User => session
                 .metadata
-                .get("model_provider")
+                .get(session_keys::MODEL_PROVIDER)
                 .and_then(|p| p.as_str())
-                .zip(session.metadata.get("model_id").and_then(|i| i.as_str()))
+                .zip(
+                    session
+                        .metadata
+                        .get(session_keys::MODEL_ID)
+                        .and_then(|i| i.as_str()),
+                )
                 .map(|(provider_id, model_id)| ModelRef {
                     provider_id: provider_id.to_string(),
                     model_id: model_id.to_string(),
@@ -1552,13 +1572,13 @@ impl SessionPrompt {
         let session_id = session_id.to_string();
         let resume_agent = session
             .metadata
-            .get("agent")
+            .get(session_keys::AGENT)
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         let compiled_request = compiled_request.inherit_missing(&session_runtime_request_defaults(
             session
                 .metadata
-                .get("model_variant")
+                .get(session_keys::MODEL_VARIANT)
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
         ));
@@ -1833,16 +1853,17 @@ impl SessionPrompt {
     ) {
         if let Some(assistant_msg) = session.messages.get_mut(assistant_index) {
             if let Some(reason) = step_output.finish_reason.clone() {
-                assistant_msg
-                    .metadata
-                    .insert("finish_reason".to_string(), serde_json::json!(reason));
+                assistant_msg.metadata.insert(
+                    session_keys::FINISH_REASON.to_string(),
+                    serde_json::json!(reason),
+                );
             }
             assistant_msg.metadata.insert(
-                "completed_at".to_string(),
+                session_keys::COMPLETED_AT.to_string(),
                 serde_json::json!(chrono::Utc::now().timestamp_millis()),
             );
             assistant_msg.metadata.insert(
-                "usage".to_string(),
+                session_keys::USAGE.to_string(),
                 serde_json::json!({
                     "prompt_tokens": step_output.prompt_tokens,
                     "completion_tokens": step_output.completion_tokens,
@@ -1852,23 +1873,23 @@ impl SessionPrompt {
                 }),
             );
             assistant_msg.metadata.insert(
-                "tokens_input".to_string(),
+                session_keys::TOKENS_INPUT.to_string(),
                 serde_json::json!(step_output.prompt_tokens),
             );
             assistant_msg.metadata.insert(
-                "tokens_output".to_string(),
+                session_keys::TOKENS_OUTPUT.to_string(),
                 serde_json::json!(step_output.completion_tokens),
             );
             assistant_msg.metadata.insert(
-                "tokens_reasoning".to_string(),
+                session_keys::TOKENS_REASONING.to_string(),
                 serde_json::json!(step_output.reasoning_tokens),
             );
             assistant_msg.metadata.insert(
-                "tokens_cache_read".to_string(),
+                session_keys::TOKENS_CACHE_READ.to_string(),
                 serde_json::json!(step_output.cache_read_tokens),
             );
             assistant_msg.metadata.insert(
-                "tokens_cache_write".to_string(),
+                session_keys::TOKENS_CACHE_WRITE.to_string(),
                 serde_json::json!(step_output.cache_write_tokens),
             );
             assistant_msg.usage = Some(crate::message::MessageUsage {
@@ -1902,26 +1923,41 @@ impl SessionPrompt {
 
         let mut hook_ctx = HookContext::new(HookEvent::ChatMessage)
             .with_session(session_id)
-            .with_data("message_id", serde_json::json!(&assistant_msg.id))
-            .with_data("message", session_message_hook_payload(&assistant_msg))
-            .with_data("parts", serde_json::json!(&assistant_msg.parts))
-            .with_data("has_tool_calls", serde_json::json!(has_tool_calls));
+            .with_data(
+                plugin_hooks::aliases::MESSAGE_ID_SNAKE,
+                serde_json::json!(&assistant_msg.id),
+            )
+            .with_data(
+                plugin_hooks::keys::MESSAGE,
+                session_message_hook_payload(&assistant_msg),
+            )
+            .with_data(
+                plugin_hooks::keys::PARTS,
+                serde_json::json!(&assistant_msg.parts),
+            )
+            .with_data(
+                plugin_hooks::keys::HAS_TOOL_CALLS,
+                serde_json::json!(has_tool_calls),
+            );
 
         if let Some(model) = provider.get_model(model_id) {
             hook_ctx = hook_ctx.with_data(
-                "model",
+                plugin_hooks::keys::MODEL,
                 serde_json::json!({
-                    "id": model.id,
+                    plugin_hooks::keys::ID: model.id,
                     "name": model.name,
-                    "provider": model.provider,
+                    plugin_hooks::keys::PROVIDER: model.provider,
                 }),
             );
         } else {
-            hook_ctx = hook_ctx.with_data("model_id", serde_json::json!(model_id));
+            hook_ctx = hook_ctx.with_data(
+                plugin_hooks::aliases::MODEL_ID_SNAKE,
+                serde_json::json!(model_id),
+            );
         }
-        hook_ctx = hook_ctx.with_data("sessionID", serde_json::json!(session_id));
+        hook_ctx = hook_ctx.with_data(wire_keys::SESSION_ID, serde_json::json!(session_id));
         if let Some(agent) = agent_name {
-            hook_ctx = hook_ctx.with_data("agent", serde_json::json!(agent));
+            hook_ctx = hook_ctx.with_data(plugin_hooks::keys::AGENT, serde_json::json!(agent));
         }
 
         let hook_outputs = rocode_plugin::trigger_collect(hook_ctx).await;
@@ -2039,16 +2075,17 @@ impl SessionPrompt {
                 rocode_core::id::create(rocode_core::id::Prefix::Message, true, None);
             let mut assistant_metadata = HashMap::new();
             assistant_metadata.insert(
-                "model_provider".to_string(),
+                session_keys::MODEL_PROVIDER.to_string(),
                 serde_json::json!(&prompt_ctx.provider_id),
             );
             assistant_metadata.insert(
-                "model_id".to_string(),
+                session_keys::MODEL_ID.to_string(),
                 serde_json::json!(&prompt_ctx.model_id),
             );
             if let Some(agent) = prompt_ctx.agent_name.as_deref() {
-                assistant_metadata.insert("agent".to_string(), serde_json::json!(agent));
-                assistant_metadata.insert("mode".to_string(), serde_json::json!(agent));
+                assistant_metadata
+                    .insert(session_keys::AGENT.to_string(), serde_json::json!(agent));
+                assistant_metadata.insert(session_keys::MODE.to_string(), serde_json::json!(agent));
             }
             session.messages.push(SessionMessage {
                 id: assistant_message_id,
@@ -2195,25 +2232,28 @@ impl SessionPrompt {
     fn collect_pending_subtasks(message: &SessionMessage) -> Vec<PendingSubtask> {
         let metadata_by_id: HashMap<String, (String, String, String)> = message
             .metadata
-            .get("pending_subtasks")
+            .get(session_keys::PENDING_SUBTASKS)
             .and_then(|v| v.as_array())
             .map(|items| {
                 items
                     .iter()
                     .filter_map(|item| {
-                        let id = item.get("id").and_then(|v| v.as_str())?.to_string();
+                        let id = item
+                            .get(wire_fields::ID)
+                            .and_then(|v| v.as_str())?
+                            .to_string();
                         let agent = item
-                            .get("agent")
+                            .get(session_keys::SUBTASK_AGENT)
                             .and_then(|v| v.as_str())
                             .unwrap_or("general")
                             .to_string();
                         let prompt = item
-                            .get("prompt")
+                            .get(session_keys::SUBTASK_PROMPT)
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
                         let description = item
-                            .get("description")
+                            .get(session_keys::SUBTASK_DESCRIPTION)
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
@@ -2367,20 +2407,25 @@ impl SessionPrompt {
             if let Some(part) = session.messages[last_user_idx].parts.get_mut(part_index) {
                 if let PartType::Subtask { status, .. } = &mut part.part_type {
                     *status = if is_error {
-                        "error".to_string()
+                        ToolCallStatusWire::Error.as_str().to_string()
                     } else {
-                        "completed".to_string()
+                        ToolCallStatusWire::Completed.as_str().to_string()
                     };
                 }
             }
 
             let assistant = session.add_assistant_message();
-            assistant
-                .metadata
-                .insert("subtask_id".to_string(), serde_json::json!(subtask_id));
             assistant.metadata.insert(
-                "subtask_status".to_string(),
-                serde_json::json!(if is_error { "error" } else { "completed" }),
+                session_keys::SUBTASK_ID.to_string(),
+                serde_json::json!(subtask_id),
+            );
+            assistant.metadata.insert(
+                session_keys::SUBTASK_STATUS.to_string(),
+                serde_json::json!(if is_error {
+                    ToolCallStatusWire::Error.as_str()
+                } else {
+                    ToolCallStatusWire::Completed.as_str()
+                }),
             );
             assistant.add_text(format!(
                 "Subtask `{}` {}:\n{}",
@@ -2764,7 +2809,7 @@ mod tests {
     fn insert_reminders_adds_build_switch_after_plan() {
         let mut user = SessionMessage::user("ses_test", "execute this");
         user.metadata
-            .insert("agent".to_string(), serde_json::json!("plan"));
+            .insert(session_keys::AGENT.to_string(), serde_json::json!("plan"));
         let output = insert_reminders(&[user], "build", true);
         let last = output.last().unwrap();
         let injected = last
@@ -2801,7 +2846,7 @@ mod tests {
                 StreamEvent::TextDelta("Hel".to_string()),
                 StreamEvent::TextDelta("lo".to_string()),
                 StreamEvent::FinishStep {
-                    finish_reason: Some("stop".to_string()),
+                    finish_reason: Some(ProviderFinishReasonWire::Stop.as_str().to_string()),
                     usage: StreamUsage {
                         prompt_tokens: 3,
                         completion_tokens: 2,
@@ -2908,7 +2953,7 @@ mod tests {
                 },
                 StreamEvent::TextDelta("Hello".to_string()),
                 StreamEvent::FinishStep {
-                    finish_reason: Some("stop".to_string()),
+                    finish_reason: Some(ProviderFinishReasonWire::Stop.as_str().to_string()),
                     usage: StreamUsage::default(),
                     provider_metadata: None,
                 },
@@ -3017,7 +3062,7 @@ mod tests {
                 },
                 StreamEvent::TextDelta("Hi".to_string()),
                 StreamEvent::FinishStep {
-                    finish_reason: Some("stop".to_string()),
+                    finish_reason: Some(ProviderFinishReasonWire::Stop.as_str().to_string()),
                     usage: StreamUsage {
                         prompt_tokens: 0,
                         completion_tokens: 2,
@@ -3114,7 +3159,7 @@ mod tests {
                     StreamEvent::Start,
                     StreamEvent::TextDelta("Read complete".to_string()),
                     StreamEvent::FinishStep {
-                        finish_reason: Some("stop".to_string()),
+                        finish_reason: Some(ProviderFinishReasonWire::Stop.as_str().to_string()),
                         usage: StreamUsage::default(),
                         provider_metadata: None,
                     },
@@ -3235,16 +3280,20 @@ mod tests {
         let msg = session.messages.last().expect("user message should exist");
         let pending = msg
             .metadata
-            .get("pending_subtasks")
+            .get(session_keys::PENDING_SUBTASKS)
             .and_then(|v| v.as_array())
             .expect("pending_subtasks metadata should exist");
         assert_eq!(pending.len(), 1);
         assert_eq!(
-            pending[0].get("agent").and_then(|v| v.as_str()),
+            pending[0]
+                .get(session_keys::SUBTASK_AGENT)
+                .and_then(|v| v.as_str()),
             Some("explore")
         );
         assert_eq!(
-            pending[0].get("prompt").and_then(|v| v.as_str()),
+            pending[0]
+                .get(session_keys::SUBTASK_PROMPT)
+                .and_then(|v| v.as_str()),
             Some("Inspect codegen path")
         );
         assert!(msg.parts.iter().any(|p| match &p.part_type {
@@ -3807,7 +3856,7 @@ mod tests {
             message_id: None,
         });
         // finish_reason is "tool-calls" — loop should continue, not break
-        assistant.finish = Some("tool-calls".to_string());
+        assistant.finish = Some(ProviderFinishReasonWire::ToolCalls.as_str().to_string());
 
         let messages = [user, assistant];
 
@@ -3822,10 +3871,7 @@ mod tests {
         // The early-exit check from the prompt loop
         let should_break = if let Some(assistant_idx) = last_assistant_idx {
             let assistant = &messages[assistant_idx];
-            let is_terminal = assistant
-                .finish
-                .as_deref()
-                .is_some_and(|f| !matches!(f, "tool-calls" | "tool_calls" | "unknown"));
+            let is_terminal = is_terminal_finish(assistant.finish.as_deref());
             is_terminal && last_user_idx < assistant_idx
         } else {
             false
@@ -3853,7 +3899,7 @@ mod tests {
             created_at: chrono::Utc::now(),
             message_id: None,
         });
-        assistant.finish = Some("stop".to_string());
+        assistant.finish = Some(ProviderFinishReasonWire::Stop.as_str().to_string());
 
         let messages = [user, assistant];
 
@@ -3867,10 +3913,7 @@ mod tests {
 
         let should_break = if let Some(assistant_idx) = last_assistant_idx {
             let assistant = &messages[assistant_idx];
-            let is_terminal = assistant
-                .finish
-                .as_deref()
-                .is_some_and(|f| !matches!(f, "tool-calls" | "tool_calls" | "unknown"));
+            let is_terminal = is_terminal_finish(assistant.finish.as_deref());
             is_terminal && last_user_idx < assistant_idx
         } else {
             false
@@ -3910,10 +3953,7 @@ mod tests {
 
         let should_break = if let Some(assistant_idx) = last_assistant_idx {
             let assistant = &messages[assistant_idx];
-            let is_terminal = assistant
-                .finish
-                .as_deref()
-                .is_some_and(|f| !matches!(f, "tool-calls" | "tool_calls" | "unknown"));
+            let is_terminal = is_terminal_finish(assistant.finish.as_deref());
             is_terminal && last_user_idx < assistant_idx
         } else {
             false

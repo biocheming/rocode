@@ -4,6 +4,9 @@ use axum::{
     Json,
 };
 use futures::stream::Stream;
+use rocode_core::contracts::scheduler::keys as scheduler_keys;
+use rocode_core::contracts::session::keys as session_keys;
+use rocode_core::contracts::wire::keys as wire_keys;
 use std::convert::Infallible;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
@@ -124,7 +127,7 @@ pub(crate) async fn stream_message(
         req.variant.clone().or_else(|| {
             session
                 .metadata
-                .get("model_variant")
+                .get(session_keys::MODEL_VARIANT)
                 .and_then(|value| value.as_str())
                 .map(|value| value.to_string())
         })
@@ -166,48 +169,51 @@ pub(crate) async fn stream_message(
 
         let selected_variant = request_variant.clone();
         if let Some(variant) = selected_variant.as_deref() {
-            session
-                .metadata
-                .insert("model_variant".to_string(), serde_json::json!(variant));
+            session.metadata.insert(
+                session_keys::MODEL_VARIANT.to_string(),
+                serde_json::json!(variant),
+            );
         } else {
-            session.metadata.remove("model_variant");
+            session.metadata.remove(session_keys::MODEL_VARIANT);
         }
         session.metadata.insert(
-            "model_provider".to_string(),
+            session_keys::MODEL_PROVIDER.to_string(),
             serde_json::json!(provider_id.clone()),
         );
-        session
-            .metadata
-            .insert("model_id".to_string(), serde_json::json!(model_id.clone()));
+        session.metadata.insert(
+            session_keys::MODEL_ID.to_string(),
+            serde_json::json!(model_id.clone()),
+        );
         if let Some(agent) = resolved_agent.as_ref().map(|agent| agent.name.as_str()) {
             session
                 .metadata
-                .insert("agent".to_string(), serde_json::json!(agent));
+                .insert(session_keys::AGENT.to_string(), serde_json::json!(agent));
         } else {
-            session.metadata.remove("agent");
+            session.metadata.remove(session_keys::AGENT);
         }
         session.metadata.insert(
-            "scheduler_applied".to_string(),
+            session_keys::SCHEDULER_APPLIED.to_string(),
             serde_json::json!(scheduler_applied),
         );
         session.metadata.insert(
-            "scheduler_skill_tree_applied".to_string(),
+            session_keys::SCHEDULER_SKILL_TREE_APPLIED.to_string(),
             serde_json::json!(scheduler_skill_tree_applied),
         );
         if let Some(profile) = scheduler_profile_name.as_deref() {
-            session
-                .metadata
-                .insert("scheduler_profile".to_string(), serde_json::json!(profile));
+            session.metadata.insert(
+                scheduler_keys::PROFILE.to_string(),
+                serde_json::json!(profile),
+            );
         } else {
-            session.metadata.remove("scheduler_profile");
+            session.metadata.remove(scheduler_keys::PROFILE);
         }
         if let Some(root_agent) = scheduler_root_agent.as_deref() {
             session.metadata.insert(
-                "scheduler_root_agent".to_string(),
+                session_keys::SCHEDULER_ROOT_AGENT.to_string(),
                 serde_json::json!(root_agent),
             );
         } else {
-            session.metadata.remove("scheduler_root_agent");
+            session.metadata.remove(session_keys::SCHEDULER_ROOT_AGENT);
         }
         session.touch();
 
@@ -289,7 +295,7 @@ pub(crate) async fn stream_message(
                 let event_hook: QuestionEventHook = Arc::new(move |payload| {
                     let sse_tx = sse_tx.clone();
                     let event_name = payload
-                        .get("type")
+                        .get(wire_keys::TYPE)
                         .and_then(|value| value.as_str())
                         .unwrap_or("question.event")
                         .to_string();
@@ -371,20 +377,22 @@ pub(crate) async fn stream_message(
             assistant
                 .metadata
                 .insert("error".to_string(), serde_json::json!(error.to_string()));
-            assistant
-                .metadata
-                .insert("finish_reason".to_string(), serde_json::json!("error"));
             assistant.metadata.insert(
-                "model_provider".to_string(),
+                session_keys::FINISH_REASON.to_string(),
+                serde_json::json!("error"),
+            );
+            assistant.metadata.insert(
+                session_keys::MODEL_PROVIDER.to_string(),
                 serde_json::json!(&stream_provider_id),
             );
-            assistant
-                .metadata
-                .insert("model_id".to_string(), serde_json::json!(&stream_model_id));
+            assistant.metadata.insert(
+                session_keys::MODEL_ID.to_string(),
+                serde_json::json!(&stream_model_id),
+            );
             if let Some(agent) = stream_agent.as_ref().map(|agent| agent.name.as_str()) {
                 assistant
                     .metadata
-                    .insert("agent".to_string(), serde_json::json!(agent));
+                    .insert(session_keys::AGENT.to_string(), serde_json::json!(agent));
             }
             assistant.add_text(format!("Provider error: {}", error));
             let _ = update_tx.send(session.clone());

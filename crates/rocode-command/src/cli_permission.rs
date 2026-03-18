@@ -9,6 +9,10 @@
 use crate::cli_select::{interactive_select, SelectOption, SelectResult};
 use crate::cli_spinner::SpinnerGuard;
 use crate::cli_style::CliStyle;
+use rocode_core::contracts::patch::keys as patch_keys;
+use rocode_core::contracts::permission::keys as permission_keys;
+use rocode_core::contracts::permission::PermissionTypeWire;
+use rocode_core::contracts::tools::BuiltinToolName;
 use std::collections::HashSet;
 use std::io::{self, Write};
 use std::sync::Arc;
@@ -74,21 +78,33 @@ fn format_permission_summary(
     let mut lines = Vec::new();
 
     // Permission type icon + label
-    let (icon, label) = match permission {
-        "bash" => ("⚡", "Execute Command"),
-        "edit" => ("✏️ ", "Edit File"),
-        "write" => ("📝", "Write File"),
-        "read" => ("📖", "Read File"),
-        "grep" => ("🔍", "Search Files"),
-        "glob" => ("📂", "Find Files"),
-        "list" => ("📂", "List Directory"),
-        "external_directory" => ("⚠️ ", "Access External Directory"),
-        "websearch" => ("🌐", "Web Search"),
-        "network" => ("🌐", "Network Request"),
-        "browser" => ("🌐", "Browser Session"),
-        "context_docs" => ("📚", "Context Docs"),
-        "media" | "media_inspect" => ("🖼️ ", "Media Inspect"),
-        "task" | "task_flow" => ("📋", "Task Management"),
+    let (icon, label) = match (
+        BuiltinToolName::parse(permission),
+        PermissionTypeWire::parse(permission),
+    ) {
+        (Some(BuiltinToolName::Bash), _) => ("⚡", "Execute Command"),
+        (Some(BuiltinToolName::Edit | BuiltinToolName::MultiEdit | BuiltinToolName::ApplyPatch), _) => {
+            ("✏️ ", "Edit File")
+        }
+        (Some(BuiltinToolName::Write), _) => ("📝", "Write File"),
+        (Some(BuiltinToolName::Read), _) => ("📖", "Read File"),
+        (Some(BuiltinToolName::Grep), _) => ("🔍", "Search Files"),
+        (Some(BuiltinToolName::Glob), _) => ("📂", "Find Files"),
+        (Some(BuiltinToolName::Ls), _) | (_, Some(PermissionTypeWire::List)) => {
+            ("📂", "List Directory")
+        }
+        (_, Some(PermissionTypeWire::ExternalDirectory)) => ("⚠️ ", "Access External Directory"),
+        (Some(BuiltinToolName::WebSearch), _) => ("🌐", "Web Search"),
+        (Some(BuiltinToolName::WebFetch), _) => ("🌐", "Network Request"),
+        (Some(BuiltinToolName::BrowserSession), _) => ("🌐", "Browser Session"),
+        (Some(BuiltinToolName::ContextDocs), _) => ("📚", "Context Docs"),
+        (Some(BuiltinToolName::MediaInspect), _) => ("🖼️ ", "Media Inspect"),
+        (Some(BuiltinToolName::Task | BuiltinToolName::TaskFlow), _) => {
+            ("📋", "Task Management")
+        }
+        (Some(BuiltinToolName::CodeSearch | BuiltinToolName::GitHubResearch | BuiltinToolName::RepoHistory), _) => {
+            ("🔎", "Code Research")
+        }
         _ => ("🔧", permission),
     };
 
@@ -107,7 +123,10 @@ fn format_permission_summary(
     }
 
     // Show relevant metadata
-    if let Some(command) = metadata.get("command").and_then(|v| v.as_str()) {
+    if let Some(command) = metadata
+        .get(permission_keys::COMMAND)
+        .and_then(|v| v.as_str())
+    {
         let display = if command.len() > 120 {
             format!("{}…", &command[..117])
         } else {
@@ -116,13 +135,16 @@ fn format_permission_summary(
         lines.push(format!("    {} {}", style.dim("$"), display));
     }
 
-    if let Some(filepath) = metadata.get("filepath").and_then(|v| v.as_str()) {
+    if let Some(filepath) = metadata
+        .get(patch_keys::FILEPATH)
+        .and_then(|v| v.as_str())
+    {
         if patterns.is_empty() || !patterns.iter().any(|p| p == filepath) {
             lines.push(format!("    {} {}", style.dim("file:"), filepath));
         }
     }
 
-    if let Some(diff) = metadata.get("diff").and_then(|v| v.as_str()) {
+    if let Some(diff) = metadata.get(patch_keys::DIFF).and_then(|v| v.as_str()) {
         // Show first few lines of the diff
         let diff_lines: Vec<&str> = diff.lines().take(8).collect();
         if !diff_lines.is_empty() {
@@ -292,20 +314,26 @@ mod tests {
     fn permission_memory_grant_and_check() {
         let mut mem = PermissionMemory::new();
 
-        assert!(!mem.is_granted("bash", &["ls".to_string()]));
+        assert!(!mem.is_granted(BuiltinToolName::Bash.as_str(), &["ls".to_string()]));
 
-        mem.grant_always("bash", &["ls".to_string()]);
-        assert!(mem.is_granted("bash", &["ls".to_string()]));
-        assert!(!mem.is_granted("bash", &["rm -rf /".to_string()]));
+        mem.grant_always(BuiltinToolName::Bash.as_str(), &["ls".to_string()]);
+        assert!(mem.is_granted(BuiltinToolName::Bash.as_str(), &["ls".to_string()]));
+        assert!(!mem.is_granted(BuiltinToolName::Bash.as_str(), &["rm -rf /".to_string()]));
     }
 
     #[test]
     fn permission_memory_wildcard_grant() {
         let mut mem = PermissionMemory::new();
 
-        mem.grant_always("edit", &[]);
-        assert!(mem.is_granted("edit", &["any-file.rs".to_string()]));
-        assert!(mem.is_granted("edit", &["another.rs".to_string()]));
+        mem.grant_always(BuiltinToolName::Edit.as_str(), &[]);
+        assert!(mem.is_granted(
+            BuiltinToolName::Edit.as_str(),
+            &["any-file.rs".to_string()]
+        ));
+        assert!(mem.is_granted(
+            BuiltinToolName::Edit.as_str(),
+            &["another.rs".to_string()]
+        ));
     }
 
     #[test]
@@ -313,28 +341,44 @@ mod tests {
         let mut mem = PermissionMemory::new();
 
         let patterns = vec!["src/a.rs".to_string(), "src/b.rs".to_string()];
-        mem.grant_always("edit", &patterns);
+        mem.grant_always(BuiltinToolName::Edit.as_str(), &patterns);
 
-        assert!(mem.is_granted("edit", &["src/a.rs".to_string()]));
-        assert!(mem.is_granted("edit", &["src/b.rs".to_string()]));
-        assert!(mem.is_granted("edit", &patterns));
-        assert!(!mem.is_granted("edit", &["src/c.rs".to_string()]));
+        assert!(mem.is_granted(
+            BuiltinToolName::Edit.as_str(),
+            &["src/a.rs".to_string()]
+        ));
+        assert!(mem.is_granted(
+            BuiltinToolName::Edit.as_str(),
+            &["src/b.rs".to_string()]
+        ));
+        assert!(mem.is_granted(BuiltinToolName::Edit.as_str(), &patterns));
+        assert!(!mem.is_granted(
+            BuiltinToolName::Edit.as_str(),
+            &["src/c.rs".to_string()]
+        ));
     }
 
     #[test]
     fn permission_memory_empty_patterns_not_granted_without_wildcard() {
         let mem = PermissionMemory::new();
-        assert!(!mem.is_granted("bash", &[]));
+        assert!(!mem.is_granted(BuiltinToolName::Bash.as_str(), &[]));
     }
 
     #[test]
     fn format_summary_bash_command() {
         let style = CliStyle::plain();
         let mut metadata = std::collections::HashMap::new();
-        metadata.insert("command".to_string(), serde_json::json!("cargo test --all"));
+        metadata.insert(
+            permission_keys::COMMAND.to_string(),
+            serde_json::json!("cargo test --all"),
+        );
 
-        let summary =
-            format_permission_summary("bash", &["cargo test --all".to_string()], &metadata, &style);
+        let summary = format_permission_summary(
+            BuiltinToolName::Bash.as_str(),
+            &["cargo test --all".to_string()],
+            &metadata,
+            &style,
+        );
 
         assert!(summary.contains("Execute Command"));
         assert!(summary.contains("cargo test --all"));
@@ -345,13 +389,17 @@ mod tests {
         let style = CliStyle::plain();
         let mut metadata = std::collections::HashMap::new();
         metadata.insert(
-            "diff".to_string(),
+            patch_keys::DIFF.to_string(),
             serde_json::json!("-old line\n+new line"),
         );
-        metadata.insert("filepath".to_string(), serde_json::json!("src/main.rs"));
+        metadata.insert(patch_keys::FILEPATH.to_string(), serde_json::json!("src/main.rs"));
 
-        let summary =
-            format_permission_summary("edit", &["src/main.rs".to_string()], &metadata, &style);
+        let summary = format_permission_summary(
+            BuiltinToolName::Edit.as_str(),
+            &["src/main.rs".to_string()],
+            &metadata,
+            &style,
+        );
 
         assert!(summary.contains("Edit File"));
         assert!(summary.contains("-old line"));

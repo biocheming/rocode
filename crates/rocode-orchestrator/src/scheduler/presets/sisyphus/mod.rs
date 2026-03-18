@@ -1,5 +1,8 @@
 use serde_json::json;
 
+use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::todo::{TodoPriority, TodoStatus};
+
 use super::{
     default_effect_dispatch, default_resolve_stage_kinds, default_transition_graph,
     passthrough_route_decision,
@@ -20,16 +23,16 @@ use crate::scheduler::{
 pub fn sisyphus_workflow_todos_payload() -> serde_json::Value {
     json!({
         "todos": [
-            { "id": "sisyphus-1", "content": "Classify intent and choose the execution path", "status": "pending", "priority": "high" },
-            { "id": "sisyphus-2", "content": "Assess the codebase shape before following patterns", "status": "pending", "priority": "high" },
-            { "id": "sisyphus-3", "content": "Explore and research in parallel before committing", "status": "pending", "priority": "high" },
-            { "id": "sisyphus-4", "content": "Execute or delegate with explicit task tracking", "status": "pending", "priority": "high" },
-            { "id": "sisyphus-5", "content": "Verify evidence and report concrete outcomes", "status": "pending", "priority": "high" }
+            { "id": "sisyphus-1", "content": "Classify intent and choose the execution path", "status": TodoStatus::Pending.as_str(), "priority": TodoPriority::High.as_str() },
+            { "id": "sisyphus-2", "content": "Assess the codebase shape before following patterns", "status": TodoStatus::Pending.as_str(), "priority": TodoPriority::High.as_str() },
+            { "id": "sisyphus-3", "content": "Explore and research in parallel before committing", "status": TodoStatus::Pending.as_str(), "priority": TodoPriority::High.as_str() },
+            { "id": "sisyphus-4", "content": "Execute or delegate with explicit task tracking", "status": TodoStatus::Pending.as_str(), "priority": TodoPriority::High.as_str() },
+            { "id": "sisyphus-5", "content": "Verify evidence and report concrete outcomes", "status": TodoStatus::Pending.as_str(), "priority": TodoPriority::High.as_str() }
         ]
     })
 }
 
-const SISYPHUS_RUNTIME_ORCHESTRATION_TOOLS: &[&str] = &["todowrite"];
+const SISYPHUS_RUNTIME_ORCHESTRATION_TOOLS: &[&str] = &[BuiltinToolName::TodoWrite.as_str()];
 
 fn validate_sisyphus_runtime_orchestration_tool(tool_name: &str) -> Result<(), String> {
     validate_runtime_orchestration_tool("Sisyphus", tool_name, SISYPHUS_RUNTIME_ORCHESTRATION_TOOLS)

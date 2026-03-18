@@ -1,4 +1,5 @@
 use super::{base_allowlist_agent, AgentInfo, AgentMode};
+use rocode_core::contracts::tools::BuiltinToolName;
 
 const DESCRIPTION: &str =
     "Specialist for interpreting PDFs, screenshots, diagrams, and other media inputs routed through ROCode's media pipeline.";
@@ -20,7 +21,11 @@ Output expectations:
 - Do not claim native multimodal support beyond what the current ROCode attachment bridge actually provides."#;
 
 pub fn media_reader() -> AgentInfo {
-    base_allowlist_agent("media-reader", AgentMode::Subagent, &["read"])
+    base_allowlist_agent(
+        "media-reader",
+        AgentMode::Subagent,
+        &[BuiltinToolName::Read],
+    )
         .with_description(DESCRIPTION)
         .with_system_prompt(SYSTEM_PROMPT)
         .with_temperature(0.1)

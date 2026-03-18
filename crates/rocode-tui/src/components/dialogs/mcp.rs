@@ -6,6 +6,8 @@ use ratatui::{
     Frame,
 };
 
+use rocode_core::contracts::mcp::McpConnectionStatusWire;
+
 use crate::theme::Theme;
 
 #[derive(Clone, Debug)]
@@ -116,20 +118,29 @@ impl McpDialog {
             self.items
                 .iter()
                 .map(|server| {
-                    let (status_label, status_color) = match server.status.as_str() {
-                        "connected" => ("Connected".to_string(), theme.success),
-                        "failed" => (
-                            server.error.clone().unwrap_or_else(|| "Failed".to_string()),
-                            theme.error,
-                        ),
-                        "needs_auth" => ("Needs authentication".to_string(), theme.warning),
-                        "needs_client_registration" => {
-                            ("Needs client registration".to_string(), theme.error)
-                        }
-                        "disabled" => ("Disabled".to_string(), theme.text_muted),
-                        "disconnected" => ("Disconnected".to_string(), theme.text_muted),
-                        other => (other.to_string(), theme.info),
-                    };
+                    let (status_label, status_color) =
+                        match McpConnectionStatusWire::parse(server.status.as_str()) {
+                            Some(McpConnectionStatusWire::Connected) => {
+                                ("Connected".to_string(), theme.success)
+                            }
+                            Some(McpConnectionStatusWire::Failed) => (
+                                server.error.clone().unwrap_or_else(|| "Failed".to_string()),
+                                theme.error,
+                            ),
+                            Some(McpConnectionStatusWire::NeedsAuth) => {
+                                ("Needs authentication".to_string(), theme.warning)
+                            }
+                            Some(McpConnectionStatusWire::NeedsClientRegistration) => {
+                                ("Needs client registration".to_string(), theme.error)
+                            }
+                            Some(McpConnectionStatusWire::Disabled) => {
+                                ("Disabled".to_string(), theme.text_muted)
+                            }
+                            Some(McpConnectionStatusWire::Disconnected) => {
+                                ("Disconnected".to_string(), theme.text_muted)
+                            }
+                            None => (server.status.clone(), theme.info),
+                        };
 
                     let mut spans = vec![
                         Span::styled("● ", Style::default().fg(status_color)),

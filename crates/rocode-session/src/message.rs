@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use rocode_core::contracts::agent_tasks::AgentTaskStatusKind;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -275,7 +276,7 @@ impl SessionMessage {
             id: format!("prt_{}", uuid::Uuid::new_v4()),
             part_type: PartType::Agent {
                 name: name.into(),
-                status: "pending".to_string(),
+                status: AgentTaskStatusKind::Pending.as_str().to_string(),
             },
             created_at: Utc::now(),
             message_id: None,
@@ -288,7 +289,7 @@ impl SessionMessage {
             part_type: PartType::Subtask {
                 id: id.into(),
                 description: description.into(),
-                status: "pending".to_string(),
+                status: AgentTaskStatusKind::Pending.as_str().to_string(),
             },
             created_at: Utc::now(),
             message_id: None,

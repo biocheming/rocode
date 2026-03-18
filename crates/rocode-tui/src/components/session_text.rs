@@ -5,6 +5,12 @@ use ratatui::{
     text::{Line, Span},
 };
 use rocode_command::output_blocks::SchedulerStageBlock;
+use rocode_core::contracts::output_blocks::BlockToneWire;
+use rocode_core::contracts::scheduler::{
+    decision_keys as scheduler_decision_keys, gate_keys as scheduler_gate_keys,
+    keys as scheduler_keys, SchedulerDecisionFieldLabelEmphasis, SchedulerDecisionSectionSpacing,
+    SchedulerStageName, SchedulerStageStatus, SchedulerStageWaitingOn,
+};
 use rocode_orchestrator::parse_execution_gate_decision;
 use serde_json::Value;
 
@@ -140,73 +146,73 @@ struct StageDecoration {
 }
 
 fn stage_decoration(stage: &str) -> StageDecoration {
-    match stage {
-        "route" => StageDecoration {
+    match SchedulerStageName::parse(stage) {
+        Some(SchedulerStageName::Route) => StageDecoration {
             icon: "◈",
             label: "Route",
             color_fn: |t| t.info,
         },
-        "interview" => StageDecoration {
+        Some(SchedulerStageName::Interview) => StageDecoration {
             icon: "❓",
             label: "Interview",
             color_fn: |t| t.warning,
         },
-        "plan" => StageDecoration {
+        Some(SchedulerStageName::Plan) => StageDecoration {
             icon: "📋",
             label: "Plan",
             color_fn: |t| t.info,
         },
-        "delegation" => StageDecoration {
+        Some(SchedulerStageName::Delegation) => StageDecoration {
             icon: "📤",
             label: "Delegation",
             color_fn: |t| t.secondary,
         },
-        "review" => StageDecoration {
+        Some(SchedulerStageName::Review) => StageDecoration {
             icon: "🔍",
             label: "Review",
             color_fn: |t| t.warning,
         },
-        "execution-orchestration" => StageDecoration {
+        Some(SchedulerStageName::ExecutionOrchestration) => StageDecoration {
             icon: "⚡",
             label: "Execution",
             color_fn: |t| t.primary,
         },
-        "coordination-verification" => StageDecoration {
+        Some(SchedulerStageName::CoordinationVerification) => StageDecoration {
             icon: "🧪",
             label: "Coordination Verification",
             color_fn: |t| t.warning,
         },
-        "coordination-gate" => StageDecoration {
+        Some(SchedulerStageName::CoordinationGate) => StageDecoration {
             icon: "🚦",
             label: "Coordination Gate",
             color_fn: |t| t.info,
         },
-        "coordination-retry" => StageDecoration {
+        Some(SchedulerStageName::CoordinationRetry) => StageDecoration {
             icon: "↺",
             label: "Coordination Retry",
             color_fn: |t| t.secondary,
         },
-        "autonomous-verification" => StageDecoration {
+        Some(SchedulerStageName::AutonomousVerification) => StageDecoration {
             icon: "🧪",
             label: "Autonomous Verification",
             color_fn: |t| t.warning,
         },
-        "autonomous-gate" => StageDecoration {
+        Some(SchedulerStageName::AutonomousGate) => StageDecoration {
             icon: "🚦",
             label: "Autonomous Gate",
             color_fn: |t| t.info,
         },
-        "autonomous-retry" => StageDecoration {
+        Some(SchedulerStageName::AutonomousRetry) => StageDecoration {
             icon: "↺",
             label: "Autonomous Retry",
             color_fn: |t| t.secondary,
         },
-        "synthesis" => StageDecoration {
+        Some(SchedulerStageName::Synthesis) => StageDecoration {
             icon: "✦",
             label: "Synthesis",
             color_fn: |t| t.success,
         },
-        "handoff" => StageDecoration {
+        Some(SchedulerStageName::Handoff) => StageDecoration {
             icon: "📎",
             label: "Handoff",
             color_fn: |t| t.secondary,
@@ -305,8 +311,8 @@ struct DecisionCard {
 
 struct DecisionRenderSpec {
     show_header_divider: bool,
-    field_label_emphasis: String,
-    section_spacing: String,
+    field_label_emphasis: SchedulerDecisionFieldLabelEmphasis,
+    section_spacing: SchedulerDecisionSectionSpacing,
 }
 
 fn render_decision_stage_part(
@@ -352,7 +358,10 @@ fn render_decision_stage_part(
         ));
     }
     for section in decision.sections {
-        if decision.spec.section_spacing == "loose" {
+        if matches!(
+            decision.spec.section_spacing,
+            SchedulerDecisionSectionSpacing::Loose
+        ) {
             lines.push(Line::from(""));
         }
         lines.push(Line::from(vec![
@@ -386,7 +395,10 @@ fn route_field_line(
     spec: &DecisionRenderSpec,
     value_style: Style,
 ) -> Line<'static> {
-    let label_style = if spec.field_label_emphasis == "bold" {
+    let label_style = if matches!(
+        spec.field_label_emphasis,
+        SchedulerDecisionFieldLabelEmphasis::Bold
+    ) {
         Style::default()
             .fg(theme.primary)
             .add_modifier(Modifier::BOLD)
@@ -401,23 +413,25 @@ fn route_field_line(
 }
 
 fn decision_field_style(tone: Option<&str>, value: &str, theme: &Theme) -> Style {
-    match tone {
-        Some("success") => Style::default()
+    match tone.and_then(BlockToneWire::parse) {
+        Some(BlockToneWire::Success) => Style::default()
             .fg(theme.success)
             .add_modifier(Modifier::BOLD),
-        Some("warning") => Style::default()
+        Some(BlockToneWire::Warning) => Style::default()
             .fg(theme.warning)
             .add_modifier(Modifier::BOLD),
-        Some("error") => Style::default()
+        Some(BlockToneWire::Error) => Style::default()
             .fg(theme.error)
             .add_modifier(Modifier::BOLD),
-        Some("info") => Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
-        Some("muted") => Style::default().fg(theme.text_muted),
-        Some("status") => match value.to_ascii_lowercase().as_str() {
-            "done" => Style::default()
+        Some(BlockToneWire::Info) => Style::default()
+            .fg(theme.info)
+            .add_modifier(Modifier::BOLD),
+        Some(BlockToneWire::Muted) => Style::default().fg(theme.text_muted),
+        Some(BlockToneWire::Status) => match SchedulerStageStatus::parse(value) {
+            Some(SchedulerStageStatus::Done) => Style::default()
                 .fg(theme.success)
                 .add_modifier(Modifier::BOLD),
-            "blocked" => Style::default()
+            Some(SchedulerStageStatus::Blocked) => Style::default()
                 .fg(theme.error)
                 .add_modifier(Modifier::BOLD),
             _ => Style::default()
@@ -429,45 +443,60 @@ fn decision_field_style(tone: Option<&str>, value: &str, theme: &Theme) -> Style
 }
 
 fn render_stage_runtime_lines(block: &SchedulerStageBlock, theme: &Theme) -> Vec<Line<'static>> {
-    let status = block.status.as_deref().unwrap_or("running");
+    let status_raw = block
+        .status
+        .as_deref()
+        .unwrap_or(SchedulerStageStatus::Running.as_str());
+    let status = SchedulerStageStatus::parse(status_raw);
     let step = block.step;
     let step_limit = block.loop_budget.as_deref().and_then(parse_step_limit);
-    let waiting_on = block.waiting_on.as_deref().unwrap_or("none");
+    let waiting_on_raw = block
+        .waiting_on
+        .as_deref()
+        .unwrap_or(SchedulerStageWaitingOn::None.as_str());
+    let waiting_on = SchedulerStageWaitingOn::parse(waiting_on_raw);
     let focus = block.focus.as_deref().filter(|v| !v.trim().is_empty());
     let last_event = block.last_event.as_deref().filter(|v| !v.trim().is_empty());
     let activity = block.activity.as_deref().filter(|v| !v.trim().is_empty());
 
     let status_style = match status {
-        "done" => Style::default()
+        Some(SchedulerStageStatus::Done) => Style::default()
             .fg(theme.success)
             .add_modifier(Modifier::BOLD),
-        "cancelled" => Style::default()
+        Some(SchedulerStageStatus::Cancelled) => Style::default()
             .fg(theme.error)
             .add_modifier(Modifier::BOLD),
-        "cancelling" => Style::default()
+        Some(SchedulerStageStatus::Cancelling) => Style::default()
             .fg(theme.warning)
             .add_modifier(Modifier::BOLD),
-        "waiting" => Style::default()
+        Some(SchedulerStageStatus::Waiting) => Style::default()
             .fg(theme.warning)
             .add_modifier(Modifier::BOLD),
-        "blocked" => Style::default()
+        Some(SchedulerStageStatus::Blocked) => Style::default()
             .fg(theme.error)
             .add_modifier(Modifier::BOLD),
-        "retrying" => Style::default()
+        Some(SchedulerStageStatus::Retrying) => Style::default()
             .fg(theme.secondary)
             .add_modifier(Modifier::BOLD),
-        _ => Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
+        Some(SchedulerStageStatus::Running) => {
+            Style::default().fg(theme.info).add_modifier(Modifier::BOLD)
+        }
+        None => Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
     };
     let label_style = Style::default().fg(theme.text_muted);
     let value_style = Style::default().fg(theme.text);
     let status_icon = match status {
-        "done" => "+",
-        "cancelled" => "x",
-        "cancelling" => "~",
-        "waiting" => "?",
-        "blocked" => "!",
+        Some(SchedulerStageStatus::Done) => "+",
+        Some(SchedulerStageStatus::Cancelled) => "x",
+        Some(SchedulerStageStatus::Cancelling) => "~",
+        Some(SchedulerStageStatus::Waiting) => "?",
+        Some(SchedulerStageStatus::Blocked) => "!",
         _ => "@",
     };
+    let status_display = status.map(|value| value.as_str()).unwrap_or(status_raw);
+    let waiting_on_display = waiting_on
+        .map(|value| value.as_str())
+        .unwrap_or(waiting_on_raw);
 
     let step_label = match (step, step_limit) {
         (Some(current), Some(limit)) => format!("{current}/{limit}"),
@@ -483,13 +512,13 @@ fn render_stage_runtime_lines(block: &SchedulerStageBlock, theme: &Theme) -> Vec
     let mut status_row = vec![
         Span::styled("  Status ", label_style),
         Span::styled(
-            format!("{status_icon} {}", prettify_token(status)),
+            format!("{status_icon} {}", prettify_token(status_display)),
             status_style,
         ),
         Span::styled("   Step ", label_style),
         Span::styled(step_label, value_style),
         Span::styled("   Waiting ", label_style),
-        Span::styled(prettify_token(waiting_on), value_style),
+        Span::styled(prettify_token(waiting_on_display), value_style),
     ];
     status_row.push(Span::styled("   Tokens ", label_style));
     status_row.push(Span::styled(
@@ -672,7 +701,7 @@ fn apply_assistant_marker(lines: Vec<Line<'static>>, marker_color: Color) -> Vec
 
 fn scheduler_stage(metadata: Option<&HashMap<String, Value>>) -> Option<&str> {
     metadata
-        .and_then(|m| m.get("scheduler_stage"))
+        .and_then(|m| m.get(scheduler_keys::STAGE))
         .and_then(Value::as_str)
 }
 
@@ -739,14 +768,14 @@ fn decision_card_from_message(
 
 fn decision_card_from_metadata(metadata: &HashMap<String, Value>) -> Option<DecisionCard> {
     let title = metadata
-        .get("scheduler_decision_title")
+        .get(scheduler_decision_keys::TITLE)
         .and_then(Value::as_str)?
         .to_string();
     Some(DecisionCard {
         title,
         spec: decision_spec_from_metadata(metadata).unwrap_or_else(default_decision_render_spec),
         fields: metadata
-            .get("scheduler_decision_fields")
+            .get(scheduler_decision_keys::FIELDS)
             .and_then(Value::as_array)
             .map(|fields| {
                 fields
@@ -765,7 +794,7 @@ fn decision_card_from_metadata(metadata: &HashMap<String, Value>) -> Option<Deci
             })
             .unwrap_or_default(),
         sections: metadata
-            .get("scheduler_decision_sections")
+            .get(scheduler_decision_keys::SECTIONS)
             .and_then(Value::as_array)
             .map(|sections| {
                 sections
@@ -788,8 +817,8 @@ fn decision_card_from_text(
     metadata: &HashMap<String, Value>,
 ) -> Option<DecisionCard> {
     let (_title, body) = split_stage_heading(text);
-    match stage {
-        "route" => {
+    match SchedulerStageName::parse(stage) {
+        Some(SchedulerStageName::Route) => {
             let decision = parse_route_decision_value(body.trim())?;
             let outcome_label = route_outcome_label_from_value(&decision);
             let mut fields = vec![DecisionField {
@@ -868,9 +897,9 @@ fn decision_card_from_text(
                 sections,
             })
         }
-        "coordination-gate" | "autonomous-gate" => {
+        Some(SchedulerStageName::CoordinationGate | SchedulerStageName::AutonomousGate) => {
             let decision = metadata
-                .get("scheduler_gate_status")
+                .get(scheduler_gate_keys::STATUS)
                 .and_then(Value::as_str)
                 .map(
                     |status| rocode_orchestrator::SchedulerExecutionGateDecision {
@@ -882,16 +911,16 @@ fn decision_card_from_text(
                             _ => rocode_orchestrator::SchedulerExecutionGateStatus::Blocked,
                         },
                         summary: metadata
-                            .get("scheduler_gate_summary")
+                            .get(scheduler_gate_keys::SUMMARY)
                             .and_then(Value::as_str)
                             .unwrap_or_default()
                             .to_string(),
                         next_input: metadata
-                            .get("scheduler_gate_next_input")
+                            .get(scheduler_gate_keys::NEXT_INPUT)
                             .and_then(Value::as_str)
                             .map(str::to_string),
                         final_response: metadata
-                            .get("scheduler_gate_final_response")
+                            .get(scheduler_gate_keys::FINAL_RESPONSE)
                             .and_then(Value::as_str)
                             .map(str::to_string),
                     },
@@ -974,19 +1003,23 @@ fn gate_outcome_label_from_status(status: &str) -> String {
 }
 
 fn decision_spec_from_metadata(metadata: &HashMap<String, Value>) -> Option<DecisionRenderSpec> {
-    let spec = metadata.get("scheduler_decision_spec")?;
+    let spec = metadata.get(scheduler_decision_keys::SPEC)?;
+    let field_label_raw = spec.get("field_label_emphasis")?.as_str()?;
+    let section_spacing_raw = spec.get("section_spacing")?.as_str()?;
     Some(DecisionRenderSpec {
         show_header_divider: spec.get("show_header_divider")?.as_bool()?,
-        field_label_emphasis: spec.get("field_label_emphasis")?.as_str()?.to_string(),
-        section_spacing: spec.get("section_spacing")?.as_str()?.to_string(),
+        field_label_emphasis: SchedulerDecisionFieldLabelEmphasis::parse(field_label_raw)
+            .unwrap_or(SchedulerDecisionFieldLabelEmphasis::Bold),
+        section_spacing: SchedulerDecisionSectionSpacing::parse(section_spacing_raw)
+            .unwrap_or(SchedulerDecisionSectionSpacing::Loose),
     })
 }
 
 fn default_decision_render_spec() -> DecisionRenderSpec {
     DecisionRenderSpec {
         show_header_divider: true,
-        field_label_emphasis: "bold".to_string(),
-        section_spacing: "loose".to_string(),
+        field_label_emphasis: SchedulerDecisionFieldLabelEmphasis::Bold,
+        section_spacing: SchedulerDecisionSectionSpacing::Loose,
     }
 }
 
@@ -1025,15 +1058,15 @@ mod tests {
         total: Option<u64>,
     ) -> Message {
         let mut metadata = HashMap::new();
-        metadata.insert("scheduler_stage".to_string(), json!(stage));
+        metadata.insert(scheduler_keys::STAGE.to_string(), json!(stage));
         if let Some(p) = profile {
-            metadata.insert("scheduler_profile".to_string(), json!(p));
+            metadata.insert(scheduler_keys::PROFILE.to_string(), json!(p));
         }
         if let Some(i) = index {
-            metadata.insert("scheduler_stage_index".to_string(), json!(i));
+            metadata.insert(scheduler_keys::STAGE_INDEX.to_string(), json!(i));
         }
         if let Some(t) = total {
-            metadata.insert("scheduler_stage_total".to_string(), json!(t));
+            metadata.insert(scheduler_keys::STAGE_TOTAL.to_string(), json!(t));
         }
         Message {
             id: "m1".to_string(),
@@ -1063,46 +1096,34 @@ mod tests {
         let mut message = message_with_stage_meta(stage, profile, index, total);
         let metadata = message.metadata.as_mut().expect("metadata should exist");
         if let Some(step) = runtime.step {
-            metadata.insert("scheduler_stage_step".to_string(), json!(step));
+            metadata.insert(scheduler_keys::STEP.to_string(), json!(step));
         }
         if let Some(status) = runtime.status {
-            metadata.insert("scheduler_stage_status".to_string(), json!(status));
+            metadata.insert(scheduler_keys::STATUS.to_string(), json!(status));
         }
         if let Some(focus) = runtime.focus {
-            metadata.insert("scheduler_stage_focus".to_string(), json!(focus));
+            metadata.insert(scheduler_keys::FOCUS.to_string(), json!(focus));
         }
         if let Some(last_event) = runtime.last_event {
-            metadata.insert("scheduler_stage_last_event".to_string(), json!(last_event));
+            metadata.insert(scheduler_keys::LAST_EVENT.to_string(), json!(last_event));
         }
         if let Some(waiting_on) = runtime.waiting_on {
-            metadata.insert("scheduler_stage_waiting_on".to_string(), json!(waiting_on));
+            metadata.insert(scheduler_keys::WAITING_ON.to_string(), json!(waiting_on));
         }
         if let Some(activity) = runtime.activity {
-            metadata.insert("scheduler_stage_activity".to_string(), json!(activity));
+            metadata.insert(scheduler_keys::ACTIVITY.to_string(), json!(activity));
         }
         if let Some(loop_budget) = runtime.loop_budget {
-            metadata.insert(
-                "scheduler_stage_loop_budget".to_string(),
-                json!(loop_budget),
-            );
+            metadata.insert(scheduler_keys::LOOP_BUDGET.to_string(), json!(loop_budget));
         }
-        metadata.insert("scheduler_stage_prompt_tokens".to_string(), json!(1200_u64));
+        metadata.insert(scheduler_keys::PROMPT_TOKENS.to_string(), json!(1200_u64));
         metadata.insert(
-            "scheduler_stage_completion_tokens".to_string(),
+            scheduler_keys::COMPLETION_TOKENS.to_string(),
             json!(320_u64),
         );
-        metadata.insert(
-            "scheduler_stage_reasoning_tokens".to_string(),
-            json!(40_u64),
-        );
-        metadata.insert(
-            "scheduler_stage_cache_read_tokens".to_string(),
-            json!(2_u64),
-        );
-        metadata.insert(
-            "scheduler_stage_cache_write_tokens".to_string(),
-            json!(1_u64),
-        );
+        metadata.insert(scheduler_keys::REASONING_TOKENS.to_string(), json!(40_u64));
+        metadata.insert(scheduler_keys::CACHE_READ_TOKENS.to_string(), json!(2_u64));
+        metadata.insert(scheduler_keys::CACHE_WRITE_TOKENS.to_string(), json!(1_u64));
         message.tokens = TokenUsage {
             input: 1200,
             output: 320,
@@ -1126,19 +1147,22 @@ mod tests {
             Some(3),
             StageRuntimeMeta {
                 step: Some(1),
-                status: Some("running"),
+                status: Some(SchedulerStageStatus::Running.as_str()),
                 focus: Some("Decide whether the coordination loop can finish."),
                 last_event: Some("Stage completed"),
-                waiting_on: Some("none"),
+                waiting_on: Some(SchedulerStageWaitingOn::None.as_str()),
                 activity: None,
                 loop_budget: Some("step-limit:3"),
             },
         );
         let metadata = message.metadata.as_mut().expect("metadata should exist");
-        metadata.insert("scheduler_gate_status".to_string(), json!(status));
-        metadata.insert("scheduler_gate_summary".to_string(), json!(summary));
+        metadata.insert(scheduler_gate_keys::STATUS.to_string(), json!(status));
+        metadata.insert(scheduler_gate_keys::SUMMARY.to_string(), json!(summary));
         if let Some(next_input) = next_input {
-            metadata.insert("scheduler_gate_next_input".to_string(), json!(next_input));
+            metadata.insert(
+                scheduler_gate_keys::NEXT_INPUT.to_string(),
+                json!(next_input),
+            );
         }
         message
     }
@@ -1372,10 +1396,10 @@ mod tests {
             Some(5),
             StageRuntimeMeta {
                 step: Some(2),
-                status: Some("running"),
+                status: Some(SchedulerStageStatus::Running.as_str()),
                 focus: Some("Draft the executable plan and its guardrails."),
                 last_event: Some("Tool finished: Read"),
-                waiting_on: Some("model"),
+                waiting_on: Some(SchedulerStageWaitingOn::Model.as_str()),
                 activity: Some("Task → build\n- label: Schema migration"),
                 loop_budget: Some("step-limit:6"),
             },
@@ -1493,16 +1517,16 @@ mod tests {
             Some(5),
             StageRuntimeMeta {
                 step: Some(2),
-                status: Some("running"),
+                status: Some(SchedulerStageStatus::Running.as_str()),
                 focus: None,
                 last_event: None,
-                waiting_on: Some("model"),
+                waiting_on: Some(SchedulerStageWaitingOn::Model.as_str()),
                 activity: None,
                 loop_budget: None,
             },
         );
         message.metadata.as_mut().unwrap().insert(
-            "scheduler_stage_child_session_id".to_string(),
+            scheduler_keys::CHILD_SESSION_ID.to_string(),
             json!("child-session-abc-123"),
         );
         let rendered =

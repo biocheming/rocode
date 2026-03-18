@@ -1,4 +1,6 @@
 use crate::runtime::events::StepUsage;
+use rocode_core::contracts::tools::arg_keys as tool_arg_keys;
+use rocode_core::contracts::wire::aliases as wire_aliases;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -90,15 +92,15 @@ pub fn continuation_target_from_tool_metadata(
 ) -> Option<ContinuationTarget> {
     let metadata = metadata?;
     let session_id = metadata
-        .get("sessionId")
-        .or_else(|| metadata.get("session_id"))
+        .get(wire_aliases::SESSION_ID_CAMEL)
+        .or_else(|| metadata.get(wire_aliases::SESSION_ID_SNAKE))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())?;
 
     let agent_task_id = metadata
-        .get("agentTaskId")
-        .or_else(|| metadata.get("agent_task_id"))
+        .get(tool_arg_keys::AGENT_TASK_ID)
+        .or_else(|| metadata.get(tool_arg_keys::AGENT_TASK_ID_SNAKE))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())

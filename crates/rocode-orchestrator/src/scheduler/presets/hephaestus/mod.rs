@@ -1,5 +1,8 @@
 use serde_json::json;
 
+use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::todo::{TodoPriority, TodoStatus};
+
 use super::{
     default_effect_dispatch, default_resolve_stage_kinds, default_transition_graph,
     passthrough_route_decision,
@@ -21,14 +24,14 @@ use crate::scheduler::{
 pub fn hephaestus_workflow_todos_payload() -> serde_json::Value {
     json!({
         "todos": [
-            { "id": "hephaestus-1", "content": "Run the autonomous execution loop to completion", "status": "pending", "priority": "high" },
-            { "id": "hephaestus-2", "content": "Verify the deep worker result before finish gate", "status": "pending", "priority": "high" },
-            { "id": "hephaestus-3", "content": "Return the finalized executor result", "status": "pending", "priority": "medium" }
+            { "id": "hephaestus-1", "content": "Run the autonomous execution loop to completion", "status": TodoStatus::Pending.as_str(), "priority": TodoPriority::High.as_str() },
+            { "id": "hephaestus-2", "content": "Verify the deep worker result before finish gate", "status": TodoStatus::Pending.as_str(), "priority": TodoPriority::High.as_str() },
+            { "id": "hephaestus-3", "content": "Return the finalized executor result", "status": TodoStatus::Pending.as_str(), "priority": TodoPriority::Medium.as_str() }
         ]
     })
 }
 
-const HEPHAESTUS_RUNTIME_ORCHESTRATION_TOOLS: &[&str] = &["todowrite"];
+const HEPHAESTUS_RUNTIME_ORCHESTRATION_TOOLS: &[&str] = &[BuiltinToolName::TodoWrite.as_str()];
 
 fn validate_hephaestus_runtime_orchestration_tool(tool_name: &str) -> Result<(), String> {
     validate_runtime_orchestration_tool(

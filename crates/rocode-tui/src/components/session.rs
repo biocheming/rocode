@@ -1,4 +1,7 @@
 use chrono::Utc;
+use rocode_core::contracts::provider::ProviderFinishReasonWire;
+use rocode_core::contracts::scheduler::keys as scheduler_keys;
+use rocode_core::contracts::session::keys as session_keys;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -620,8 +623,8 @@ impl SessionView {
                             .as_ref()
                             .and_then(|metadata| {
                                 metadata
-                                    .get("resolved_system_prompt_preview")
-                                    .or_else(|| metadata.get("resolved_system_prompt"))
+                                    .get(session_keys::RESOLVED_SYSTEM_PROMPT_PREVIEW)
+                                    .or_else(|| metadata.get(session_keys::RESOLVED_SYSTEM_PROMPT))
                             })
                             .and_then(|value| value.as_str())
                             .map(|value| !value.trim().is_empty())
@@ -1498,7 +1501,7 @@ fn assistant_footer(
         .mode
         .as_deref()
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| assistant_metadata_text(message, "scheduler_profile"))
+        .or_else(|| assistant_metadata_text(message, scheduler_keys::PROFILE))
         .or_else(|| {
             message
                 .agent
@@ -1585,10 +1588,13 @@ fn assistant_duration(
 }
 
 fn is_assistant_final(message: &Message) -> bool {
-    matches!(
-        message.finish.as_deref(),
-        Some(reason) if reason != "tool-calls" && reason != "unknown"
-    )
+    let Some(raw) = message.finish.as_deref() else {
+        return false;
+    };
+    match ProviderFinishReasonWire::parse(raw) {
+        Some(ProviderFinishReasonWire::ToolCalls | ProviderFinishReasonWire::Unknown) => false,
+        _ => true,
+    }
 }
 
 fn is_assistant_interrupted(message: &Message) -> bool {

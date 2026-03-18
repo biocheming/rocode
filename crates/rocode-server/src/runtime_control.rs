@@ -1,5 +1,7 @@
 use chrono::Utc;
 use rocode_command::stage_protocol::{ExecutionNode, ExecutionNodeKind, ExecutionNodeStatus};
+use rocode_core::contracts::agent_tasks::bus_keys as agent_task_bus_keys;
+use rocode_core::contracts::scheduler::keys as scheduler_keys;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -78,7 +80,7 @@ impl ExecutionRecord {
             stage_id: self.stage_id.clone().or_else(|| {
                 self.metadata
                     .as_ref()
-                    .and_then(|m| m.get("scheduler_stage_id"))
+                    .and_then(|m| m.get(scheduler_keys::STAGE_ID))
                     .and_then(|v| v.as_str())
                     .map(String::from)
             }),
@@ -574,8 +576,8 @@ impl RuntimeControlRegistry {
             started_at: now_millis(),
             updated_at: now_millis(),
             metadata: Some(serde_json::json!({
-                "task_id": task_id,
-                "agent_name": agent_name,
+                (agent_task_bus_keys::TASK_ID): task_id,
+                (agent_task_bus_keys::AGENT_NAME): agent_name,
             })),
         })
         .await;
@@ -1113,6 +1115,7 @@ fn question_record_to_info(record: &ExecutionRecord) -> Option<QuestionInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocode_core::contracts::tools::BuiltinToolName;
 
     #[tokio::test]
     async fn prompt_status_roundtrip_uses_single_registry() {
@@ -1193,11 +1196,19 @@ mod tests {
                 "ses_1",
                 "msg_stage_1".to_string(),
                 "Coordination Gate".to_string(),
-                serde_json::json!({
-                    "scheduler_profile": "atlas",
-                    "stage_name": "coordination-gate",
-                    "stage_index": 2
-                }),
+                {
+                    let mut meta = serde_json::Map::new();
+                    meta.insert(
+                        scheduler_keys::PROFILE.to_string(),
+                        serde_json::json!("atlas"),
+                    );
+                    meta.insert(
+                        "stage_name".to_string(),
+                        serde_json::json!("coordination-gate"),
+                    );
+                    meta.insert("stage_index".to_string(), serde_json::json!(2));
+                    serde_json::Value::Object(meta)
+                },
             )
             .await;
 
@@ -1560,7 +1571,7 @@ mod tests {
             .register_tool_call(
                 "tc_1",
                 "ses_1",
-                "bash",
+                BuiltinToolName::Bash.as_str(),
                 Some("stage_x".to_string()),
                 Some("stage_x".to_string()),
             )
@@ -1694,10 +1705,18 @@ mod tests {
             recent_event: Some("tool_call".to_string()),
             started_at: 1710000000000,
             updated_at: 1710000001000,
-            metadata: Some(serde_json::json!({
-                "scheduler_stage_id": "stage_xyz",
-                "child_session_id": "child_001"
-            })),
+            metadata: Some({
+                let mut meta = serde_json::Map::new();
+                meta.insert(
+                    scheduler_keys::STAGE_ID.to_string(),
+                    serde_json::json!("stage_xyz"),
+                );
+                meta.insert(
+                    "child_session_id".to_string(),
+                    serde_json::json!("child_001"),
+                );
+                serde_json::Value::Object(meta)
+            }),
         };
 
         let node = record.to_node();

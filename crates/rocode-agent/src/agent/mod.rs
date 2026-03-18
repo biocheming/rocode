@@ -12,6 +12,8 @@ use rocode_config::{
     AgentMode as LoadedAgentMode, Config as LoadedConfig,
 };
 #[cfg(test)]
+use rocode_core::contracts::tools::BuiltinToolName;
+#[cfg(test)]
 use rocode_permission::PermissionAction;
 #[cfg(test)]
 use std::collections::HashMap;
@@ -81,40 +83,40 @@ mod tests {
     fn explore_agent_permission_is_restricted_to_read_search_and_bash() {
         let explore = AgentInfo::explore();
         assert_eq!(
-            explore.tool_permission_decision("grep"),
+            explore.tool_permission_decision(BuiltinToolName::Grep.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            explore.tool_permission_decision("glob"),
+            explore.tool_permission_decision(BuiltinToolName::Glob.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            explore.tool_permission_decision("read"),
+            explore.tool_permission_decision(BuiltinToolName::Read.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            explore.tool_permission_decision("bash"),
+            explore.tool_permission_decision(BuiltinToolName::Bash.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            explore.tool_permission_decision("ast_grep_search"),
+            explore.tool_permission_decision(BuiltinToolName::AstGrepSearch.as_str()),
             PermissionAction::Allow
         );
 
         assert_eq!(
-            explore.tool_permission_decision("write"),
+            explore.tool_permission_decision(BuiltinToolName::Write.as_str()),
             PermissionAction::Deny
         );
         assert_eq!(
-            explore.tool_permission_decision("ls"),
+            explore.tool_permission_decision(BuiltinToolName::Ls.as_str()),
             PermissionAction::Deny
         );
         assert_eq!(
-            explore.tool_permission_decision("websearch"),
+            explore.tool_permission_decision(BuiltinToolName::WebSearch.as_str()),
             PermissionAction::Deny
         );
         assert_eq!(
-            explore.tool_permission_decision("browser_session"),
+            explore.tool_permission_decision(BuiltinToolName::BrowserSession.as_str()),
             PermissionAction::Deny
         );
     }
@@ -128,15 +130,15 @@ mod tests {
         let media = AgentInfo::media_reader();
 
         assert_eq!(
-            deep.tool_permission_decision("write"),
+            deep.tool_permission_decision(BuiltinToolName::Write.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            deep.tool_permission_decision("ast_grep_search"),
+            deep.tool_permission_decision(BuiltinToolName::AstGrepSearch.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            deep.tool_permission_decision("shell_session"),
+            deep.tool_permission_decision(BuiltinToolName::ShellSession.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
@@ -145,70 +147,70 @@ mod tests {
         );
 
         assert_eq!(
-            architecture.tool_permission_decision("read"),
+            architecture.tool_permission_decision(BuiltinToolName::Read.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            architecture.tool_permission_decision("ast_grep_search"),
+            architecture.tool_permission_decision(BuiltinToolName::AstGrepSearch.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            architecture.tool_permission_decision("write"),
+            architecture.tool_permission_decision(BuiltinToolName::Write.as_str()),
             PermissionAction::Deny
         );
 
         assert_eq!(
-            docs.tool_permission_decision("websearch"),
+            docs.tool_permission_decision(BuiltinToolName::WebSearch.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            docs.tool_permission_decision("webfetch"),
+            docs.tool_permission_decision(BuiltinToolName::WebFetch.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            docs.tool_permission_decision("codesearch"),
+            docs.tool_permission_decision(BuiltinToolName::CodeSearch.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            docs.tool_permission_decision("context_docs"),
+            docs.tool_permission_decision(BuiltinToolName::ContextDocs.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            docs.tool_permission_decision("github_research"),
+            docs.tool_permission_decision(BuiltinToolName::GitHubResearch.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            docs.tool_permission_decision("browser_session"),
+            docs.tool_permission_decision(BuiltinToolName::BrowserSession.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            docs.tool_permission_decision("ast_grep_search"),
+            docs.tool_permission_decision(BuiltinToolName::AstGrepSearch.as_str()),
             PermissionAction::Deny
         );
         assert_eq!(
-            docs.tool_permission_decision("write"),
-            PermissionAction::Deny
-        );
-
-        assert_eq!(
-            code.tool_permission_decision("grep"),
-            PermissionAction::Allow
-        );
-        assert_eq!(
-            code.tool_permission_decision("ast_grep_search"),
-            PermissionAction::Allow
-        );
-        assert_eq!(
-            code.tool_permission_decision("write"),
+            docs.tool_permission_decision(BuiltinToolName::Write.as_str()),
             PermissionAction::Deny
         );
 
         assert_eq!(
-            media.tool_permission_decision("read"),
+            code.tool_permission_decision(BuiltinToolName::Grep.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            media.tool_permission_decision("grep"),
+            code.tool_permission_decision(BuiltinToolName::AstGrepSearch.as_str()),
+            PermissionAction::Allow
+        );
+        assert_eq!(
+            code.tool_permission_decision(BuiltinToolName::Write.as_str()),
+            PermissionAction::Deny
+        );
+
+        assert_eq!(
+            media.tool_permission_decision(BuiltinToolName::Read.as_str()),
+            PermissionAction::Allow
+        );
+        assert_eq!(
+            media.tool_permission_decision(BuiltinToolName::Grep.as_str()),
             PermissionAction::Deny
         );
     }
@@ -222,9 +224,9 @@ mod tests {
         let media = AgentInfo::media_reader();
 
         let deep_prompt = deep.system_prompt.as_deref().expect("deep worker prompt");
-        assert!(deep_prompt.contains("task_flow"));
-        assert!(deep_prompt.contains("shell_session"));
-        assert!(deep_prompt.contains("ast_grep_replace"));
+        assert!(deep_prompt.contains(BuiltinToolName::TaskFlow.as_str()));
+        assert!(deep_prompt.contains(BuiltinToolName::ShellSession.as_str()));
+        assert!(deep_prompt.contains(BuiltinToolName::AstGrepReplace.as_str()));
         assert!(deep_prompt.contains("task_create"));
         assert!(deep_prompt.contains("task_update"));
         assert!(deep_prompt.contains("lsp_diagnostics"));
@@ -235,30 +237,30 @@ mod tests {
             .as_deref()
             .expect("architecture advisor prompt");
         assert!(architecture_prompt.contains("read-only"));
-        assert!(architecture_prompt.contains("ast_grep_search"));
-        assert!(!architecture_prompt.contains("write"));
+        assert!(architecture_prompt.contains(BuiltinToolName::AstGrepSearch.as_str()));
+        assert!(!architecture_prompt.contains(BuiltinToolName::Write.as_str()));
 
         let docs_prompt = docs
             .system_prompt
             .as_deref()
             .expect("docs researcher prompt");
-        assert!(docs_prompt.contains("context_docs"));
-        assert!(docs_prompt.contains("github_research"));
-        assert!(docs_prompt.contains("browser_session"));
+        assert!(docs_prompt.contains(BuiltinToolName::ContextDocs.as_str()));
+        assert!(docs_prompt.contains(BuiltinToolName::GitHubResearch.as_str()));
+        assert!(docs_prompt.contains(BuiltinToolName::BrowserSession.as_str()));
         assert!(docs_prompt.contains("Phase 1"));
         assert!(docs_prompt.contains("context7_*"));
         assert!(docs_prompt.contains("grep_app_searchGitHub"));
         assert!(docs_prompt.contains("Do not claim access"));
 
         let code_prompt = code.system_prompt.as_deref().expect("code explorer prompt");
-        assert!(code_prompt.contains("glob"));
-        assert!(code_prompt.contains("grep"));
-        assert!(code_prompt.contains("ast_grep_search"));
+        assert!(code_prompt.contains(BuiltinToolName::Glob.as_str()));
+        assert!(code_prompt.contains(BuiltinToolName::Grep.as_str()));
+        assert!(code_prompt.contains(BuiltinToolName::AstGrepSearch.as_str()));
         assert!(code_prompt.contains("read-only"));
 
         let media_prompt = media.system_prompt.as_deref().expect("media reader prompt");
         assert!(media_prompt.contains("attachment"));
-        assert!(media_prompt.contains("read"));
+        assert!(media_prompt.contains(BuiltinToolName::Read.as_str()));
         assert!(media_prompt.contains("preflight"));
     }
 
@@ -267,36 +269,45 @@ mod tests {
         let general = AgentInfo::general();
 
         assert_eq!(
-            general.tool_permission_decision("ast_grep_search"),
+            general.tool_permission_decision(BuiltinToolName::AstGrepSearch.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            general.tool_permission_decision("write"),
+            general.tool_permission_decision(BuiltinToolName::Write.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            general.tool_permission_decision("ast_grep_replace"),
+            general.tool_permission_decision(BuiltinToolName::AstGrepReplace.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            general.tool_permission_decision("task_flow"),
+            general.tool_permission_decision(BuiltinToolName::TaskFlow.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            general.tool_permission_decision("shell_session"),
+            general.tool_permission_decision(BuiltinToolName::ShellSession.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
             general.tool_permission_decision("nonexistent_tool"),
             PermissionAction::Deny
         );
-        assert!(general.allowed_tools.iter().any(|t| t == "ast_grep_search"));
         assert!(general
             .allowed_tools
             .iter()
-            .any(|t| t == "ast_grep_replace"));
-        assert!(general.allowed_tools.iter().any(|t| t == "task_flow"));
-        assert!(general.allowed_tools.iter().any(|t| t == "shell_session"));
+            .any(|t| t == BuiltinToolName::AstGrepSearch.as_str()));
+        assert!(general
+            .allowed_tools
+            .iter()
+            .any(|t| t == BuiltinToolName::AstGrepReplace.as_str()));
+        assert!(general
+            .allowed_tools
+            .iter()
+            .any(|t| t == BuiltinToolName::TaskFlow.as_str()));
+        assert!(general
+            .allowed_tools
+            .iter()
+            .any(|t| t == BuiltinToolName::ShellSession.as_str()));
     }
 
     #[test]
@@ -304,37 +315,49 @@ mod tests {
         let build = AgentInfo::build();
 
         assert_eq!(
-            build.tool_permission_decision("ast_grep_search"),
+            build.tool_permission_decision(BuiltinToolName::AstGrepSearch.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            build.tool_permission_decision("write"),
+            build.tool_permission_decision(BuiltinToolName::Write.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            build.tool_permission_decision("ast_grep_replace"),
+            build.tool_permission_decision(BuiltinToolName::AstGrepReplace.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            build.tool_permission_decision("plan_enter"),
+            build.tool_permission_decision(BuiltinToolName::PlanEnter.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            build.tool_permission_decision("task_flow"),
+            build.tool_permission_decision(BuiltinToolName::TaskFlow.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
-            build.tool_permission_decision("shell_session"),
+            build.tool_permission_decision(BuiltinToolName::ShellSession.as_str()),
             PermissionAction::Allow
         );
         assert_eq!(
             build.tool_permission_decision("nonexistent_tool"),
             PermissionAction::Deny
         );
-        assert!(build.allowed_tools.iter().any(|t| t == "ast_grep_search"));
-        assert!(build.allowed_tools.iter().any(|t| t == "ast_grep_replace"));
-        assert!(build.allowed_tools.iter().any(|t| t == "task_flow"));
-        assert!(build.allowed_tools.iter().any(|t| t == "shell_session"));
+        assert!(build
+            .allowed_tools
+            .iter()
+            .any(|t| t == BuiltinToolName::AstGrepSearch.as_str()));
+        assert!(build
+            .allowed_tools
+            .iter()
+            .any(|t| t == BuiltinToolName::AstGrepReplace.as_str()));
+        assert!(build
+            .allowed_tools
+            .iter()
+            .any(|t| t == BuiltinToolName::TaskFlow.as_str()));
+        assert!(build
+            .allowed_tools
+            .iter()
+            .any(|t| t == BuiltinToolName::ShellSession.as_str()));
     }
 
     #[test]

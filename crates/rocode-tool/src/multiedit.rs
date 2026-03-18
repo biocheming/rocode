@@ -1,4 +1,8 @@
 use async_trait::async_trait;
+use rocode_core::contracts::events::BusEventName;
+use rocode_core::contracts::fs::{keys as fs_keys, FileWatcherEventKind};
+use rocode_core::contracts::patch::keys as patch_keys;
+use rocode_core::contracts::tools::BuiltinToolName;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -31,7 +35,7 @@ struct EditOperation {
 #[async_trait]
 impl Tool for MultiEditTool {
     fn id(&self) -> &str {
-        "multiedit"
+        BuiltinToolName::MultiEdit.as_str()
     }
 
     fn description(&self) -> &str {
@@ -47,7 +51,7 @@ impl Tool for MultiEditTool {
                     "items": {
                         "type": "object",
                         "properties": {
-                            "file_path": {
+                            (patch_keys::FILE_PATH_SNAKE): {
                                 "type": "string",
                                 "description": "The path to the file to edit"
                             },
@@ -56,11 +60,11 @@ impl Tool for MultiEditTool {
                                 "items": {
                                     "type": "object",
                                     "properties": {
-                                        "old_string": {
+                                        (patch_keys::OLD_STRING): {
                                             "type": "string",
                                             "description": "The text to search for"
                                         },
-                                        "new_string": {
+                                        (patch_keys::NEW_STRING): {
                                             "type": "string",
                                             "description": "The text to replace it with"
                                         },
@@ -70,12 +74,12 @@ impl Tool for MultiEditTool {
                                             "description": "Replace all occurrences"
                                         }
                                     },
-                                    "required": ["old_string", "new_string"]
+                                    "required": [patch_keys::OLD_STRING, patch_keys::NEW_STRING]
                                 },
                                 "description": "List of edits to apply to this file"
                             }
                         },
-                        "required": ["file_path", "edits"]
+                        "required": [patch_keys::FILE_PATH_SNAKE, "edits"]
                     },
                     "description": "List of files with their edits"
                 }
@@ -146,18 +150,18 @@ impl Tool for MultiEditTool {
                     })?;
 
                 ctx.do_publish_bus(
-                    "file.edited",
+                    BusEventName::FileEdited.as_str(),
                     serde_json::json!({
-                        "file": file_edit.file_path
+                        (fs_keys::FILE): file_edit.file_path
                     }),
                 )
                 .await;
 
                 ctx.do_publish_bus(
-                    "file_watcher.updated",
+                    BusEventName::FileWatcherUpdated.as_str(),
                     serde_json::json!({
-                        "file": file_edit.file_path,
-                        "event": "change"
+                        (fs_keys::FILE): file_edit.file_path,
+                        (fs_keys::EVENT): FileWatcherEventKind::Change.as_str()
                     }),
                 )
                 .await;

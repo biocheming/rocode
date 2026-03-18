@@ -11,6 +11,8 @@ use std::sync::Arc;
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 
+use crate::contracts::agent_tasks::AgentTaskStatusKind;
+
 /// Global singleton agent task registry.
 static TASK_REGISTRY: Lazy<AgentTaskRegistry> = Lazy::new(AgentTaskRegistry::new);
 
@@ -40,6 +42,20 @@ impl AgentTaskStatus {
             self,
             Self::Completed { .. } | Self::Cancelled | Self::Failed { .. }
         )
+    }
+
+    pub fn kind(&self) -> AgentTaskStatusKind {
+        match self {
+            Self::Pending => AgentTaskStatusKind::Pending,
+            Self::Running { .. } => AgentTaskStatusKind::Running,
+            Self::Completed { .. } => AgentTaskStatusKind::Completed,
+            Self::Cancelled => AgentTaskStatusKind::Cancelled,
+            Self::Failed { .. } => AgentTaskStatusKind::Failed,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        self.kind().as_str()
     }
 }
 

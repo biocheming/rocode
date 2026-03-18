@@ -4,6 +4,10 @@ use axum::extract::{Path, State};
 use axum::Json;
 
 use rocode_core::agent_task_registry::{global_task_registry, AgentTask, AgentTaskStatus};
+use rocode_core::contracts::agent_tasks::bus_keys as agent_task_bus_keys;
+use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::tools::ToolCallStatusWire;
+use rocode_core::contracts::wire::fields as wire_fields;
 use rocode_session::{PartType, Session, ToolCallStatus};
 
 use crate::runtime_control::SessionExecutionTopology;
@@ -154,10 +158,10 @@ pub(super) fn collect_active_tool_execution_records(
                     "input": input,
                     "message_id": message.id,
                     "status": match status {
-                        ToolCallStatus::Pending => "pending",
-                        ToolCallStatus::Running => "running",
-                        ToolCallStatus::Completed => "completed",
-                        ToolCallStatus::Error => "error",
+                        ToolCallStatus::Pending => ToolCallStatusWire::Pending.as_str(),
+                        ToolCallStatus::Running => ToolCallStatusWire::Running.as_str(),
+                        ToolCallStatus::Completed => ToolCallStatusWire::Completed.as_str(),
+                        ToolCallStatus::Error => ToolCallStatusWire::Error.as_str(),
                     },
                 })),
             });
@@ -234,8 +238,8 @@ fn agent_task_execution_record(
         started_at: task.started_at.saturating_mul(1000),
         updated_at: chrono::Utc::now().timestamp_millis(),
         metadata: Some(serde_json::json!({
-            "task_id": task.id,
-            "agent_name": task.agent_name,
+            (agent_task_bus_keys::TASK_ID): task.id,
+            (agent_task_bus_keys::AGENT_NAME): task.agent_name,
             "prompt": task.prompt,
             "max_steps": task.max_steps,
             "step": step,
@@ -260,9 +264,14 @@ fn select_active_agent_task_parent_id(
             record
                 .metadata
                 .as_ref()
-                .and_then(|value| value.get("tool_name"))
+                .and_then(|value| value.get(wire_fields::TOOL_NAME_SNAKE))
                 .and_then(|value| value.as_str())
-                .map(|name| matches!(name, "task" | "task_flow"))
+                .map(|name| {
+                    matches!(
+                        BuiltinToolName::parse(name),
+                        Some(BuiltinToolName::Task | BuiltinToolName::TaskFlow)
+                    )
+                })
                 .unwrap_or(false)
         })
         .max_by_key(|record| record.updated_at)

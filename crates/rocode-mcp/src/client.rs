@@ -1,5 +1,7 @@
 use chrono::Utc;
 use rocode_core::bus::{Bus, BusEventDef};
+use rocode_core::contracts::events::BusEventName;
+use rocode_core::contracts::mcp::McpConnectionStatusWire;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -46,12 +48,18 @@ impl McpStatus {
 impl std::fmt::Display for McpStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            McpStatus::Connected => write!(f, "connected"),
-            McpStatus::Disabled => write!(f, "disabled"),
-            McpStatus::Failed { error } => write!(f, "failed: {error}"),
-            McpStatus::NeedsAuth => write!(f, "needs_auth"),
+            McpStatus::Connected => write!(f, "{}", McpConnectionStatusWire::Connected.as_str()),
+            McpStatus::Disabled => write!(f, "{}", McpConnectionStatusWire::Disabled.as_str()),
+            McpStatus::Failed { error } => {
+                write!(f, "{}: {error}", McpConnectionStatusWire::Failed.as_str())
+            }
+            McpStatus::NeedsAuth => write!(f, "{}", McpConnectionStatusWire::NeedsAuth.as_str()),
             McpStatus::NeedsClientRegistration { error } => {
-                write!(f, "needs_client_registration: {error}")
+                write!(
+                    f,
+                    "{}: {error}",
+                    McpConnectionStatusWire::NeedsClientRegistration.as_str()
+                )
             }
         }
     }
@@ -135,7 +143,8 @@ pub struct McpClient {
     tools_changed: std::sync::atomic::AtomicBool,
 }
 
-pub static MCP_TOOLS_CHANGED_EVENT: BusEventDef = BusEventDef::new("mcp.tools.changed");
+pub static MCP_TOOLS_CHANGED_EVENT: BusEventDef =
+    BusEventDef::new(BusEventName::McpToolsChanged.as_str());
 
 impl McpClient {
     pub fn new(server_name: String, tool_registry: Arc<McpToolRegistry>) -> Self {

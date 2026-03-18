@@ -1,6 +1,9 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
+use rocode_core::contracts::provider::ProviderFinishReasonWire;
+use rocode_core::contracts::provider::ProviderToolCallNameWire;
+
 use crate::message::{ContentPart, ToolResult, ToolUse};
 use crate::stream::{StreamEvent, StreamUsage, ToolResultOutput};
 
@@ -59,14 +62,14 @@ pub(super) fn process_stream_chunk(
                 ongoing_tool_calls.insert(
                     output_index,
                     OngoingToolCall {
-                        tool_name: "web_search_call".to_string(),
+                        tool_name: ProviderToolCallNameWire::WebSearchCall.as_str().to_string(),
                         tool_call_id: id.clone(),
                         code_interpreter: None,
                     },
                 );
                 events.push(StreamEvent::ToolInputStart {
                     id,
-                    tool_name: "web_search_call".to_string(),
+                    tool_name: ProviderToolCallNameWire::WebSearchCall.as_str().to_string(),
                 });
             }
             OutputItemAddedItem::CodeInterpreterCall {
@@ -78,14 +81,18 @@ pub(super) fn process_stream_chunk(
                 ongoing_tool_calls.insert(
                     output_index,
                     OngoingToolCall {
-                        tool_name: "code_interpreter_call".to_string(),
+                        tool_name: ProviderToolCallNameWire::CodeInterpreterCall
+                            .as_str()
+                            .to_string(),
                         tool_call_id: id.clone(),
                         code_interpreter: Some(CodeInterpreterState { container_id }),
                     },
                 );
                 events.push(StreamEvent::ToolInputStart {
                     id: id.clone(),
-                    tool_name: "code_interpreter_call".to_string(),
+                    tool_name: ProviderToolCallNameWire::CodeInterpreterCall
+                        .as_str()
+                        .to_string(),
                 });
                 if let Some(code) = code {
                     if !code.is_empty() {
@@ -96,22 +103,22 @@ pub(super) fn process_stream_chunk(
             OutputItemAddedItem::FileSearchCall { id } => {
                 events.push(StreamEvent::ToolCallStart {
                     id: id.clone(),
-                    name: "file_search_call".to_string(),
+                    name: ProviderToolCallNameWire::FileSearchCall.as_str().to_string(),
                 });
                 events.push(StreamEvent::ToolCallEnd {
                     id,
-                    name: "file_search_call".to_string(),
+                    name: ProviderToolCallNameWire::FileSearchCall.as_str().to_string(),
                     input: json!({}),
                 });
             }
             OutputItemAddedItem::ImageGenerationCall { id } => {
                 events.push(StreamEvent::ToolCallStart {
                     id: id.clone(),
-                    name: "image_generation_call".to_string(),
+                    name: ProviderToolCallNameWire::ImageGenerationCall.as_str().to_string(),
                 });
                 events.push(StreamEvent::ToolCallEnd {
                     id,
-                    name: "image_generation_call".to_string(),
+                    name: ProviderToolCallNameWire::ImageGenerationCall.as_str().to_string(),
                     input: json!({}),
                 });
             }
@@ -141,11 +148,11 @@ pub(super) fn process_stream_chunk(
             OutputItemAddedItem::ComputerCall { id, .. } => {
                 events.push(StreamEvent::ToolCallStart {
                     id: id.clone(),
-                    name: "computer_call".to_string(),
+                    name: ProviderToolCallNameWire::ComputerCall.as_str().to_string(),
                 });
                 events.push(StreamEvent::ToolCallEnd {
                     id,
-                    name: "computer_call".to_string(),
+                    name: ProviderToolCallNameWire::ComputerCall.as_str().to_string(),
                     input: json!({}),
                 });
             }
@@ -174,12 +181,12 @@ pub(super) fn process_stream_chunk(
                 events.push(StreamEvent::ToolInputEnd { id: id.clone() });
                 events.push(StreamEvent::ToolCallEnd {
                     id: id.clone(),
-                    name: "web_search_call".to_string(),
+                    name: ProviderToolCallNameWire::WebSearchCall.as_str().to_string(),
                     input: input.clone(),
                 });
                 events.push(StreamEvent::ToolResult {
                     tool_call_id: id,
-                    tool_name: "web_search_call".to_string(),
+                    tool_name: ProviderToolCallNameWire::WebSearchCall.as_str().to_string(),
                     input: Some(input.clone()),
                     output: ToolResultOutput {
                         output: serde_json::to_string(&input).unwrap_or_default(),
@@ -203,7 +210,9 @@ pub(super) fn process_stream_chunk(
                 if let Some(code) = code {
                     events.push(StreamEvent::ToolCallEnd {
                         id: id.clone(),
-                        name: "code_interpreter_call".to_string(),
+                        name: ProviderToolCallNameWire::CodeInterpreterCall
+                            .as_str()
+                            .to_string(),
                         input: json!({
                             "code": code,
                             "container_id": container_id,
@@ -214,7 +223,9 @@ pub(super) fn process_stream_chunk(
                 let output_json = json!({ "outputs": outputs });
                 events.push(StreamEvent::ToolResult {
                     tool_call_id: id,
-                    tool_name: "code_interpreter_call".to_string(),
+                    tool_name: ProviderToolCallNameWire::CodeInterpreterCall
+                        .as_str()
+                        .to_string(),
                     input: None,
                     output: ToolResultOutput {
                         output: serde_json::to_string(&output_json).unwrap_or_default(),
@@ -238,7 +249,7 @@ pub(super) fn process_stream_chunk(
                 });
                 events.push(StreamEvent::ToolResult {
                     tool_call_id: id,
-                    tool_name: "file_search_call".to_string(),
+                    tool_name: ProviderToolCallNameWire::FileSearchCall.as_str().to_string(),
                     input: None,
                     output: ToolResultOutput {
                         output: serde_json::to_string(&output_json).unwrap_or_default(),
@@ -254,7 +265,9 @@ pub(super) fn process_stream_chunk(
             OutputItemDoneItem::ImageGenerationCall { id, result } => {
                 events.push(StreamEvent::ToolResult {
                     tool_call_id: id,
-                    tool_name: "image_generation_call".to_string(),
+                    tool_name: ProviderToolCallNameWire::ImageGenerationCall
+                        .as_str()
+                        .to_string(),
                     input: None,
                     output: ToolResultOutput {
                         output: result,
@@ -276,7 +289,7 @@ pub(super) fn process_stream_chunk(
                 });
                 events.push(StreamEvent::ToolCallEnd {
                     id: call_id.clone(),
-                    name: "local_shell".to_string(),
+                    name: ProviderToolCallNameWire::LocalShell.as_str().to_string(),
                     input: json!({ "action": action }),
                 });
                 *has_function_call = true;
@@ -301,7 +314,7 @@ pub(super) fn process_stream_chunk(
                 let status = status.unwrap_or_else(|| "unknown".to_string());
                 events.push(StreamEvent::ToolResult {
                     tool_call_id: id,
-                    tool_name: "computer_call".to_string(),
+                    tool_name: ProviderToolCallNameWire::ComputerCall.as_str().to_string(),
                     input: None,
                     output: ToolResultOutput {
                         output: status,
@@ -368,7 +381,9 @@ pub(super) fn process_stream_chunk(
         } => {
             events.push(StreamEvent::ToolResult {
                 tool_call_id: item_id,
-                tool_name: "image_generation_call".to_string(),
+                tool_name: ProviderToolCallNameWire::ImageGenerationCall
+                    .as_str()
+                    .to_string(),
                 input: None,
                 output: ToolResultOutput {
                     output: partial_image_b64,
@@ -576,113 +591,130 @@ pub(super) fn parse_output_items(
                 });
                 has_function_call = true;
             }
-            "web_search_call" => {
-                let id = item
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let action = item.get("action").cloned().unwrap_or_else(|| json!({}));
-                parts.push(provider_executed_tool_parts(
-                    id,
-                    "web_search_call",
-                    action.clone(),
-                    action,
-                ));
-                has_function_call = true;
+            other => {
+                // Provider tool call items (OpenAI Responses output items).
+                //
+                // Only treat *_call items as provider tool calls to avoid accidentally
+                // interpreting unrelated types.
+                if !other.ends_with("_call") && !other.ends_with("-call") {
+                    continue;
+                }
+
+                let Some(provider_tool) = ProviderToolCallNameWire::parse(other) else {
+                    continue;
+                };
+
+                match provider_tool {
+                    ProviderToolCallNameWire::WebSearchCall => {
+                        let id = item
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        let action =
+                            item.get("action").cloned().unwrap_or_else(|| json!({}));
+                        parts.push(provider_executed_tool_parts(
+                            id,
+                            provider_tool.as_str(),
+                            action.clone(),
+                            action,
+                        ));
+                        has_function_call = true;
+                    }
+                    ProviderToolCallNameWire::FileSearchCall => {
+                        let id = item
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        let output = json!({
+                            "queries": item.get("queries").cloned().unwrap_or_else(|| json!([])),
+                            "results": item.get("results").cloned().unwrap_or(Value::Null),
+                        });
+                        parts.push(provider_executed_tool_parts(
+                            id,
+                            provider_tool.as_str(),
+                            json!({}),
+                            output,
+                        ));
+                        has_function_call = true;
+                    }
+                    ProviderToolCallNameWire::CodeInterpreterCall => {
+                        let id = item
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        let input = json!({
+                            "code": item.get("code").cloned().unwrap_or(Value::Null),
+                            "container_id": item.get("container_id").cloned().unwrap_or(Value::Null),
+                        });
+                        let output = json!({
+                            "outputs": item.get("outputs").cloned().unwrap_or(Value::Null),
+                        });
+                        parts.push(provider_executed_tool_parts(
+                            id,
+                            provider_tool.as_str(),
+                            input,
+                            output,
+                        ));
+                        has_function_call = true;
+                    }
+                    ProviderToolCallNameWire::ImageGenerationCall => {
+                        let id = item
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        let output = json!({
+                            "result": item.get("result").cloned().unwrap_or(Value::Null),
+                        });
+                        parts.push(provider_executed_tool_parts(
+                            id,
+                            provider_tool.as_str(),
+                            json!({}),
+                            output,
+                        ));
+                        has_function_call = true;
+                    }
+                    ProviderToolCallNameWire::ComputerCall => {
+                        let id = item
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        let output = json!({
+                            "status": item.get("status").cloned().unwrap_or(Value::Null),
+                        });
+                        parts.push(provider_executed_tool_parts(
+                            id,
+                            provider_tool.as_str(),
+                            json!({}),
+                            output,
+                        ));
+                        has_function_call = true;
+                    }
+                    ProviderToolCallNameWire::LocalShell => {
+                        let call_id = item
+                            .get("call_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        let action =
+                            item.get("action").cloned().unwrap_or_else(|| json!({}));
+                        parts.push(ContentPart {
+                            content_type: "tool_use".to_string(),
+                            tool_use: Some(ToolUse {
+                                id: call_id,
+                                name: provider_tool.as_str().to_string(),
+                                input: json!({ "action": action }),
+                            }),
+                            ..Default::default()
+                        });
+                        has_function_call = true;
+                    }
+                }
             }
-            "file_search_call" => {
-                let id = item
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let output = json!({
-                    "queries": item.get("queries").cloned().unwrap_or_else(|| json!([])),
-                    "results": item.get("results").cloned().unwrap_or(Value::Null),
-                });
-                parts.push(provider_executed_tool_parts(
-                    id,
-                    "file_search_call",
-                    json!({}),
-                    output,
-                ));
-                has_function_call = true;
-            }
-            "code_interpreter_call" => {
-                let id = item
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let input = json!({
-                    "code": item.get("code").cloned().unwrap_or(Value::Null),
-                    "container_id": item.get("container_id").cloned().unwrap_or(Value::Null),
-                });
-                let output = json!({
-                    "outputs": item.get("outputs").cloned().unwrap_or(Value::Null),
-                });
-                parts.push(provider_executed_tool_parts(
-                    id,
-                    "code_interpreter_call",
-                    input,
-                    output,
-                ));
-                has_function_call = true;
-            }
-            "image_generation_call" => {
-                let id = item
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let output = json!({
-                    "result": item.get("result").cloned().unwrap_or(Value::Null),
-                });
-                parts.push(provider_executed_tool_parts(
-                    id,
-                    "image_generation_call",
-                    json!({}),
-                    output,
-                ));
-                has_function_call = true;
-            }
-            "local_shell_call" => {
-                let call_id = item
-                    .get("call_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let action = item.get("action").cloned().unwrap_or_else(|| json!({}));
-                parts.push(ContentPart {
-                    content_type: "tool_use".to_string(),
-                    tool_use: Some(ToolUse {
-                        id: call_id,
-                        name: "local_shell".to_string(),
-                        input: json!({ "action": action }),
-                    }),
-                    ..Default::default()
-                });
-                has_function_call = true;
-            }
-            "computer_call" => {
-                let id = item
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let output = json!({
-                    "status": item.get("status").cloned().unwrap_or(Value::Null),
-                });
-                parts.push(provider_executed_tool_parts(
-                    id,
-                    "computer_call",
-                    json!({}),
-                    output,
-                ));
-                has_function_call = true;
-            }
-            _ => {}
         }
     }
 
@@ -817,11 +849,11 @@ pub(super) fn extract_sse_data(frame: &str) -> Option<String> {
 
 pub(super) fn finish_reason_label(reason: FinishReason) -> &'static str {
     match reason {
-        FinishReason::Stop => "stop",
-        FinishReason::Length => "length",
-        FinishReason::ContentFilter => "content-filter",
-        FinishReason::ToolCalls => "tool-calls",
-        FinishReason::Error => "error",
-        FinishReason::Unknown => "unknown",
+        FinishReason::Stop => ProviderFinishReasonWire::Stop.as_str(),
+        FinishReason::Length => ProviderFinishReasonWire::Length.as_str(),
+        FinishReason::ContentFilter => ProviderFinishReasonWire::ContentFilter.as_str(),
+        FinishReason::ToolCalls => ProviderFinishReasonWire::ToolCalls.as_str(),
+        FinishReason::Error => ProviderFinishReasonWire::Error.as_str(),
+        FinishReason::Unknown => ProviderFinishReasonWire::Unknown.as_str(),
     }
 }

@@ -18,5 +18,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 petgraph = { workspace = true }
 jsonc-parser = { version = "0.29.0", features = ["serde"] }
+strum = { workspace = true }
+strum_macros = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }

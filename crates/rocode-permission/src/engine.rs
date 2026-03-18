@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use rocode_core::contracts::permission::PermissionHookStatus;
 use rocode_plugin::{HookContext, HookEvent};
 
 use crate::matching::wildcard_match;
@@ -110,12 +111,15 @@ impl PermissionEngine {
             .with_data("permission_type", serde_json::json!(&info.permission_type))
             .with_data("permission_id", serde_json::json!(&permission_id))
             .with_data("permission", serde_json::json!(&info))
-            .with_data("status", serde_json::json!("ask"));
+            .with_data(
+                "status",
+                serde_json::json!(PermissionHookStatus::Ask.as_str()),
+            );
         if let Some(call_id) = &info.call_id {
             hook_ctx = hook_ctx.with_data("call_id", serde_json::json!(call_id));
         }
 
-        let mut status = "ask".to_string();
+        let mut status = PermissionHookStatus::Ask;
         let hook_outputs = rocode_plugin::trigger_collect(hook_ctx).await;
         for output in hook_outputs {
             let Some(payload) = output.payload.as_ref() else {
@@ -126,16 +130,16 @@ impl PermissionEngine {
             }
         }
 
-        match status.as_str() {
-            "allow" => return Ok(()),
-            "deny" => {
+        match status {
+            PermissionHookStatus::Allow => return Ok(()),
+            PermissionHookStatus::Deny => {
                 return Err(PermissionError::Rejected {
                     session_id: session_id.clone(),
                     permission_id: permission_id.clone(),
                     tool_call_id: info.call_id.clone(),
                 });
             }
-            _ => {}
+            PermissionHookStatus::Ask => {}
         }
 
         self.pending
@@ -204,12 +208,11 @@ fn hook_payload_object(
         .or_else(|| payload.get("data").and_then(|value| value.as_object()))
 }
 
-fn extract_permission_status(payload: &serde_json::Value) -> Option<String> {
+fn extract_permission_status(payload: &serde_json::Value) -> Option<PermissionHookStatus> {
     hook_payload_object(payload)
         .and_then(|object| object.get("status"))
         .and_then(|value| value.as_str())
-        .filter(|status| matches!(*status, "ask" | "deny" | "allow"))
-        .map(ToString::to_string)
+        .and_then(PermissionHookStatus::parse)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -228,6 +231,7 @@ pub enum PermissionError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocode_core::contracts::tools::BuiltinToolName;
 
     #[tokio::test]
     async fn test_permission_engine() {
@@ -235,7 +239,7 @@ mod tests {
 
         let info = PermissionInfo {
             id: "per_test".to_string(),
-            permission_type: "bash".to_string(),
+            permission_type: BuiltinToolName::Bash.as_str().to_string(),
             pattern: Some(Pattern::Single("ls".to_string())),
             session_id: "ses_test".to_string(),
             message_id: "msg_test".to_string(),

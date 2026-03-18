@@ -50,6 +50,8 @@ urlencoding = "2.1"
 html2md = "0.2"
 base64 = "0.22"
 portable-pty = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

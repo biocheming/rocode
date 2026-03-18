@@ -1,4 +1,7 @@
 pub mod json {
+    use rocode_core::contracts::patch::keys as patch_keys;
+    use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
+
     fn parse_json_object_with_recovery(input: &str) -> Option<serde_json::Value> {
         let cleaned = input.trim().trim_start_matches('\u{feff}').trim();
         if let Ok(val @ serde_json::Value::Object(_)) = serde_json::from_str(cleaned) {
@@ -185,25 +188,28 @@ pub mod json {
     }
 
     fn recover_write_args_from_jsonish_once(input: &str) -> Option<serde_json::Value> {
-        let file_path = parse_jsonish_string_field(input, "file_path")
-            .or_else(|| parse_jsonish_string_field(input, "filePath"))?;
-        let content = parse_jsonish_string_field(input, "content").unwrap_or_default();
+        let file_path = parse_jsonish_string_field(input, patch_keys::FILE_PATH_SNAKE)
+            .or_else(|| parse_jsonish_string_field(input, patch_keys::FILE_PATH))?;
+        let content = parse_jsonish_string_field(input, patch_keys::CONTENT).unwrap_or_default();
         Some(serde_json::json!({
-            "file_path": file_path,
-            "content": content
+            (patch_keys::FILE_PATH_SNAKE): file_path,
+            (patch_keys::CONTENT): content
         }))
     }
 
     fn recover_bash_args_from_jsonish_once(input: &str) -> Option<serde_json::Value> {
-        let command = parse_jsonish_string_field(input, "command")
-            .or_else(|| parse_jsonish_string_field(input, "cmd"))?;
-        let description = parse_jsonish_string_field(input, "description")
+        let command = parse_jsonish_string_field(input, tool_arg_keys::COMMAND)
+            .or_else(|| parse_jsonish_string_field(input, tool_arg_keys::CMD))?;
+        let description = parse_jsonish_string_field(input, tool_arg_keys::DESCRIPTION)
             .unwrap_or_else(|| "Execute shell command".to_string());
 
         let mut obj = serde_json::Map::new();
-        obj.insert("command".to_string(), serde_json::Value::String(command));
         obj.insert(
-            "description".to_string(),
+            tool_arg_keys::COMMAND.to_string(),
+            serde_json::Value::String(command),
+        );
+        obj.insert(
+            tool_arg_keys::DESCRIPTION.to_string(),
             serde_json::Value::String(description),
         );
         if let Some(workdir) = parse_jsonish_string_field(input, "workdir")
@@ -215,11 +221,11 @@ pub mod json {
     }
 
     fn recover_edit_args_from_jsonish_once(input: &str) -> Option<serde_json::Value> {
-        let file_path = parse_jsonish_string_field(input, "file_path")
-            .or_else(|| parse_jsonish_string_field(input, "filePath"))?;
-        let old_string = parse_jsonish_string_field(input, "old_string")
+        let file_path = parse_jsonish_string_field(input, patch_keys::FILE_PATH_SNAKE)
+            .or_else(|| parse_jsonish_string_field(input, patch_keys::FILE_PATH))?;
+        let old_string = parse_jsonish_string_field(input, patch_keys::OLD_STRING)
             .or_else(|| parse_jsonish_string_field(input, "oldString"));
-        let new_string = parse_jsonish_string_field(input, "new_string")
+        let new_string = parse_jsonish_string_field(input, patch_keys::NEW_STRING)
             .or_else(|| parse_jsonish_string_field(input, "newString"));
 
         // Keep recovery conservative: require file_path plus at least one edit payload field.
@@ -229,15 +235,18 @@ pub mod json {
 
         let mut obj = serde_json::Map::new();
         obj.insert(
-            "file_path".to_string(),
+            patch_keys::FILE_PATH_SNAKE.to_string(),
             serde_json::Value::String(file_path),
         );
         if let Some(old) = old_string {
-            obj.insert("old_string".to_string(), serde_json::Value::String(old));
+            obj.insert(
+                patch_keys::OLD_STRING.to_string(),
+                serde_json::Value::String(old),
+            );
         }
         if let Some(new_value) = new_string {
             obj.insert(
-                "new_string".to_string(),
+                patch_keys::NEW_STRING.to_string(),
                 serde_json::Value::String(new_value),
             );
         }
@@ -250,13 +259,17 @@ pub mod json {
         tool_name: &str,
         input: &str,
     ) -> Option<serde_json::Value> {
-        let tool = tool_name.trim().to_ascii_lowercase();
-        let recover_once = match tool.as_str() {
-            "write" => {
+        let tool = BuiltinToolName::parse(tool_name)?;
+        let recover_once = match tool {
+            BuiltinToolName::Write => {
                 recover_write_args_from_jsonish_once as fn(&str) -> Option<serde_json::Value>
             }
-            "bash" => recover_bash_args_from_jsonish_once as fn(&str) -> Option<serde_json::Value>,
-            "edit" => recover_edit_args_from_jsonish_once as fn(&str) -> Option<serde_json::Value>,
+            BuiltinToolName::Bash => {
+                recover_bash_args_from_jsonish_once as fn(&str) -> Option<serde_json::Value>
+            }
+            BuiltinToolName::Edit | BuiltinToolName::MultiEdit => {
+                recover_edit_args_from_jsonish_once as fn(&str) -> Option<serde_json::Value>
+            }
             _ => return None,
         };
 
@@ -307,14 +320,13 @@ pub mod json {
 
         // Stage 5 — tool-specific structural recovery (knows the schema,
         // so it handles unescaped quotes in large content fields).
-        let tool_lower = tool.trim().to_ascii_lowercase();
-        match tool_lower.as_str() {
-            "write" => {
+        match BuiltinToolName::parse(tool) {
+            Some(BuiltinToolName::Write) => {
                 if let Some(v) = ultra_recover_write(&candidate) {
                     return Some(v);
                 }
             }
-            "edit" | "editfile" | "edit_file" => {
+            Some(BuiltinToolName::Edit | BuiltinToolName::MultiEdit) => {
                 if let Some(v) = ultra_recover_edit(&candidate) {
                     return Some(v);
                 }
@@ -505,12 +517,19 @@ pub mod json {
     // -- Stage 6: write -----------------------------------------------------
 
     fn ultra_recover_write(input: &str) -> Option<serde_json::Value> {
-        let file_path = ultra_extract_short_field(input, &["file_path", "filePath"])?;
+        let file_path = ultra_extract_short_field(
+            input,
+            &[patch_keys::FILE_PATH_SNAKE, patch_keys::FILE_PATH],
+        )?;
         // Require content to be present — an empty default would silently
         // overwrite files with nothing, which is worse than failing recovery.
-        let content = ultra_extract_large_field(input, "content", &["file_path", "filePath"])?;
+        let content = ultra_extract_large_field(
+            input,
+            "content",
+            &[patch_keys::FILE_PATH_SNAKE, patch_keys::FILE_PATH],
+        )?;
         Some(serde_json::json!({
-            "file_path": file_path,
+            (patch_keys::FILE_PATH_SNAKE): file_path,
             "content": content,
         }))
     }
@@ -518,43 +537,72 @@ pub mod json {
     // -- Stage 6: edit ------------------------------------------------------
 
     fn ultra_recover_edit(input: &str) -> Option<serde_json::Value> {
-        let file_path = ultra_extract_short_field(input, &["file_path", "filePath"])?;
+        let file_path = ultra_extract_short_field(
+            input,
+            &[patch_keys::FILE_PATH_SNAKE, patch_keys::FILE_PATH],
+        )?;
         let old_string = ultra_extract_large_field(
             input,
-            "old_string",
-            &["new_string", "newString", "file_path", "filePath"],
+            patch_keys::OLD_STRING,
+            &[
+                patch_keys::NEW_STRING,
+                "newString",
+                patch_keys::FILE_PATH_SNAKE,
+                patch_keys::FILE_PATH,
+            ],
         );
         let new_string = ultra_extract_large_field(
             input,
-            "new_string",
-            &["old_string", "oldString", "file_path", "filePath"],
+            patch_keys::NEW_STRING,
+            &[
+                patch_keys::OLD_STRING,
+                "oldString",
+                patch_keys::FILE_PATH_SNAKE,
+                patch_keys::FILE_PATH,
+            ],
         );
         // Also try camelCase variants.
         let old_string = old_string.or_else(|| {
             ultra_extract_large_field(
                 input,
                 "oldString",
-                &["new_string", "newString", "file_path", "filePath"],
+                &[
+                    patch_keys::NEW_STRING,
+                    "newString",
+                    patch_keys::FILE_PATH_SNAKE,
+                    patch_keys::FILE_PATH,
+                ],
             )
         });
         let new_string = new_string.or_else(|| {
             ultra_extract_large_field(
                 input,
                 "newString",
-                &["old_string", "oldString", "file_path", "filePath"],
+                &[
+                    patch_keys::OLD_STRING,
+                    "oldString",
+                    patch_keys::FILE_PATH_SNAKE,
+                    patch_keys::FILE_PATH,
+                ],
             )
         });
 
         let mut obj = serde_json::Map::new();
         obj.insert(
-            "file_path".to_string(),
+            patch_keys::FILE_PATH_SNAKE.to_string(),
             serde_json::Value::String(file_path),
         );
         if let Some(v) = old_string {
-            obj.insert("old_string".to_string(), serde_json::Value::String(v));
+            obj.insert(
+                patch_keys::OLD_STRING.to_string(),
+                serde_json::Value::String(v),
+            );
         }
         if let Some(v) = new_string {
-            obj.insert("new_string".to_string(), serde_json::Value::String(v));
+            obj.insert(
+                patch_keys::NEW_STRING.to_string(),
+                serde_json::Value::String(v),
+            );
         }
         Some(serde_json::Value::Object(obj))
     }
@@ -993,6 +1041,7 @@ pub mod abort {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocode_core::contracts::tools::BuiltinToolName;
 
     #[test]
     fn test_token_estimate() {
@@ -1117,8 +1166,9 @@ mod tests {
     #[test]
     fn recover_tool_arguments_from_jsonish_recovers_truncated_write_payload() {
         let malformed = "{\"file_path\":\"/tmp/t2.html\",\"content\":\"<html><body>hello";
-        let recovered = json::recover_tool_arguments_from_jsonish("write", malformed)
-            .expect("write payload should be recoverable");
+        let recovered =
+            json::recover_tool_arguments_from_jsonish(BuiltinToolName::Write.as_str(), malformed)
+                .expect("write payload should be recoverable");
         assert_eq!(recovered["file_path"], "/tmp/t2.html");
         assert_eq!(recovered["content"], "<html><body>hello");
     }
@@ -1126,22 +1176,28 @@ mod tests {
     #[test]
     fn recover_tool_arguments_from_jsonish_recovers_truncated_bash_payload() {
         let malformed = "{\"command\":\"cat > t2.html << 'EOF'\\n<html>";
-        let recovered = json::recover_tool_arguments_from_jsonish("bash", malformed)
-            .expect("bash payload should be recoverable");
+        let recovered =
+            json::recover_tool_arguments_from_jsonish(BuiltinToolName::Bash.as_str(), malformed)
+                .expect("bash payload should be recoverable");
         assert_eq!(recovered["command"], "cat > t2.html << 'EOF'\n<html>");
     }
 
     #[test]
     fn recover_tool_arguments_from_jsonish_returns_none_for_unknown_tool() {
         let malformed = "{\"file_path\":\"/tmp/t2.html\",\"content\":\"hello\"";
-        assert!(json::recover_tool_arguments_from_jsonish("read", malformed).is_none());
+        assert!(json::recover_tool_arguments_from_jsonish(
+            BuiltinToolName::Read.as_str(),
+            malformed
+        )
+        .is_none());
     }
 
     #[test]
     fn recover_tool_arguments_from_jsonish_recovers_truncated_edit_payload() {
         let malformed = "{\"file_path\":\"/tmp/t2.html\",\"new_string\":\".class { color: red; }";
-        let recovered = json::recover_tool_arguments_from_jsonish("edit", malformed)
-            .expect("edit payload should be recoverable");
+        let recovered =
+            json::recover_tool_arguments_from_jsonish(BuiltinToolName::Edit.as_str(), malformed)
+                .expect("edit payload should be recoverable");
         assert_eq!(recovered["file_path"], "/tmp/t2.html");
         assert_eq!(recovered["new_string"], ".class { color: red; }");
         assert!(recovered.get("old_string").is_none());
@@ -1153,7 +1209,7 @@ mod tests {
     fn ultra_recovers_write_with_unescaped_html_quotes() {
         // The exact scenario from the bug: HTML with unescaped quotes in attributes.
         let raw = r#"{"content":"<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n<meta charset="UTF-8">\n<title>Test</title>\n</head>\n<body>Hello</body>\n</html>","file_path":"/tmp/test.html"}"#;
-        let recovered = json::recover_tool_call_ultra("write", raw)
+        let recovered = json::recover_tool_call_ultra(BuiltinToolName::Write.as_str(), raw)
             .expect("should recover write with unescaped HTML quotes");
         assert_eq!(recovered["file_path"], "/tmp/test.html");
         let content = recovered["content"].as_str().unwrap();
@@ -1165,7 +1221,7 @@ mod tests {
     fn ultra_recovers_write_content_before_filepath() {
         // content comes first, file_path at the end — the original bug scenario.
         let raw = r#"{"content":"<h1>Hello "World"</h1>","file_path":"/tmp/a.html"}"#;
-        let recovered = json::recover_tool_call_ultra("write", raw)
+        let recovered = json::recover_tool_call_ultra(BuiltinToolName::Write.as_str(), raw)
             .expect("should recover when content precedes file_path");
         assert_eq!(recovered["file_path"], "/tmp/a.html");
     }
@@ -1173,8 +1229,8 @@ mod tests {
     #[test]
     fn ultra_recovers_truncated_write() {
         let raw = r#"{"file_path":"/tmp/a.html","content":"<html><body>hello"#;
-        let recovered =
-            json::recover_tool_call_ultra("write", raw).expect("should recover truncated write");
+        let recovered = json::recover_tool_call_ultra(BuiltinToolName::Write.as_str(), raw)
+            .expect("should recover truncated write");
         assert_eq!(recovered["file_path"], "/tmp/a.html");
         let content = recovered["content"].as_str().unwrap();
         assert!(content.contains("<html><body>hello"));
@@ -1183,8 +1239,8 @@ mod tests {
     #[test]
     fn ultra_strips_markdown_fences() {
         let raw = "```json\n{\"file_path\":\"/tmp/a\",\"content\":\"ok\"}\n```";
-        let recovered =
-            json::recover_tool_call_ultra("write", raw).expect("should strip markdown fences");
+        let recovered = json::recover_tool_call_ultra(BuiltinToolName::Write.as_str(), raw)
+            .expect("should strip markdown fences");
         assert_eq!(recovered["file_path"], "/tmp/a");
         assert_eq!(recovered["content"], "ok");
     }
@@ -1192,8 +1248,8 @@ mod tests {
     #[test]
     fn ultra_strips_reasoning_preamble() {
         let raw = "Sure! Here is the file:\n\n{\"file_path\":\"/tmp/a\",\"content\":\"hello\"}";
-        let recovered =
-            json::recover_tool_call_ultra("write", raw).expect("should strip reasoning preamble");
+        let recovered = json::recover_tool_call_ultra(BuiltinToolName::Write.as_str(), raw)
+            .expect("should strip reasoning preamble");
         assert_eq!(recovered["file_path"], "/tmp/a");
         assert_eq!(recovered["content"], "hello");
     }
@@ -1201,21 +1257,24 @@ mod tests {
     #[test]
     fn ultra_recovers_edit_with_unescaped_content() {
         let raw = r#"{"file_path":"/tmp/a.rs","old_string":"fn foo("bar")","new_string":"fn foo("baz")"}"#;
-        let recovered = json::recover_tool_call_ultra("edit", raw)
+        let recovered = json::recover_tool_call_ultra(BuiltinToolName::Edit.as_str(), raw)
             .expect("should recover edit with unescaped quotes");
         assert_eq!(recovered["file_path"], "/tmp/a.rs");
     }
 
     #[test]
     fn ultra_returns_none_for_garbage() {
-        assert!(json::recover_tool_call_ultra("write", "not json at all").is_none());
+        assert!(
+            json::recover_tool_call_ultra(BuiltinToolName::Write.as_str(), "not json at all")
+                .is_none()
+        );
     }
 
     #[test]
     fn ultra_fast_path_valid_json() {
         let raw = r#"{"file_path":"/tmp/a","content":"hello"}"#;
-        let recovered =
-            json::recover_tool_call_ultra("write", raw).expect("valid JSON should pass through");
+        let recovered = json::recover_tool_call_ultra(BuiltinToolName::Write.as_str(), raw)
+            .expect("valid JSON should pass through");
         assert_eq!(recovered["file_path"], "/tmp/a");
         assert_eq!(recovered["content"], "hello");
     }
@@ -1226,7 +1285,7 @@ mod tests {
         let raw = r#"I'll write the CSS file. The selector .card { display: flex } needs updating.
 
 {"file_path":"/tmp/style.css","content":".card { display: grid; }"}"#;
-        let recovered = json::recover_tool_call_ultra("write", raw)
+        let recovered = json::recover_tool_call_ultra(BuiltinToolName::Write.as_str(), raw)
             .expect("should pick the JSON candidate, not the reasoning");
         assert_eq!(recovered["file_path"], "/tmp/style.css");
         assert_eq!(recovered["content"], ".card { display: grid; }");
@@ -1237,7 +1296,7 @@ mod tests {
         // Two JSON objects — the second one has the tool-call keys.
         let raw = r#"{"status":"thinking","step":1}
 {"file_path":"/tmp/a.html","content":"<h1>Hi</h1>"}"#;
-        let recovered = json::recover_tool_call_ultra("write", raw)
+        let recovered = json::recover_tool_call_ultra(BuiltinToolName::Write.as_str(), raw)
             .expect("should pick the object with file_path");
         assert_eq!(recovered["file_path"], "/tmp/a.html");
     }
@@ -1247,7 +1306,7 @@ mod tests {
         // content contains a fake "file_path" key — extraction should find the
         // real top-level key, not the one buried inside the content value.
         let raw = r#"{"content":"see \"file_path\":\"/wrong/path\" in docs","file_path":"/correct/path.txt"}"#;
-        let recovered = json::recover_tool_call_ultra("write", raw)
+        let recovered = json::recover_tool_call_ultra(BuiltinToolName::Write.as_str(), raw)
             .expect("should extract the real file_path, not the one in content");
         assert_eq!(recovered["file_path"], "/correct/path.txt");
     }

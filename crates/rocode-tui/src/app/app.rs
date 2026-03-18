@@ -41,6 +41,8 @@ use rocode_command::interactive::{parse_interactive_command, InteractiveCommand}
 use rocode_command::output_blocks::{BlockTone, StatusBlock};
 use rocode_command::{CommandRegistry, UiActionId};
 use rocode_core::agent_task_registry::{global_task_registry, AgentTaskStatus};
+use rocode_core::contracts::output_blocks::OutputBlockKind;
+use rocode_core::contracts::permission::PermissionReplyWire;
 
 use crate::api::{
     ApiClient, ExecutionModeInfo, ExecutionStatus as ApiExecutionStatus, McpStatusInfo,
@@ -515,7 +517,7 @@ impl App {
                             if let Some(request) = self.permission_prompt.approve() {
                                 self.resolve_permission_request(
                                     &request.id,
-                                    "once",
+                                    PermissionReplyWire::Once.as_str(),
                                     Some("approved".to_string()),
                                 );
                             }
@@ -524,7 +526,7 @@ impl App {
                             if let Some(request) = self.permission_prompt.deny() {
                                 self.resolve_permission_request(
                                     &request.id,
-                                    "reject",
+                                    PermissionReplyWire::Reject.as_str(),
                                     Some("rejected".to_string()),
                                 );
                             }
@@ -533,7 +535,7 @@ impl App {
                             if let Some(request) = self.permission_prompt.approve_always() {
                                 self.resolve_permission_request(
                                     &request.id,
-                                    "always",
+                                    PermissionReplyWire::Always.as_str(),
                                     Some("approved always".to_string()),
                                 );
                             }
@@ -542,7 +544,7 @@ impl App {
                             if let Some(request) = self.permission_prompt.deny() {
                                 self.resolve_permission_request(
                                     &request.id,
-                                    "reject",
+                                    PermissionReplyWire::Reject.as_str(),
                                     Some("rejected".to_string()),
                                 );
                             }
@@ -998,7 +1000,7 @@ impl App {
                                         if let Some(request) = self.permission_prompt.approve() {
                                             self.resolve_permission_request(
                                                 &request.id,
-                                                "once",
+                                                PermissionReplyWire::Once.as_str(),
                                                 Some("approved".to_string()),
                                             );
                                         }
@@ -1007,7 +1009,7 @@ impl App {
                                         if let Some(request) = self.permission_prompt.deny() {
                                             self.resolve_permission_request(
                                                 &request.id,
-                                                "reject",
+                                                PermissionReplyWire::Reject.as_str(),
                                                 Some("rejected".to_string()),
                                             );
                                         }
@@ -1018,7 +1020,7 @@ impl App {
                                         {
                                             self.resolve_permission_request(
                                                 &request.id,
-                                                "always",
+                                                PermissionReplyWire::Always.as_str(),
                                                 Some("approved always".to_string()),
                                             );
                                         }
@@ -1339,8 +1341,11 @@ impl App {
 
                     if let Route::Session { session_id: active } = self.context.current_route() {
                         if active == *session_id {
-                            if payload.get("kind").and_then(|value| value.as_str())
-                                == Some("scheduler_stage")
+                            if payload
+                                .get("kind")
+                                .and_then(|value| value.as_str())
+                                .and_then(OutputBlockKind::parse)
+                                == Some(OutputBlockKind::SchedulerStage)
                             {
                                 self.refresh_child_sessions();
                             }
@@ -1866,11 +1871,11 @@ mod tests {
         use crate::context::TodoStatus;
 
         let cases = vec![
-            ("pending", TodoStatus::Pending),
-            ("in_progress", TodoStatus::InProgress),
-            ("completed", TodoStatus::Completed),
+            (TodoStatus::Pending.as_str(), TodoStatus::Pending),
+            (TodoStatus::InProgress.as_str(), TodoStatus::InProgress),
+            (TodoStatus::Completed.as_str(), TodoStatus::Completed),
             ("done", TodoStatus::Completed),
-            ("cancelled", TodoStatus::Cancelled),
+            (TodoStatus::Cancelled.as_str(), TodoStatus::Cancelled),
             ("canceled", TodoStatus::Cancelled),
             ("unknown_status", TodoStatus::Pending),
         ];

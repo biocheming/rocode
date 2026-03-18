@@ -1,4 +1,9 @@
 use async_trait::async_trait;
+use rocode_core::contracts::events::BusEventName;
+use rocode_core::contracts::fs::{keys as fs_keys, FileWatcherEventKind};
+use rocode_core::contracts::patch::keys as patch_keys;
+use rocode_core::contracts::permission::PermissionTypeWire;
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
@@ -30,7 +35,7 @@ impl Default for EditTool {
 #[async_trait]
 impl Tool for EditTool {
     fn id(&self) -> &str {
-        "edit"
+        BuiltinToolName::Edit.as_str()
     }
 
     fn description(&self) -> &str {
@@ -41,15 +46,15 @@ impl Tool for EditTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "file_path": {
+                (patch_keys::FILE_PATH_SNAKE): {
                     "type": "string",
                     "description": "Absolute path or project-relative path to the file to edit"
                 },
-                "old_string": {
+                (patch_keys::OLD_STRING): {
                     "type": "string",
                     "description": "The text to replace"
                 },
-                "new_string": {
+                (patch_keys::NEW_STRING): {
                     "type": "string",
                     "description": "The text to replace it with (must be different from old_string)"
                 },
@@ -58,7 +63,7 @@ impl Tool for EditTool {
                     "description": "Replace all occurrences of old_string (default false)"
                 }
             },
-            "required": ["file_path", "old_string", "new_string"]
+            "required": [patch_keys::FILE_PATH_SNAKE, patch_keys::OLD_STRING, patch_keys::NEW_STRING]
         })
     }
 
@@ -68,8 +73,8 @@ impl Tool for EditTool {
         ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
         let file_path: String = args
-            .get("file_path")
-            .or_else(|| args.get("filePath"))
+            .get(patch_keys::FILE_PATH_SNAKE)
+            .or_else(|| args.get(patch_keys::FILE_PATH))
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
                 ToolError::InvalidArguments("file_path (or filePath) is required".into())
@@ -78,7 +83,7 @@ impl Tool for EditTool {
             .to_string();
 
         let old_string: String = args
-            .get("old_string")
+            .get(patch_keys::OLD_STRING)
             .or_else(|| args.get("oldString"))
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
@@ -87,7 +92,7 @@ impl Tool for EditTool {
             .to_string();
 
         let new_string: String = args
-            .get("new_string")
+            .get(patch_keys::NEW_STRING)
             .or_else(|| args.get("newString"))
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
@@ -131,10 +136,10 @@ impl Tool for EditTool {
                 .unwrap_or_else(|| path_str.clone());
 
             ctx.ask_permission(
-                crate::PermissionRequest::new("external_directory")
+                crate::PermissionRequest::new(PermissionTypeWire::ExternalDirectory.as_str())
                     .with_pattern(format!("{}/*", parent))
-                    .with_metadata("filepath", serde_json::json!(&path_str))
-                    .with_metadata("parentDir", serde_json::json!(parent)),
+                    .with_metadata(patch_keys::FILEPATH, serde_json::json!(&path_str))
+                    .with_metadata(tool_arg_keys::PARENT_DIR, serde_json::json!(parent)),
             )
             .await?;
         }
@@ -171,9 +176,9 @@ impl Tool for EditTool {
                 let diff = create_diff(&path_str_clone, "", &new_string_normalized);
                 ctx_clone
                     .ask_permission(
-                        crate::PermissionRequest::new("edit")
+                        crate::PermissionRequest::new(BuiltinToolName::Edit.as_str())
                             .with_pattern(&path_str_clone)
-                            .with_metadata("diff", serde_json::json!(diff))
+                            .with_metadata(patch_keys::DIFF, serde_json::json!(diff))
                             .always_allow(),
                     )
                     .await?;
@@ -184,21 +189,27 @@ impl Tool for EditTool {
                         ToolError::ExecutionError(format!("Failed to write file: {}", e))
                     })?;
 
+                let file_watcher_event = if existed {
+                    FileWatcherEventKind::Change
+                } else {
+                    FileWatcherEventKind::Add
+                };
+
                 ctx_clone
                     .do_publish_bus(
-                        "file.edited",
+                        BusEventName::FileEdited.as_str(),
                         serde_json::json!({
-                            "file": path_str_clone.clone()
+                            (fs_keys::FILE): path_str_clone.clone()
                         }),
                     )
                     .await;
 
                 ctx_clone
                     .do_publish_bus(
-                        "file_watcher.updated",
+                        BusEventName::FileWatcherUpdated.as_str(),
                         serde_json::json!({
-                            "file": path_str_clone.clone(),
-                            "event": if existed { "change" } else { "add" }
+                            (fs_keys::FILE): path_str_clone.clone(),
+                            (fs_keys::EVENT): file_watcher_event.as_str()
                         }),
                     )
                     .await;
@@ -224,9 +235,15 @@ impl Tool for EditTool {
                     output: final_output,
                     metadata: {
                         let mut m = Metadata::new();
-                        m.insert("filepath".into(), serde_json::json!(path_for_metadata));
+                        m.insert(
+                            patch_keys::FILEPATH.into(),
+                            serde_json::json!(path_for_metadata),
+                        );
                         if !lsp_diagnostics.is_empty() {
-                            m.insert("diagnostics".into(), serde_json::json!(lsp_diagnostics));
+                            m.insert(
+                                patch_keys::DIAGNOSTICS.into(),
+                                serde_json::json!(lsp_diagnostics),
+                            );
                         }
                         m
                     },
@@ -249,9 +266,9 @@ impl Tool for EditTool {
             let diff = create_diff(&path_str_clone, &content, &new_content);
             ctx_clone
                 .ask_permission(
-                    crate::PermissionRequest::new("edit")
+                    crate::PermissionRequest::new(BuiltinToolName::Edit.as_str())
                         .with_pattern(&path_str_clone)
-                        .with_metadata("diff", serde_json::json!(diff))
+                        .with_metadata(patch_keys::DIFF, serde_json::json!(diff))
                         .always_allow(),
                 )
                 .await?;
@@ -266,21 +283,27 @@ impl Tool for EditTool {
                 .await
                 .map_err(|e| ToolError::ExecutionError(format!("Failed to write file: {}", e)))?;
 
+            let file_watcher_event = if existed {
+                FileWatcherEventKind::Change
+            } else {
+                FileWatcherEventKind::Add
+            };
+
             ctx_clone
                 .do_publish_bus(
-                    "file.edited",
+                    BusEventName::FileEdited.as_str(),
                     serde_json::json!({
-                        "file": path_str_clone.clone()
+                        (fs_keys::FILE): path_str_clone.clone()
                     }),
                 )
                 .await;
 
             ctx_clone
                 .do_publish_bus(
-                    "file_watcher.updated",
+                    BusEventName::FileWatcherUpdated.as_str(),
                     serde_json::json!({
-                        "file": path_str_clone.clone(),
-                        "event": if existed { "change" } else { "add" }
+                        (fs_keys::FILE): path_str_clone.clone(),
+                        (fs_keys::EVENT): file_watcher_event.as_str()
                     }),
                 )
                 .await;
@@ -313,11 +336,23 @@ impl Tool for EditTool {
                 output: final_output,
                 metadata: {
                     let mut m = Metadata::new();
-                    m.insert("replacements".into(), serde_json::json!(replacements));
-                    m.insert("filepath".into(), serde_json::json!(path_for_metadata));
-                    m.insert("diff".into(), serde_json::json!(diff_for_metadata));
+                    m.insert(
+                        patch_keys::REPLACEMENTS.into(),
+                        serde_json::json!(replacements),
+                    );
+                    m.insert(
+                        patch_keys::FILEPATH.into(),
+                        serde_json::json!(path_for_metadata),
+                    );
+                    m.insert(
+                        patch_keys::DIFF.into(),
+                        serde_json::json!(diff_for_metadata),
+                    );
                     if !lsp_diagnostics.is_empty() {
-                        m.insert("diagnostics".into(), serde_json::json!(lsp_diagnostics));
+                        m.insert(
+                            patch_keys::DIAGNOSTICS.into(),
+                            serde_json::json!(lsp_diagnostics),
+                        );
                     }
                     m
                 },

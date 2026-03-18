@@ -14,6 +14,9 @@ use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
+use rocode_core::contracts::events::ServerEventType;
+use rocode_core::contracts::provider::option_keys as provider_option_keys;
+use rocode_core::contracts::wire::keys as wire_keys;
 use rocode_plugin::init_global;
 use rocode_plugin::subprocess::{
     PluginAuthBridge, PluginContext, PluginFetchRequest, PluginLoader,
@@ -268,12 +271,14 @@ impl ServerState {
                     scope: rocode_command::stage_protocol::EventScope::Stage,
                     stage_id: ctx.stage_id.clone(),
                     execution_id: Some(ctx.execution_id.clone()),
-                    event_type: "execution.topology.changed".to_string(),
+                    event_type: ServerEventType::ExecutionTopologyChanged
+                        .as_str()
+                        .to_string(),
                     ts: chrono::Utc::now().timestamp_millis(),
                     payload: serde_json::json!({
-                        "sessionID": ctx.session_id,
-                        "executionID": ctx.execution_id,
-                        "stageID": ctx.stage_id,
+                        (wire_keys::SESSION_ID): ctx.session_id,
+                        (wire_keys::EXECUTION_ID): ctx.execution_id,
+                        (wire_keys::STAGE_ID): ctx.stage_id,
                     }),
                 };
                 let log = event_log_for_callback.clone();
@@ -523,12 +528,12 @@ fn provider_to_bootstrap(provider: &rocode_config::ProviderConfig) -> BootstrapC
     let mut options = provider.options.clone().unwrap_or_default();
     if let Some(api_key) = &provider.api_key {
         options
-            .entry("apiKey".to_string())
+            .entry(provider_option_keys::API_KEY.to_string())
             .or_insert_with(|| serde_json::Value::String(api_key.clone()));
     }
     if let Some(base_url) = &provider.base_url {
         options
-            .entry("baseURL".to_string())
+            .entry(provider_option_keys::BASE_URL.to_string())
             .or_insert_with(|| serde_json::Value::String(base_url.clone()));
     }
 
@@ -555,7 +560,7 @@ fn model_to_bootstrap(id: &str, model: &rocode_config::ModelConfig) -> Bootstrap
     let mut options = HashMap::new();
     if let Some(api_key) = &model.api_key {
         options.insert(
-            "apiKey".to_string(),
+            provider_option_keys::API_KEY.to_string(),
             serde_json::Value::String(api_key.clone()),
         );
     }

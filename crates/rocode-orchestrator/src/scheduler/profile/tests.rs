@@ -15,6 +15,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use futures::stream;
+use rocode_core::contracts::tools::BuiltinToolName;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -322,7 +323,7 @@ fn atlas_coordination_verification_input_uses_preset_authority() {
             serde_json::json!([{
                 "sessionId": "task_build_42",
                 "agentTaskId": "agent-task-42",
-                "toolName": "task_flow"
+                "toolName": BuiltinToolName::TaskFlow.as_str()
             }]),
         )]),
         finish_reason: FinishReason::EndTurn,
@@ -362,7 +363,7 @@ fn atlas_coordination_gate_input_uses_preset_authority() {
             serde_json::json!([{
                 "sessionId": "task_build_42",
                 "agentTaskId": "agent-task-42",
-                "toolName": "task_flow"
+                "toolName": BuiltinToolName::TaskFlow.as_str()
             }]),
         )]),
         finish_reason: FinishReason::EndTurn,
@@ -410,7 +411,7 @@ fn atlas_retry_input_uses_preset_authority() {
             serde_json::json!([{
                 "sessionId": "task_build_42",
                 "agentTaskId": "agent-task-42",
-                "toolName": "task_flow"
+                "toolName": BuiltinToolName::TaskFlow.as_str()
             }]),
         )]),
         finish_reason: FinishReason::EndTurn,
@@ -1449,13 +1450,13 @@ impl ToolExecutor for RecordingToolExecutor {
     ) -> Result<ToolOutput, ToolExecError> {
         self.calls.lock().await.push(tool_name.to_string());
         match tool_name {
-            "todowrite" => Ok(ToolOutput {
+            tool if tool == BuiltinToolName::TodoWrite.as_str() => Ok(ToolOutput {
                 output: "todos updated".to_string(),
                 is_error: false,
                 title: None,
                 metadata: None,
             }),
-            "question" => Ok(ToolOutput {
+            tool if tool == BuiltinToolName::Question.as_str() => Ok(ToolOutput {
                 output: r#"{"answers":["Start Work"]}"#.to_string(),
                 is_error: false,
                 title: None,
@@ -1532,11 +1533,13 @@ Plan looks consistent.",
     assert_eq!(
         calls
             .iter()
-            .filter(|call| call.as_str() == "todowrite")
+            .filter(|call| call.as_str() == BuiltinToolName::TodoWrite.as_str())
             .count(),
         1
     );
-    assert!(calls.iter().any(|call| call == "question"));
+    assert!(calls
+        .iter()
+        .any(|call| call == BuiltinToolName::Question.as_str()));
     assert!(output.content.contains("/start-work"));
     assert!(output.content.contains("Plan saved to:"));
     assert!(!draft_path.exists());
@@ -1557,7 +1560,7 @@ async fn prometheus_runtime_rejects_non_planner_orchestration_tools_before_execu
     let mut state = SchedulerProfileState::default();
 
     let error = SchedulerProfileOrchestrator::execute_orchestration_tool(
-        "write",
+        BuiltinToolName::Write.as_str(),
         serde_json::json!({
             "file_path": ".sisyphus/plans/demo.md",
             "content": "# not allowed"
@@ -1571,8 +1574,13 @@ async fn prometheus_runtime_rejects_non_planner_orchestration_tools_before_execu
 
     match error {
         OrchestratorError::ToolError { tool, error } => {
-            assert_eq!(tool, "write");
-            assert!(error.contains("question, todowrite"));
+            assert_eq!(tool, BuiltinToolName::Write.as_str());
+            let expected = format!(
+                "{}, {}",
+                BuiltinToolName::Question.as_str(),
+                BuiltinToolName::TodoWrite.as_str()
+            );
+            assert!(error.contains(&expected));
         }
         other => panic!("unexpected error: {other}"),
     }
@@ -1594,7 +1602,7 @@ async fn sisyphus_runtime_rejects_non_runtime_tool_before_execution() {
     let mut state = SchedulerProfileState::default();
 
     let error = SchedulerProfileOrchestrator::execute_orchestration_tool(
-        "question",
+        BuiltinToolName::Question.as_str(),
         serde_json::json!({"questions": [{"question": "Continue?"}]}),
         &runtime_execution_plan("sisyphus"),
         &mut state,
@@ -1605,8 +1613,8 @@ async fn sisyphus_runtime_rejects_non_runtime_tool_before_execution() {
 
     match error {
         OrchestratorError::ToolError { tool, error } => {
-            assert_eq!(tool, "question");
-            assert!(error.contains("todowrite"));
+            assert_eq!(tool, BuiltinToolName::Question.as_str());
+            assert!(error.contains(BuiltinToolName::TodoWrite.as_str()));
         }
         other => panic!("unexpected error: {other}"),
     }
@@ -1628,7 +1636,7 @@ async fn atlas_runtime_rejects_non_runtime_tool_before_execution() {
     let mut state = SchedulerProfileState::default();
 
     let error = SchedulerProfileOrchestrator::execute_orchestration_tool(
-        "question",
+        BuiltinToolName::Question.as_str(),
         serde_json::json!({"questions": [{"question": "Continue?"}]}),
         &runtime_execution_plan("atlas"),
         &mut state,
@@ -1639,8 +1647,8 @@ async fn atlas_runtime_rejects_non_runtime_tool_before_execution() {
 
     match error {
         OrchestratorError::ToolError { tool, error } => {
-            assert_eq!(tool, "question");
-            assert!(error.contains("todowrite"));
+            assert_eq!(tool, BuiltinToolName::Question.as_str());
+            assert!(error.contains(BuiltinToolName::TodoWrite.as_str()));
         }
         other => panic!("unexpected error: {other}"),
     }
@@ -1662,7 +1670,7 @@ async fn hephaestus_runtime_rejects_non_runtime_tool_before_execution() {
     let mut state = SchedulerProfileState::default();
 
     let error = SchedulerProfileOrchestrator::execute_orchestration_tool(
-        "question",
+        BuiltinToolName::Question.as_str(),
         serde_json::json!({"questions": [{"question": "Continue?"}]}),
         &runtime_execution_plan("hephaestus"),
         &mut state,
@@ -1673,8 +1681,8 @@ async fn hephaestus_runtime_rejects_non_runtime_tool_before_execution() {
 
     match error {
         OrchestratorError::ToolError { tool, error } => {
-            assert_eq!(tool, "question");
-            assert!(error.contains("todowrite"));
+            assert_eq!(tool, BuiltinToolName::Question.as_str());
+            assert!(error.contains(BuiltinToolName::TodoWrite.as_str()));
         }
         other => panic!("unexpected error: {other}"),
     }

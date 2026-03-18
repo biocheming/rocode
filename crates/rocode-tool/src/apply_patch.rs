@@ -1,8 +1,14 @@
 use async_trait::async_trait;
 use regex::Regex;
+use rocode_core::contracts::events::BusEventName;
+use rocode_core::contracts::fs::{keys as fs_keys, FileWatcherEventKind};
+use rocode_core::contracts::permission::PermissionTypeWire;
+use rocode_core::contracts::tools::BuiltinToolName;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+use rocode_core::contracts::patch::{keys as patch_keys, FileChangeType};
 
 use crate::{Metadata, PermissionRequest, Tool, ToolContext, ToolError, ToolResult};
 
@@ -56,7 +62,7 @@ enum PatchLine {
 #[async_trait]
 impl Tool for ApplyPatchTool {
     fn id(&self) -> &str {
-        "apply_patch"
+        BuiltinToolName::ApplyPatch.as_str()
     }
 
     fn description(&self) -> &str {
@@ -108,7 +114,8 @@ impl Tool for ApplyPatchTool {
             let file_path_str = file_path.to_string_lossy().to_string();
             if ctx.is_external_path(&file_path_str) {
                 ctx.ask_permission(
-                    PermissionRequest::new("external_directory").with_pattern(&file_path_str),
+                    PermissionRequest::new(PermissionTypeWire::ExternalDirectory.as_str())
+                        .with_pattern(&file_path_str),
                 )
                 .await?;
             }
@@ -127,37 +134,74 @@ impl Tool for ApplyPatchTool {
             .iter()
             .map(|change| {
                 let (change_type, move_path, target_relative_path) = match &change.operation {
-                    PatchOperation::Add => ("add", None, change.relative_path.clone()),
-                    PatchOperation::Update => ("update", None, change.relative_path.clone()),
-                    PatchOperation::Delete => ("delete", None, change.relative_path.clone()),
+                    PatchOperation::Add => (FileChangeType::Add, None, change.relative_path.clone()),
+                    PatchOperation::Update => {
+                        (FileChangeType::Update, None, change.relative_path.clone())
+                    }
+                    PatchOperation::Delete => {
+                        (FileChangeType::Delete, None, change.relative_path.clone())
+                    }
                     PatchOperation::Move { move_path } => {
-                        ("move", Some(move_path.clone()), move_path.clone())
+                        (
+                            FileChangeType::Move,
+                            Some(move_path.clone()),
+                            move_path.clone(),
+                        )
                     }
                 };
 
-                serde_json::json!({
-                    "filePath": base_path.join(&change.relative_path).to_string_lossy().to_string(),
-                    "relativePath": target_relative_path,
-                    "type": change_type,
-                    "diff": change.diff,
-                    "before": change.old_content,
-                    "after": change.new_content,
-                    "movePath": move_path.map(|path| base_path.join(path).to_string_lossy().to_string()),
-                })
+                serde_json::Value::Object(serde_json::Map::from_iter([
+                    (
+                        patch_keys::FILE_PATH.to_string(),
+                        serde_json::json!(
+                            base_path
+                                .join(&change.relative_path)
+                                .to_string_lossy()
+                                .to_string()
+                        ),
+                    ),
+                    (
+                        patch_keys::RELATIVE_PATH.to_string(),
+                        serde_json::json!(target_relative_path),
+                    ),
+                    (
+                        patch_keys::CHANGE_TYPE.to_string(),
+                        serde_json::json!(change_type.as_str()),
+                    ),
+                    (
+                        patch_keys::FILE_DIFF.to_string(),
+                        serde_json::json!(change.diff),
+                    ),
+                    (
+                        patch_keys::BEFORE.to_string(),
+                        serde_json::json!(change.old_content),
+                    ),
+                    (
+                        patch_keys::AFTER.to_string(),
+                        serde_json::json!(change.new_content),
+                    ),
+                    (
+                        patch_keys::MOVE_PATH.to_string(),
+                        serde_json::json!(move_path.map(|path| base_path
+                            .join(path)
+                            .to_string_lossy()
+                            .to_string())),
+                    ),
+                ]))
             })
             .collect();
 
         ctx.ask_permission(
-            PermissionRequest::new("edit")
+            PermissionRequest::new(BuiltinToolName::Edit.as_str())
                 .with_patterns(relative_paths.clone())
-                .with_metadata("diff", serde_json::json!(&total_diff))
-                .with_metadata("filepath", serde_json::json!(relative_paths.join(", ")))
-                .with_metadata("files", serde_json::json!(&files_metadata))
+                .with_metadata(patch_keys::DIFF, serde_json::json!(&total_diff))
+                .with_metadata(patch_keys::FILEPATH, serde_json::json!(relative_paths.join(", ")))
+                .with_metadata(patch_keys::FILES, serde_json::json!(&files_metadata))
                 .always_allow(),
         )
         .await?;
 
-        let mut updates: Vec<(String, String)> = Vec::new();
+        let mut updates: Vec<(String, FileWatcherEventKind)> = Vec::new();
         let mut summary_lines: Vec<String> = Vec::new();
         let mut edited_files: Vec<String> = Vec::new();
         let mut lsp_targets: Vec<String> = Vec::new();
@@ -177,7 +221,7 @@ impl Tool for ApplyPatchTool {
                         .map_err(|e| {
                             ToolError::ExecutionError(format!("Failed to write file: {}", e))
                         })?;
-                    updates.push((change.relative_path.clone(), "add".to_string()));
+                    updates.push((change.relative_path.clone(), FileWatcherEventKind::Add));
                     summary_lines.push(format!("A {}", change.relative_path));
                     edited_files.push(change.relative_path.clone());
                     lsp_targets.push(change.relative_path.clone());
@@ -188,7 +232,10 @@ impl Tool for ApplyPatchTool {
                         .map_err(|e| {
                             ToolError::ExecutionError(format!("Failed to write file: {}", e))
                         })?;
-                    updates.push((change.relative_path.clone(), "change".to_string()));
+                    updates.push((
+                        change.relative_path.clone(),
+                        FileWatcherEventKind::Change,
+                    ));
                     summary_lines.push(format!("M {}", change.relative_path));
                     edited_files.push(change.relative_path.clone());
                     lsp_targets.push(change.relative_path.clone());
@@ -197,7 +244,10 @@ impl Tool for ApplyPatchTool {
                     tokio::fs::remove_file(&file_path).await.map_err(|e| {
                         ToolError::ExecutionError(format!("Failed to delete file: {}", e))
                     })?;
-                    updates.push((change.relative_path.clone(), "unlink".to_string()));
+                    updates.push((
+                        change.relative_path.clone(),
+                        FileWatcherEventKind::Unlink,
+                    ));
                     summary_lines.push(format!("D {}", change.relative_path));
                 }
                 PatchOperation::Move { ref move_path } => {
@@ -215,8 +265,11 @@ impl Tool for ApplyPatchTool {
                     tokio::fs::remove_file(&file_path).await.map_err(|e| {
                         ToolError::ExecutionError(format!("Failed to remove old file: {}", e))
                     })?;
-                    updates.push((change.relative_path.clone(), "unlink".to_string()));
-                    updates.push((move_path.clone(), "add".to_string()));
+                    updates.push((
+                        change.relative_path.clone(),
+                        FileWatcherEventKind::Unlink,
+                    ));
+                    updates.push((move_path.clone(), FileWatcherEventKind::Add));
                     summary_lines.push(format!("M {}", move_path));
                     edited_files.push(move_path.clone());
                     lsp_targets.push(move_path.clone());
@@ -226,9 +279,9 @@ impl Tool for ApplyPatchTool {
 
         for relative_path in &edited_files {
             ctx.do_publish_bus(
-                "file.edited",
+                BusEventName::FileEdited.as_str(),
                 serde_json::json!({
-                    "file": relative_path
+                    (fs_keys::FILE): relative_path
                 }),
             )
             .await;
@@ -236,10 +289,10 @@ impl Tool for ApplyPatchTool {
 
         for (relative_path, event) in &updates {
             ctx.do_publish_bus(
-                "file_watcher.updated",
+                BusEventName::FileWatcherUpdated.as_str(),
                 serde_json::json!({
-                    "file": relative_path,
-                    "event": event
+                    (fs_keys::FILE): relative_path,
+                    (fs_keys::EVENT): event.as_str()
                 }),
             )
             .await;
@@ -262,10 +315,10 @@ impl Tool for ApplyPatchTool {
         }
 
         let mut metadata = Metadata::new();
-        metadata.insert("diff".to_string(), serde_json::json!(total_diff));
-        metadata.insert("files".to_string(), serde_json::json!(files_metadata));
+        metadata.insert(patch_keys::DIFF.to_string(), serde_json::json!(total_diff));
+        metadata.insert(patch_keys::FILES.to_string(), serde_json::json!(files_metadata));
         metadata.insert(
-            "diagnostics".to_string(),
+            patch_keys::DIAGNOSTICS.to_string(),
             serde_json::json!(diagnostics_meta),
         );
 

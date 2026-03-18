@@ -4,16 +4,18 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use rocode_core::bus::{Bus, BusEventDef};
+use rocode_core::contracts::{events::BusEventName, wire};
 
 // ============================================================================
 // Bus event definitions (matches TS SessionStatus.Event)
 // ============================================================================
 
 /// Event published when a session's run status changes.
-pub static SESSION_STATUS_EVENT: BusEventDef = BusEventDef::new("session.status");
+pub static SESSION_STATUS_EVENT: BusEventDef =
+    BusEventDef::new(BusEventName::SessionStatus.as_str());
 
 /// Deprecated event published when a session becomes idle.
-pub static SESSION_IDLE_EVENT: BusEventDef = BusEventDef::new("session.idle");
+pub static SESSION_IDLE_EVENT: BusEventDef = BusEventDef::new(BusEventName::SessionIdle.as_str());
 
 // ============================================================================
 // Status types (matches TS SessionStatus.Info union type)
@@ -79,11 +81,17 @@ impl SessionStatusManager {
     pub async fn set(&self, session_id: &str, status: SessionStatusInfo) {
         // Publish status event
         if let Some(ref bus) = self.bus {
-            let event_data = serde_json::json!({
-                "sessionID": session_id,
-                "status": status,
-            });
-            bus.publish(&SESSION_STATUS_EVENT, event_data).await;
+            let mut event_data = serde_json::Map::new();
+            event_data.insert(
+                wire::keys::SESSION_ID.to_string(),
+                serde_json::Value::String(session_id.to_string()),
+            );
+            event_data.insert(
+                "status".to_string(),
+                serde_json::to_value(&status).unwrap_or(serde_json::Value::Null),
+            );
+            bus.publish(&SESSION_STATUS_EVENT, serde_json::Value::Object(event_data))
+                .await;
         }
 
         let mut state = self.state.write().await;
@@ -91,10 +99,13 @@ impl SessionStatusManager {
             SessionStatusInfo::Idle => {
                 // Publish deprecated idle event
                 if let Some(ref bus) = self.bus {
-                    let idle_data = serde_json::json!({
-                        "sessionID": session_id,
-                    });
-                    bus.publish(&SESSION_IDLE_EVENT, idle_data).await;
+                    let mut idle_data = serde_json::Map::new();
+                    idle_data.insert(
+                        wire::keys::SESSION_ID.to_string(),
+                        serde_json::Value::String(session_id.to_string()),
+                    );
+                    bus.publish(&SESSION_IDLE_EVENT, serde_json::Value::Object(idle_data))
+                        .await;
                 }
                 state.remove(session_id);
             }

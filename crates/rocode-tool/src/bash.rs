@@ -1,4 +1,7 @@
 use async_trait::async_trait;
+use rocode_core::contracts::permission::PermissionTypeWire;
+use rocode_core::contracts::patch::keys as patch_keys;
+use rocode_core::contracts::tools::BuiltinToolName;
 use std::collections::HashSet;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -60,9 +63,9 @@ pub(crate) async fn authorize_bash_command(
                 .unwrap_or_else(|| path.clone());
 
             ctx.ask_permission(
-                crate::PermissionRequest::new("external_directory")
+                crate::PermissionRequest::new(PermissionTypeWire::ExternalDirectory.as_str())
                     .with_pattern(format!("{}/*", parent))
-                    .with_metadata("filepath", serde_json::json!(path))
+                    .with_metadata(patch_keys::FILEPATH, serde_json::json!(path))
                     .with_metadata("parentDir", serde_json::json!(parent)),
             )
             .await?;
@@ -72,7 +75,7 @@ pub(crate) async fn authorize_bash_command(
     if !parsed.patterns.is_empty() {
         let patterns: Vec<String> = parsed.patterns.into_iter().collect();
         let always: Vec<String> = parsed.always.into_iter().collect();
-        let mut req = crate::PermissionRequest::new("bash")
+        let mut req = crate::PermissionRequest::new(BuiltinToolName::Bash.as_str())
             .with_patterns(patterns)
             .with_metadata("description", serde_json::json!(description));
         for a in always {
@@ -87,7 +90,7 @@ pub(crate) async fn authorize_bash_command(
 #[async_trait]
 impl Tool for BashTool {
     fn id(&self) -> &str {
-        "bash"
+        BuiltinToolName::Bash.as_str()
     }
 
     fn description(&self) -> &str {

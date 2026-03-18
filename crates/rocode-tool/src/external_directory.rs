@@ -1,4 +1,6 @@
 use crate::{PermissionRequest, ToolContext, ToolError};
+use rocode_core::contracts::permission::PermissionTypeWire;
+use rocode_core::contracts::patch::keys as patch_keys;
 use std::path::Path;
 
 #[derive(Debug, Clone)]
@@ -50,9 +52,9 @@ pub async fn assert_external_directory(
 
     let glob_pattern = format!("{}/*", parent_dir);
 
-    let request = PermissionRequest::new("external_directory")
+    let request = PermissionRequest::new(PermissionTypeWire::ExternalDirectory.as_str())
         .with_pattern(&glob_pattern)
-        .with_metadata("filepath", serde_json::json!(target))
+        .with_metadata(patch_keys::FILEPATH, serde_json::json!(target))
         .with_metadata("parentDir", serde_json::json!(&parent_dir));
 
     ctx.ask_permission(request).await

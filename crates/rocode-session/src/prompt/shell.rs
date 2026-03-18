@@ -3,6 +3,8 @@ use std::path::Path;
 use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 
+use rocode_core::contracts::tools::BuiltinToolName;
+
 use crate::Session;
 
 use super::ModelRef;
@@ -86,7 +88,7 @@ pub async fn shell_exec(input: &ShellInput, session: &mut Session) -> anyhow::Re
     let call_id = format!("call_{}", uuid::Uuid::new_v4());
     assistant_msg.add_tool_call(
         &call_id,
-        "bash",
+        BuiltinToolName::Bash.as_str(),
         serde_json::json!({ "command": input.command_str }),
     );
     let invocation =

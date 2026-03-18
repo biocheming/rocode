@@ -1,6 +1,7 @@
 use crate::provider::ProviderError;
 use bytes::Bytes;
 use futures::{stream, Stream, StreamExt};
+use rocode_core::contracts::provider::ProviderFinishReasonWire;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
@@ -717,19 +718,21 @@ pub fn parse_openai_value(value: serde_json::Value) -> Vec<StreamEvent> {
             }
         }
 
-        if let Some(reason) = &choice.finish_reason {
-            match reason.as_str() {
-                "stop" => {
+        if let Some(reason) = choice.finish_reason.as_deref() {
+            match ProviderFinishReasonWire::parse(reason) {
+                Some(ProviderFinishReasonWire::Stop) => {
                     events.push(StreamEvent::FinishStep {
-                        finish_reason: Some("stop".to_string()),
+                        finish_reason: Some(ProviderFinishReasonWire::Stop.as_str().to_string()),
                         usage: usage.clone().unwrap_or_default(),
                         provider_metadata: None,
                     });
                     events.push(StreamEvent::Done);
                 }
-                "tool_calls" => {
+                Some(ProviderFinishReasonWire::ToolCalls) => {
                     events.push(StreamEvent::FinishStep {
-                        finish_reason: Some("tool-calls".to_string()),
+                        finish_reason: Some(
+                            ProviderFinishReasonWire::ToolCalls.as_str().to_string(),
+                        ),
                         usage: usage.clone().unwrap_or_default(),
                         provider_metadata: None,
                     });

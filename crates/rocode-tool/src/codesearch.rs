@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use reqwest::Client;
+use rocode_core::contracts::tools::BuiltinToolName;
 use serde::{Deserialize, Serialize};
 
 use crate::{Metadata, PermissionRequest, Tool, ToolContext, ToolError, ToolResult};
@@ -61,7 +62,7 @@ pub struct CodeSearchTool;
 #[async_trait]
 impl Tool for CodeSearchTool {
     fn id(&self) -> &str {
-        "codesearch"
+        BuiltinToolName::CodeSearch.as_str()
     }
 
     fn description(&self) -> &str {
@@ -97,7 +98,7 @@ impl Tool for CodeSearchTool {
             .map_err(|e| ToolError::InvalidArguments(format!("Invalid parameters: {}", e)))?;
 
         ctx.ask_permission(
-            PermissionRequest::new("codesearch")
+            PermissionRequest::new(BuiltinToolName::CodeSearch.as_str())
                 .with_pattern(&params.query)
                 .always_allow(),
         )

@@ -22,6 +22,7 @@ use crate::provider::ProviderError;
 use crate::stream::{StreamEvent, StreamResult, StreamUsage};
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
+use rocode_core::contracts::provider::ProviderFinishReasonWire;
 use std::pin::Pin;
 
 /// Convert a single `StreamingEvent` into zero or more rocode `StreamEvent`s.
@@ -101,11 +102,9 @@ pub fn streaming_event_to_stream_events(event: StreamingEvent) -> Vec<StreamEven
             // finish_reason or stop_reason signals end of a step
             let reason = finish_reason.or(stop_reason);
             if let Some(ref r) = reason {
-                let normalized = match r.as_str() {
-                    "end_turn" | "stop" => "stop".to_string(),
-                    "tool_use" | "tool_calls" => "tool-calls".to_string(),
-                    other => other.to_string(),
-                };
+                let normalized = ProviderFinishReasonWire::parse(r.as_str())
+                    .map(|parsed| parsed.as_str().to_string())
+                    .unwrap_or_else(|| r.to_string());
                 events.push(StreamEvent::FinishStep {
                     finish_reason: Some(normalized),
                     usage: usage_for_step,
@@ -557,6 +556,7 @@ mod tests {
     use super::*;
     use crate::driver::UsageInfo;
     use futures::StreamExt;
+    use rocode_core::contracts::tools::BuiltinToolName;
     use serde_json::json;
 
     #[test]
@@ -591,7 +591,7 @@ mod tests {
     fn tool_call_started_uses_index_based_id() {
         let event = StreamingEvent::ToolCallStarted {
             tool_call_id: "call_abc123".to_string(),
-            tool_name: "read".to_string(),
+            tool_name: BuiltinToolName::Read.as_str().to_string(),
             index: Some(2),
         };
         let result = streaming_event_to_stream_events(event);
@@ -599,7 +599,7 @@ mod tests {
         match &result[0] {
             StreamEvent::ToolCallStart { id, name } => {
                 assert_eq!(id, "tool-call-2");
-                assert_eq!(name, "read");
+                assert_eq!(name, BuiltinToolName::Read.as_str());
             }
             other => panic!("expected ToolCallStart, got: {:?}", other),
         }
@@ -609,7 +609,7 @@ mod tests {
     fn tool_call_started_falls_back_to_tool_call_id() {
         let event = StreamingEvent::ToolCallStarted {
             tool_call_id: "call_xyz".to_string(),
-            tool_name: "write".to_string(),
+            tool_name: BuiltinToolName::Write.as_str().to_string(),
             index: None,
         };
         let result = streaming_event_to_stream_events(event);
@@ -710,7 +710,7 @@ mod tests {
             StreamEvent::FinishStep {
                 finish_reason: Some(r),
                 ..
-            } => assert_eq!(r, "stop"),
+            } => assert_eq!(r, ProviderFinishReasonWire::Stop.as_str()),
             other => panic!("expected FinishStep, got: {:?}", other),
         }
     }
@@ -728,7 +728,7 @@ mod tests {
             StreamEvent::FinishStep {
                 finish_reason: Some(r),
                 ..
-            } => assert_eq!(r, "stop"),
+            } => assert_eq!(r, ProviderFinishReasonWire::Stop.as_str()),
             other => panic!("expected FinishStep, got: {:?}", other),
         }
     }
@@ -745,7 +745,7 @@ mod tests {
             StreamEvent::FinishStep {
                 finish_reason: Some(r),
                 ..
-            } => assert_eq!(r, "tool-calls"),
+            } => assert_eq!(r, ProviderFinishReasonWire::ToolCalls.as_str()),
             other => panic!("expected FinishStep, got: {:?}", other),
         }
     }
@@ -877,7 +877,7 @@ mod tests {
             content: None,
             finish_reason: Some("tool_calls".to_string()),
             usage: None,
-            tool_calls: vec![json!({"type": "tool_use", "name": "bash"})],
+            tool_calls: vec![json!({"type": "tool_use", "name": BuiltinToolName::Bash.as_str()})],
             raw: json!({}),
         };
 
@@ -913,7 +913,7 @@ mod tests {
             }),
             Ok(StreamingEvent::ToolCallStarted {
                 tool_call_id: "tc-0".to_string(),
-                tool_name: "read".to_string(),
+                tool_name: BuiltinToolName::Read.as_str().to_string(),
                 index: Some(0),
             }),
             Ok(StreamingEvent::PartialToolCall {
@@ -941,7 +941,7 @@ mod tests {
             .any(|e| matches!(e, StreamEvent::TextDelta(s) if s == "Hello")));
         assert!(output
             .iter()
-            .any(|e| matches!(e, StreamEvent::ToolCallStart { name, .. } if name == "read")));
+            .any(|e| matches!(e, StreamEvent::ToolCallStart { name, .. } if name == BuiltinToolName::Read.as_str())));
         assert!(output
             .iter()
             .any(|e| matches!(e, StreamEvent::ToolCallEnd { .. })));

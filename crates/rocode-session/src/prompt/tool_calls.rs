@@ -1,6 +1,10 @@
 use std::collections::HashMap;
 
 use crate::{PartType, Session, SessionMessage};
+use rocode_core::contracts::attachments::{keys as attachment_keys, AttachmentTypeWire};
+use rocode_core::contracts::patch::keys as patch_keys;
+use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::wire::{aliases as wire_aliases, keys as wire_keys};
 
 use super::SessionPrompt;
 
@@ -134,7 +138,7 @@ impl SessionPrompt {
     ) -> Option<Vec<serde_json::Value>> {
         let mut attachments = Vec::new();
 
-        if let Some(value) = metadata.remove("attachments") {
+        if let Some(value) = metadata.remove(attachment_keys::ATTACHMENTS) {
             match value {
                 serde_json::Value::Array(values) => attachments.extend(values),
                 serde_json::Value::Null => {}
@@ -142,7 +146,7 @@ impl SessionPrompt {
             }
         }
 
-        if let Some(value) = metadata.remove("attachment") {
+        if let Some(value) = metadata.remove(attachment_keys::ATTACHMENT) {
             if !value.is_null() {
                 attachments.push(value);
             }
@@ -171,52 +175,61 @@ impl SessionPrompt {
                 continue;
             };
 
-            let Some(mime) = obj.get("mime").and_then(|v| v.as_str()) else {
+            let Some(mime) = obj.get(attachment_keys::MIME).and_then(|v| v.as_str()) else {
                 continue;
             };
-            let Some(url) = obj.get("url").and_then(|v| v.as_str()) else {
+            let Some(url) = obj.get(attachment_keys::URL).and_then(|v| v.as_str()) else {
                 continue;
             };
 
             let filename = obj
-                .get("filename")
+                .get(attachment_keys::FILENAME)
                 .and_then(|v| v.as_str())
                 .map(ToString::to_string);
             let id = obj
-                .get("id")
+                .get(attachment_keys::ID)
                 .and_then(|v| v.as_str())
                 .map(ToString::to_string)
                 .unwrap_or_else(|| {
                     rocode_core::id::create(rocode_core::id::Prefix::Part, true, None)
                 });
             let normalized_session_id = obj
-                .get("sessionID")
-                .or_else(|| obj.get("session_id"))
+                .get(wire_keys::SESSION_ID)
+                .or_else(|| obj.get(wire_aliases::SESSION_ID_SNAKE))
                 .and_then(|v| v.as_str())
                 .unwrap_or(session_id)
                 .to_string();
             let normalized_message_id = obj
-                .get("messageID")
-                .or_else(|| obj.get("message_id"))
+                .get(wire_keys::MESSAGE_ID)
+                .or_else(|| obj.get(wire_aliases::MESSAGE_ID_SNAKE))
                 .and_then(|v| v.as_str())
                 .unwrap_or(message_id)
                 .to_string();
 
             let mut normalized = serde_json::Map::new();
-            normalized.insert("type".to_string(), serde_json::json!("file"));
-            normalized.insert("id".to_string(), serde_json::json!(id.clone()));
             normalized.insert(
-                "sessionID".to_string(),
+                wire_keys::TYPE.to_string(),
+                serde_json::json!(AttachmentTypeWire::File.as_str()),
+            );
+            normalized.insert(
+                attachment_keys::ID.to_string(),
+                serde_json::json!(id.clone()),
+            );
+            normalized.insert(
+                wire_keys::SESSION_ID.to_string(),
                 serde_json::json!(normalized_session_id.clone()),
             );
             normalized.insert(
-                "messageID".to_string(),
+                wire_keys::MESSAGE_ID.to_string(),
                 serde_json::json!(normalized_message_id.clone()),
             );
-            normalized.insert("mime".to_string(), serde_json::json!(mime));
-            normalized.insert("url".to_string(), serde_json::json!(url));
+            normalized.insert(attachment_keys::MIME.to_string(), serde_json::json!(mime));
+            normalized.insert(attachment_keys::URL.to_string(), serde_json::json!(url));
             if let Some(name) = filename.clone() {
-                normalized.insert("filename".to_string(), serde_json::json!(name));
+                normalized.insert(
+                    attachment_keys::FILENAME.to_string(),
+                    serde_json::json!(name),
+                );
             }
 
             normalized_json.push(serde_json::Value::Object(normalized));
@@ -311,18 +324,18 @@ impl SessionPrompt {
         tool_name: &str,
         input: &serde_json::Value,
     ) -> Option<serde_json::Value> {
-        if tool_name != "write" {
+        if BuiltinToolName::parse(tool_name) != Some(BuiltinToolName::Write) {
             return None;
         }
 
         if let Some(obj) = input.as_object() {
             let file_path = obj
-                .get("file_path")
-                .or_else(|| obj.get("filePath"))
+                .get(patch_keys::FILE_PATH_SNAKE)
+                .or_else(|| obj.get(patch_keys::FILE_PATH))
                 .and_then(|v| v.as_str())
                 .map(str::trim)
                 .filter(|s| !s.is_empty());
-            let content = obj.get("content").and_then(|v| v.as_str());
+            let content = obj.get(patch_keys::CONTENT).and_then(|v| v.as_str());
             if file_path.is_some() && content.is_some() {
                 return None;
             }
@@ -330,12 +343,12 @@ impl SessionPrompt {
             let keys = obj.keys().cloned().collect::<Vec<_>>();
             let mut payload = if file_path.is_none() {
                 Self::invalid_tool_payload(
-                    "write",
+                    BuiltinToolName::Write.as_str(),
                     "The write tool was called without file_path/filePath. Provide both file_path and content.",
                 )
             } else {
                 Self::invalid_tool_payload(
-                    "write",
+                    BuiltinToolName::Write.as_str(),
                     "The write tool was called without content. Provide both file_path and content.",
                 )
             };
@@ -615,6 +628,7 @@ impl SessionPrompt {
 mod tests {
     use super::*;
     use crate::{MessageRole, PartType, Session, SessionMessage};
+    use rocode_core::contracts::tools::BuiltinToolName;
     use std::collections::HashMap;
 
     #[test]
@@ -629,8 +643,16 @@ mod tests {
 
         // Add an assistant message with two tool calls but only one result
         let mut assistant = SessionMessage::assistant(sid.clone());
-        assistant.add_tool_call("call_1", "bash", serde_json::json!({"command": "echo a"}));
-        assistant.add_tool_call("call_2", "read_file", serde_json::json!({"path": "foo.rs"}));
+        assistant.add_tool_call(
+            "call_1",
+            BuiltinToolName::Bash.as_str(),
+            serde_json::json!({"command": "echo a"}),
+        );
+        assistant.add_tool_call(
+            "call_2",
+            BuiltinToolName::Read.as_str(),
+            serde_json::json!({"path": "foo.rs"}),
+        );
         session.messages.push(assistant);
         let mut existing_tool_result = SessionMessage::tool(sid.clone());
         existing_tool_result.add_tool_result("call_1", "output a", false);
@@ -670,7 +692,11 @@ mod tests {
             .push(SessionMessage::user(sid.clone(), "do something"));
 
         let mut assistant = SessionMessage::assistant(sid.clone());
-        assistant.add_tool_call("call_1", "bash", serde_json::json!({"command": "echo a"}));
+        assistant.add_tool_call(
+            "call_1",
+            BuiltinToolName::Bash.as_str(),
+            serde_json::json!({"command": "echo a"}),
+        );
         session.messages.push(assistant);
         let mut tool_result = SessionMessage::tool(sid.clone());
         tool_result.add_tool_result("call_1", "output a", false);
@@ -698,9 +724,21 @@ mod tests {
             .push(SessionMessage::user(sid.clone(), "do something"));
 
         let mut assistant = SessionMessage::assistant(sid.clone());
-        assistant.add_tool_call("call_1", "bash", serde_json::json!({}));
-        assistant.add_tool_call("call_2", "read_file", serde_json::json!({}));
-        assistant.add_tool_call("call_3", "write_file", serde_json::json!({}));
+        assistant.add_tool_call(
+            "call_1",
+            BuiltinToolName::Bash.as_str(),
+            serde_json::json!({}),
+        );
+        assistant.add_tool_call(
+            "call_2",
+            BuiltinToolName::Read.as_str(),
+            serde_json::json!({}),
+        );
+        assistant.add_tool_call(
+            "call_3",
+            BuiltinToolName::Write.as_str(),
+            serde_json::json!({}),
+        );
         // No results at all — all three are pending
         session.messages.push(assistant);
 
@@ -890,11 +928,11 @@ mod tests {
         let mut metadata = HashMap::new();
         metadata.insert("note".to_string(), serde_json::json!("ok"));
         metadata.insert(
-            "attachments".to_string(),
+            attachment_keys::ATTACHMENTS.to_string(),
             serde_json::json!([{ "mime": "application/pdf", "url": "data:application/pdf;base64,AA==" }]),
         );
         metadata.insert(
-            "attachment".to_string(),
+            attachment_keys::ATTACHMENT.to_string(),
             serde_json::json!({ "mime": "image/png", "url": "data:image/png;base64,BB==" }),
         );
 
@@ -902,8 +940,8 @@ mod tests {
             SessionPrompt::extract_tool_attachments_from_metadata(&mut metadata, "ses_1", "msg_1");
 
         assert_eq!(metadata.get("note").and_then(|v| v.as_str()), Some("ok"));
-        assert!(!metadata.contains_key("attachments"));
-        assert!(!metadata.contains_key("attachment"));
+        assert!(!metadata.contains_key(attachment_keys::ATTACHMENTS));
+        assert!(!metadata.contains_key(attachment_keys::ATTACHMENT));
         assert_eq!(attachments.as_ref().map(|v| v.len()), Some(2));
         assert_eq!(file_parts.as_ref().map(|v| v.len()), Some(2));
     }

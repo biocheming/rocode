@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use rocode_core::contracts::permission::PermissionTypeWire;
+use rocode_core::contracts::tools::BuiltinToolName;
+
 use crate::matching::wildcard_match;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -95,10 +98,16 @@ pub fn evaluate(permission: &str, pattern: &str, rulesets: &[PermissionRuleset])
 /// Map a tool name to its permission type.
 /// Edit-family tools map to "edit", `ls` maps to "list", others pass through as-is.
 pub fn tool_to_permission(tool_name: &str) -> &str {
-    match tool_name {
-        "write" | "edit" | "multiedit" | "apply_patch" | "patch" => "edit",
-        "ls" => "list",
-        _ => tool_name,
+    match BuiltinToolName::parse(tool_name) {
+        Some(
+            BuiltinToolName::Write
+            | BuiltinToolName::Edit
+            | BuiltinToolName::MultiEdit
+            | BuiltinToolName::ApplyPatch,
+        ) => BuiltinToolName::Edit.as_str(),
+        Some(BuiltinToolName::Ls) => PermissionTypeWire::List.as_str(),
+        Some(tool) => tool.as_str(),
+        None => tool_name,
     }
 }
 
@@ -154,42 +163,42 @@ pub fn default_ruleset() -> PermissionRuleset {
             action: PermissionAction::Allow,
         },
         PermissionRule {
-            permission: "doom_loop".to_string(),
+            permission: PermissionTypeWire::DoomLoop.as_str().to_string(),
             pattern: "*".to_string(),
             action: PermissionAction::Ask,
         },
         PermissionRule {
-            permission: "external_directory".to_string(),
+            permission: PermissionTypeWire::ExternalDirectory.as_str().to_string(),
             pattern: "*".to_string(),
             action: PermissionAction::Ask,
         },
         PermissionRule {
-            permission: "question".to_string(),
+            permission: BuiltinToolName::Question.as_str().to_string(),
             pattern: "*".to_string(),
             action: PermissionAction::Deny,
         },
         PermissionRule {
-            permission: "plan_enter".to_string(),
+            permission: BuiltinToolName::PlanEnter.as_str().to_string(),
             pattern: "*".to_string(),
             action: PermissionAction::Deny,
         },
         PermissionRule {
-            permission: "plan_exit".to_string(),
+            permission: BuiltinToolName::PlanExit.as_str().to_string(),
             pattern: "*".to_string(),
             action: PermissionAction::Deny,
         },
         PermissionRule {
-            permission: "read".to_string(),
+            permission: BuiltinToolName::Read.as_str().to_string(),
             pattern: "*.env".to_string(),
             action: PermissionAction::Ask,
         },
         PermissionRule {
-            permission: "read".to_string(),
+            permission: BuiltinToolName::Read.as_str().to_string(),
             pattern: "*.env.*".to_string(),
             action: PermissionAction::Ask,
         },
         PermissionRule {
-            permission: "read".to_string(),
+            permission: BuiltinToolName::Read.as_str().to_string(),
             pattern: "*.env.example".to_string(),
             action: PermissionAction::Allow,
         },
@@ -204,12 +213,12 @@ pub fn build_agent_ruleset(agent_name: &str, user_ruleset: &[PermissionRule]) ->
         "build" => {
             let build_specific = vec![
                 PermissionRule {
-                    permission: "question".to_string(),
+                    permission: BuiltinToolName::Question.as_str().to_string(),
                     pattern: "*".to_string(),
                     action: PermissionAction::Allow,
                 },
                 PermissionRule {
-                    permission: "plan_enter".to_string(),
+                    permission: BuiltinToolName::PlanEnter.as_str().to_string(),
                     pattern: "*".to_string(),
                     action: PermissionAction::Allow,
                 },
@@ -219,17 +228,17 @@ pub fn build_agent_ruleset(agent_name: &str, user_ruleset: &[PermissionRule]) ->
         "plan" => {
             let plan_specific = vec![
                 PermissionRule {
-                    permission: "question".to_string(),
+                    permission: BuiltinToolName::Question.as_str().to_string(),
                     pattern: "*".to_string(),
                     action: PermissionAction::Allow,
                 },
                 PermissionRule {
-                    permission: "plan_exit".to_string(),
+                    permission: BuiltinToolName::PlanExit.as_str().to_string(),
                     pattern: "*".to_string(),
                     action: PermissionAction::Allow,
                 },
                 PermissionRule {
-                    permission: "edit".to_string(),
+                    permission: BuiltinToolName::Edit.as_str().to_string(),
                     pattern: "*".to_string(),
                     action: PermissionAction::Deny,
                 },
@@ -244,47 +253,47 @@ pub fn build_agent_ruleset(agent_name: &str, user_ruleset: &[PermissionRule]) ->
                     action: PermissionAction::Deny,
                 },
                 PermissionRule {
-                    permission: "grep".to_string(),
+                    permission: BuiltinToolName::Grep.as_str().to_string(),
                     pattern: "*".to_string(),
                     action: PermissionAction::Allow,
                 },
                 PermissionRule {
-                    permission: "glob".to_string(),
+                    permission: BuiltinToolName::Glob.as_str().to_string(),
                     pattern: "*".to_string(),
                     action: PermissionAction::Allow,
                 },
                 PermissionRule {
-                    permission: "list".to_string(),
+                    permission: PermissionTypeWire::List.as_str().to_string(),
                     pattern: "*".to_string(),
                     action: PermissionAction::Allow,
                 },
                 PermissionRule {
-                    permission: "bash".to_string(),
+                    permission: BuiltinToolName::Bash.as_str().to_string(),
                     pattern: "*".to_string(),
                     action: PermissionAction::Allow,
                 },
                 PermissionRule {
-                    permission: "webfetch".to_string(),
+                    permission: BuiltinToolName::WebFetch.as_str().to_string(),
                     pattern: "*".to_string(),
                     action: PermissionAction::Allow,
                 },
                 PermissionRule {
-                    permission: "websearch".to_string(),
+                    permission: BuiltinToolName::WebSearch.as_str().to_string(),
                     pattern: "*".to_string(),
                     action: PermissionAction::Allow,
                 },
                 PermissionRule {
-                    permission: "codesearch".to_string(),
+                    permission: BuiltinToolName::CodeSearch.as_str().to_string(),
                     pattern: "*".to_string(),
                     action: PermissionAction::Allow,
                 },
                 PermissionRule {
-                    permission: "ast_grep_search".to_string(),
+                    permission: BuiltinToolName::AstGrepSearch.as_str().to_string(),
                     pattern: "*".to_string(),
                     action: PermissionAction::Allow,
                 },
                 PermissionRule {
-                    permission: "read".to_string(),
+                    permission: BuiltinToolName::Read.as_str().to_string(),
                     pattern: "*".to_string(),
                     action: PermissionAction::Allow,
                 },
@@ -298,18 +307,20 @@ pub fn build_agent_ruleset(agent_name: &str, user_ruleset: &[PermissionRule]) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocode_core::contracts::permission::PermissionTypeWire;
+    use rocode_core::contracts::tools::BuiltinToolName;
 
     #[test]
     fn test_from_config() {
         let mut config = HashMap::new();
         config.insert(
-            "bash".to_string(),
+            BuiltinToolName::Bash.as_str().to_string(),
             ConfigValue::Action(PermissionAction::Allow),
         );
 
         let ruleset = from_config(&config);
         assert_eq!(ruleset.len(), 1);
-        assert_eq!(ruleset[0].permission, "bash");
+        assert_eq!(ruleset[0].permission, BuiltinToolName::Bash.as_str());
         assert_eq!(ruleset[0].action, PermissionAction::Allow);
     }
 
@@ -325,37 +336,64 @@ mod tests {
     #[test]
     fn test_disabled() {
         let ruleset = vec![PermissionRule {
-            permission: "bash".to_string(),
+            permission: BuiltinToolName::Bash.as_str().to_string(),
             pattern: "*".to_string(),
             action: PermissionAction::Deny,
         }];
 
-        let tools = vec!["bash".to_string(), "read".to_string()];
+        let tools = vec![
+            BuiltinToolName::Bash.as_str().to_string(),
+            BuiltinToolName::Read.as_str().to_string(),
+        ];
         let disabled_tools = disabled(&tools, &ruleset);
 
-        assert!(disabled_tools.contains("bash"));
-        assert!(!disabled_tools.contains("read"));
+        assert!(disabled_tools.contains(BuiltinToolName::Bash.as_str()));
+        assert!(!disabled_tools.contains(BuiltinToolName::Read.as_str()));
     }
 
     #[test]
     fn tool_to_permission_maps_edit_tools() {
-        assert_eq!(tool_to_permission("write"), "edit");
-        assert_eq!(tool_to_permission("edit"), "edit");
-        assert_eq!(tool_to_permission("multiedit"), "edit");
-        assert_eq!(tool_to_permission("apply_patch"), "edit");
-        assert_eq!(tool_to_permission("patch"), "edit");
+        assert_eq!(
+            tool_to_permission(BuiltinToolName::Write.as_str()),
+            BuiltinToolName::Edit.as_str()
+        );
+        assert_eq!(
+            tool_to_permission(BuiltinToolName::Edit.as_str()),
+            BuiltinToolName::Edit.as_str()
+        );
+        assert_eq!(
+            tool_to_permission(BuiltinToolName::MultiEdit.as_str()),
+            BuiltinToolName::Edit.as_str()
+        );
+        assert_eq!(
+            tool_to_permission(BuiltinToolName::ApplyPatch.as_str()),
+            BuiltinToolName::Edit.as_str()
+        );
+        assert_eq!(tool_to_permission("patch"), BuiltinToolName::Edit.as_str());
     }
 
     #[test]
     fn tool_to_permission_maps_ls() {
-        assert_eq!(tool_to_permission("ls"), "list");
+        assert_eq!(
+            tool_to_permission(BuiltinToolName::Ls.as_str()),
+            PermissionTypeWire::List.as_str()
+        );
     }
 
     #[test]
     fn tool_to_permission_passes_through_unknown() {
-        assert_eq!(tool_to_permission("bash"), "bash");
-        assert_eq!(tool_to_permission("grep"), "grep");
-        assert_eq!(tool_to_permission("read"), "read");
+        assert_eq!(
+            tool_to_permission(BuiltinToolName::Bash.as_str()),
+            BuiltinToolName::Bash.as_str()
+        );
+        assert_eq!(
+            tool_to_permission(BuiltinToolName::Grep.as_str()),
+            BuiltinToolName::Grep.as_str()
+        );
+        assert_eq!(
+            tool_to_permission(BuiltinToolName::Read.as_str()),
+            BuiltinToolName::Read.as_str()
+        );
     }
 
     #[test]
@@ -366,7 +404,11 @@ mod tests {
             action: PermissionAction::Deny,
         }];
         // Tool is in allowlist — even with deny-all ruleset, check proceeds to ruleset
-        let result = evaluate_tool_permission("grep", &["grep".to_string()], &[ruleset]);
+        let result = evaluate_tool_permission(
+            BuiltinToolName::Grep.as_str(),
+            &[BuiltinToolName::Grep.as_str().to_string()],
+            &[ruleset],
+        );
         assert_eq!(result, PermissionAction::Deny);
     }
 
@@ -378,7 +420,11 @@ mod tests {
             action: PermissionAction::Allow,
         }];
         // Tool NOT in non-empty allowlist → Deny regardless of ruleset
-        let result = evaluate_tool_permission("write", &["grep".to_string()], &[ruleset]);
+        let result = evaluate_tool_permission(
+            BuiltinToolName::Write.as_str(),
+            &[BuiltinToolName::Grep.as_str().to_string()],
+            &[ruleset],
+        );
         assert_eq!(result, PermissionAction::Deny);
     }
 
@@ -390,19 +436,19 @@ mod tests {
             action: PermissionAction::Allow,
         }];
         // Empty allowlist → no allowlist filter, proceed to ruleset
-        let result = evaluate_tool_permission("write", &[], &[ruleset]);
+        let result = evaluate_tool_permission(BuiltinToolName::Write.as_str(), &[], &[ruleset]);
         assert_eq!(result, PermissionAction::Allow);
     }
 
     #[test]
     fn evaluate_tool_permission_maps_tool_name_to_permission() {
         let ruleset = vec![PermissionRule {
-            permission: "edit".to_string(),
+            permission: BuiltinToolName::Edit.as_str().to_string(),
             pattern: "*".to_string(),
             action: PermissionAction::Ask,
         }];
         // "write" maps to "edit" permission via tool_to_permission
-        let result = evaluate_tool_permission("write", &[], &[ruleset]);
+        let result = evaluate_tool_permission(BuiltinToolName::Write.as_str(), &[], &[ruleset]);
         assert_eq!(result, PermissionAction::Ask);
     }
 

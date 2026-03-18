@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use rocode_core::contracts::session::keys as session_keys;
+
 use crate::session::{FileDiff as SessionFileDiff, Session, SessionManager};
 use crate::snapshot::Snapshot;
 
@@ -211,7 +213,8 @@ impl RevertManager {
     ///
     /// Mirrors the TS `SessionSummary.computeDiff` behavior:
     /// 1. Scans messages for snapshot hashes stored in metadata
-    ///    (keys `"step_start_snapshot"` / `"step_finish_snapshot"`).
+    ///    (keys `session_keys::STEP_START_SNAPSHOT` /
+    ///    `session_keys::STEP_FINISH_SNAPSHOT`).
     ///    If both an earliest "from" and a latest "to" snapshot are found,
     ///    delegates to `Snapshot::diff_full` (git diff between two refs).
     /// 2. Falls back to aggregating `Patch` parts by filepath, counting
@@ -224,14 +227,17 @@ impl RevertManager {
         for msg in messages {
             // Check message-level metadata for snapshot hashes
             if from_snapshot.is_none() {
-                if let Some(serde_json::Value::String(s)) = msg.metadata.get("step_start_snapshot")
+                if let Some(serde_json::Value::String(s)) =
+                    msg.metadata.get(session_keys::STEP_START_SNAPSHOT)
                 {
                     if !s.is_empty() {
                         from_snapshot = Some(s.clone());
                     }
                 }
             }
-            if let Some(serde_json::Value::String(s)) = msg.metadata.get("step_finish_snapshot") {
+            if let Some(serde_json::Value::String(s)) =
+                msg.metadata.get(session_keys::STEP_FINISH_SNAPSHOT)
+            {
                 if !s.is_empty() {
                     to_snapshot = Some(s.clone());
                 }
@@ -240,9 +246,10 @@ impl RevertManager {
             // Also scan parts: StepStart / StepFinish carry id+name / id+output,
             // but the metadata on the *message* is the canonical place for snapshots
             // in the v1 format. We also check part-level metadata stored in the
-            // message metadata under "snapshot" as a generic key.
+            // message metadata under `session_keys::SNAPSHOT` as a generic key.
             if from_snapshot.is_none() {
-                if let Some(serde_json::Value::String(s)) = msg.metadata.get("snapshot") {
+                if let Some(serde_json::Value::String(s)) = msg.metadata.get(session_keys::SNAPSHOT)
+                {
                     if !s.is_empty() {
                         from_snapshot = Some(s.clone());
                     }

@@ -4,6 +4,18 @@ use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
+use rocode_core::contracts::output_blocks::{
+    keys as output_keys, scheduler_decision_spec_keys as output_decision_spec_keys,
+};
+use rocode_core::contracts::scheduler::decision_keys as scheduler_decision_keys;
+use rocode_core::contracts::scheduler::keys as scheduler_keys;
+use rocode_core::contracts::session::{keys as session_keys, MessagePartTypeWire, MessageRoleWire};
+use rocode_core::contracts::tools::{
+    BuiltinToolName, QuestionInteractionStatus, ToolCallStatusWire,
+};
+use rocode_core::contracts::wire::{
+    aliases as wire_aliases, fields as wire_fields, keys as wire_keys,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::session_runtime::{assistant_visible_text, decision_from_stage_text};
@@ -105,28 +117,28 @@ pub(super) struct ToolResultInfo {
 
 pub(super) fn message_role_name(role: &rocode_session::MessageRole) -> &'static str {
     match role {
-        rocode_session::MessageRole::User => "user",
-        rocode_session::MessageRole::Assistant => "assistant",
-        rocode_session::MessageRole::System => "system",
-        rocode_session::MessageRole::Tool => "tool",
+        rocode_session::MessageRole::User => MessageRoleWire::User.as_str(),
+        rocode_session::MessageRole::Assistant => MessageRoleWire::Assistant.as_str(),
+        rocode_session::MessageRole::System => MessageRoleWire::System.as_str(),
+        rocode_session::MessageRole::Tool => MessageRoleWire::Tool.as_str(),
     }
 }
 
 fn part_type_name(part_type: &rocode_session::PartType) -> &'static str {
     match part_type {
-        rocode_session::PartType::Text { .. } => "text",
-        rocode_session::PartType::ToolCall { .. } => "tool_call",
-        rocode_session::PartType::ToolResult { .. } => "tool_result",
-        rocode_session::PartType::Reasoning { .. } => "reasoning",
-        rocode_session::PartType::File { .. } => "file",
-        rocode_session::PartType::StepStart { .. } => "step_start",
-        rocode_session::PartType::StepFinish { .. } => "step_finish",
-        rocode_session::PartType::Snapshot { .. } => "snapshot",
-        rocode_session::PartType::Patch { .. } => "patch",
-        rocode_session::PartType::Agent { .. } => "agent",
-        rocode_session::PartType::Subtask { .. } => "subtask",
-        rocode_session::PartType::Retry { .. } => "retry",
-        rocode_session::PartType::Compaction { .. } => "compaction",
+        rocode_session::PartType::Text { .. } => MessagePartTypeWire::Text.as_str(),
+        rocode_session::PartType::ToolCall { .. } => MessagePartTypeWire::ToolCall.as_str(),
+        rocode_session::PartType::ToolResult { .. } => MessagePartTypeWire::ToolResult.as_str(),
+        rocode_session::PartType::Reasoning { .. } => MessagePartTypeWire::Reasoning.as_str(),
+        rocode_session::PartType::File { .. } => MessagePartTypeWire::File.as_str(),
+        rocode_session::PartType::StepStart { .. } => MessagePartTypeWire::StepStart.as_str(),
+        rocode_session::PartType::StepFinish { .. } => MessagePartTypeWire::StepFinish.as_str(),
+        rocode_session::PartType::Snapshot { .. } => MessagePartTypeWire::Snapshot.as_str(),
+        rocode_session::PartType::Patch { .. } => MessagePartTypeWire::Patch.as_str(),
+        rocode_session::PartType::Agent { .. } => MessagePartTypeWire::Agent.as_str(),
+        rocode_session::PartType::Subtask { .. } => MessagePartTypeWire::Subtask.as_str(),
+        rocode_session::PartType::Retry { .. } => MessagePartTypeWire::Retry.as_str(),
+        rocode_session::PartType::Compaction { .. } => MessagePartTypeWire::Compaction.as_str(),
     }
 }
 
@@ -157,10 +169,12 @@ fn part_to_info(
             input: input.clone(),
             status: Some(
                 match status {
-                    rocode_session::ToolCallStatus::Pending => "pending",
-                    rocode_session::ToolCallStatus::Running => "running",
-                    rocode_session::ToolCallStatus::Completed => "completed",
-                    rocode_session::ToolCallStatus::Error => "error",
+                    rocode_session::ToolCallStatus::Pending => ToolCallStatusWire::Pending.as_str(),
+                    rocode_session::ToolCallStatus::Running => ToolCallStatusWire::Running.as_str(),
+                    rocode_session::ToolCallStatus::Completed => {
+                        ToolCallStatusWire::Completed.as_str()
+                    }
+                    rocode_session::ToolCallStatus::Error => ToolCallStatusWire::Error.as_str(),
                 }
                 .to_string(),
             ),
@@ -254,7 +268,7 @@ fn part_to_info(
         Some(history_session_event_to_web(
             "retry",
             "Retry",
-            Some("running"),
+            Some(ToolCallStatusWire::Running.as_str()),
             Some(format!("Retry attempt {}", count)),
             vec![(
                 "Attempt".to_string(),
@@ -267,7 +281,7 @@ fn part_to_info(
         Some(history_session_event_to_web(
             "step",
             format!("Step · {name}"),
-            Some("running"),
+            Some(ToolCallStatusWire::Running.as_str()),
             Some("Step started".to_string()),
             vec![("ID".to_string(), id.clone(), None)],
             None,
@@ -276,7 +290,7 @@ fn part_to_info(
         Some(history_session_event_to_web(
             "step",
             "Step complete",
-            Some("completed"),
+            Some(ToolCallStatusWire::Completed.as_str()),
             Some("Step finished".to_string()),
             vec![("ID".to_string(), id.clone(), None)],
             output.clone(),
@@ -290,12 +304,12 @@ fn part_to_info(
             serde_json::Value::Number(part.created_at.timestamp_millis().into()),
         );
         if let Some(tool_call) = tool_call.as_ref() {
-            if tool_call.name.eq_ignore_ascii_case("question") {
+            if BuiltinToolName::parse(&tool_call.name) == Some(BuiltinToolName::Question) {
                 if let Some(question_info) =
                     match_pending_question_request(&tool_call.input, pending_questions)
                 {
                     map.insert(
-                        "interaction".to_string(),
+                        output_keys::INTERACTION.to_string(),
                         question_pending_interaction_json(question_info, &tool_call.input),
                     );
                 }
@@ -348,12 +362,12 @@ fn message_to_info(
     let usage = message.usage.clone().unwrap_or_default();
     let model_id = message
         .metadata
-        .get("model_id")
+        .get(session_keys::MODEL_ID)
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
     let model_provider = message
         .metadata
-        .get("model_provider")
+        .get(session_keys::MODEL_PROVIDER)
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
     let model = match (model_provider.as_deref(), model_id.as_deref()) {
@@ -366,7 +380,7 @@ fn message_to_info(
     } else {
         message
             .metadata
-            .get("cost")
+            .get(session_keys::COST)
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0)
     };
@@ -383,29 +397,29 @@ fn message_to_info(
         created_at: message.created_at.timestamp_millis(),
         completed_at: message
             .metadata
-            .get("completed_at")
+            .get(session_keys::COMPLETED_AT)
             .and_then(|v| v.as_i64()),
         agent: message
             .metadata
-            .get("agent")
+            .get(session_keys::AGENT)
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         model,
         mode: message
             .metadata
-            .get("mode")
+            .get(session_keys::MODE)
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         finish: message.finish.clone().or_else(|| {
             message
                 .metadata
-                .get("finish_reason")
+                .get(session_keys::FINISH_REASON)
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
         }),
         error: message
             .metadata
-            .get("error")
+            .get(session_keys::ERROR)
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         cost,
@@ -438,11 +452,11 @@ fn augment_scheduler_decision_metadata_for_response(
     metadata: &mut HashMap<String, serde_json::Value>,
     message: &rocode_session::SessionMessage,
 ) {
-    if metadata.contains_key("scheduler_decision_title") {
+    if metadata.contains_key(scheduler_decision_keys::TITLE) {
         return;
     }
     let Some(stage) = metadata
-        .get("scheduler_stage")
+        .get(scheduler_keys::STAGE)
         .and_then(|value| value.as_str())
     else {
         return;
@@ -453,51 +467,51 @@ fn augment_scheduler_decision_metadata_for_response(
     };
 
     metadata.insert(
-        "scheduler_decision_kind".to_string(),
+        scheduler_decision_keys::KIND.to_string(),
         serde_json::json!(decision.kind),
     );
     metadata.insert(
-        "scheduler_decision_title".to_string(),
+        scheduler_decision_keys::TITLE.to_string(),
         serde_json::json!(decision.title),
     );
     metadata.insert(
-        "scheduler_decision_spec".to_string(),
+        scheduler_decision_keys::SPEC.to_string(),
         serde_json::json!({
-            "version": decision.spec.version,
-            "show_header_divider": decision.spec.show_header_divider,
-            "field_order": decision.spec.field_order,
-            "field_label_emphasis": decision.spec.field_label_emphasis,
-            "status_palette": decision.spec.status_palette,
-            "section_spacing": decision.spec.section_spacing,
-            "update_policy": decision.spec.update_policy,
+            output_decision_spec_keys::VERSION: decision.spec.version,
+            output_decision_spec_keys::SHOW_HEADER_DIVIDER: decision.spec.show_header_divider,
+            output_decision_spec_keys::FIELD_ORDER: decision.spec.field_order,
+            output_decision_spec_keys::FIELD_LABEL_EMPHASIS: decision.spec.field_label_emphasis,
+            output_decision_spec_keys::STATUS_PALETTE: decision.spec.status_palette,
+            output_decision_spec_keys::SECTION_SPACING: decision.spec.section_spacing,
+            output_decision_spec_keys::UPDATE_POLICY: decision.spec.update_policy,
         }),
     );
     metadata.insert(
-        "scheduler_decision_fields".to_string(),
+        scheduler_decision_keys::FIELDS.to_string(),
         serde_json::Value::Array(
             decision
                 .fields
                 .iter()
                 .map(|field| {
                     serde_json::json!({
-                        "label": field.label,
-                        "value": field.value,
-                        "tone": field.tone,
+                        output_keys::LABEL: field.label,
+                        output_keys::VALUE: field.value,
+                        output_keys::TONE: field.tone,
                     })
                 })
                 .collect(),
         ),
     );
     metadata.insert(
-        "scheduler_decision_sections".to_string(),
+        scheduler_decision_keys::SECTIONS.to_string(),
         serde_json::Value::Array(
             decision
                 .sections
                 .iter()
                 .map(|section| {
                     serde_json::json!({
-                        "title": section.title,
-                        "body": section.body,
+                        output_keys::TITLE: section.title,
+                        output_keys::BODY: section.body,
                     })
                 })
                 .collect(),
@@ -559,9 +573,10 @@ pub(super) async fn send_message(
         .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
     session.add_user_message(&req.content);
     if let Some(variant) = req.variant.as_deref() {
-        session
-            .metadata
-            .insert("model_variant".to_string(), serde_json::json!(variant));
+        session.metadata.insert(
+            session_keys::MODEL_VARIANT.to_string(),
+            serde_json::json!(variant),
+        );
     }
     let tool_names = collect_tool_names(session);
     let assistant_msg = session.add_assistant_message();
@@ -653,12 +668,12 @@ fn match_pending_question_request(
     input: &serde_json::Value,
     pending_questions: &mut Vec<super::super::tui::QuestionInfo>,
 ) -> Option<super::super::tui::QuestionInfo> {
-    let input_questions = input.get("questions")?.as_array()?;
+    let input_questions = input.get(wire_fields::QUESTIONS)?.as_array()?;
     let normalized_input = input_questions
         .iter()
         .filter_map(|question| {
             question
-                .get("question")
+                .get(wire_fields::QUESTION)
                 .and_then(|value| value.as_str())
                 .map(normalize_question_text)
         })
@@ -689,7 +704,7 @@ fn question_pending_interaction_json(
     input: &serde_json::Value,
 ) -> serde_json::Value {
     let input_questions = input
-        .get("questions")
+        .get(wire_fields::QUESTIONS)
         .and_then(|value| value.as_array())
         .cloned()
         .unwrap_or_default();
@@ -698,14 +713,14 @@ fn question_pending_interaction_json(
         .enumerate()
         .map(|(index, question)| {
             let options = question
-                .get("options")
+                .get(wire_fields::OPTIONS)
                 .and_then(|value| value.as_array())
                 .map(|values| {
                     values
                         .iter()
                         .filter_map(|option| {
                             option
-                                .get("label")
+                                .get(wire_fields::LABEL)
                                 .and_then(|value| value.as_str())
                                 .map(str::to_string)
                         })
@@ -719,26 +734,26 @@ fn question_pending_interaction_json(
                 })
                 .unwrap_or_default();
             serde_json::json!({
-                "question": question
-                    .get("question")
+                wire_fields::QUESTION: question
+                    .get(wire_fields::QUESTION)
                     .and_then(|value| value.as_str())
                     .unwrap_or_default(),
-                "header": question.get("header").and_then(|value| value.as_str()),
-                "multiple": question
-                    .get("multiple")
+                wire_fields::HEADER: question.get(wire_fields::HEADER).and_then(|value| value.as_str()),
+                wire_fields::MULTIPLE: question
+                    .get(wire_fields::MULTIPLE)
                     .and_then(|value| value.as_bool())
                     .unwrap_or(false),
-                "options": options,
+                wire_fields::OPTIONS: options,
             })
         })
         .collect::<Vec<_>>();
     serde_json::json!({
-        "type": "question",
-        "status": "pending",
-        "request_id": question_info.id,
-        "can_reply": true,
-        "can_reject": true,
-        "questions": questions,
+        wire_keys::TYPE: BuiltinToolName::Question.as_str(),
+        output_keys::INTERACTION_STATUS: QuestionInteractionStatus::Pending.as_str(),
+        wire_aliases::REQUEST_ID_SNAKE: question_info.id,
+        output_keys::INTERACTION_CAN_REPLY: true,
+        output_keys::INTERACTION_CAN_REJECT: true,
+        wire_fields::QUESTIONS: questions,
     })
 }
 
@@ -780,20 +795,22 @@ pub(super) struct AddPartRequest {
 }
 
 fn build_message_part(req: AddPartRequest, msg_id: &str) -> Result<rocode_session::MessagePart> {
-    let part_type = match req.part_type.as_str() {
-        "text" => rocode_session::PartType::Text {
+    let part_kind = MessagePartTypeWire::parse(req.part_type.as_str())
+        .ok_or_else(|| ApiError::BadRequest(format!("Unsupported part type: {}", req.part_type)))?;
+    let part_type = match part_kind {
+        MessagePartTypeWire::Text => rocode_session::PartType::Text {
             text: req.text.ok_or_else(|| {
                 ApiError::BadRequest("Field `text` is required for text parts".to_string())
             })?,
             synthetic: None,
             ignored: None,
         },
-        "reasoning" => rocode_session::PartType::Reasoning {
+        MessagePartTypeWire::Reasoning => rocode_session::PartType::Reasoning {
             text: req.text.ok_or_else(|| {
                 ApiError::BadRequest("Field `text` is required for reasoning parts".to_string())
             })?,
         },
-        "tool_call" => rocode_session::PartType::ToolCall {
+        MessagePartTypeWire::ToolCall => rocode_session::PartType::ToolCall {
             id: req.tool_call_id.ok_or_else(|| {
                 ApiError::BadRequest(
                     "Field `tool_call_id` is required for tool_call parts".to_string(),
@@ -805,22 +822,22 @@ fn build_message_part(req: AddPartRequest, msg_id: &str) -> Result<rocode_sessio
                 )
             })?,
             input: req.tool_input.unwrap_or_else(|| serde_json::json!({})),
-            status: match req
-                .tool_status
-                .as_deref()
-                .unwrap_or("pending")
-                .to_ascii_lowercase()
-                .as_str()
+            status: match ToolCallStatusWire::parse(
+                req.tool_status
+                    .as_deref()
+                    .unwrap_or(ToolCallStatusWire::Pending.as_str()),
+            )
+            .unwrap_or(ToolCallStatusWire::Pending)
             {
-                "running" => rocode_session::ToolCallStatus::Running,
-                "completed" => rocode_session::ToolCallStatus::Completed,
-                "error" => rocode_session::ToolCallStatus::Error,
-                _ => rocode_session::ToolCallStatus::Pending,
+                ToolCallStatusWire::Pending => rocode_session::ToolCallStatus::Pending,
+                ToolCallStatusWire::Running => rocode_session::ToolCallStatus::Running,
+                ToolCallStatusWire::Completed => rocode_session::ToolCallStatus::Completed,
+                ToolCallStatusWire::Error => rocode_session::ToolCallStatus::Error,
             },
             raw: req.tool_raw_input,
             state: None,
         },
-        "tool_result" => rocode_session::PartType::ToolResult {
+        MessagePartTypeWire::ToolResult => rocode_session::PartType::ToolResult {
             tool_call_id: req.tool_call_id.ok_or_else(|| {
                 ApiError::BadRequest(
                     "Field `tool_call_id` is required for tool_result parts".to_string(),
@@ -838,8 +855,7 @@ fn build_message_part(req: AddPartRequest, msg_id: &str) -> Result<rocode_sessio
         },
         unsupported => {
             return Err(ApiError::BadRequest(format!(
-                "Unsupported part type: {}",
-                unsupported
+                "Unsupported part type: {unsupported}"
             )));
         }
     };

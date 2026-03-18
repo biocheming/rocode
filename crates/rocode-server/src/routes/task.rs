@@ -27,11 +27,8 @@ struct TaskDetail {
 
 fn status_str(status: &AgentTaskStatus) -> String {
     match status {
-        AgentTaskStatus::Pending => "pending".to_string(),
-        AgentTaskStatus::Running { .. } => "running".to_string(),
-        AgentTaskStatus::Completed { .. } => "completed".to_string(),
-        AgentTaskStatus::Cancelled => "cancelled".to_string(),
-        AgentTaskStatus::Failed { error } => format!("failed: {}", error),
+        AgentTaskStatus::Failed { error } => format!("{}: {}", status.kind().as_str(), error),
+        _ => status.kind().as_str().to_string(),
     }
 }
 

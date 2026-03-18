@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use rocode_core::bus::Bus;
+use rocode_core::contracts::events::BusEventName;
+use rocode_core::contracts::wire::keys as wire_keys;
 use rocode_orchestrator::message_title_request;
 use rocode_provider::{Content, Message, Provider, Role};
 
@@ -218,9 +220,9 @@ pub async fn summarize(
 
     // Publish diff event if bus is available
     if let Some(bus) = bus {
-        let diff_event = rocode_core::bus::define_event("session.diff");
+        let diff_event = rocode_core::bus::define_event(BusEventName::SessionDiff.as_str());
         let diff_data = serde_json::json!({
-            "sessionID": input.session_id,
+            wire_keys::SESSION_ID: input.session_id,
             "diff": diffs,
         });
         bus.publish(&diff_event, diff_data).await;
@@ -574,6 +576,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use futures::stream;
+    use rocode_core::contracts::provider::ProviderFinishReasonWire;
     use rocode_provider::{
         ChatRequest, ChatResponse, Choice, ModelInfo, ProviderError, StreamResult, Usage,
     };
@@ -612,7 +615,7 @@ mod tests {
                 choices: vec![Choice {
                     index: 0,
                     message: Message::assistant(self.title.clone()),
-                    finish_reason: Some("stop".to_string()),
+                    finish_reason: Some(ProviderFinishReasonWire::Stop.as_str().to_string()),
                 }],
                 usage: Some(Usage {
                     prompt_tokens: 10,
@@ -828,11 +831,11 @@ mod tests {
         assert_eq!(
             updated
                 .metadata
-                .get("summary_title")
+                .get(MESSAGE_SUMMARY_TITLE_KEY)
                 .and_then(|value| value.as_str()),
             Some("Summary Pipeline")
         );
-        assert!(updated.metadata.contains_key("summary_diffs"));
+        assert!(updated.metadata.contains_key(MESSAGE_SUMMARY_DIFFS_KEY));
     }
 
     #[tokio::test]
@@ -872,7 +875,7 @@ mod tests {
             .expect("message should still exist");
         let title = updated
             .metadata
-            .get("summary_title")
+            .get(MESSAGE_SUMMARY_TITLE_KEY)
             .and_then(|value| value.as_str())
             .expect("summary_title should be present");
         assert!(title.chars().count() <= 100);

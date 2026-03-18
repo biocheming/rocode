@@ -286,11 +286,12 @@ impl ChatRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocode_core::contracts::tools::BuiltinToolName;
 
     #[test]
     fn tool_definition_serializes_to_openai_compatible_format() {
         let tool = ToolDefinition {
-            name: "bash".to_string(),
+            name: BuiltinToolName::Bash.as_str().to_string(),
             description: Some("Execute shell commands".to_string()),
             parameters: serde_json::json!({
                 "type": "object",
@@ -303,7 +304,7 @@ mod tests {
 
         let value = serde_json::to_value(&tool).expect("serialize tool");
         assert_eq!(value["type"], "function");
-        assert_eq!(value["function"]["name"], "bash");
+        assert_eq!(value["function"]["name"], BuiltinToolName::Bash.as_str());
         assert_eq!(value["function"]["description"], "Execute shell commands");
         assert_eq!(value["function"]["parameters"]["type"], "object");
     }

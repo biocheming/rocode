@@ -7,6 +7,7 @@ use super::markdown_parser::{
 };
 use super::*;
 use crate::{ShareMode, UiPreferencesConfig};
+use rocode_core::contracts::tools::BuiltinToolName;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 struct TestDir {
@@ -522,9 +523,9 @@ fn test_yaml_frontmatter_inline_list() {
     let json = serde_yaml_frontmatter_to_json(yaml);
     let tools = json["tools"].as_array().unwrap();
     assert_eq!(tools.len(), 3);
-    assert_eq!(tools[0], "bash");
-    assert_eq!(tools[1], "read");
-    assert_eq!(tools[2], "write");
+    assert_eq!(tools[0], BuiltinToolName::Bash.as_str());
+    assert_eq!(tools[1], BuiltinToolName::Read.as_str());
+    assert_eq!(tools[2], BuiltinToolName::Write.as_str());
 }
 
 #[test]
@@ -533,9 +534,9 @@ fn test_yaml_frontmatter_dash_list() {
     let json = serde_yaml_frontmatter_to_json(yaml);
     let tools = json["tools"].as_array().unwrap();
     assert_eq!(tools.len(), 3);
-    assert_eq!(tools[0], "bash");
-    assert_eq!(tools[1], "read");
-    assert_eq!(tools[2], "write");
+    assert_eq!(tools[0], BuiltinToolName::Bash.as_str());
+    assert_eq!(tools[1], BuiltinToolName::Read.as_str());
+    assert_eq!(tools[2], BuiltinToolName::Write.as_str());
 }
 
 #[test]
@@ -543,8 +544,8 @@ fn test_yaml_frontmatter_nested_object() {
     let yaml = "tools:\n  bash: true\n  read: false";
     let json = serde_yaml_frontmatter_to_json(yaml);
     let tools = json["tools"].as_object().unwrap();
-    assert_eq!(tools["bash"], true);
-    assert_eq!(tools["read"], false);
+    assert_eq!(tools[BuiltinToolName::Bash.as_str()], true);
+    assert_eq!(tools[BuiltinToolName::Read.as_str()], false);
 }
 
 #[test]
@@ -693,8 +694,8 @@ fn test_parse_markdown_agent_with_tools_map() {
     let (_name, config) = result.unwrap();
     assert_eq!(config.description.as_deref(), Some("Safe agent"));
     let tools = config.tools.unwrap();
-    assert_eq!(tools.get("bash"), Some(&false));
-    assert_eq!(tools.get("read"), Some(&true));
+    assert_eq!(tools.get(BuiltinToolName::Bash.as_str()), Some(&false));
+    assert_eq!(tools.get(BuiltinToolName::Read.as_str()), Some(&true));
 }
 
 #[test]

@@ -2,6 +2,7 @@ use ast_grep_core::Pattern as AstPattern;
 use ast_grep_language::{LanguageExt, SupportLang};
 use async_trait::async_trait;
 use glob::Pattern;
+use rocode_core::contracts::tools::BuiltinToolName;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -88,7 +89,7 @@ impl Default for AstGrepSearchTool {
 #[async_trait]
 impl Tool for AstGrepSearchTool {
     fn id(&self) -> &str {
-        "ast_grep_search"
+        BuiltinToolName::AstGrepSearch.as_str()
     }
 
     fn description(&self) -> &str {
@@ -171,7 +172,7 @@ impl Tool for AstGrepSearchTool {
         .await?;
 
         ctx.ask_permission(
-            PermissionRequest::new("ast_grep_search")
+            PermissionRequest::new(BuiltinToolName::AstGrepSearch.as_str())
                 .with_pattern(&input.pattern)
                 .with_metadata("language", serde_json::json!(input.language.as_str()))
                 .with_metadata("path", serde_json::json!(search_root))
@@ -391,7 +392,7 @@ mod tests {
     #[test]
     fn tool_id_and_required_fields_are_stable() {
         let tool = AstGrepSearchTool::new();
-        assert_eq!(tool.id(), "ast_grep_search");
+        assert_eq!(tool.id(), BuiltinToolName::AstGrepSearch.as_str());
 
         let schema = tool.parameters();
         let required = schema["required"]

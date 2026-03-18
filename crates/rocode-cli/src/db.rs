@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 
+use rocode_core::contracts::session::keys as session_keys;
 use rocode_storage::{Database, MessageRepository, SessionRepository};
 
 use crate::cli::{DbCommands, DbOutputFormat};
@@ -112,10 +113,15 @@ pub(crate) async fn handle_stats_command(
         total_messages += messages.len();
 
         for message in messages {
-            if let Some(provider) = message.metadata.get("provider_id").and_then(|v| v.as_str()) {
+            let provider = message
+                .metadata
+                .get(session_keys::MODEL_PROVIDER)
+                .or_else(|| message.metadata.get(session_keys::LEGACY_PROVIDER_ID))
+                .and_then(|v| v.as_str());
+            if let Some(provider) = provider {
                 let model = message
                     .metadata
-                    .get("model_id")
+                    .get(session_keys::MODEL_ID)
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
                 *model_usage

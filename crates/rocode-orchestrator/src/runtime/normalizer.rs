@@ -1,4 +1,5 @@
 use crate::runtime::events::{FinishReason, LoopEvent, StepUsage, ToolCallReady};
+use rocode_core::contracts::provider::ProviderFinishReasonWire;
 use rocode_provider::StreamEvent;
 
 // ---------------------------------------------------------------------------
@@ -89,9 +90,11 @@ pub fn normalize(event: StreamEvent) -> Vec<LoopEvent> {
             ..
         } => {
             let reason = match finish_reason.as_deref() {
-                Some("stop") => FinishReason::EndTurn,
-                Some("tool-calls") | Some("tool_calls") => FinishReason::ToolUse,
-                Some(other) => FinishReason::Provider(other.to_string()),
+                Some(raw) => match ProviderFinishReasonWire::parse(raw) {
+                    Some(ProviderFinishReasonWire::Stop) => FinishReason::EndTurn,
+                    Some(ProviderFinishReasonWire::ToolCalls) => FinishReason::ToolUse,
+                    _ => FinishReason::Provider(raw.to_string()),
+                },
                 None => FinishReason::EndTurn,
             };
             let step_usage = StepUsage {
@@ -180,6 +183,7 @@ pub fn normalize(event: StreamEvent) -> Vec<LoopEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocode_core::contracts::tools::BuiltinToolName;
 
     #[test]
     fn text_delta_maps_to_text_chunk() {
@@ -192,11 +196,14 @@ mod tests {
     fn tool_call_end_maps_to_tool_call_ready() {
         let events = normalize(StreamEvent::ToolCallEnd {
             id: "tc-1".into(),
-            name: "read".into(),
+            name: BuiltinToolName::Read.as_str().into(),
             input: serde_json::json!({"path": "/tmp/a"}),
         });
         assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0], LoopEvent::ToolCallReady(tc) if tc.name == "read"));
+        assert!(matches!(
+            &events[0],
+            LoopEvent::ToolCallReady(tc) if tc.name == BuiltinToolName::Read.as_str()
+        ));
     }
 
     #[test]
@@ -213,19 +220,19 @@ mod tests {
     fn tool_call_start_maps_to_progress() {
         let events = normalize(StreamEvent::ToolCallStart {
             id: "tc-3".into(),
-            name: "write".into(),
+            name: BuiltinToolName::Write.as_str().into(),
         });
         assert_eq!(events.len(), 1);
         assert!(matches!(
             &events[0],
-            LoopEvent::ToolCallProgress { id, name: Some(n), .. } if id == "tc-3" && n == "write"
+            LoopEvent::ToolCallProgress { id, name: Some(n), .. } if id == "tc-3" && n == BuiltinToolName::Write.as_str()
         ));
     }
 
     #[test]
     fn finish_step_stop_maps_to_end_turn() {
         let events = normalize(StreamEvent::FinishStep {
-            finish_reason: Some("stop".into()),
+            finish_reason: Some(ProviderFinishReasonWire::Stop.as_str().into()),
             usage: rocode_provider::StreamUsage::default(),
             provider_metadata: None,
         });
@@ -242,7 +249,7 @@ mod tests {
     #[test]
     fn finish_step_tool_calls_maps_to_tool_use() {
         let events = normalize(StreamEvent::FinishStep {
-            finish_reason: Some("tool-calls".into()),
+            finish_reason: Some(ProviderFinishReasonWire::ToolCalls.as_str().into()),
             usage: rocode_provider::StreamUsage::default(),
             provider_metadata: None,
         });
@@ -288,12 +295,12 @@ mod tests {
     fn tool_input_start_maps_to_progress() {
         let events = normalize(StreamEvent::ToolInputStart {
             id: "ti-1".into(),
-            tool_name: "bash".into(),
+            tool_name: BuiltinToolName::Bash.as_str().into(),
         });
         assert_eq!(events.len(), 1);
         assert!(matches!(
             &events[0],
-            LoopEvent::ToolCallProgress { id, name: Some(n), .. } if id == "ti-1" && n == "bash"
+            LoopEvent::ToolCallProgress { id, name: Some(n), .. } if id == "ti-1" && n == BuiltinToolName::Bash.as_str()
         ));
     }
 

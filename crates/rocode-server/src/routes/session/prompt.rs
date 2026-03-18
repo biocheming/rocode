@@ -8,6 +8,11 @@ use axum::{
     http::HeaderMap,
     Json,
 };
+use rocode_core::contracts::agent_tasks::bus_keys as agent_task_bus_keys;
+use rocode_core::contracts::events::BusEventName;
+use rocode_core::contracts::provider::ProviderFinishReasonWire;
+use rocode_core::contracts::scheduler::keys as scheduler_keys;
+use rocode_core::contracts::session::keys as session_keys;
 use serde::Deserialize;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -236,79 +241,88 @@ pub(super) async fn session_prompt(
         };
 
         if let Some(variant) = task_variant.as_deref() {
-            session
-                .metadata
-                .insert("model_variant".to_string(), serde_json::json!(variant));
+            session.metadata.insert(
+                session_keys::MODEL_VARIANT.to_string(),
+                serde_json::json!(variant),
+            );
         } else {
-            session.metadata.remove("model_variant");
+            session.metadata.remove(session_keys::MODEL_VARIANT);
         }
         session.metadata.insert(
-            "model_provider".to_string(),
+            session_keys::MODEL_PROVIDER.to_string(),
             serde_json::json!(&task_provider),
         );
-        session
-            .metadata
-            .insert("model_id".to_string(), serde_json::json!(&task_model));
+        session.metadata.insert(
+            session_keys::MODEL_ID.to_string(),
+            serde_json::json!(&task_model),
+        );
         if let Some(agent) = task_agent.as_deref() {
             session
                 .metadata
-                .insert("agent".to_string(), serde_json::json!(agent));
+                .insert(session_keys::AGENT.to_string(), serde_json::json!(agent));
         } else {
-            session.metadata.remove("agent");
+            session.metadata.remove(session_keys::AGENT);
         }
         session.metadata.insert(
-            "scheduler_applied".to_string(),
+            session_keys::SCHEDULER_APPLIED.to_string(),
             serde_json::json!(task_scheduler_applied),
         );
         session.metadata.insert(
-            "scheduler_skill_tree_applied".to_string(),
+            session_keys::SCHEDULER_SKILL_TREE_APPLIED.to_string(),
             serde_json::json!(task_scheduler_skill_tree_applied),
         );
         if let Some(profile) = task_scheduler_profile_name.as_deref() {
-            session
-                .metadata
-                .insert("scheduler_profile".to_string(), serde_json::json!(profile));
+            session.metadata.insert(
+                scheduler_keys::PROFILE.to_string(),
+                serde_json::json!(profile),
+            );
         } else {
-            session.metadata.remove("scheduler_profile");
+            session.metadata.remove(scheduler_keys::PROFILE);
         }
         if let Some(root_agent) = task_scheduler_root_agent.as_deref() {
             session.metadata.insert(
-                "scheduler_root_agent".to_string(),
+                session_keys::SCHEDULER_ROOT_AGENT.to_string(),
                 serde_json::json!(root_agent),
             );
         } else {
-            session.metadata.remove("scheduler_root_agent");
+            session.metadata.remove(session_keys::SCHEDULER_ROOT_AGENT);
         }
         if let Some(recovery) = task_recovery.as_ref() {
             if let Some(action) = recovery.action.as_ref() {
                 session.metadata.insert(
-                    "last_recovery_action".to_string(),
+                    session_keys::LAST_RECOVERY_ACTION.to_string(),
                     serde_json::json!(action),
                 );
             }
             if let Some(target_id) = recovery.target_id.as_deref() {
                 session.metadata.insert(
-                    "last_recovery_target_id".to_string(),
+                    session_keys::LAST_RECOVERY_TARGET_ID.to_string(),
                     serde_json::json!(target_id),
                 );
             } else {
-                session.metadata.remove("last_recovery_target_id");
+                session
+                    .metadata
+                    .remove(session_keys::LAST_RECOVERY_TARGET_ID);
             }
             if let Some(target_kind) = recovery.target_kind.as_deref() {
                 session.metadata.insert(
-                    "last_recovery_target_kind".to_string(),
+                    session_keys::LAST_RECOVERY_TARGET_KIND.to_string(),
                     serde_json::json!(target_kind),
                 );
             } else {
-                session.metadata.remove("last_recovery_target_kind");
+                session
+                    .metadata
+                    .remove(session_keys::LAST_RECOVERY_TARGET_KIND);
             }
             if let Some(target_label) = recovery.target_label.as_deref() {
                 session.metadata.insert(
-                    "last_recovery_target_label".to_string(),
+                    session_keys::LAST_RECOVERY_TARGET_LABEL.to_string(),
                     serde_json::json!(target_label),
                 );
             } else {
-                session.metadata.remove("last_recovery_target_label");
+                session
+                    .metadata
+                    .remove(session_keys::LAST_RECOVERY_TARGET_LABEL);
             }
         }
 
@@ -322,50 +336,51 @@ pub(super) async fn session_prompt(
             let user_message_id = {
                 let user_message = session.add_user_message(display_prompt_text.clone());
                 user_message.metadata.insert(
-                    "resolved_scheduler_profile".to_string(),
+                    scheduler_keys::RESOLVED_PROFILE.to_string(),
                     serde_json::json!(profile_name.clone()),
                 );
                 user_message.metadata.insert(
-                    "resolved_execution_mode_kind".to_string(),
+                    session_keys::RESOLVED_EXECUTION_MODE_KIND.to_string(),
                     serde_json::json!(mode_kind),
                 );
                 user_message.metadata.insert(
-                    "resolved_system_prompt".to_string(),
+                    session_keys::RESOLVED_SYSTEM_PROMPT.to_string(),
                     serde_json::json!(resolved_system_prompt.clone()),
                 );
                 user_message.metadata.insert(
-                    "resolved_system_prompt_preview".to_string(),
+                    session_keys::RESOLVED_SYSTEM_PROMPT_PREVIEW.to_string(),
                     serde_json::json!(resolved_system_prompt.clone()),
                 );
                 user_message.metadata.insert(
-                    "resolved_system_prompt_applied".to_string(),
+                    session_keys::RESOLVED_SYSTEM_PROMPT_APPLIED.to_string(),
                     serde_json::json!(true),
                 );
                 user_message.metadata.insert(
-                    "resolved_user_prompt".to_string(),
+                    session_keys::RESOLVED_USER_PROMPT.to_string(),
                     serde_json::json!(prompt_text.clone()),
                 );
                 if let Some(recovery) = task_recovery.as_ref() {
                     if let Some(action) = recovery.action.as_ref() {
-                        user_message
-                            .metadata
-                            .insert("recovery_action".to_string(), serde_json::json!(action));
+                        user_message.metadata.insert(
+                            session_keys::RECOVERY_ACTION.to_string(),
+                            serde_json::json!(action),
+                        );
                     }
                     if let Some(target_id) = recovery.target_id.as_deref() {
                         user_message.metadata.insert(
-                            "recovery_target_id".to_string(),
+                            session_keys::RECOVERY_TARGET_ID.to_string(),
                             serde_json::json!(target_id),
                         );
                     }
                     if let Some(target_kind) = recovery.target_kind.as_deref() {
                         user_message.metadata.insert(
-                            "recovery_target_kind".to_string(),
+                            session_keys::RECOVERY_TARGET_KIND.to_string(),
                             serde_json::json!(target_kind),
                         );
                     }
                     if let Some(target_label) = recovery.target_label.as_deref() {
                         user_message.metadata.insert(
-                            "recovery_target_label".to_string(),
+                            session_keys::RECOVERY_TARGET_LABEL.to_string(),
                             serde_json::json!(target_label),
                         );
                     }
@@ -478,7 +493,7 @@ pub(super) async fn session_prompt(
                         serde_json::json!(user_message_id.clone()),
                     ),
                     (
-                        "scheduler_profile".to_string(),
+                        scheduler_keys::PROFILE.to_string(),
                         serde_json::json!(profile_name.clone()),
                     ),
                 ]),
@@ -550,29 +565,31 @@ pub(super) async fn session_prompt(
 
             if let Some(assistant) = session.get_message_mut(&assistant_message_id) {
                 assistant.metadata.insert(
-                    "model_provider".to_string(),
+                    session_keys::MODEL_PROVIDER.to_string(),
                     serde_json::json!(&task_provider),
                 );
-                assistant
-                    .metadata
-                    .insert("model_id".to_string(), serde_json::json!(&task_model));
                 assistant.metadata.insert(
-                    "scheduler_profile".to_string(),
+                    session_keys::MODEL_ID.to_string(),
+                    serde_json::json!(&task_model),
+                );
+                assistant.metadata.insert(
+                    scheduler_keys::PROFILE.to_string(),
                     serde_json::json!(profile_name.clone()),
                 );
                 assistant.metadata.insert(
-                    "resolved_scheduler_profile".to_string(),
+                    scheduler_keys::RESOLVED_PROFILE.to_string(),
                     serde_json::json!(profile_name.clone()),
                 );
                 assistant.metadata.insert(
-                    "resolved_execution_mode_kind".to_string(),
+                    session_keys::RESOLVED_EXECUTION_MODE_KIND.to_string(),
                     serde_json::json!(mode_kind),
                 );
-                assistant
-                    .metadata
-                    .insert("mode".to_string(), serde_json::json!(profile_name.clone()));
                 assistant.metadata.insert(
-                    "scheduler_applied".to_string(),
+                    session_keys::MODE.to_string(),
+                    serde_json::json!(profile_name.clone()),
+                );
+                assistant.metadata.insert(
+                    session_keys::SCHEDULER_APPLIED.to_string(),
                     serde_json::json!(task_scheduler_applied),
                 );
                 match orchestrator_result {
@@ -583,18 +600,19 @@ pub(super) async fn session_prompt(
                                     .await;
                             assistant.finish = Some("cancelled".to_string());
                             assistant.metadata.insert(
-                                "finish_reason".to_string(),
+                                session_keys::FINISH_REASON.to_string(),
                                 serde_json::json!("cancelled"),
                             );
                         } else {
-                            assistant.finish = Some("stop".to_string());
+                            assistant.finish =
+                                Some(ProviderFinishReasonWire::Stop.as_str().to_string());
                         }
                         assistant.metadata.insert(
-                            "scheduler_steps".to_string(),
+                            scheduler_keys::SCHEDULER_STEPS.to_string(),
                             serde_json::json!(output.steps),
                         );
                         assistant.metadata.insert(
-                            "scheduler_tool_calls".to_string(),
+                            scheduler_keys::SCHEDULER_TOOL_CALLS.to_string(),
                             serde_json::json!(output.tool_calls_count),
                         );
                         if let Some(usage) = output_usage(&output.metadata) {
@@ -626,7 +644,7 @@ pub(super) async fn session_prompt(
                                     .await;
                             assistant.finish = Some("cancelled".to_string());
                             assistant.metadata.insert(
-                                "finish_reason".to_string(),
+                                session_keys::FINISH_REASON.to_string(),
                                 serde_json::json!("cancelled"),
                             );
                             assistant.add_text("Scheduler cancelled.");
@@ -637,10 +655,12 @@ pub(super) async fn session_prompt(
                                 %error,
                                 "scheduler prompt failed"
                             );
-                            assistant.finish = Some("error".to_string());
-                            assistant
-                                .metadata
-                                .insert("error".to_string(), serde_json::json!(error.to_string()));
+                            assistant.finish =
+                                Some(ProviderFinishReasonWire::Error.as_str().to_string());
+                            assistant.metadata.insert(
+                                session_keys::ERROR.to_string(),
+                                serde_json::json!(error.to_string()),
+                            );
                             assistant.add_text(format!("Scheduler error: {}", error));
                         }
                     }
@@ -800,16 +820,20 @@ pub(super) async fn session_prompt(
                     let state = state.clone();
                     let session_id = session_id.clone();
                     Box::pin(async move {
-                        match event_type.as_str() {
-                            "agent_task.registered" => {
-                                let task_id = properties["task_id"].as_str().unwrap_or_default();
-                                let agent_name =
-                                    properties["agent_name"].as_str().unwrap_or_default();
-                                let parent_tool_call_id = properties["parent_tool_call_id"]
-                                .as_str()
-                                .map(
-                                    crate::runtime_control::RuntimeControlRegistry::tool_call_execution_id,
-                                );
+                        match BusEventName::parse(event_type.as_str()) {
+                            Some(BusEventName::AgentTaskRegistered) => {
+                                let task_id = properties
+                                    .get(agent_task_bus_keys::TASK_ID)
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or_default();
+                                let agent_name = properties
+                                    .get(agent_task_bus_keys::AGENT_NAME)
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or_default();
+                                let parent_tool_call_id = properties
+                                    .get(agent_task_bus_keys::PARENT_TOOL_CALL_ID)
+                                    .and_then(|value| value.as_str())
+                                    .map(crate::runtime_control::RuntimeControlRegistry::tool_call_execution_id);
                                 let stage_id = if let Some(ref pid) = parent_tool_call_id {
                                     state.runtime_control.resolve_stage_id(pid).await
                                 } else {
@@ -826,8 +850,11 @@ pub(super) async fn session_prompt(
                                     )
                                     .await;
                             }
-                            "agent_task.completed" => {
-                                let task_id = properties["task_id"].as_str().unwrap_or_default();
+                            Some(BusEventName::AgentTaskCompleted) => {
+                                let task_id = properties
+                                    .get(agent_task_bus_keys::TASK_ID)
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or_default();
                                 state.runtime_control.finish_agent_task(task_id).await;
                             }
                             _ => {}
@@ -867,24 +894,27 @@ pub(super) async fn session_prompt(
                 "session prompt failed"
             );
             let assistant = session.add_assistant_message();
-            assistant.finish = Some("error".to_string());
-            assistant
-                .metadata
-                .insert("error".to_string(), serde_json::json!(error.to_string()));
-            assistant
-                .metadata
-                .insert("finish_reason".to_string(), serde_json::json!("error"));
+            assistant.finish = Some(ProviderFinishReasonWire::Error.as_str().to_string());
             assistant.metadata.insert(
-                "model_provider".to_string(),
+                session_keys::ERROR.to_string(),
+                serde_json::json!(error.to_string()),
+            );
+            assistant.metadata.insert(
+                session_keys::FINISH_REASON.to_string(),
+                serde_json::json!(ProviderFinishReasonWire::Error.as_str()),
+            );
+            assistant.metadata.insert(
+                session_keys::MODEL_PROVIDER.to_string(),
                 serde_json::json!(&task_provider),
             );
-            assistant
-                .metadata
-                .insert("model_id".to_string(), serde_json::json!(&task_model));
+            assistant.metadata.insert(
+                session_keys::MODEL_ID.to_string(),
+                serde_json::json!(&task_model),
+            );
             if let Some(agent) = task_agent.as_deref() {
                 assistant
                     .metadata
-                    .insert("agent".to_string(), serde_json::json!(agent));
+                    .insert(session_keys::AGENT.to_string(), serde_json::json!(agent));
             }
             assistant.add_text(format!("Provider error: {}", error));
         }
@@ -924,6 +954,6 @@ pub(super) async fn session_prompt(
     Ok(Json(serde_json::json!({
         "status": "started",
         "model": format!("{}/{}", provider_id, model_id),
-        "variant": req.variant,
+        session_keys::MODEL_VARIANT: req.variant,
     })))
 }

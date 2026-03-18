@@ -6,6 +6,23 @@ use crate::output_blocks::{
     SessionEventField, StatusBlock, ToolBlock, ToolPhase, ToolStructuredDetail,
 };
 use rocode_agent::{AgentRenderEvent, AgentRenderOutcome, AgentToolOutput};
+#[cfg(test)]
+use rocode_core::contracts::agent_tasks::AgentTaskStatusKind;
+use rocode_core::contracts::output_blocks::{
+    keys as output_keys, scheduler_decision_keys as output_decision_keys,
+    scheduler_decision_spec_keys as output_decision_spec_keys,
+    scheduler_stage_keys as output_stage_keys, BlockToneWire, DisplayPreviewKindWire,
+    MessagePhaseWire, MessageRoleWire, OutputBlockKind, ToolPhaseWire,
+    ToolStructuredDetailTypeWire,
+};
+use rocode_core::contracts::patch::keys as patch_keys;
+#[cfg(test)]
+use rocode_core::contracts::todo::TodoPriority;
+use rocode_core::contracts::todo::{keys as todo_keys, TodoStatus};
+use rocode_core::contracts::tools::{
+    arg_keys as tool_arg_keys, BuiltinToolName, QuestionInteractionStatus, ToolCallStatusWire,
+};
+use rocode_core::contracts::wire::fields as wire_fields;
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -131,14 +148,16 @@ pub fn history_tool_call_to_web(
     status: Option<&str>,
     raw: Option<&str>,
 ) -> serde_json::Value {
-    let normalized_status = status.unwrap_or("pending");
-    let detail = history_tool_call_detail(input, raw, normalized_status);
+    let normalized_status = status.unwrap_or(ToolCallStatusWire::Pending.as_str());
+    let status_wire =
+        ToolCallStatusWire::parse(normalized_status).unwrap_or(ToolCallStatusWire::Pending);
+    let detail = history_tool_call_detail(input, raw, status_wire);
     let structured = extract_tool_input_structured(tool_name, input);
-    let phase = match normalized_status {
-        "running" => ToolPhase::Running,
-        "completed" => ToolPhase::Done,
-        "error" => ToolPhase::Error,
-        _ => ToolPhase::Start,
+    let phase = match status_wire {
+        ToolCallStatusWire::Pending => ToolPhase::Start,
+        ToolCallStatusWire::Running => ToolPhase::Running,
+        ToolCallStatusWire::Completed => ToolPhase::Done,
+        ToolCallStatusWire::Error => ToolPhase::Error,
     };
 
     let mut block = ToolBlock {
@@ -153,7 +172,7 @@ pub fn history_tool_call_to_web(
 
     let mut web = output_block_to_web(&OutputBlock::Tool(block));
     if let serde_json::Value::Object(ref mut map) = web {
-        map.insert("id".to_string(), json!(tool_call_id));
+        map.insert(output_keys::ID.to_string(), json!(tool_call_id));
     }
     apply_history_tool_call_display_override(&mut web, tool_name, input);
     web
@@ -187,7 +206,7 @@ pub fn history_tool_result_to_web(
     }
     let mut web = output_block_to_web(&OutputBlock::Tool(block));
     if let serde_json::Value::Object(ref mut map) = web {
-        map.insert("id".to_string(), json!(tool_call_id));
+        map.insert(output_keys::ID.to_string(), json!(tool_call_id));
     }
     apply_history_tool_result_display_override(&mut web, tool_name, title, metadata);
     apply_history_tool_result_interaction(&mut web, tool_name, title, content, is_error);
@@ -218,15 +237,15 @@ pub fn history_session_event_to_web(
 fn history_tool_call_detail(
     input: &serde_json::Value,
     raw: Option<&str>,
-    status: &str,
+    status: ToolCallStatusWire,
 ) -> Option<String> {
     if let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) {
         return Some(raw.to_string());
     }
 
     match status {
-        "completed" | "error" => None,
-        _ => {
+        ToolCallStatusWire::Completed | ToolCallStatusWire::Error => None,
+        ToolCallStatusWire::Pending | ToolCallStatusWire::Running => {
             if input.is_null() {
                 return None;
             }
@@ -265,9 +284,12 @@ fn apply_history_tool_call_display_override(
     tool_name: &str,
     input: &serde_json::Value,
 ) {
-    match tool_name {
-        "question" => {
-            let Some(questions) = input.get("questions").and_then(|value| value.as_array()) else {
+    match BuiltinToolName::parse(tool_name) {
+        Some(BuiltinToolName::Question) => {
+            let Some(questions) = input
+                .get(wire_fields::QUESTIONS)
+                .and_then(|value| value.as_array())
+            else {
                 return;
             };
             if questions.is_empty() {
@@ -283,22 +305,27 @@ fn apply_history_tool_call_display_override(
                 .enumerate()
                 .filter_map(|(index, item)| {
                     let label = item
-                        .get("header")
+                        .get(wire_fields::HEADER)
                         .and_then(|value| value.as_str())
                         .filter(|value| !value.trim().is_empty())
                         .map(str::to_string)
                         .unwrap_or_else(|| format!("Question {}", index + 1));
-                    let question = item.get("question").and_then(|value| value.as_str())?;
+                    let question = item
+                        .get(wire_fields::QUESTION)
+                        .and_then(|value| value.as_str())?;
                     Some(json!({
-                        "label": label,
-                        "value": question,
+                        output_keys::LABEL: label,
+                        output_keys::VALUE: question,
                     }))
                 })
                 .collect::<Vec<_>>();
             apply_display_override(web, summary, fields, None);
         }
-        "todowrite" | "todo_write" => {
-            let Some(todos) = input.get("todos").and_then(|value| value.as_array()) else {
+        Some(BuiltinToolName::TodoWrite) => {
+            let Some(todos) = input
+                .get(todo_keys::TODOS)
+                .and_then(|value| value.as_array())
+            else {
                 return;
             };
             let summary = Some(format!("{} todo items proposed", todos.len()));
@@ -306,7 +333,7 @@ fn apply_history_tool_call_display_override(
             let preview = todo_preview_from_array(todos);
             apply_display_override(web, summary, fields, preview);
         }
-        "todoread" | "todo_read" => {
+        Some(BuiltinToolName::TodoRead) => {
             apply_display_override(
                 web,
                 Some("Read current todo list".to_string()),
@@ -324,23 +351,26 @@ fn apply_history_tool_result_display_override(
     title: Option<&str>,
     metadata: &HashMap<String, serde_json::Value>,
 ) {
-    match tool_name {
-        "question" => {
+    match BuiltinToolName::parse(tool_name) {
+        Some(BuiltinToolName::Question) => {
             let summary = metadata
-                .get("display.summary")
+                .get(output_keys::DISPLAY_SUMMARY)
                 .and_then(|value| value.as_str())
                 .map(str::to_string)
                 .or_else(|| title.map(str::to_string));
             let fields = metadata
-                .get("display.fields")
+                .get(output_keys::DISPLAY_FIELDS)
                 .and_then(|value| value.as_array())
                 .map(|values| {
                     values
                         .iter()
                         .filter_map(|field| {
                             Some(json!({
-                                "label": field.get("key")?.as_str()?,
-                                "value": field.get("value")?.as_str().unwrap_or(""),
+                                output_keys::LABEL: field.get(output_keys::DISPLAY_FIELD_KEY)?.as_str()?,
+                                output_keys::VALUE: field
+                                    .get(output_keys::DISPLAY_FIELD_VALUE)?
+                                    .as_str()
+                                    .unwrap_or(""),
                             }))
                         })
                         .collect::<Vec<_>>()
@@ -348,15 +378,15 @@ fn apply_history_tool_result_display_override(
                 .unwrap_or_default();
             apply_display_override(web, summary, fields, None);
         }
-        "todowrite" | "todo_write" | "todoread" | "todo_read" => {
+        Some(BuiltinToolName::TodoWrite | BuiltinToolName::TodoRead) => {
             let todos = metadata
-                .get("todos")
+                .get(todo_keys::TODOS)
                 .and_then(|value| value.as_array())
                 .cloned()
                 .unwrap_or_default();
             let summary = title.map(str::to_string).or_else(|| {
                 metadata
-                    .get("count")
+                    .get(todo_keys::COUNT)
                     .and_then(|value| value.as_u64())
                     .map(|count| format!("{count} todo items"))
             });
@@ -375,7 +405,7 @@ fn apply_history_tool_result_interaction(
     content: &str,
     is_error: bool,
 ) {
-    if tool_name != "question" {
+    if BuiltinToolName::parse(tool_name) != Some(BuiltinToolName::Question) {
         return;
     }
     let status = if is_error {
@@ -385,26 +415,35 @@ fn apply_history_tool_result_interaction(
             content.to_ascii_lowercase()
         );
         if lower.contains("reject") {
-            "rejected"
+            QuestionInteractionStatus::Rejected
         } else if lower.contains("cancel") {
-            "cancelled"
+            QuestionInteractionStatus::Cancelled
         } else {
-            "error"
+            QuestionInteractionStatus::Error
         }
     } else {
-        "answered"
+        QuestionInteractionStatus::Answered
     };
     let Some(map) = web.as_object_mut() else {
         return;
     };
     map.insert(
-        "interaction".to_string(),
-        json!({
-            "type": "question",
-            "status": status,
-            "can_reply": false,
-            "can_reject": false,
-        }),
+        output_keys::INTERACTION.to_string(),
+        serde_json::Value::Object(serde_json::Map::from_iter([
+            (
+                output_keys::INTERACTION_TYPE.to_string(),
+                json!(BuiltinToolName::Question.as_str()),
+            ),
+            (
+                output_keys::INTERACTION_STATUS.to_string(),
+                json!(status.as_str()),
+            ),
+            (output_keys::INTERACTION_CAN_REPLY.to_string(), json!(false)),
+            (
+                output_keys::INTERACTION_CAN_REJECT.to_string(),
+                json!(false),
+            ),
+        ])),
     );
 }
 
@@ -418,20 +457,23 @@ fn apply_display_override(
         return;
     };
     let display = map
-        .entry("display".to_string())
+        .entry(output_keys::DISPLAY.to_string())
         .or_insert_with(|| json!({}))
         .as_object_mut();
     let Some(display) = display else {
         return;
     };
     if let Some(summary) = summary {
-        display.insert("summary".to_string(), json!(summary));
+        display.insert(output_keys::SUMMARY.to_string(), json!(summary));
     }
     if !fields.is_empty() {
-        display.insert("fields".to_string(), serde_json::Value::Array(fields));
+        display.insert(
+            output_keys::FIELDS.to_string(),
+            serde_json::Value::Array(fields),
+        );
     }
     if let Some(preview) = preview {
-        display.insert("preview".to_string(), preview);
+        display.insert(output_keys::PREVIEW.to_string(), preview);
     }
 }
 
@@ -443,21 +485,22 @@ fn todo_summary_fields_from_array(todos: &[serde_json::Value]) -> Vec<serde_json
     let mut in_progress = 0_u64;
     let mut completed = 0_u64;
     for todo in todos {
-        match todo
-            .get("status")
+        let status_raw = todo
+            .get(todo_keys::STATUS)
             .and_then(|value| value.as_str())
-            .unwrap_or("pending")
-        {
-            "completed" => completed += 1,
-            "in_progress" | "in-progress" | "in progress" => in_progress += 1,
+            .unwrap_or(TodoStatus::Pending.as_str());
+
+        match TodoStatus::parse(status_raw).unwrap_or(TodoStatus::Pending) {
+            TodoStatus::Completed => completed += 1,
+            TodoStatus::InProgress => in_progress += 1,
             _ => pending += 1,
         }
     }
     vec![
-        json!({ "label": "Count", "value": todos.len().to_string() }),
-        json!({ "label": "Pending", "value": pending.to_string() }),
-        json!({ "label": "In Progress", "value": in_progress.to_string() }),
-        json!({ "label": "Completed", "value": completed.to_string() }),
+        json!({ output_keys::LABEL: "Count", output_keys::VALUE: todos.len().to_string() }),
+        json!({ output_keys::LABEL: "Pending", output_keys::VALUE: pending.to_string() }),
+        json!({ output_keys::LABEL: "In Progress", output_keys::VALUE: in_progress.to_string() }),
+        json!({ output_keys::LABEL: "Completed", output_keys::VALUE: completed.to_string() }),
     ]
 }
 
@@ -469,11 +512,16 @@ fn todo_preview_from_array(todos: &[serde_json::Value]) -> Option<serde_json::Va
         .iter()
         .take(8)
         .filter_map(|todo| {
-            let content = todo.get("content").and_then(|value| value.as_str())?;
-            let status = todo
-                .get("status")
+            let content = todo
+                .get(todo_keys::CONTENT)
+                .and_then(|value| value.as_str())?;
+            let status_raw = todo
+                .get(todo_keys::STATUS)
                 .and_then(|value| value.as_str())
-                .unwrap_or("pending");
+                .unwrap_or(TodoStatus::Pending.as_str());
+            let status = TodoStatus::parse(status_raw)
+                .unwrap_or(TodoStatus::Pending)
+                .as_str();
             Some(format!("- [{}] {}", status, content))
         })
         .collect::<Vec<_>>();
@@ -481,9 +529,9 @@ fn todo_preview_from_array(todos: &[serde_json::Value]) -> Option<serde_json::Va
         return None;
     }
     Some(json!({
-        "kind": "text",
-        "text": lines.join("\n"),
-        "truncated": todos.len() > lines.len(),
+        output_keys::KIND: DisplayPreviewKindWire::Text.as_str(),
+        output_keys::TEXT: lines.join("\n"),
+        output_keys::TRUNCATED: todos.len() > lines.len(),
     }))
 }
 
@@ -495,11 +543,11 @@ fn extract_tool_input_structured(
     tool_name: &str,
     input: &serde_json::Value,
 ) -> Option<ToolStructuredDetail> {
-    match tool_name {
-        "edit" | "multiedit" => {
+    match BuiltinToolName::parse(tool_name) {
+        Some(BuiltinToolName::Edit | BuiltinToolName::MultiEdit) => {
             let file_path = input
-                .get("file_path")
-                .or_else(|| input.get("filePath"))
+                .get(patch_keys::FILE_PATH_SNAKE)
+                .or_else(|| input.get(patch_keys::FILE_PATH))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
@@ -508,10 +556,10 @@ fn extract_tool_input_structured(
                 diff_preview: None,
             })
         }
-        "write" => {
+        Some(BuiltinToolName::Write) => {
             let file_path = input
-                .get("file_path")
-                .or_else(|| input.get("filePath"))
+                .get(patch_keys::FILE_PATH_SNAKE)
+                .or_else(|| input.get(patch_keys::FILE_PATH))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
@@ -522,10 +570,10 @@ fn extract_tool_input_structured(
                 diff_preview: None,
             })
         }
-        "read" => {
+        Some(BuiltinToolName::Read) => {
             let file_path = input
-                .get("file_path")
-                .or_else(|| input.get("filePath"))
+                .get(patch_keys::FILE_PATH_SNAKE)
+                .or_else(|| input.get(patch_keys::FILE_PATH))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
@@ -535,9 +583,9 @@ fn extract_tool_input_structured(
                 truncated: false,
             })
         }
-        "bash" => {
+        Some(BuiltinToolName::Bash) => {
             let command_preview = input
-                .get("command")
+                .get(tool_arg_keys::COMMAND)
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
@@ -548,9 +596,9 @@ fn extract_tool_input_structured(
                 truncated: false,
             })
         }
-        "grep" => {
+        Some(BuiltinToolName::Grep) => {
             let pattern = input
-                .get("pattern")
+                .get(tool_arg_keys::PATTERN)
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
@@ -560,9 +608,9 @@ fn extract_tool_input_structured(
                 truncated: false,
             })
         }
-        "glob" => {
+        Some(BuiltinToolName::Glob) => {
             let pattern = input
-                .get("pattern")
+                .get(tool_arg_keys::PATTERN)
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
@@ -582,20 +630,20 @@ fn extract_tool_result_structured(
     output: &AgentToolOutput,
 ) -> Option<ToolStructuredDetail> {
     let meta = &output.metadata;
-    match tool_name {
-        "edit" | "multiedit" => {
-            let file_path = meta_str(meta, "filepath").unwrap_or_default();
-            let diff_preview = meta_str(meta, "diff");
+    match BuiltinToolName::parse(tool_name) {
+        Some(BuiltinToolName::Edit | BuiltinToolName::MultiEdit) => {
+            let file_path = meta_str(meta, patch_keys::FILEPATH).unwrap_or_default();
+            let diff_preview = meta_str(meta, patch_keys::DIFF);
             Some(ToolStructuredDetail::FileEdit {
                 file_path,
                 diff_preview,
             })
         }
-        "write" => {
-            let file_path = meta_str(meta, "filepath").unwrap_or_default();
-            let bytes = meta_u64(meta, "bytes");
-            let lines = meta_u64(meta, "lines");
-            let diff_preview = meta_str(meta, "diff");
+        Some(BuiltinToolName::Write) => {
+            let file_path = meta_str(meta, patch_keys::FILEPATH).unwrap_or_default();
+            let bytes = meta_u64(meta, patch_keys::BYTES);
+            let lines = meta_u64(meta, patch_keys::LINES);
+            let diff_preview = meta_str(meta, patch_keys::DIFF);
             Some(ToolStructuredDetail::FileWrite {
                 file_path,
                 bytes,
@@ -603,8 +651,8 @@ fn extract_tool_result_structured(
                 diff_preview,
             })
         }
-        "read" => {
-            let file_path = meta_str(meta, "filepath").unwrap_or_default();
+        Some(BuiltinToolName::Read) => {
+            let file_path = meta_str(meta, patch_keys::FILEPATH).unwrap_or_default();
             let total_lines = meta_u64(meta, "total_lines");
             let truncated = meta_bool(meta, "truncated");
             Some(ToolStructuredDetail::FileRead {
@@ -613,7 +661,7 @@ fn extract_tool_result_structured(
                 truncated,
             })
         }
-        "bash" => {
+        Some(BuiltinToolName::Bash) => {
             let command_preview = String::new(); // command is in tool input, not result metadata
             let exit_code = meta_i64(meta, "exit_code");
             // Use the tool output text as output preview for bash
@@ -630,7 +678,7 @@ fn extract_tool_result_structured(
                 truncated,
             })
         }
-        "grep" => {
+        Some(BuiltinToolName::Grep) => {
             let pattern = String::new(); // pattern is in tool input
             let matches = meta_u64(meta, "matches");
             let truncated = meta_bool(meta, "truncated");
@@ -640,7 +688,7 @@ fn extract_tool_result_structured(
                 truncated,
             })
         }
-        "glob" => {
+        Some(BuiltinToolName::Glob) => {
             let pattern = String::new();
             let matches = meta_u64(meta, "count");
             let truncated = meta_bool(meta, "truncated");
@@ -677,20 +725,20 @@ fn meta_bool(meta: &HashMap<String, serde_json::Value>, key: &str) -> bool {
 pub fn output_block_to_web(block: &OutputBlock) -> serde_json::Value {
     match block {
         OutputBlock::Status(StatusBlock { tone, text }) => json!({
-            "kind": "status",
-            "tone": tone_to_web(tone),
-            "text": text,
+            output_keys::KIND: OutputBlockKind::Status.as_str(),
+            output_keys::TONE: tone_to_web(tone),
+            output_keys::TEXT: text,
         }),
         OutputBlock::Message(MessageBlock { role, phase, text }) => json!({
-            "kind": "message",
-            "role": role_to_web(role),
-            "phase": phase_to_web(phase),
-            "text": text,
+            output_keys::KIND: OutputBlockKind::Message.as_str(),
+            output_keys::ROLE: role_to_web(role),
+            output_keys::PHASE: phase_to_web(phase),
+            output_keys::TEXT: text,
         }),
         OutputBlock::Reasoning(ReasoningBlock { phase, text }) => json!({
-            "kind": "reasoning",
-            "phase": phase_to_web(phase),
-            "text": text,
+            output_keys::KIND: OutputBlockKind::Reasoning.as_str(),
+            output_keys::PHASE: phase_to_web(phase),
+            output_keys::TEXT: text,
         }),
         OutputBlock::Tool(ToolBlock {
             name,
@@ -705,27 +753,27 @@ pub fn output_block_to_web(block: &OutputBlock) -> serde_json::Value {
                 structured: structured.clone(),
             };
             let mut obj = serde_json::json!({
-                "kind": "tool",
-                "name": name,
-                "phase": tool_phase_to_web(phase),
-                "detail": detail,
-                "display": {
-                    "header": tool_web_header(&tool),
-                    "summary": tool_web_summary(&tool),
-                    "fields": tool_web_fields(&tool).into_iter().map(|field| json!({
-                        "label": field.label,
-                        "value": field.value,
+                output_keys::KIND: OutputBlockKind::Tool.as_str(),
+                output_keys::NAME: name,
+                output_keys::PHASE: tool_phase_to_web(phase),
+                output_keys::DETAIL: detail,
+                output_keys::DISPLAY: {
+                    output_keys::HEADER: tool_web_header(&tool),
+                    output_keys::SUMMARY: tool_web_summary(&tool),
+                    output_keys::FIELDS: tool_web_fields(&tool).into_iter().map(|field| json!({
+                        output_keys::LABEL: field.label,
+                        output_keys::VALUE: field.value,
                     })).collect::<Vec<_>>(),
-                    "preview": tool_web_preview(&tool).map(|preview| json!({
-                        "kind": preview.kind,
-                        "text": preview.text,
-                        "truncated": preview.truncated,
+                    output_keys::PREVIEW: tool_web_preview(&tool).map(|preview| json!({
+                        output_keys::KIND: preview.kind,
+                        output_keys::TEXT: preview.text,
+                        output_keys::TRUNCATED: preview.truncated,
                     })),
                 }
             });
             if let Some(ref s) = structured {
                 if let serde_json::Value::Object(ref mut map) = obj {
-                    map.insert("structured".to_string(), structured_to_web(s));
+                    map.insert(output_keys::STRUCTURED.to_string(), structured_to_web(s));
                 }
             }
             obj
@@ -738,80 +786,151 @@ pub fn output_block_to_web(block: &OutputBlock) -> serde_json::Value {
             fields,
             body,
         }) => json!({
-            "kind": "session_event",
-            "event": event,
-            "title": title,
-            "status": status,
-            "summary": summary,
-            "fields": fields.iter().map(|field| json!({
-                "label": field.label,
-                "value": field.value,
-                "tone": field.tone,
+            output_keys::KIND: OutputBlockKind::SessionEvent.as_str(),
+            output_keys::EVENT: event,
+            output_keys::TITLE: title,
+            output_keys::STATUS: status,
+            output_keys::SUMMARY: summary,
+            output_keys::FIELDS: fields.iter().map(|field| json!({
+                output_keys::LABEL: field.label,
+                output_keys::VALUE: field.value,
+                output_keys::TONE: field.tone,
             })).collect::<Vec<_>>(),
-            "body": body,
+            output_keys::BODY: body,
         }),
         OutputBlock::QueueItem(QueueItemBlock { position, text }) => json!({
-            "kind": "queue_item",
-            "position": position,
-            "text": text,
-            "display": {
-                "summary": format!("Queued [{}] {}", position, text),
+            output_keys::KIND: OutputBlockKind::QueueItem.as_str(),
+            output_keys::POSITION: position,
+            output_keys::TEXT: text,
+            output_keys::DISPLAY: {
+                output_keys::SUMMARY: format!("Queued [{}] {}", position, text),
             }
         }),
-        OutputBlock::SchedulerStage(stage) => json!({
-            "kind": "scheduler_stage",
-            "stage_id": stage.stage_id,
-            "profile": stage.profile,
-            "stage": stage.stage,
-            "title": stage.title,
-            "text": stage.text,
-            "stage_index": stage.stage_index,
-            "stage_total": stage.stage_total,
-            "step": stage.step,
-            "status": stage.status,
-            "focus": stage.focus,
-            "last_event": stage.last_event,
-            "waiting_on": stage.waiting_on,
-            "activity": stage.activity,
-            "available_skill_count": stage.available_skill_count,
-            "available_agent_count": stage.available_agent_count,
-            "available_category_count": stage.available_category_count,
-            "active_skills": stage.active_skills,
-            "active_agents": stage.active_agents,
-            "active_categories": stage.active_categories,
-            "done_agent_count": stage.done_agent_count,
-            "total_agent_count": stage.total_agent_count,
-            "prompt_tokens": stage.prompt_tokens,
-            "completion_tokens": stage.completion_tokens,
-            "reasoning_tokens": stage.reasoning_tokens,
-            "cache_read_tokens": stage.cache_read_tokens,
-            "cache_write_tokens": stage.cache_write_tokens,
-            "child_session_id": stage.child_session_id,
-            "decision": stage.decision.as_ref().map(|decision| json!({
-                "kind": decision.kind,
-                "title": decision.title,
-                "spec": {
-                    "version": decision.spec.version,
-                    "show_header_divider": decision.spec.show_header_divider,
-                    "field_order": decision.spec.field_order,
-                    "field_label_emphasis": decision.spec.field_label_emphasis,
-                    "status_palette": decision.spec.status_palette,
-                    "section_spacing": decision.spec.section_spacing,
-                    "update_policy": decision.spec.update_policy,
-                },
-                "fields": decision.fields.iter().map(|field| json!({
-                    "label": field.label,
-                    "value": field.value,
-                    "tone": field.tone,
-                })).collect::<Vec<_>>(),
-                "sections": decision.sections.iter().map(|section| json!({
-                    "title": section.title,
-                    "body": section.body,
-                })).collect::<Vec<_>>(),
-            })),
-        }),
+        OutputBlock::SchedulerStage(stage) => {
+            let decision_value = stage.decision.as_ref().map(|decision| {
+                json!({
+                    output_decision_keys::KIND: decision.kind,
+                    output_decision_keys::TITLE: decision.title,
+                    output_decision_keys::SPEC: {
+                        output_decision_spec_keys::VERSION: decision.spec.version,
+                        output_decision_spec_keys::SHOW_HEADER_DIVIDER: decision.spec.show_header_divider,
+                        output_decision_spec_keys::FIELD_ORDER: decision.spec.field_order,
+                        output_decision_spec_keys::FIELD_LABEL_EMPHASIS: decision.spec.field_label_emphasis,
+                        output_decision_spec_keys::STATUS_PALETTE: decision.spec.status_palette,
+                        output_decision_spec_keys::SECTION_SPACING: decision.spec.section_spacing,
+                        output_decision_spec_keys::UPDATE_POLICY: decision.spec.update_policy,
+                    },
+                    output_decision_keys::FIELDS: decision.fields.iter().map(|field| json!({
+                        output_keys::LABEL: field.label,
+                        output_keys::VALUE: field.value,
+                        output_keys::TONE: field.tone,
+                    })).collect::<Vec<_>>(),
+                    output_decision_keys::SECTIONS: decision.sections.iter().map(|section| json!({
+                        output_keys::TITLE: section.title,
+                        output_keys::BODY: section.body,
+                    })).collect::<Vec<_>>(),
+                })
+            });
+            let mut map = serde_json::Map::new();
+            map.insert(
+                output_keys::KIND.to_string(),
+                json!(OutputBlockKind::SchedulerStage.as_str()),
+            );
+            map.insert(
+                output_stage_keys::STAGE_ID.to_string(),
+                json!(stage.stage_id),
+            );
+            map.insert(output_stage_keys::PROFILE.to_string(), json!(stage.profile));
+            map.insert(output_stage_keys::STAGE.to_string(), json!(stage.stage));
+            map.insert(output_keys::TITLE.to_string(), json!(stage.title));
+            map.insert(output_keys::TEXT.to_string(), json!(stage.text));
+            map.insert(
+                output_stage_keys::STAGE_INDEX.to_string(),
+                json!(stage.stage_index),
+            );
+            map.insert(
+                output_stage_keys::STAGE_TOTAL.to_string(),
+                json!(stage.stage_total),
+            );
+            map.insert(output_stage_keys::STEP.to_string(), json!(stage.step));
+            map.insert(output_keys::STATUS.to_string(), json!(stage.status));
+            map.insert(output_stage_keys::FOCUS.to_string(), json!(stage.focus));
+            map.insert(
+                output_stage_keys::LAST_EVENT.to_string(),
+                json!(stage.last_event),
+            );
+            map.insert(
+                output_stage_keys::WAITING_ON.to_string(),
+                json!(stage.waiting_on),
+            );
+            map.insert(
+                output_stage_keys::ACTIVITY.to_string(),
+                json!(stage.activity),
+            );
+            map.insert(
+                output_stage_keys::AVAILABLE_SKILL_COUNT.to_string(),
+                json!(stage.available_skill_count),
+            );
+            map.insert(
+                output_stage_keys::AVAILABLE_AGENT_COUNT.to_string(),
+                json!(stage.available_agent_count),
+            );
+            map.insert(
+                output_stage_keys::AVAILABLE_CATEGORY_COUNT.to_string(),
+                json!(stage.available_category_count),
+            );
+            map.insert(
+                output_stage_keys::ACTIVE_SKILLS.to_string(),
+                json!(stage.active_skills),
+            );
+            map.insert(
+                output_stage_keys::ACTIVE_AGENTS.to_string(),
+                json!(stage.active_agents),
+            );
+            map.insert(
+                output_stage_keys::ACTIVE_CATEGORIES.to_string(),
+                json!(stage.active_categories),
+            );
+            map.insert(
+                output_stage_keys::DONE_AGENT_COUNT.to_string(),
+                json!(stage.done_agent_count),
+            );
+            map.insert(
+                output_stage_keys::TOTAL_AGENT_COUNT.to_string(),
+                json!(stage.total_agent_count),
+            );
+            map.insert(
+                wire_fields::PROMPT_TOKENS.to_string(),
+                json!(stage.prompt_tokens),
+            );
+            map.insert(
+                wire_fields::COMPLETION_TOKENS.to_string(),
+                json!(stage.completion_tokens),
+            );
+            map.insert(
+                output_stage_keys::REASONING_TOKENS.to_string(),
+                json!(stage.reasoning_tokens),
+            );
+            map.insert(
+                output_stage_keys::CACHE_READ_TOKENS.to_string(),
+                json!(stage.cache_read_tokens),
+            );
+            map.insert(
+                output_stage_keys::CACHE_WRITE_TOKENS.to_string(),
+                json!(stage.cache_write_tokens),
+            );
+            map.insert(
+                output_stage_keys::CHILD_SESSION_ID.to_string(),
+                json!(stage.child_session_id),
+            );
+            map.insert(
+                output_keys::DECISION.to_string(),
+                decision_value.unwrap_or(serde_json::Value::Null),
+            );
+            serde_json::Value::Object(map)
+        }
         OutputBlock::Inspect(inspect) => json!({
-            "kind": "inspect",
+            output_keys::KIND: OutputBlockKind::Inspect.as_str(),
             "stage_ids": inspect.stage_ids,
             "filter_stage_id": inspect.filter_stage_id,
             "events": inspect.events.iter().map(|e| json!({
@@ -843,45 +962,45 @@ pub fn render_agent_event_to_web(
 
     let mut web = output_block_to_web(&map_render_event_to_block(event, config)?);
     if let (Some(id), serde_json::Value::Object(map)) = (tool_id, &mut web) {
-        map.insert("id".to_string(), serde_json::Value::String(id));
+        map.insert(output_keys::ID.to_string(), serde_json::Value::String(id));
     }
     Some(web)
 }
 
 fn tone_to_web(tone: &BlockTone) -> &'static str {
     match tone {
-        BlockTone::Title => "title",
-        BlockTone::Normal => "normal",
-        BlockTone::Muted => "muted",
-        BlockTone::Success => "success",
-        BlockTone::Warning => "warning",
-        BlockTone::Error => "error",
+        BlockTone::Title => BlockToneWire::Title.as_str(),
+        BlockTone::Normal => BlockToneWire::Normal.as_str(),
+        BlockTone::Muted => BlockToneWire::Muted.as_str(),
+        BlockTone::Success => BlockToneWire::Success.as_str(),
+        BlockTone::Warning => BlockToneWire::Warning.as_str(),
+        BlockTone::Error => BlockToneWire::Error.as_str(),
     }
 }
 
 fn role_to_web(role: &MessageRole) -> &'static str {
     match role {
-        MessageRole::User => "user",
-        MessageRole::Assistant => "assistant",
-        MessageRole::System => "system",
+        MessageRole::User => MessageRoleWire::User.as_str(),
+        MessageRole::Assistant => MessageRoleWire::Assistant.as_str(),
+        MessageRole::System => MessageRoleWire::System.as_str(),
     }
 }
 
 fn phase_to_web(phase: &MessagePhase) -> &'static str {
     match phase {
-        MessagePhase::Start => "start",
-        MessagePhase::Delta => "delta",
-        MessagePhase::End => "end",
-        MessagePhase::Full => "full",
+        MessagePhase::Start => MessagePhaseWire::Start.as_str(),
+        MessagePhase::Delta => MessagePhaseWire::Delta.as_str(),
+        MessagePhase::End => MessagePhaseWire::End.as_str(),
+        MessagePhase::Full => MessagePhaseWire::Full.as_str(),
     }
 }
 
 fn tool_phase_to_web(phase: &ToolPhase) -> &'static str {
     match phase {
-        ToolPhase::Start => "start",
-        ToolPhase::Running => "running",
-        ToolPhase::Done => "done",
-        ToolPhase::Error => "error",
+        ToolPhase::Start => ToolPhaseWire::Start.as_str(),
+        ToolPhase::Running => ToolPhaseWire::Running.as_str(),
+        ToolPhase::Done => ToolPhaseWire::Done.as_str(),
+        ToolPhase::Error => ToolPhaseWire::Error.as_str(),
     }
 }
 
@@ -891,8 +1010,8 @@ fn structured_to_web(detail: &ToolStructuredDetail) -> serde_json::Value {
             file_path,
             diff_preview,
         } => json!({
-            "type": "file_edit",
-            "file_path": file_path,
+            "type": ToolStructuredDetailTypeWire::FileEdit.as_str(),
+            (patch_keys::FILE_PATH_SNAKE): file_path,
             "diff_preview": diff_preview,
         }),
         ToolStructuredDetail::FileWrite {
@@ -901,10 +1020,10 @@ fn structured_to_web(detail: &ToolStructuredDetail) -> serde_json::Value {
             lines,
             diff_preview,
         } => json!({
-            "type": "file_write",
-            "file_path": file_path,
-            "bytes": bytes,
-            "lines": lines,
+            "type": ToolStructuredDetailTypeWire::FileWrite.as_str(),
+            (patch_keys::FILE_PATH_SNAKE): file_path,
+            (patch_keys::BYTES): bytes,
+            (patch_keys::LINES): lines,
             "diff_preview": diff_preview,
         }),
         ToolStructuredDetail::FileRead {
@@ -912,8 +1031,8 @@ fn structured_to_web(detail: &ToolStructuredDetail) -> serde_json::Value {
             total_lines,
             truncated,
         } => json!({
-            "type": "file_read",
-            "file_path": file_path,
+            "type": ToolStructuredDetailTypeWire::FileRead.as_str(),
+            (patch_keys::FILE_PATH_SNAKE): file_path,
             "total_lines": total_lines,
             "truncated": truncated,
         }),
@@ -923,7 +1042,7 @@ fn structured_to_web(detail: &ToolStructuredDetail) -> serde_json::Value {
             output_preview,
             truncated,
         } => json!({
-            "type": "bash_exec",
+            "type": ToolStructuredDetailTypeWire::BashExec.as_str(),
             "command_preview": command_preview,
             "exit_code": exit_code,
             "output_preview": output_preview,
@@ -934,13 +1053,13 @@ fn structured_to_web(detail: &ToolStructuredDetail) -> serde_json::Value {
             matches,
             truncated,
         } => json!({
-            "type": "search",
+            "type": ToolStructuredDetailTypeWire::Search.as_str(),
             "pattern": pattern,
             "matches": matches,
             "truncated": truncated,
         }),
         ToolStructuredDetail::Generic => json!({
-            "type": "generic",
+            "type": ToolStructuredDetailTypeWire::Generic.as_str(),
         }),
     }
 }
@@ -972,7 +1091,7 @@ mod tests {
         let block = map_render_event_to_block(
             AgentRenderEvent::ToolError {
                 tool_call_id: "tc1".to_string(),
-                tool_name: "bash".to_string(),
+                tool_name: BuiltinToolName::Bash.as_str().to_string(),
                 error: "failed".to_string(),
                 metadata: HashMap::new(),
             },
@@ -982,7 +1101,7 @@ mod tests {
 
         match block {
             OutputBlock::Tool(tool) => {
-                assert_eq!(tool.name, "bash");
+                assert_eq!(tool.name, BuiltinToolName::Bash.as_str());
                 assert_eq!(tool.phase, ToolPhase::Error);
                 assert_eq!(tool.detail.as_deref(), Some("failed"));
             }
@@ -999,7 +1118,7 @@ mod tests {
                 AgentRenderEvent::AssistantEnd,
                 AgentRenderEvent::ToolResult {
                     tool_call_id: "t1".to_string(),
-                    tool_name: "read".to_string(),
+                    tool_name: BuiltinToolName::Read.as_str().to_string(),
                     output: AgentToolOutput {
                         output: "ok".to_string(),
                         title: String::new(),
@@ -1023,9 +1142,18 @@ mod tests {
     fn converts_output_block_to_web_shape() {
         let block = OutputBlock::Message(MessageBlock::delta(MessageRole::Assistant, "hello"));
         let web = output_block_to_web(&block);
-        assert_eq!(web.get("kind").and_then(|v| v.as_str()), Some("message"));
-        assert_eq!(web.get("phase").and_then(|v| v.as_str()), Some("delta"));
-        assert_eq!(web.get("role").and_then(|v| v.as_str()), Some("assistant"));
+        assert_eq!(
+            web.get("kind").and_then(|v| v.as_str()),
+            Some(OutputBlockKind::Message.as_str())
+        );
+        assert_eq!(
+            web.get("phase").and_then(|v| v.as_str()),
+            Some(MessagePhaseWire::Delta.as_str())
+        );
+        assert_eq!(
+            web.get("role").and_then(|v| v.as_str()),
+            Some(MessageRoleWire::Assistant.as_str())
+        );
     }
 
     #[test]
@@ -1038,7 +1166,7 @@ mod tests {
         ));
         assert_eq!(
             web.get("kind").and_then(|value| value.as_str()),
-            Some("queue_item")
+            Some(OutputBlockKind::QueueItem.as_str())
         );
         assert_eq!(
             web.get("position").and_then(|value| value.as_u64()),
@@ -1102,7 +1230,7 @@ mod tests {
         )));
         assert_eq!(
             web.get("kind").and_then(|value| value.as_str()),
-            Some("scheduler_stage")
+            Some(OutputBlockKind::SchedulerStage.as_str())
         );
         let decision = web.get("decision").expect("decision should exist");
         assert_eq!(
@@ -1146,12 +1274,15 @@ mod tests {
         let web = render_agent_event_to_web(
             AgentRenderEvent::ToolStart {
                 id: "tool_123".to_string(),
-                name: "read".to_string(),
+                name: BuiltinToolName::Read.as_str().to_string(),
             },
             AgentPresenterConfig::default(),
         )
         .expect("tool event should produce web block");
-        assert_eq!(web.get("kind").and_then(|v| v.as_str()), Some("tool"));
+        assert_eq!(
+            web.get("kind").and_then(|v| v.as_str()),
+            Some(OutputBlockKind::Tool.as_str())
+        );
         assert_eq!(web.get("id").and_then(|v| v.as_str()), Some("tool_123"));
     }
 
@@ -1159,28 +1290,42 @@ mod tests {
     fn history_tool_result_to_web_preserves_tool_id() {
         let web = history_tool_result_to_web(
             "call_123",
-            "bash",
+            BuiltinToolName::Bash.as_str(),
             Some("stdout"),
             "ok",
             false,
             &HashMap::new(),
         );
-        assert_eq!(web.get("kind").and_then(|v| v.as_str()), Some("tool"));
+        assert_eq!(
+            web.get("kind").and_then(|v| v.as_str()),
+            Some(OutputBlockKind::Tool.as_str())
+        );
         assert_eq!(web.get("id").and_then(|v| v.as_str()), Some("call_123"));
     }
 
     #[test]
     fn history_question_result_to_web_uses_display_fields() {
         let mut metadata = HashMap::new();
-        metadata.insert("display.summary".to_string(), json!("1 question answered"));
         metadata.insert(
-            "display.fields".to_string(),
-            json!([{ "key": "Scope", "value": "Proceed" }]),
+            output_keys::DISPLAY_SUMMARY.to_string(),
+            json!("1 question answered"),
+        );
+        metadata.insert(
+            output_keys::DISPLAY_FIELDS.to_string(),
+            serde_json::Value::Array(vec![serde_json::Value::Object(serde_json::Map::from_iter(
+                [
+                    (output_keys::DISPLAY_FIELD_KEY.to_string(), json!("Scope")),
+                    (
+                        output_keys::DISPLAY_FIELD_VALUE.to_string(),
+                        json!("Proceed"),
+                    ),
+                ],
+            ))]),
         );
 
         let web = history_tool_result_to_web(
             "call_question_1",
-            "question",
+            BuiltinToolName::Question.as_str(),
             Some("User response received"),
             "{\n  \"answers\": [\"Proceed\"]\n}",
             false,
@@ -1208,17 +1353,17 @@ mod tests {
     fn history_todo_result_to_web_uses_preview_list() {
         let mut metadata = HashMap::new();
         metadata.insert(
-            "todos".to_string(),
+            todo_keys::TODOS.to_string(),
             json!([
-                { "content": "Add tests", "status": "pending", "priority": "high" },
-                { "content": "Refactor server route", "status": "completed", "priority": "medium" }
+                { (todo_keys::CONTENT): "Add tests", (todo_keys::STATUS): TodoStatus::Pending.as_str(), (todo_keys::PRIORITY): TodoPriority::High.as_str() },
+                { (todo_keys::CONTENT): "Refactor server route", (todo_keys::STATUS): TodoStatus::Completed.as_str(), (todo_keys::PRIORITY): TodoPriority::Medium.as_str() }
             ]),
         );
-        metadata.insert("count".to_string(), json!(2));
+        metadata.insert(todo_keys::COUNT.to_string(), json!(2));
 
         let web = history_tool_result_to_web(
             "call_todo_1",
-            "todo_write",
+            BuiltinToolName::TodoWrite.as_str(),
             Some("Updated Todo List (2 items)"),
             "irrelevant",
             false,
@@ -1245,7 +1390,7 @@ mod tests {
         let web = history_session_event_to_web(
             "subtask",
             "Subtask · inspect scheduler",
-            Some("pending"),
+            Some(AgentTaskStatusKind::Pending.as_str()),
             Some("Subtask `task_1` is `pending`.".to_string()),
             vec![
                 ("ID".to_string(), "task_1".to_string(), None),
@@ -1260,7 +1405,7 @@ mod tests {
 
         assert_eq!(
             web.get("kind").and_then(|value| value.as_str()),
-            Some("session_event")
+            Some(OutputBlockKind::SessionEvent.as_str())
         );
         assert_eq!(
             web.get("event").and_then(|value| value.as_str()),
@@ -1278,7 +1423,7 @@ mod tests {
     fn history_question_result_to_web_marks_answered_interaction() {
         let web = history_tool_result_to_web(
             "call_question_2",
-            "question",
+            BuiltinToolName::Question.as_str(),
             Some("User response received"),
             "{\"answers\":[\"Proceed\"]}",
             false,
@@ -1288,7 +1433,7 @@ mod tests {
             web.get("interaction")
                 .and_then(|value| value.get("status"))
                 .and_then(|value| value.as_str()),
-            Some("answered")
+            Some(QuestionInteractionStatus::Answered.as_str())
         );
     }
 
@@ -1297,17 +1442,17 @@ mod tests {
     #[test]
     fn tool_result_edit_extracts_structured_diff() {
         let mut meta = HashMap::new();
-        meta.insert("filepath".to_string(), json!("/tmp/src/main.rs"));
+        meta.insert(patch_keys::FILEPATH.to_string(), json!("/tmp/src/main.rs"));
         meta.insert(
-            "diff".to_string(),
+            patch_keys::DIFF.to_string(),
             json!("--- a/main.rs\n+++ b/main.rs\n@@ -1 +1 @@\n-old\n+new"),
         );
-        meta.insert("replacements".to_string(), json!(1));
+        meta.insert(patch_keys::REPLACEMENTS.to_string(), json!(1));
 
         let block = map_render_event_to_block(
             AgentRenderEvent::ToolResult {
                 tool_call_id: "tc1".to_string(),
-                tool_name: "edit".to_string(),
+                tool_name: BuiltinToolName::Edit.as_str().to_string(),
                 output: AgentToolOutput {
                     output: "edited".to_string(),
                     title: String::new(),
@@ -1347,7 +1492,7 @@ mod tests {
         let block = map_render_event_to_block(
             AgentRenderEvent::ToolResult {
                 tool_call_id: "tc2".to_string(),
-                tool_name: "bash".to_string(),
+                tool_name: BuiltinToolName::Bash.as_str().to_string(),
                 output: AgentToolOutput {
                     output: "hello world\n".to_string(),
                     title: String::new(),
@@ -1382,15 +1527,15 @@ mod tests {
     #[test]
     fn tool_result_write_extracts_bytes_and_lines() {
         let mut meta = HashMap::new();
-        meta.insert("filepath".to_string(), json!("/tmp/new_file.rs"));
-        meta.insert("bytes".to_string(), json!(256));
-        meta.insert("lines".to_string(), json!(12));
-        meta.insert("diff".to_string(), json!("+line1\n+line2"));
+        meta.insert(patch_keys::FILEPATH.to_string(), json!("/tmp/new_file.rs"));
+        meta.insert(patch_keys::BYTES.to_string(), json!(256));
+        meta.insert(patch_keys::LINES.to_string(), json!(12));
+        meta.insert(patch_keys::DIFF.to_string(), json!("+line1\n+line2"));
 
         let block = map_render_event_to_block(
             AgentRenderEvent::ToolResult {
                 tool_call_id: "tc3".to_string(),
-                tool_name: "write".to_string(),
+                tool_name: BuiltinToolName::Write.as_str().to_string(),
                 output: AgentToolOutput {
                     output: "written".to_string(),
                     title: String::new(),
@@ -1426,14 +1571,14 @@ mod tests {
     #[test]
     fn tool_result_read_extracts_total_lines() {
         let mut meta = HashMap::new();
-        meta.insert("filepath".to_string(), json!("/tmp/read.rs"));
+        meta.insert(patch_keys::FILEPATH.to_string(), json!("/tmp/read.rs"));
         meta.insert("total_lines".to_string(), json!(150));
         meta.insert("truncated".to_string(), json!(true));
 
         let block = map_render_event_to_block(
             AgentRenderEvent::ToolResult {
                 tool_call_id: "tc4".to_string(),
-                tool_name: "read".to_string(),
+                tool_name: BuiltinToolName::Read.as_str().to_string(),
                 output: AgentToolOutput {
                     output: "contents".to_string(),
                     title: String::new(),
@@ -1473,7 +1618,7 @@ mod tests {
         let block = map_render_event_to_block(
             AgentRenderEvent::ToolResult {
                 tool_call_id: "tc5".to_string(),
-                tool_name: "grep".to_string(),
+                tool_name: BuiltinToolName::Grep.as_str().to_string(),
                 output: AgentToolOutput {
                     output: "results".to_string(),
                     title: String::new(),
@@ -1506,7 +1651,7 @@ mod tests {
         let block = map_render_event_to_block(
             AgentRenderEvent::ToolEnd {
                 id: "te1".to_string(),
-                name: "edit".to_string(),
+                name: BuiltinToolName::Edit.as_str().to_string(),
                 input: json!({
                     "file_path": "/src/lib.rs",
                     "old_string": "old",
@@ -1536,7 +1681,7 @@ mod tests {
         let block = map_render_event_to_block(
             AgentRenderEvent::ToolEnd {
                 id: "te2".to_string(),
-                name: "bash".to_string(),
+                name: BuiltinToolName::Bash.as_str().to_string(),
                 input: json!({
                     "command": "cargo test --all"
                 }),
@@ -1588,13 +1733,13 @@ mod tests {
     #[test]
     fn web_output_includes_structured_for_tool_result() {
         let mut meta = HashMap::new();
-        meta.insert("filepath".to_string(), json!("/src/main.rs"));
-        meta.insert("diff".to_string(), json!("+line"));
+        meta.insert(patch_keys::FILEPATH.to_string(), json!("/src/main.rs"));
+        meta.insert(patch_keys::DIFF.to_string(), json!("+line"));
 
         let block = map_render_event_to_block(
             AgentRenderEvent::ToolResult {
                 tool_call_id: "tc7".to_string(),
-                tool_name: "edit".to_string(),
+                tool_name: BuiltinToolName::Edit.as_str().to_string(),
                 output: AgentToolOutput {
                     output: "done".to_string(),
                     title: String::new(),
@@ -1611,10 +1756,12 @@ mod tests {
             .expect("web output should have structured");
         assert_eq!(
             structured.get("type").and_then(|v| v.as_str()),
-            Some("file_edit")
+            Some(ToolStructuredDetailTypeWire::FileEdit.as_str())
         );
         assert_eq!(
-            structured.get("file_path").and_then(|v| v.as_str()),
+            structured
+                .get(patch_keys::FILE_PATH_SNAKE)
+                .and_then(|v| v.as_str()),
             Some("/src/main.rs")
         );
         assert_eq!(
@@ -1628,7 +1775,7 @@ mod tests {
                 .and_then(|value| value.get("preview"))
                 .and_then(|value| value.get("kind"))
                 .and_then(|value| value.as_str()),
-            Some("diff")
+            Some(DisplayPreviewKindWire::Diff.as_str())
         );
     }
 }

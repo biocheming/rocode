@@ -1,4 +1,11 @@
 use async_trait::async_trait;
+use rocode_core::contracts::{
+    output_blocks::MessageRoleWire,
+    session::MessagePartTypeWire,
+    task::metadata_keys as task_metadata_keys,
+    tools::{arg_keys as tool_arg_keys, BuiltinToolName},
+    wire::{self, aliases as wire_aliases},
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -31,27 +38,27 @@ async fn create_user_message_with_part(
     // Build the MessageV2.User info matching the TS MessageInfo::User shape
     let mut user_msg = serde_json::json!({
         "id": message_id,
-        "sessionID": ctx.session_id,
-        "role": "user",
+        "role": MessageRoleWire::User.as_str(),
         "time": { "created": now },
         "agent": agent,
     });
+    user_msg[wire::keys::SESSION_ID] = serde_json::json!(ctx.session_id);
     if let Some(ref m) = model {
-        user_msg["model"] = serde_json::json!(m);
+        user_msg[task_metadata_keys::MODEL] = serde_json::json!(m);
     }
 
     // Persist the message (mirrors TS Session.updateMessage)
     ctx.do_update_message(user_msg).await?;
 
     // Build the synthetic text part matching the TS MessageV2.TextPart shape
-    let text_part = serde_json::json!({
+    let mut text_part = serde_json::json!({
         "id": part_id,
-        "messageID": message_id,
-        "sessionID": ctx.session_id,
-        "type": "text",
+        "type": MessagePartTypeWire::Text.as_str(),
         "text": text,
         "synthetic": true,
     });
+    text_part[wire::keys::MESSAGE_ID] = serde_json::json!(message_id);
+    text_part[wire::keys::SESSION_ID] = serde_json::json!(ctx.session_id);
 
     // Persist the part (mirrors TS Session.updatePart)
     ctx.do_update_part(text_part).await?;
@@ -62,7 +69,7 @@ async fn create_user_message_with_part(
 #[async_trait]
 impl Tool for PlanEnterTool {
     fn id(&self) -> &str {
-        "plan_enter"
+        BuiltinToolName::PlanEnter.as_str()
     }
 
     fn description(&self) -> &str {
@@ -130,10 +137,13 @@ impl Tool for PlanEnterTool {
             .await?;
 
         let mut metadata = Metadata::new();
-        metadata.insert("agent".to_string(), serde_json::json!("plan"));
-        metadata.insert("session_id".to_string(), serde_json::json!(ctx.session_id));
+        metadata.insert(tool_arg_keys::AGENT.to_string(), serde_json::json!("plan"));
+        metadata.insert(
+            wire_aliases::SESSION_ID_SNAKE.to_string(),
+            serde_json::json!(ctx.session_id),
+        );
         if let Some(ref m) = model {
-            metadata.insert("model".to_string(), serde_json::json!(m));
+            metadata.insert(task_metadata_keys::MODEL.to_string(), serde_json::json!(m));
         }
 
         Ok(ToolResult {
@@ -151,7 +161,7 @@ impl Tool for PlanEnterTool {
 #[async_trait]
 impl Tool for PlanExitTool {
     fn id(&self) -> &str {
-        "plan_exit"
+        BuiltinToolName::PlanExit.as_str()
     }
 
     fn description(&self) -> &str {
@@ -219,10 +229,13 @@ impl Tool for PlanExitTool {
             .await?;
 
         let mut metadata = Metadata::new();
-        metadata.insert("agent".to_string(), serde_json::json!("build"));
-        metadata.insert("session_id".to_string(), serde_json::json!(ctx.session_id));
+        metadata.insert(tool_arg_keys::AGENT.to_string(), serde_json::json!("build"));
+        metadata.insert(
+            wire_aliases::SESSION_ID_SNAKE.to_string(),
+            serde_json::json!(ctx.session_id),
+        );
         if let Some(ref m) = model {
-            metadata.insert("model".to_string(), serde_json::json!(m));
+            metadata.insert(task_metadata_keys::MODEL.to_string(), serde_json::json!(m));
         }
 
         Ok(ToolResult {

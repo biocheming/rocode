@@ -2,6 +2,8 @@ use super::*;
 use crate::message::MessagePart;
 use async_trait::async_trait;
 use futures::stream;
+use rocode_core::contracts::provider::ProviderFinishReasonWire;
+use rocode_core::contracts::session::keys as session_keys;
 use rocode_orchestrator::CompiledExecutionRequest;
 use rocode_provider::{
     ChatRequest, ChatResponse, ModelInfo, ProviderError, StreamEvent, StreamResult, StreamUsage,
@@ -300,7 +302,7 @@ async fn prompt_with_update_hook_emits_incremental_snapshots() {
             StreamEvent::TextDelta("Hel".to_string()),
             StreamEvent::TextDelta("lo".to_string()),
             StreamEvent::FinishStep {
-                finish_reason: Some("stop".to_string()),
+                finish_reason: Some(ProviderFinishReasonWire::Stop.as_str().to_string()),
                 usage: StreamUsage {
                     prompt_tokens: 3,
                     completion_tokens: 2,
@@ -424,7 +426,7 @@ async fn prompt_continues_after_tool_calls_without_finish_step_reason() {
                 StreamEvent::Start,
                 StreamEvent::TextDelta("Read complete".to_string()),
                 StreamEvent::FinishStep {
-                    finish_reason: Some("stop".to_string()),
+                    finish_reason: Some(ProviderFinishReasonWire::Stop.as_str().to_string()),
                     usage: StreamUsage::default(),
                     provider_metadata: None,
                 },
@@ -510,16 +512,20 @@ async fn create_user_message_persists_pending_subtask_payload() {
     let msg = session.messages.last().expect("user message should exist");
     let pending = msg
         .metadata
-        .get("pending_subtasks")
+        .get(session_keys::PENDING_SUBTASKS)
         .and_then(|v| v.as_array())
         .expect("pending_subtasks metadata should exist");
     assert_eq!(pending.len(), 1);
     assert_eq!(
-        pending[0].get("agent").and_then(|v| v.as_str()),
+        pending[0]
+            .get(session_keys::SUBTASK_AGENT)
+            .and_then(|v| v.as_str()),
         Some("explore")
     );
     assert_eq!(
-        pending[0].get("prompt").and_then(|v| v.as_str()),
+        pending[0]
+            .get(session_keys::SUBTASK_PROMPT)
+            .and_then(|v| v.as_str()),
         Some("Inspect codegen path")
     );
     assert!(msg.parts.iter().any(|p| match &p.part_type {
@@ -1001,8 +1007,7 @@ fn part_input_file_skips_none_fields_in_json() {
 
 #[tokio::test]
 async fn resolve_prompt_parts_plain_text() {
-    let parts =
-        resolve_prompt_parts("just plain text", std::path::Path::new("/tmp"), &[]).await;
+    let parts = resolve_prompt_parts("just plain text", std::path::Path::new("/tmp"), &[]).await;
     assert_eq!(parts.len(), 1);
     assert!(matches!(&parts[0], PartInput::Text { text } if text == "just plain text"));
 }
@@ -1082,7 +1087,7 @@ fn early_exit_does_not_break_on_tool_calls_finish() {
         message_id: None,
     });
     // finish_reason is "tool-calls" — loop should continue, not break
-    assistant.finish = Some("tool-calls".to_string());
+    assistant.finish = Some(ProviderFinishReasonWire::ToolCalls.as_str().to_string());
 
     let messages = vec![user, assistant];
 
@@ -1097,10 +1102,7 @@ fn early_exit_does_not_break_on_tool_calls_finish() {
     // The early-exit check from the prompt loop
     let should_break = if let Some(assistant_idx) = last_assistant_idx {
         let assistant = &messages[assistant_idx];
-        let is_terminal = assistant
-            .finish
-            .as_deref()
-            .is_some_and(|f| !matches!(f, "tool-calls" | "tool_calls" | "unknown"));
+        let is_terminal = is_terminal_finish(assistant.finish.as_deref());
         is_terminal && last_user_idx < assistant_idx
     } else {
         false
@@ -1128,7 +1130,7 @@ fn early_exit_breaks_on_terminal_finish() {
         created_at: chrono::Utc::now(),
         message_id: None,
     });
-    assistant.finish = Some("stop".to_string());
+    assistant.finish = Some(ProviderFinishReasonWire::Stop.as_str().to_string());
 
     let messages = vec![user, assistant];
 
@@ -1142,10 +1144,7 @@ fn early_exit_breaks_on_terminal_finish() {
 
     let should_break = if let Some(assistant_idx) = last_assistant_idx {
         let assistant = &messages[assistant_idx];
-        let is_terminal = assistant
-            .finish
-            .as_deref()
-            .is_some_and(|f| !matches!(f, "tool-calls" | "tool_calls" | "unknown"));
+        let is_terminal = is_terminal_finish(assistant.finish.as_deref());
         is_terminal && last_user_idx < assistant_idx
     } else {
         false
@@ -1185,10 +1184,7 @@ fn early_exit_does_not_break_when_finish_is_none() {
 
     let should_break = if let Some(assistant_idx) = last_assistant_idx {
         let assistant = &messages[assistant_idx];
-        let is_terminal = assistant
-            .finish
-            .as_deref()
-            .is_some_and(|f| !matches!(f, "tool-calls" | "tool_calls" | "unknown"));
+        let is_terminal = is_terminal_finish(assistant.finish.as_deref());
         is_terminal && last_user_idx < assistant_idx
     } else {
         false

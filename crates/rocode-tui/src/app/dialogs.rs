@@ -1,5 +1,7 @@
 use super::*;
 
+use rocode_core::contracts::mcp::McpConnectionStatusWire;
+
 impl App {
     pub(super) fn has_open_dialog_layer(&self) -> bool {
         self.alert_dialog.is_open()
@@ -807,7 +809,9 @@ impl App {
                 KeyCode::Enter => {
                     if let Some(item) = self.mcp_dialog.selected_item() {
                         if let Some(client) = self.context.get_api_client() {
-                            let result = if item.status == "connected" {
+                            let result = if McpConnectionStatusWire::parse(&item.status)
+                                == Some(McpConnectionStatusWire::Connected)
+                            {
                                 client.disconnect_mcp(&item.name)
                             } else {
                                 client.connect_mcp(&item.name)

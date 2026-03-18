@@ -9,6 +9,7 @@
 //! | Raw SSE            | [`StageEvent`]    | Real-time event stream & history replay|
 
 use serde::{Deserialize, Serialize};
+use strum_macros::{Display, EnumString, IntoStaticStr};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StageSummary {
@@ -44,30 +45,43 @@ pub struct StageSummary {
     pub primary_child_session_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Display,
+    EnumString,
+    IntoStaticStr,
+)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 pub enum StageStatus {
     Running,
     Waiting,
     Done,
+    #[strum(serialize = "canceled")]
     Cancelled,
+    #[strum(serialize = "canceling")]
     Cancelling,
     Blocked,
     Retrying,
 }
 
 impl StageStatus {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        value.trim().parse().ok()
+    }
+
     pub fn from_str_lossy(s: Option<&str>) -> Self {
-        match s {
-            Some("done") => Self::Done,
-            Some("cancelled") => Self::Cancelled,
-            Some("cancelling") => Self::Cancelling,
-            Some("waiting") => Self::Waiting,
-            Some("blocked") => Self::Blocked,
-            Some("retrying") => Self::Retrying,
-            Some("running") => Self::Running,
-            _ => Self::Running,
-        }
+        s.and_then(Self::parse).unwrap_or(Self::Running)
     }
 }
 

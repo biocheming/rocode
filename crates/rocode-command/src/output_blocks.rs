@@ -2,6 +2,12 @@ use crate::cli_markdown;
 use crate::cli_panel::truncate_display;
 use crate::cli_style::CliStyle;
 pub use rocode_content::output_blocks::*;
+use rocode_core::contracts::agent_tasks::AgentTaskStatusKind;
+use rocode_core::contracts::scheduler::{SchedulerDecisionSectionSpacing, SchedulerStageStatus};
+use rocode_core::contracts::output_blocks::{
+    BlockToneWire, DisplayPreviewKindWire, ToolPhaseWire,
+};
+use rocode_core::contracts::tools::BuiltinToolName;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolWebField {
@@ -83,10 +89,10 @@ fn render_reasoning_block(reasoning: &ReasoningBlock) -> String {
 
 fn render_tool_block(tool: &ToolBlock) -> String {
     let phase = match tool.phase {
-        ToolPhase::Start => "start",
-        ToolPhase::Running => "running",
-        ToolPhase::Done => "done",
-        ToolPhase::Error => "error",
+        ToolPhase::Start => ToolPhaseWire::Start.as_str(),
+        ToolPhase::Running => ToolPhaseWire::Running.as_str(),
+        ToolPhase::Done => ToolPhaseWire::Done.as_str(),
+        ToolPhase::Error => ToolPhaseWire::Error.as_str(),
     };
     match &tool.detail {
         Some(detail) if !detail.trim().is_empty() => {
@@ -217,7 +223,7 @@ fn render_scheduler_stage_block(stage: &SchedulerStageBlock) -> String {
             ));
         }
         for section in &decision.sections {
-            if decision.spec.section_spacing == "loose" {
+            if decision.spec.section_spacing == SchedulerDecisionSectionSpacing::Loose.as_str() {
                 out.push('\n');
             }
             out.push_str(&format!("  ✦ {}\n", section.title));
@@ -463,12 +469,13 @@ fn render_tool_rich(tool: &ToolBlock, style: &CliStyle) -> String {
 }
 
 fn render_session_event_rich(event: &SessionEventBlock, style: &CliStyle) -> String {
-    let tone = event.status.as_deref().unwrap_or("");
-    let heading = match tone {
-        "completed" | "done" | "success" => style.green(&event.title),
-        "error" | "failed" => style.red(&event.title),
-        "running" | "in_progress" => style.yellow(&event.title),
-        _ => style.bold(&event.title),
+    let status = event.status.as_deref().unwrap_or("");
+    let heading = match AgentTaskStatusKind::parse(status) {
+        Some(AgentTaskStatusKind::Completed) => style.green(&event.title),
+        Some(AgentTaskStatusKind::Failed) => style.red(&event.title),
+        Some(AgentTaskStatusKind::Running) => style.yellow(&event.title),
+        Some(AgentTaskStatusKind::Cancelled) => style.dim(&event.title),
+        Some(AgentTaskStatusKind::Pending) | None => style.bold(&event.title),
     };
     let mut out = format!(
         "\n{} {} {}\n",
@@ -676,7 +683,7 @@ pub(crate) fn tool_web_preview(tool: &ToolBlock) -> Option<ToolWebPreview> {
         ToolStructuredDetail::FileEdit { diff_preview, .. }
         | ToolStructuredDetail::FileWrite { diff_preview, .. } => {
             diff_preview.as_ref().map(|diff| ToolWebPreview {
-                kind: "diff".to_string(),
+                kind: DisplayPreviewKindWire::Diff.as_str().to_string(),
                 text: diff.clone(),
                 truncated: false,
             })
@@ -686,7 +693,7 @@ pub(crate) fn tool_web_preview(tool: &ToolBlock) -> Option<ToolWebPreview> {
             truncated,
             ..
         } => output_preview.as_ref().map(|preview| ToolWebPreview {
-            kind: "code".to_string(),
+            kind: DisplayPreviewKindWire::Code.as_str().to_string(),
             text: preview.clone(),
             truncated: *truncated,
         }),
@@ -696,23 +703,31 @@ pub(crate) fn tool_web_preview(tool: &ToolBlock) -> Option<ToolWebPreview> {
 
 fn render_scheduler_stage_rich(stage: &SchedulerStageBlock, style: &CliStyle) -> String {
     let header = scheduler_stage_header(stage);
-    let header_rendered = match stage.status.as_deref().unwrap_or_default() {
-        "done" => style.bold_green(&header),
-        "blocked" => style.bold_red(&header),
-        "cancelled" => style.bold_red(&header),
-        "waiting" => style.bold_yellow(&header),
-        "cancelling" => style.bold_yellow(&header),
-        _ => style.bold_cyan(&header),
+    let status = stage
+        .status
+        .as_deref()
+        .and_then(SchedulerStageStatus::parse);
+    let header_rendered = match status {
+        Some(SchedulerStageStatus::Done) => style.bold_green(&header),
+        Some(SchedulerStageStatus::Blocked) | Some(SchedulerStageStatus::Cancelled) => {
+            style.bold_red(&header)
+        }
+        Some(SchedulerStageStatus::Waiting)
+        | Some(SchedulerStageStatus::Cancelling)
+        | Some(SchedulerStageStatus::Retrying) => style.bold_yellow(&header),
+        Some(SchedulerStageStatus::Running) | None => style.bold_cyan(&header),
     };
     let mut out = String::new();
     out.push('\n');
-    let bullet = match stage.status.as_deref().unwrap_or_default() {
-        "done" => style.bold_green(style.bullet()),
-        "blocked" => style.bold_red(style.bullet()),
-        "cancelled" => style.bold_red(style.bullet()),
-        "waiting" => style.bold_yellow(style.bullet()),
-        "cancelling" => style.bold_yellow(style.bullet()),
-        _ => style.bold_cyan(style.bullet()),
+    let bullet = match status {
+        Some(SchedulerStageStatus::Done) => style.bold_green(style.bullet()),
+        Some(SchedulerStageStatus::Blocked) | Some(SchedulerStageStatus::Cancelled) => {
+            style.bold_red(style.bullet())
+        }
+        Some(SchedulerStageStatus::Waiting)
+        | Some(SchedulerStageStatus::Cancelling)
+        | Some(SchedulerStageStatus::Retrying) => style.bold_yellow(style.bullet()),
+        Some(SchedulerStageStatus::Running) | None => style.bold_cyan(style.bullet()),
     };
     out.push_str(&format!("{} {}\n", bullet, header_rendered));
     if stage
@@ -745,16 +760,20 @@ fn render_scheduler_stage_rich(stage: &SchedulerStageBlock, style: &CliStyle) ->
     summary.push(format!("tokens {}", scheduler_stage_token_summary(stage)));
     if !summary.is_empty() {
         let summary_text = summary.join(" · ");
-        out.push_str(&stage_tree_line(style, &summary_text, |text| {
-            match stage.status.as_deref().unwrap_or_default() {
-                "done" => style.green(text),
-                "blocked" => style.red(text),
-                "cancelled" => style.red(text),
-                "waiting" => style.yellow(text),
-                "cancelling" => style.yellow(text),
-                _ => style.cyan(text),
-            }
-        }));
+        out.push_str(&stage_tree_line(
+            style,
+            &summary_text,
+            |text| match status {
+                Some(SchedulerStageStatus::Done) => style.green(text),
+                Some(SchedulerStageStatus::Blocked) | Some(SchedulerStageStatus::Cancelled) => {
+                    style.red(text)
+                }
+                Some(SchedulerStageStatus::Waiting)
+                | Some(SchedulerStageStatus::Cancelling)
+                | Some(SchedulerStageStatus::Retrying) => style.yellow(text),
+                Some(SchedulerStageStatus::Running) | None => style.cyan(text),
+            },
+        ));
     }
     if let Some(detail) = scheduler_stage_secondary_token_summary(stage) {
         out.push_str(&stage_tree_field(style, "Usage", &detail, |text| {
@@ -965,14 +984,15 @@ fn stage_tree_decision_field(style: &CliStyle, field: &SchedulerDecisionField) -
 }
 
 fn scheduler_status_label(status: &str) -> &str {
-    match status {
-        "waiting" => "? waiting",
-        "running" => "@ running",
-        "cancelling" => "~ cancelling",
-        "cancelled" => "x cancelled",
-        "done" => "+ done",
-        "blocked" => "! blocked",
-        _ => status,
+    match SchedulerStageStatus::parse(status) {
+        Some(SchedulerStageStatus::Waiting) => "? waiting",
+        Some(SchedulerStageStatus::Running) => "@ running",
+        Some(SchedulerStageStatus::Cancelling) => "~ cancelling",
+        Some(SchedulerStageStatus::Cancelled) => "x cancelled",
+        Some(SchedulerStageStatus::Done) => "+ done",
+        Some(SchedulerStageStatus::Blocked) => "! blocked",
+        Some(SchedulerStageStatus::Retrying) => "~ retrying",
+        None => status,
     }
 }
 
@@ -985,15 +1005,15 @@ fn decision_field_rendered_value_text(
     value: &str,
     style: &CliStyle,
 ) -> String {
-    match field.tone.as_deref() {
-        Some("success") => style.bold_green(value),
-        Some("warning") => style.bold_yellow(value),
-        Some("error") => style.bold_red(value),
-        Some("info") => style.bold_cyan(value),
-        Some("muted") => style.dim(value),
-        Some("status") => match value.to_ascii_lowercase().as_str() {
-            "done" => style.bold_green(value),
-            "blocked" => style.bold_red(value),
+    match field.tone.as_deref().and_then(BlockToneWire::parse) {
+        Some(BlockToneWire::Success) => style.bold_green(value),
+        Some(BlockToneWire::Warning) => style.bold_yellow(value),
+        Some(BlockToneWire::Error) => style.bold_red(value),
+        Some(BlockToneWire::Info) => style.bold_cyan(value),
+        Some(BlockToneWire::Muted) => style.dim(value),
+        Some(BlockToneWire::Status) => match SchedulerStageStatus::parse(value) {
+            Some(SchedulerStageStatus::Done) => style.bold_green(value),
+            Some(SchedulerStageStatus::Blocked) => style.bold_red(value),
             _ => style.bold_yellow(value),
         },
         _ => value.to_string(),
@@ -1192,56 +1212,26 @@ fn format_tool_header(tool: &ToolBlock) -> String {
 
 /// Convert internal tool ID to a human-readable display name.
 fn tool_display_name(tool_id: &str) -> String {
-    match tool_id {
-        "read" => "Read".to_string(),
-        "write" => "Write".to_string(),
-        "edit" => "Edit".to_string(),
-        "multiedit" => "MultiEdit".to_string(),
-        "bash" => "Bash".to_string(),
-        "glob" => "Glob".to_string(),
-        "grep" => "Grep".to_string(),
-        "ls" => "Ls".to_string(),
-        "websearch" => "WebSearch".to_string(),
-        "webfetch" => "WebFetch".to_string(),
-        "task" => "Task".to_string(),
-        "task_flow" => "TaskFlow".to_string(),
-        "question" => "Question".to_string(),
-        "todo_read" => "TodoRead".to_string(),
-        "todo_write" => "TodoWrite".to_string(),
-        "apply_patch" => "ApplyPatch".to_string(),
-        "skill" => "Skill".to_string(),
-        "lsp" => "LSP".to_string(),
-        "batch" => "Batch".to_string(),
-        "codesearch" => "CodeSearch".to_string(),
-        "context_docs" => "ContextDocs".to_string(),
-        "github_research" => "GitHubResearch".to_string(),
-        "repo_history" => "RepoHistory".to_string(),
-        "media_inspect" => "MediaInspect".to_string(),
-        "browser_session" => "BrowserSession".to_string(),
-        "shell_session" => "ShellSession".to_string(),
-        "ast_grep_search" => "AstGrepSearch".to_string(),
-        "ast_grep_replace" => "AstGrepReplace".to_string(),
-        "plan_enter" => "PlanEnter".to_string(),
-        "plan_exit" => "PlanExit".to_string(),
-        other => {
-            // CamelCase conversion for unknown tools
-            let mut result = String::new();
-            for (i, ch) in other.chars().enumerate() {
-                if ch == '_' || ch == '-' {
-                    continue;
-                }
-                if i == 0
-                    || other.as_bytes().get(i.wrapping_sub(1)) == Some(&b'_')
-                    || other.as_bytes().get(i.wrapping_sub(1)) == Some(&b'-')
-                {
-                    result.push(ch.to_uppercase().next().unwrap_or(ch));
-                } else {
-                    result.push(ch);
-                }
-            }
-            result
+    if let Some(tool) = BuiltinToolName::parse(tool_id) {
+        return tool.display_name().to_string();
+    }
+
+    // CamelCase conversion for unknown tools
+    let mut result = String::new();
+    for (i, ch) in tool_id.chars().enumerate() {
+        if ch == '_' || ch == '-' {
+            continue;
+        }
+        if i == 0
+            || tool_id.as_bytes().get(i.wrapping_sub(1)) == Some(&b'_')
+            || tool_id.as_bytes().get(i.wrapping_sub(1)) == Some(&b'-')
+        {
+            result.push(ch.to_uppercase().next().unwrap_or(ch));
+        } else {
+            result.push(ch);
         }
     }
+    result
 }
 
 #[cfg(test)]
@@ -1273,7 +1263,10 @@ mod tests {
 
     #[test]
     fn renders_tool_blocks() {
-        let line = render_cli_block(&OutputBlock::Tool(ToolBlock::error("bash", "exit=1")));
+        let line = render_cli_block(&OutputBlock::Tool(ToolBlock::error(
+            BuiltinToolName::Bash.as_str(),
+            "exit=1",
+        )));
         assert_eq!(line, "[tool:error] bash :: exit=1\n");
     }
 
@@ -1282,7 +1275,7 @@ mod tests {
         let line = render_cli_block(&OutputBlock::SessionEvent(SessionEventBlock {
             event: "subtask".to_string(),
             title: "Subtask · inspect scheduler".to_string(),
-            status: Some("pending".to_string()),
+            status: Some(AgentTaskStatusKind::Pending.as_str().to_string()),
             summary: Some("Subtask `task_1` is `pending`.".to_string()),
             fields: vec![SessionEventField {
                 label: "ID".to_string(),
@@ -1316,7 +1309,7 @@ mod tests {
                 stage_index: Some(2),
                 stage_total: Some(5),
                 step: Some(3),
-                status: Some("running".to_string()),
+                status: Some(SchedulerStageStatus::Running.as_str().to_string()),
                 focus: Some("planning".to_string()),
                 last_event: Some("Tool finished: Read".to_string()),
                 waiting_on: Some("model".to_string()),
@@ -1388,7 +1381,10 @@ mod tests {
             color: true,
             width: 80,
         };
-        let out = render_cli_block_rich(&OutputBlock::Tool(ToolBlock::start("edit")), &style);
+        let out = render_cli_block_rich(
+            &OutputBlock::Tool(ToolBlock::start(BuiltinToolName::Edit.as_str())),
+            &style,
+        );
         assert!(out.contains("Edit"));
         assert!(out.contains("●"));
     }
@@ -1400,7 +1396,10 @@ mod tests {
             width: 80,
         };
         let out = render_cli_block_rich(
-            &OutputBlock::Tool(ToolBlock::error("bash", "exit code 1")),
+            &OutputBlock::Tool(ToolBlock::error(
+                BuiltinToolName::Bash.as_str(),
+                "exit code 1",
+            )),
             &style,
         );
         assert!(out.contains("⎿"));
@@ -1490,7 +1489,7 @@ mod tests {
                 stage_index: Some(3),
                 stage_total: Some(4),
                 step: Some(2),
-                status: Some("waiting".to_string()),
+                status: Some(SchedulerStageStatus::Waiting.as_str().to_string()),
                 focus: Some("verification".to_string()),
                 last_event: Some("Question started".to_string()),
                 waiting_on: Some("user".to_string()),
@@ -1561,7 +1560,7 @@ mod tests {
                 stage_index: Some(1),
                 stage_total: Some(5),
                 step: Some(1),
-                status: Some("running".to_string()),
+                status: Some(SchedulerStageStatus::Running.as_str().to_string()),
                 focus: Some("Decide the correct workflow and preserve request intent for a very long biomedical planning request".to_string()),
                 last_event: Some("Step 1 started with model analysis and route rubric evaluation".to_string()),
                 waiting_on: Some("model".to_string()),
@@ -1609,9 +1608,18 @@ mod tests {
 
     #[test]
     fn tool_display_name_maps_known_tools() {
-        assert_eq!(tool_display_name("bash"), "Bash");
-        assert_eq!(tool_display_name("ast_grep_search"), "AstGrepSearch");
-        assert_eq!(tool_display_name("websearch"), "WebSearch");
+        assert_eq!(
+            tool_display_name(BuiltinToolName::Bash.as_str()),
+            BuiltinToolName::Bash.display_name()
+        );
+        assert_eq!(
+            tool_display_name(BuiltinToolName::AstGrepSearch.as_str()),
+            BuiltinToolName::AstGrepSearch.display_name()
+        );
+        assert_eq!(
+            tool_display_name(BuiltinToolName::WebSearch.as_str()),
+            BuiltinToolName::WebSearch.display_name()
+        );
     }
 
     #[test]
@@ -1631,7 +1639,7 @@ mod tests {
             stage_index: None,
             stage_total: None,
             step: None,
-            status: Some("running".to_string()),
+            status: Some(SchedulerStageStatus::Running.as_str().to_string()),
             focus: None,
             last_event: None,
             waiting_on: None,
@@ -1672,7 +1680,7 @@ mod tests {
             stage_index: None,
             stage_total: None,
             step: None,
-            status: Some("running".to_string()),
+            status: Some(SchedulerStageStatus::Running.as_str().to_string()),
             focus: None,
             last_event: None,
             waiting_on: None,
@@ -1712,7 +1720,7 @@ mod tests {
             stage_index: Some(1),
             stage_total: Some(3),
             step: Some(2),
-            status: Some("running".to_string()),
+            status: Some(SchedulerStageStatus::Running.as_str().to_string()),
             focus: Some("code analysis".to_string()),
             last_event: Some("tool_call".to_string()),
             waiting_on: None,
@@ -1721,7 +1729,7 @@ mod tests {
             available_skill_count: Some(10),
             available_agent_count: Some(3),
             available_category_count: Some(2),
-            active_skills: vec!["read".to_string()],
+            active_skills: vec![BuiltinToolName::Read.as_str().to_string()],
             active_agents: vec!["planner".to_string(), "reviewer".to_string()],
             active_categories: vec!["coding".to_string()],
             done_agent_count: 0,

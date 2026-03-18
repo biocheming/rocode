@@ -6,13 +6,14 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use strum_macros::{Display, EnumString, IntoStaticStr};
 use tokio::sync::RwLock;
 
-pub mod circuit_breaker;
 pub mod cabi;
+pub mod circuit_breaker;
 pub mod feature_flags;
-pub mod hook_names;
 pub(crate) mod hook_io;
+pub mod hook_names;
 pub mod native;
 pub mod subprocess;
 
@@ -51,48 +52,80 @@ pub type HookResult = Result<HookOutput, HookError>;
 pub type HookHandler =
     Box<dyn Fn(HookContext) -> Pin<Box<dyn Future<Output = HookResult> + Send>> + Send + Sync>;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Display, EnumString, IntoStaticStr,
+)]
+#[strum(ascii_case_insensitive)]
 pub enum HookEvent {
     // Original events
+    #[strum(serialize = "config.loaded")]
     ConfigLoaded,
+    #[strum(serialize = "session.start")]
     SessionStart,
+    #[strum(serialize = "session.end")]
     SessionEnd,
+    #[strum(serialize = "tool.call")]
     ToolCall,
+    #[strum(serialize = "tool.result")]
     ToolResult,
+    #[strum(serialize = "message.sent")]
     MessageSent,
+    #[strum(serialize = "message.received")]
     MessageReceived,
+    #[strum(serialize = "error")]
     Error,
+    #[strum(serialize = "file.change")]
     FileChange,
+    #[strum(serialize = "provider.change")]
     ProviderChange,
 
     // Tool lifecycle hooks (matches TS "tool.execute.before" / "tool.execute.after")
+    #[strum(serialize = "tool.execute.before")]
     ToolExecuteBefore,
+    #[strum(serialize = "tool.execute.after")]
     ToolExecuteAfter,
 
     // Tool definition transform (matches TS "tool.definition")
+    #[strum(serialize = "tool.definition")]
     ToolDefinition,
 
     // Chat / LLM hooks
+    #[strum(serialize = "experimental.chat.system.transform")]
     ChatSystemTransform,
+    #[strum(serialize = "experimental.chat.messages.transform")]
     ChatMessagesTransform,
+    #[strum(serialize = "chat.params")]
     ChatParams,
+    #[strum(serialize = "chat.headers")]
     ChatHeaders,
+    #[strum(serialize = "chat.message")]
     ChatMessage,
 
     // Session compaction (matches TS "experimental.session.compacting")
+    #[strum(serialize = "experimental.session.compacting")]
     SessionCompacting,
 
     // Text completion (matches TS "experimental.text.complete")
+    #[strum(serialize = "experimental.text.complete")]
     TextComplete,
 
     // Shell environment (matches TS "shell.env")
+    #[strum(serialize = "shell.env")]
     ShellEnv,
 
     // Command execution (matches TS "command.execute.before")
+    #[strum(serialize = "command.execute.before")]
     CommandExecuteBefore,
 
     // Permission (matches TS "permission.ask")
+    #[strum(serialize = "permission.ask")]
     PermissionAsk,
+}
+
+impl HookEvent {
+    pub fn as_hook_name(self) -> &'static str {
+        self.into()
+    }
 }
 
 #[derive(Debug, Clone)]

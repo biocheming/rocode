@@ -1,14 +1,15 @@
 use super::{base_allowlist_agent, AgentInfo, AgentMode};
+use rocode_core::contracts::tools::BuiltinToolName;
 
-const DOCS_RESEARCHER_TOOLS: &[&str] = &[
-    "read",
-    "websearch",
-    "webfetch",
-    "browser_session",
-    "codesearch",
-    "context_docs",
-    "github_research",
-    "bash",
+const DOCS_RESEARCHER_TOOLS: &[BuiltinToolName] = &[
+    BuiltinToolName::Read,
+    BuiltinToolName::WebSearch,
+    BuiltinToolName::WebFetch,
+    BuiltinToolName::BrowserSession,
+    BuiltinToolName::CodeSearch,
+    BuiltinToolName::ContextDocs,
+    BuiltinToolName::GitHubResearch,
+    BuiltinToolName::Bash,
 ];
 
 const DESCRIPTION: &str = "Docs-aware Phase 1 research agent for external evidence, official documentation lookup, GitHub investigation, and conservative source-backed answers.";

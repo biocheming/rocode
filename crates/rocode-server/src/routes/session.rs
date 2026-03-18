@@ -264,7 +264,11 @@ mod tests {
         let mut session = Session::new("proj", "/tmp");
         session.id = "ses_tools".to_string();
         let mut assistant = rocode_session::SessionMessage::assistant(session.id.clone());
-        assistant.add_tool_call("call_1", "bash", serde_json::json!({"command": "echo hi"}));
+        assistant.add_tool_call(
+            "call_1",
+            rocode_core::contracts::tools::BuiltinToolName::Bash.as_str(),
+            serde_json::json!({"command": "echo hi"}),
+        );
         session.messages.push(assistant);
 
         let records = vec![
@@ -395,7 +399,10 @@ mod tests {
                 scope: EventScope::Stage,
                 stage_id: Some("stg_alpha".into()),
                 execution_id: Some("ex_1".into()),
-                event_type: "execution.topology.changed".into(),
+                event_type:
+                    rocode_core::contracts::events::ServerEventType::ExecutionTopologyChanged
+                        .as_str()
+                        .into(),
                 ts: 1000,
                 payload: serde_json::json!({}),
             },
@@ -408,7 +415,10 @@ mod tests {
                 scope: EventScope::Stage,
                 stage_id: Some("stg_beta".into()),
                 execution_id: Some("ex_2".into()),
-                event_type: "execution.topology.changed".into(),
+                event_type:
+                    rocode_core::contracts::events::ServerEventType::ExecutionTopologyChanged
+                        .as_str()
+                        .into(),
                 ts: 2000,
                 payload: serde_json::json!({}),
             },

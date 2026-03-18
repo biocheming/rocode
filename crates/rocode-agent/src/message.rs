@@ -332,6 +332,7 @@ impl Default for Conversation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocode_core::contracts::tools::BuiltinToolName;
 
     #[test]
     fn assistant_with_tool_calls_serializes_tool_use_parts() {
@@ -340,7 +341,7 @@ mod tests {
             "",
             vec![ToolCall {
                 id: "tool-call-0".to_string(),
-                name: "ls".to_string(),
+                name: BuiltinToolName::Ls.as_str().to_string(),
                 arguments: serde_json::json!({"path":"."}),
             }],
         );
@@ -356,7 +357,7 @@ mod tests {
                             .tool_use
                             .as_ref()
                             .map(|tool| {
-                                tool.name == "ls"
+                                tool.name == BuiltinToolName::Ls.as_str()
                                     && tool.id == "tool-call-0"
                                     && tool.input == serde_json::json!({"path":"."})
                             })

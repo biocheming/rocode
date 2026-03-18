@@ -1,6 +1,9 @@
 use async_trait::async_trait;
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use strum::IntoEnumIterator;
+use strum_macros::{Display, EnumIter, EnumString, IntoStaticStr};
 
 use crate::git_runtime::{ensure_git_available, run_git_command, DEFAULT_GIT_TIMEOUT_SECS};
 use crate::{Metadata, PermissionRequest, Tool, ToolContext, ToolError, ToolResult};
@@ -22,8 +25,21 @@ Implemented operations:
 This tool is a thin, read-only wrapper around the local `git` executable.
 It exists to give models stable, structured git semantics instead of free-form shell output."#;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Display,
+    EnumIter,
+    EnumString,
+    IntoStaticStr,
+)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 enum RepoHistoryOperation {
     Status,
     Head,
@@ -34,15 +50,8 @@ enum RepoHistoryOperation {
 }
 
 impl RepoHistoryOperation {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::Status => "status",
-            Self::Head => "head",
-            Self::Log => "log",
-            Self::ShowCommit => "show_commit",
-            Self::DiffUncommitted => "diff_uncommitted",
-            Self::Blame => "blame",
-        }
+    fn as_str(self) -> &'static str {
+        self.into()
     }
 }
 
@@ -167,8 +176,14 @@ impl RepoHistoryTool {
         let view = parse_status_output(repo_root, &raw);
         let output = render_status(&view);
         let mut metadata = base_metadata(input, repo_root);
-        metadata.insert("status".to_string(), serde_json::to_value(&view).unwrap());
-        metadata.insert("count".to_string(), serde_json::json!(view.entries.len()));
+        metadata.insert(
+            tool_arg_keys::STATUS.to_string(),
+            serde_json::to_value(&view).unwrap(),
+        );
+        metadata.insert(
+            tool_arg_keys::COUNT.to_string(),
+            serde_json::json!(view.entries.len()),
+        );
         Ok(ToolResult {
             title: "Repository Status".to_string(),
             output,
@@ -181,8 +196,14 @@ impl RepoHistoryTool {
         let view = load_head_view(repo_root, ctx).await?;
         let output = render_head(&view);
         let mut metadata = Metadata::new();
-        metadata.insert("operation".to_string(), serde_json::json!("head"));
-        metadata.insert("head".to_string(), serde_json::to_value(&view).unwrap());
+        metadata.insert(
+            tool_arg_keys::OPERATION.to_string(),
+            serde_json::json!(RepoHistoryOperation::Head.as_str()),
+        );
+        metadata.insert(
+            tool_arg_keys::HEAD.to_string(),
+            serde_json::to_value(&view).unwrap(),
+        );
         Ok(ToolResult {
             title: "Repository Head".to_string(),
             output,
@@ -211,8 +232,14 @@ impl RepoHistoryTool {
         let items = parse_log_output(&raw);
         let output = render_log(repo_root, &items);
         let mut metadata = base_metadata(input, repo_root);
-        metadata.insert("commits".to_string(), serde_json::to_value(&items).unwrap());
-        metadata.insert("count".to_string(), serde_json::json!(items.len()));
+        metadata.insert(
+            tool_arg_keys::COMMITS.to_string(),
+            serde_json::to_value(&items).unwrap(),
+        );
+        metadata.insert(
+            tool_arg_keys::COUNT.to_string(),
+            serde_json::json!(items.len()),
+        );
         Ok(ToolResult {
             title: "Repository Log".to_string(),
             output,
@@ -272,7 +299,10 @@ impl RepoHistoryTool {
         };
         let output = render_show_commit(&view);
         let mut metadata = base_metadata(input, repo_root);
-        metadata.insert("commit".to_string(), serde_json::to_value(&view).unwrap());
+        metadata.insert(
+            tool_arg_keys::COMMIT.to_string(),
+            serde_json::to_value(&view).unwrap(),
+        );
         Ok(ToolResult {
             title: format!("Commit {}", short_sha(&view.sha)),
             output,
@@ -322,7 +352,7 @@ impl RepoHistoryTool {
             serde_json::json!(!staged.trim().is_empty()),
         );
         if let Some(path) = path {
-            metadata.insert("path".to_string(), serde_json::json!(path));
+            metadata.insert(tool_arg_keys::PATH.to_string(), serde_json::json!(path));
         }
         Ok(ToolResult {
             title: "Repository Diff".to_string(),
@@ -358,9 +388,15 @@ impl RepoHistoryTool {
         let lines = parse_blame_porcelain(&raw);
         let output = render_blame(repo_root, &path, line_start, line_end, &lines);
         let mut metadata = base_metadata(input, repo_root);
-        metadata.insert("blame".to_string(), serde_json::to_value(&lines).unwrap());
-        metadata.insert("path".to_string(), serde_json::json!(path));
-        metadata.insert("count".to_string(), serde_json::json!(lines.len()));
+        metadata.insert(
+            tool_arg_keys::BLAME.to_string(),
+            serde_json::to_value(&lines).unwrap(),
+        );
+        metadata.insert(tool_arg_keys::PATH.to_string(), serde_json::json!(path));
+        metadata.insert(
+            tool_arg_keys::COUNT.to_string(),
+            serde_json::json!(lines.len()),
+        );
         Ok(ToolResult {
             title: "Repository Blame".to_string(),
             output,
@@ -379,7 +415,7 @@ impl Default for RepoHistoryTool {
 #[async_trait]
 impl Tool for RepoHistoryTool {
     fn id(&self) -> &str {
-        "repo_history"
+        BuiltinToolName::RepoHistory.as_str()
     }
 
     fn description(&self) -> &str {
@@ -387,19 +423,22 @@ impl Tool for RepoHistoryTool {
     }
 
     fn parameters(&self) -> serde_json::Value {
+        let operations: Vec<&'static str> = RepoHistoryOperation::iter()
+            .map(RepoHistoryOperation::as_str)
+            .collect();
         serde_json::json!({
             "type": "object",
             "properties": {
-                "operation": {
+                (tool_arg_keys::OPERATION): {
                     "type": "string",
-                    "enum": ["status", "head", "log", "show_commit", "diff_uncommitted", "blame"],
+                    "enum": operations,
                     "description": "Local repository history operation to execute"
                 },
-                "path": {
+                (tool_arg_keys::PATH): {
                     "type": "string",
                     "description": "Optional repository-relative path for status/log/diff_uncommitted, required for blame"
                 },
-                "commit": {
+                (tool_arg_keys::COMMIT): {
                     "type": "string",
                     "description": "Commit SHA or ref for show_commit"
                 },
@@ -415,7 +454,7 @@ impl Tool for RepoHistoryTool {
                     "type": "integer",
                     "description": "Optional ending line for blame"
                 },
-                "limit": {
+                (tool_arg_keys::LIMIT): {
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 100,
@@ -423,7 +462,7 @@ impl Tool for RepoHistoryTool {
                     "description": "Maximum number of commits, or fallback line count for blame"
                 }
             },
-            "required": ["operation"]
+            "required": [tool_arg_keys::OPERATION]
         })
     }
 
@@ -436,21 +475,26 @@ impl Tool for RepoHistoryTool {
             serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
         validate_input(&input)?;
 
-        let mut permission = PermissionRequest::new("repo_history")
-            .with_metadata("operation", serde_json::json!(input.operation.as_str()))
-            .with_metadata("limit", serde_json::json!(input.limit))
+        let mut permission = PermissionRequest::new(BuiltinToolName::RepoHistory.as_str())
+            .with_metadata(
+                tool_arg_keys::OPERATION,
+                serde_json::json!(input.operation.as_str()),
+            )
+            .with_metadata(tool_arg_keys::LIMIT, serde_json::json!(input.limit))
             .always_allow();
         if let Some(path) = input.path.as_ref() {
-            permission = permission.with_metadata("path", serde_json::json!(path));
+            permission = permission.with_metadata(tool_arg_keys::PATH, serde_json::json!(path));
         }
         if let Some(commit) = input.commit.as_ref() {
-            permission = permission.with_metadata("commit", serde_json::json!(commit));
+            permission = permission.with_metadata(tool_arg_keys::COMMIT, serde_json::json!(commit));
         }
         if let Some(line_start) = input.line_start {
-            permission = permission.with_metadata("line_start", serde_json::json!(line_start));
+            permission =
+                permission.with_metadata(tool_arg_keys::LINE_START, serde_json::json!(line_start));
         }
         if let Some(line_end) = input.line_end {
-            permission = permission.with_metadata("line_end", serde_json::json!(line_end));
+            permission =
+                permission.with_metadata(tool_arg_keys::LINE_END, serde_json::json!(line_end));
         }
         ctx.ask_permission(permission).await?;
 
@@ -579,11 +623,11 @@ async fn git_diff_output(
 fn base_metadata(input: &RepoHistoryInput, repo_root: &Path) -> Metadata {
     let mut metadata = Metadata::new();
     metadata.insert(
-        "operation".to_string(),
+        tool_arg_keys::OPERATION.to_string(),
         serde_json::json!(input.operation.as_str()),
     );
     metadata.insert(
-        "repo_root".to_string(),
+        tool_arg_keys::REPO_ROOT.to_string(),
         serde_json::json!(repo_root.display().to_string()),
     );
     metadata

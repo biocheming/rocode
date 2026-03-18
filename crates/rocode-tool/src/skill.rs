@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+use rocode_core::contracts::output_blocks::keys as output_keys;
+use rocode_core::contracts::tools::BuiltinToolName;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -278,7 +280,7 @@ fn sample_skill_files(skill: &SkillInfo, limit: usize) -> Vec<PathBuf> {
 #[async_trait]
 impl Tool for SkillTool {
     fn id(&self) -> &str {
-        "skill"
+        BuiltinToolName::Skill.as_str()
     }
 
     fn description(&self) -> &str {
@@ -338,7 +340,7 @@ impl Tool for SkillTool {
             })?;
 
         ctx.ask_permission(
-            PermissionRequest::new("skill")
+            PermissionRequest::new(BuiltinToolName::Skill.as_str())
                 .with_pattern(&skill.name)
                 .with_always(&skill.name)
                 .with_metadata("description", serde_json::json!(&skill.description)),
@@ -402,7 +404,7 @@ impl Tool for SkillTool {
             serde_json::json!(&skill.description),
         );
         metadata.insert(
-            "display.summary".to_string(),
+            output_keys::DISPLAY_SUMMARY.to_string(),
             serde_json::json!(format!("{}", skill.description)),
         );
 

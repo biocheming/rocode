@@ -1,5 +1,7 @@
 use super::*;
 
+use rocode_core::contracts::mcp::McpConnectionStatusWire;
+
 impl App {
     pub(super) fn refresh_status_dialog(&mut self) {
         let formatters = self
@@ -48,12 +50,14 @@ impl App {
         } else {
             for server in mcp_servers.iter() {
                 let status_text = match server.status {
-                    McpConnectionStatus::Connected => "connected",
-                    McpConnectionStatus::Disconnected => "disconnected",
-                    McpConnectionStatus::Failed => "failed",
+                    McpConnectionStatus::Connected => McpConnectionStatusWire::Connected.as_str(),
+                    McpConnectionStatus::Disconnected => {
+                        McpConnectionStatusWire::Disconnected.as_str()
+                    }
+                    McpConnectionStatus::Failed => McpConnectionStatusWire::Failed.as_str(),
                     McpConnectionStatus::NeedsAuth => "needs authentication",
                     McpConnectionStatus::NeedsClientRegistration => "needs client ID",
-                    McpConnectionStatus::Disabled => "disabled",
+                    McpConnectionStatus::Disabled => McpConnectionStatusWire::Disabled.as_str(),
                 };
                 let base = format!("- {}: {}", server.name, status_text);
                 match server.status {
@@ -186,17 +190,19 @@ impl App {
         } else {
             for task in &tasks {
                 let (icon, status_str) = match &task.status {
-                    AgentTaskStatus::Pending => ("◯", "pending".to_string()),
+                    AgentTaskStatus::Pending => ("◯", task.status.kind().as_str().to_string()),
                     AgentTaskStatus::Running { step } => {
                         let steps = task
                             .max_steps
                             .map(|m| format!("{}/{}", step, m))
                             .unwrap_or(format!("{}/?", step));
-                        ("◐", format!("running  {}", steps))
+                        ("◐", format!("{}  {}", task.status.kind().as_str(), steps))
                     }
-                    AgentTaskStatus::Completed { steps } => ("●", format!("done     {}", steps)),
-                    AgentTaskStatus::Cancelled => ("✗", "cancelled".to_string()),
-                    AgentTaskStatus::Failed { .. } => ("✗", "failed".to_string()),
+                    AgentTaskStatus::Completed { steps } => {
+                        ("●", format!("{}  {}", task.status.kind().as_str(), steps))
+                    }
+                    AgentTaskStatus::Cancelled => ("✗", task.status.kind().as_str().to_string()),
+                    AgentTaskStatus::Failed { .. } => ("✗", task.status.kind().as_str().to_string()),
                 };
                 let elapsed = now - task.started_at;
                 let elapsed_str = if elapsed < 60 {
@@ -238,20 +244,26 @@ impl App {
         match global_task_registry().get(id) {
             Some(task) => {
                 let (status_label, step_info) = match &task.status {
-                    AgentTaskStatus::Pending => ("pending".to_string(), String::new()),
+                    AgentTaskStatus::Pending => (task.status.kind().as_str().to_string(), String::new()),
                     AgentTaskStatus::Running { step } => {
                         let steps = task
                             .max_steps
                             .map(|m| format!(" (step {}/{})", step, m))
                             .unwrap_or(format!(" (step {}/?)", step));
-                        ("running".to_string(), steps)
+                        (task.status.kind().as_str().to_string(), steps)
                     }
                     AgentTaskStatus::Completed { steps } => {
-                        ("completed".to_string(), format!(" ({} steps)", steps))
+                        (
+                            task.status.kind().as_str().to_string(),
+                            format!(" ({} steps)", steps),
+                        )
                     }
-                    AgentTaskStatus::Cancelled => ("cancelled".to_string(), String::new()),
+                    AgentTaskStatus::Cancelled => (task.status.kind().as_str().to_string(), String::new()),
                     AgentTaskStatus::Failed { error } => {
-                        (format!("failed: {}", error), String::new())
+                        (
+                            format!("{}: {}", task.status.kind().as_str(), error),
+                            String::new(),
+                        )
                     }
                 };
                 let elapsed = now - task.started_at;

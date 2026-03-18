@@ -1,4 +1,10 @@
 use crate::stage_protocol::{parse_step_limit_from_budget, StageStatus, StageSummary};
+use rocode_core::contracts::scheduler::keys as scheduler_keys;
+use rocode_core::contracts::scheduler::{
+    SchedulerDecisionFieldLabelEmphasis, SchedulerDecisionFieldOrder,
+    SchedulerDecisionRenderSpecVersion, SchedulerDecisionSectionSpacing,
+    SchedulerDecisionStatusPalette, SchedulerDecisionUpdatePolicy,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -302,13 +308,17 @@ pub struct QueueItemBlock {
 
 pub fn default_scheduler_decision_render_spec() -> SchedulerDecisionRenderSpec {
     SchedulerDecisionRenderSpec {
-        version: "decision-card/v1".to_string(),
+        version: SchedulerDecisionRenderSpecVersion::DecisionCardV1
+            .as_str()
+            .to_string(),
         show_header_divider: true,
-        field_order: "as-provided".to_string(),
-        field_label_emphasis: "bold".to_string(),
-        status_palette: "semantic".to_string(),
-        section_spacing: "loose".to_string(),
-        update_policy: "stable-shell-live-runtime-append-decision".to_string(),
+        field_order: SchedulerDecisionFieldOrder::AsProvided.as_str().to_string(),
+        field_label_emphasis: SchedulerDecisionFieldLabelEmphasis::Bold.as_str().to_string(),
+        status_palette: SchedulerDecisionStatusPalette::Semantic.as_str().to_string(),
+        section_spacing: SchedulerDecisionSectionSpacing::Loose.as_str().to_string(),
+        update_policy: SchedulerDecisionUpdatePolicy::StableShellLiveRuntimeAppendDecision
+            .as_str()
+            .to_string(),
     }
 }
 
@@ -354,69 +364,67 @@ impl SchedulerStageBlock {
         text: &str,
         metadata: &HashMap<String, serde_json::Value>,
     ) -> Option<Self> {
-        let stage = metadata.get("scheduler_stage")?.as_str()?.to_string();
+        let stage = metadata.get(scheduler_keys::STAGE)?.as_str()?.to_string();
         let stage_id = metadata
-            .get("scheduler_stage_id")
+            .get(scheduler_keys::STAGE_ID)
             .and_then(|v| v.as_str())
             .map(String::from);
         let profile = metadata
-            .get("resolved_scheduler_profile")
-            .or_else(|| metadata.get("scheduler_profile"))
+            .get(scheduler_keys::RESOLVED_PROFILE)
+            .or_else(|| metadata.get(scheduler_keys::PROFILE))
             .and_then(|v| v.as_str())
             .map(String::from);
         let stage_index = metadata
-            .get("scheduler_stage_index")
+            .get(scheduler_keys::STAGE_INDEX)
             .and_then(|v| v.as_u64());
         let stage_total = metadata
-            .get("scheduler_stage_total")
+            .get(scheduler_keys::STAGE_TOTAL)
             .and_then(|v| v.as_u64());
-        let step = metadata
-            .get("scheduler_stage_step")
-            .and_then(|v| v.as_u64());
+        let step = metadata.get(scheduler_keys::STEP).and_then(|v| v.as_u64());
         let status = metadata
-            .get("scheduler_stage_status")
+            .get(scheduler_keys::STATUS)
             .and_then(|v| v.as_str())
             .map(String::from);
         let focus = metadata
-            .get("scheduler_stage_focus")
+            .get(scheduler_keys::FOCUS)
             .and_then(|v| v.as_str())
             .filter(|s| !s.trim().is_empty())
             .map(String::from);
         let last_event = metadata
-            .get("scheduler_stage_last_event")
+            .get(scheduler_keys::LAST_EVENT)
             .and_then(|v| v.as_str())
             .filter(|s| !s.trim().is_empty())
             .map(String::from);
         let waiting_on = metadata
-            .get("scheduler_stage_waiting_on")
+            .get(scheduler_keys::WAITING_ON)
             .and_then(|v| v.as_str())
             .map(String::from);
         let activity = metadata
-            .get("scheduler_stage_activity")
+            .get(scheduler_keys::ACTIVITY)
             .and_then(|v| v.as_str())
             .filter(|s| !s.trim().is_empty())
             .map(String::from);
         let loop_budget = metadata
-            .get("scheduler_stage_loop_budget")
+            .get(scheduler_keys::LOOP_BUDGET)
             .and_then(|v| v.as_str())
             .map(String::from);
         let prompt_tokens = metadata
-            .get("scheduler_stage_prompt_tokens")
+            .get(scheduler_keys::PROMPT_TOKENS)
             .and_then(|v| v.as_u64());
         let completion_tokens = metadata
-            .get("scheduler_stage_completion_tokens")
+            .get(scheduler_keys::COMPLETION_TOKENS)
             .and_then(|v| v.as_u64());
         let reasoning_tokens = metadata
-            .get("scheduler_stage_reasoning_tokens")
+            .get(scheduler_keys::REASONING_TOKENS)
             .and_then(|v| v.as_u64());
         let cache_read_tokens = metadata
-            .get("scheduler_stage_cache_read_tokens")
+            .get(scheduler_keys::CACHE_READ_TOKENS)
             .and_then(|v| v.as_u64());
         let cache_write_tokens = metadata
-            .get("scheduler_stage_cache_write_tokens")
+            .get(scheduler_keys::CACHE_WRITE_TOKENS)
             .and_then(|v| v.as_u64());
         let child_session_id = metadata
-            .get("scheduler_stage_child_session_id")
+            .get(scheduler_keys::CHILD_SESSION_ID)
             .and_then(|v| v.as_str())
             .filter(|s| !s.trim().is_empty())
             .map(String::from);
@@ -432,25 +440,25 @@ impl SchedulerStageBlock {
                 })
                 .unwrap_or_default()
         };
-        let active_skills = extract_string_array("scheduler_stage_active_skills");
-        let active_agents = extract_string_array("scheduler_stage_active_agents");
-        let active_categories = extract_string_array("scheduler_stage_active_categories");
+        let active_skills = extract_string_array(scheduler_keys::ACTIVE_SKILLS);
+        let active_agents = extract_string_array(scheduler_keys::ACTIVE_AGENTS);
+        let active_categories = extract_string_array(scheduler_keys::ACTIVE_CATEGORIES);
 
         let available_skill_count = metadata
-            .get("scheduler_stage_available_skill_count")
+            .get(scheduler_keys::AVAILABLE_SKILL_COUNT)
             .and_then(|v| v.as_u64());
         let available_agent_count = metadata
-            .get("scheduler_stage_available_agent_count")
+            .get(scheduler_keys::AVAILABLE_AGENT_COUNT)
             .and_then(|v| v.as_u64());
         let available_category_count = metadata
-            .get("scheduler_stage_available_category_count")
+            .get(scheduler_keys::AVAILABLE_CATEGORY_COUNT)
             .and_then(|v| v.as_u64());
         let done_agent_count = metadata
-            .get("scheduler_stage_done_agent_count")
+            .get(scheduler_keys::DONE_AGENT_COUNT)
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as u32;
         let total_agent_count = metadata
-            .get("scheduler_stage_total_agent_count")
+            .get(scheduler_keys::TOTAL_AGENT_COUNT)
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as u32;
 

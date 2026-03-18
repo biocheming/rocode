@@ -2,6 +2,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::anyhow;
+use rocode_core::contracts::task::{TaskResultEnvelope, TASK_NO_TEXT_OUTPUT_MESSAGE};
+use rocode_core::contracts::tools::BuiltinToolName;
 use rocode_provider::{
     Content, ContentPart, Message, Provider, Role, ToolDefinition, ToolResult as ProviderToolResult,
 };
@@ -14,9 +16,6 @@ use rocode_orchestrator::{
     ExecutionRequestContext,
 };
 
-const TASK_STATUS_COMPLETED: &str = "completed";
-const TASK_NO_TEXT_OUTPUT_MESSAGE: &str =
-    "Task completed successfully. No textual output was returned by subagent.";
 const MAX_STEPS_SUMMARY_PROMPT: &str = "You have reached the maximum allowed steps for this subtask. Do NOT make any more tool calls. Return a concise final summary of work completed and any remaining work.";
 
 #[derive(Debug, Clone)]
@@ -162,10 +161,7 @@ impl SubtaskExecutor {
         } else {
             result_text.to_string()
         };
-        format!(
-            "task_id: {} (for resuming to continue this task if needed)\ntask_status: {}\n\n<task_result>\n{}\n</task_result>",
-            subsession_id, TASK_STATUS_COMPLETED, task_body
-        )
+        TaskResultEnvelope::format_completed(subsession_id, &task_body)
     }
 
     pub async fn execute(
@@ -186,7 +182,10 @@ impl SubtaskExecutor {
                 self.agent_name.clone(),
                 Some(title.clone()),
                 Some(model_ref),
-                vec!["todowrite".to_string(), "todoread".to_string()],
+                vec![
+                    BuiltinToolName::TodoWrite.as_str().to_string(),
+                    BuiltinToolName::TodoRead.as_str().to_string(),
+                ],
             )
             .await
             .unwrap_or_else(|_| format!("task_{}_{}", self.agent_name, uuid::Uuid::new_v4()));
@@ -448,23 +447,24 @@ fn build_tool_result_message(tool_call_id: &str, output: String, is_error: bool)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocode_core::contracts::tools::BuiltinToolName;
 
     #[test]
     fn build_inline_tool_definitions_preserves_runtime_input_order() {
         let disabled = HashSet::new();
         let tools = vec![
             rocode_tool::ToolSchema {
-                name: "websearch".to_string(),
+                name: BuiltinToolName::WebSearch.as_str().to_string(),
                 description: "web".to_string(),
                 parameters: serde_json::json!({}),
             },
             rocode_tool::ToolSchema {
-                name: "task".to_string(),
+                name: BuiltinToolName::Task.as_str().to_string(),
                 description: "task".to_string(),
                 parameters: serde_json::json!({}),
             },
             rocode_tool::ToolSchema {
-                name: "task_flow".to_string(),
+                name: BuiltinToolName::TaskFlow.as_str().to_string(),
                 description: "task flow".to_string(),
                 parameters: serde_json::json!({}),
             },
@@ -472,6 +472,13 @@ mod tests {
 
         let tool_defs = build_inline_tool_definitions(tools, &disabled);
         let names: Vec<&str> = tool_defs.iter().map(|tool| tool.name.as_str()).collect();
-        assert_eq!(names, vec!["websearch", "task", "task_flow"]);
+        assert_eq!(
+            names,
+            vec![
+                BuiltinToolName::WebSearch.as_str(),
+                BuiltinToolName::Task.as_str(),
+                BuiltinToolName::TaskFlow.as_str(),
+            ]
+        );
     }
 }

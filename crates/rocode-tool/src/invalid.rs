@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use rocode_core::contracts::tools::BuiltinToolName;
 use serde::{Deserialize, Serialize};
 
 use crate::{Metadata, Tool, ToolContext, ToolError, ToolResult};
@@ -20,7 +21,7 @@ pub struct InvalidTool;
 #[async_trait]
 impl Tool for InvalidTool {
     fn id(&self) -> &str {
-        "invalid"
+        BuiltinToolName::Invalid.as_str()
     }
 
     fn description(&self) -> &str {

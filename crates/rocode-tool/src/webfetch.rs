@@ -1,5 +1,7 @@
 use async_trait::async_trait;
 use reqwest::Client;
+use rocode_core::contracts::attachments::keys as attachment_keys;
+use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
 
 use crate::web_page::{
     build_web_client, convert_html_to_markdown, ensure_http_url, strip_html,
@@ -37,7 +39,7 @@ fn default_format() -> String {
 #[async_trait]
 impl Tool for WebFetchTool {
     fn id(&self) -> &str {
-        "webfetch"
+        BuiltinToolName::WebFetch.as_str()
     }
 
     fn description(&self) -> &str {
@@ -48,11 +50,11 @@ impl Tool for WebFetchTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "url": {
+                (tool_arg_keys::URL): {
                     "type": "string",
                     "description": "The URL to fetch content from"
                 },
-                "format": {
+                (tool_arg_keys::FORMAT): {
                     "type": "string",
                     "enum": ["text", "markdown", "html"],
                     "default": "markdown",
@@ -63,7 +65,7 @@ impl Tool for WebFetchTool {
                     "description": "Optional timeout in seconds (max 120)"
                 }
             },
-            "required": ["url"]
+            "required": [tool_arg_keys::URL]
         })
     }
 
@@ -80,7 +82,7 @@ impl Tool for WebFetchTool {
         ensure_http_url(&url)?;
 
         ctx.ask_permission(
-            crate::PermissionRequest::new("webfetch")
+            crate::PermissionRequest::new(BuiltinToolName::WebFetch.as_str())
                 .with_pattern(&url)
                 .always_allow(),
         )
@@ -163,16 +165,16 @@ impl Tool for WebFetchTool {
                 mime, url, bytes.len(), data_url
             );
             let mut metadata = std::collections::HashMap::new();
-            metadata.insert("url".to_string(), serde_json::json!(url));
+            metadata.insert(tool_arg_keys::URL.to_string(), serde_json::json!(url));
             metadata.insert("mimeType".to_string(), serde_json::json!(mime));
             metadata.insert("size".to_string(), serde_json::json!(bytes.len()));
             metadata.insert("data".to_string(), serde_json::json!(data_url));
             metadata.insert(
-                "attachment".to_string(),
+                attachment_keys::ATTACHMENT.to_string(),
                 serde_json::json!({
-                    "type": "image",
+                    (attachment_keys::TYPE): "image",
                     "mimeType": mime,
-                    "url": url,
+                    (attachment_keys::URL): url,
                     "size": bytes.len(),
                     "data": data_url
                 }),
@@ -207,8 +209,11 @@ impl Tool for WebFetchTool {
         };
 
         let mut metadata = std::collections::HashMap::new();
-        metadata.insert("url".to_string(), serde_json::json!(url));
-        metadata.insert("format".to_string(), serde_json::json!(input.format));
+        metadata.insert(tool_arg_keys::URL.to_string(), serde_json::json!(url));
+        metadata.insert(
+            tool_arg_keys::FORMAT.to_string(),
+            serde_json::json!(input.format),
+        );
         metadata.insert("mimeType".to_string(), serde_json::json!(mime));
         metadata.insert("size".to_string(), serde_json::json!(output.len()));
 
