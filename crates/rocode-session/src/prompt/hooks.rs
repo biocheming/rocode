@@ -1,13 +1,22 @@
 use crate::{MessageRole, SessionMessage};
+use rocode_core::contracts::{
+    plugin_hooks,
+    session::MessageRoleWire,
+    wire::{self, fields as wire_fields},
+};
 
 pub(crate) fn hook_payload_object(
     payload: &serde_json::Value,
 ) -> Option<&serde_json::Map<String, serde_json::Value>> {
     payload
-        .get("output")
+        .get(plugin_hooks::keys::OUTPUT)
         .and_then(|value| value.as_object())
         .or_else(|| payload.as_object())
-        .or_else(|| payload.get("data").and_then(|value| value.as_object()))
+        .or_else(|| {
+            payload
+                .get(plugin_hooks::keys::DATA)
+                .and_then(|value| value.as_object())
+        })
 }
 
 pub(crate) fn session_message_hook_payload(message: &SessionMessage) -> serde_json::Value {
@@ -17,11 +26,11 @@ pub(crate) fn session_message_hook_payload(message: &SessionMessage) -> serde_js
     };
 
     object.insert(
-        "info".to_string(),
+        plugin_hooks::keys::INFO.to_string(),
         serde_json::json!({
-            "id": message.id,
-            "sessionID": message.session_id,
-            "role": hook_message_role(&message.role),
+            plugin_hooks::keys::ID: message.id,
+            wire::keys::SESSION_ID: message.session_id,
+            wire_fields::ROLE: hook_message_role(&message.role),
             "time": { "created": message.created_at.timestamp_millis() },
         }),
     );
@@ -31,10 +40,10 @@ pub(crate) fn session_message_hook_payload(message: &SessionMessage) -> serde_js
 
 pub(crate) fn hook_message_role(role: &MessageRole) -> &'static str {
     match role {
-        MessageRole::User => "user",
-        MessageRole::Assistant => "assistant",
-        MessageRole::System => "system",
-        MessageRole::Tool => "tool",
+        MessageRole::User => MessageRoleWire::User.as_str(),
+        MessageRole::Assistant => MessageRoleWire::Assistant.as_str(),
+        MessageRole::System => MessageRoleWire::System.as_str(),
+        MessageRole::Tool => MessageRoleWire::Tool.as_str(),
     }
 }
 
@@ -49,7 +58,10 @@ pub(crate) fn apply_chat_messages_hook_outputs(
         let Some(object) = hook_payload_object(payload) else {
             continue;
         };
-        let Some(next_messages) = object.get("messages").and_then(|value| value.as_array()) else {
+        let Some(next_messages) = object
+            .get(plugin_hooks::keys::MESSAGES)
+            .and_then(|value| value.as_array())
+        else {
             continue;
         };
         let parsed = serde_json::from_value::<Vec<SessionMessage>>(serde_json::Value::Array(
@@ -72,12 +84,15 @@ pub(crate) fn apply_chat_message_hook_outputs(
         let Some(object) = hook_payload_object(payload) else {
             continue;
         };
-        if let Some(next_message) = object.get("message") {
+        if let Some(next_message) = object.get(plugin_hooks::keys::MESSAGE) {
             if let Ok(parsed) = serde_json::from_value::<SessionMessage>(next_message.clone()) {
                 *message = parsed;
             }
         }
-        if let Some(next_parts) = object.get("parts").and_then(|value| value.as_array()) {
+        if let Some(next_parts) = object
+            .get(plugin_hooks::keys::PARTS)
+            .and_then(|value| value.as_array())
+        {
             let parsed = serde_json::from_value::<Vec<crate::MessagePart>>(
                 serde_json::Value::Array(next_parts.clone()),
             );

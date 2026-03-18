@@ -7,6 +7,7 @@ use rocode_command::output_blocks::{MessageBlock, MessageRole as OutputMessageRo
 use rocode_config::{Config as AppConfig, SkillTreeNodeConfig};
 use rocode_core::contracts::agent_tasks::bus_keys as agent_task_bus_keys;
 use rocode_core::contracts::events::BusEventName;
+use rocode_core::contracts::plugin_hooks;
 use rocode_core::contracts::provider::ProviderFinishReasonWire;
 use rocode_core::contracts::scheduler::keys as scheduler_keys;
 use rocode_core::contracts::session::keys as session_keys;
@@ -388,7 +389,7 @@ impl SessionSchedulerToolExecutor {
         });
         base_ctx.call_id = exec_ctx
             .metadata
-            .get("call_id")
+            .get(plugin_hooks::aliases::CALL_ID_SNAKE)
             .and_then(|value| value.as_str())
             .map(str::to_string);
         base_ctx.extra = exec_ctx.metadata.clone();
@@ -1150,8 +1151,7 @@ pub async fn run_local_scheduler_prompt(
                         serde_json::json!("cancelled"),
                     );
                 } else {
-                    assistant.finish =
-                        Some(ProviderFinishReasonWire::Stop.as_str().to_string());
+                    assistant.finish = Some(ProviderFinishReasonWire::Stop.as_str().to_string());
                 }
                 assistant.metadata.insert(
                     scheduler_keys::SCHEDULER_STEPS.to_string(),
@@ -1196,14 +1196,11 @@ pub async fn run_local_scheduler_prompt(
                     );
                     assistant.add_text("Scheduler cancelled.");
                 } else {
-                    assistant.finish =
-                        Some(ProviderFinishReasonWire::Error.as_str().to_string());
-                    assistant
-                        .metadata
-                        .insert(
-                            session_keys::ERROR.to_string(),
-                            serde_json::json!(error.to_string()),
-                        );
+                    assistant.finish = Some(ProviderFinishReasonWire::Error.as_str().to_string());
+                    assistant.metadata.insert(
+                        session_keys::ERROR.to_string(),
+                        serde_json::json!(error.to_string()),
+                    );
                     assistant.add_text(format!("Scheduler error: {}", error));
                 }
             }

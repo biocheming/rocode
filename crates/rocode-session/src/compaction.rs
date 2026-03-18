@@ -4,6 +4,8 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use rocode_core::bus::{Bus, BusEventDef};
 use rocode_core::contracts::events::BusEventName;
+use rocode_core::contracts::plugin_hooks;
+use rocode_core::contracts::wire::keys as wire_keys;
 use rocode_orchestrator::compaction_request;
 use rocode_orchestrator::runtime::events::CancelToken as RuntimeCancelToken;
 use rocode_orchestrator::runtime::events::LoopRequest;
@@ -49,8 +51,7 @@ impl RuntimeCancelToken for CompactionAbortToken {
 }
 
 /// Bus event definition for session.compacted (mirrors TS Event.Compacted).
-pub const EVENT_COMPACTED: BusEventDef =
-    BusEventDef::new(BusEventName::SessionCompacted.as_str());
+pub const EVENT_COMPACTED: BusEventDef = BusEventDef::new(BusEventName::SessionCompacted.as_str());
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactionConfig {
@@ -669,7 +670,7 @@ When constructing the summary, try to stick to this template:
         if let Some(ref bus) = self.bus {
             bus.publish(
                 &EVENT_COMPACTED,
-                serde_json::json!({ "sessionID": input.session_id }),
+                serde_json::json!({ wire_keys::SESSION_ID: input.session_id }),
             )
             .await;
         }
@@ -857,12 +858,12 @@ pub fn generate_continue_message() -> String {
 
 fn parse_compaction_hook_payload(payload: &serde_json::Value) -> (Option<String>, Vec<String>) {
     let source = payload
-        .get("data")
+        .get(plugin_hooks::keys::DATA)
         .filter(|value| value.is_object())
         .unwrap_or(payload);
 
     let prompt = source
-        .get("prompt")
+        .get(plugin_hooks::keys::PROMPT)
         .and_then(|value| value.as_str())
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -876,7 +877,7 @@ fn parse_compaction_hook_payload(payload: &serde_json::Value) -> (Option<String>
         });
 
     let mut context = Vec::new();
-    if let Some(value) = source.get("context") {
+    if let Some(value) = source.get(plugin_hooks::keys::CONTEXT) {
         if let Some(values) = value.as_array() {
             context.extend(values.iter().filter_map(|item| {
                 item.as_str()

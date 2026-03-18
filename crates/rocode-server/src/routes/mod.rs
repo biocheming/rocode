@@ -50,11 +50,14 @@ use crate::{ApiError, Result, ServerState};
 use rocode_agent::{AgentMode, AgentRegistry};
 use rocode_command::{CommandRegistry, ResolvedUiCommand};
 use rocode_config::Config as AppConfig;
+use rocode_core::contracts::{
+    output_blocks::{keys as block_keys, MessagePhaseWire, OutputBlockKind},
+    wire::{keysets as wire_keysets, selectors as wire_selectors},
+};
 use rocode_orchestrator::{SchedulerConfig, SchedulerPresetKind};
 use rocode_permission::PermissionRuleset;
 use rocode_plugin::subprocess::{PluginLoader, PluginSubprocessError};
 use rocode_provider::AuthInfo;
-use rocode_core::contracts::wire::keys as wire_keys;
 
 pub fn router() -> Router<Arc<ServerState>> {
     Router::new()
@@ -219,13 +222,16 @@ pub(crate) fn stream_server_events(
             let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
                 return true;
             };
-            match value.get(wire_keys::SESSION_ID).and_then(|v| v.as_str()) {
+            match wire_selectors::first_str(&value, wire_keysets::SESSION_ID_ANY) {
                 Some(sid) => sid == filter.as_str(),
                 None => {
-                    // Also check "parentID" for child_session events.
-                    match value.get("parentID").and_then(|v| v.as_str()) {
-                        Some(pid) => pid == filter.as_str(),
-                        None => true, // global event
+                    let parent_id = wire_selectors::first_str(&value, wire_keysets::PARENT_ID_ANY);
+                    let child_id = wire_selectors::first_str(&value, wire_keysets::CHILD_ID_ANY);
+                    match (parent_id, child_id) {
+                        (Some(pid), Some(cid)) => pid == filter.as_str() || cid == filter.as_str(),
+                        (Some(pid), None) => pid == filter.as_str(),
+                        (None, Some(cid)) => cid == filter.as_str(),
+                        (None, None) => true, // global event
                     }
                 }
             }
@@ -339,12 +345,23 @@ fn is_mergeable_output_delta(event: &ServerEvent) -> bool {
     if id.as_deref().is_none_or(str::is_empty) {
         return false;
     }
+    let kind = block
+        .get(block_keys::KIND)
+        .and_then(|value| value.as_str())
+        .and_then(OutputBlockKind::parse);
+    let phase = block
+        .get(block_keys::PHASE)
+        .and_then(|value| value.as_str())
+        .and_then(MessagePhaseWire::parse);
     matches!(
+        (kind, phase),
         (
-            block.get("kind").and_then(|value| value.as_str()),
-            block.get("phase").and_then(|value| value.as_str()),
-        ),
-        (Some("message"), Some("delta")) | (Some("reasoning"), Some("delta"))
+            Some(OutputBlockKind::Message),
+            Some(MessagePhaseWire::Delta)
+        ) | (
+            Some(OutputBlockKind::Reasoning),
+            Some(MessagePhaseWire::Delta)
+        )
     )
 }
 
@@ -369,31 +386,54 @@ fn merge_output_block_delta(current: &mut ServerEvent, next: &ServerEvent) -> bo
         return false;
     }
 
-    let current_kind = current_block.get("kind").and_then(|value| value.as_str());
-    let next_kind = next_block.get("kind").and_then(|value| value.as_str());
-    let current_phase = current_block.get("phase").and_then(|value| value.as_str());
-    let next_phase = next_block.get("phase").and_then(|value| value.as_str());
-    if current_kind != next_kind || current_phase != Some("delta") || next_phase != Some("delta") {
+    let current_kind = current_block
+        .get(block_keys::KIND)
+        .and_then(|value| value.as_str())
+        .and_then(OutputBlockKind::parse);
+    let next_kind = next_block
+        .get(block_keys::KIND)
+        .and_then(|value| value.as_str())
+        .and_then(OutputBlockKind::parse);
+    let current_phase = current_block
+        .get(block_keys::PHASE)
+        .and_then(|value| value.as_str())
+        .and_then(MessagePhaseWire::parse);
+    let next_phase = next_block
+        .get(block_keys::PHASE)
+        .and_then(|value| value.as_str())
+        .and_then(MessagePhaseWire::parse);
+    if current_kind != next_kind
+        || current_phase != Some(MessagePhaseWire::Delta)
+        || next_phase != Some(MessagePhaseWire::Delta)
+    {
         return false;
     }
-    if current_kind == Some("message")
-        && current_block.get("role").and_then(|value| value.as_str())
-            != next_block.get("role").and_then(|value| value.as_str())
+    if current_kind == Some(OutputBlockKind::Message)
+        && current_block
+            .get(block_keys::ROLE)
+            .and_then(|value| value.as_str())
+            != next_block
+                .get(block_keys::ROLE)
+                .and_then(|value| value.as_str())
     {
         return false;
     }
 
-    let Some(next_text) = next_block.get("text").and_then(|value| value.as_str()) else {
+    let Some(next_text) = next_block
+        .get(block_keys::TEXT)
+        .and_then(|value| value.as_str())
+    else {
         return false;
     };
     let Some(current_text) = current_block
-        .get_mut("text")
+        .get_mut(block_keys::TEXT)
         .and_then(|value| value.as_str())
     else {
         return false;
     };
 
-    current_block["text"] = serde_json::Value::String(format!("{current_text}{next_text}"));
+    current_block[block_keys::TEXT] =
+        serde_json::Value::String(format!("{current_text}{next_text}"));
     true
 }
 
@@ -958,7 +998,9 @@ pub(crate) fn get_plugin_loader() -> Option<&'static Arc<PluginLoader>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocode_core::contracts::output_blocks::{MessagePhaseWire, MessageRoleWire, OutputBlockKind};
+    use rocode_core::contracts::output_blocks::{
+        MessagePhaseWire, MessageRoleWire, OutputBlockKind,
+    };
     use serde_json::json;
 
     #[test]
@@ -1004,7 +1046,7 @@ mod tests {
             panic!("expected output block");
         };
         assert_eq!(
-            block.get("text").and_then(|value| value.as_str()),
+            block.get(block_keys::TEXT).and_then(|value| value.as_str()),
             Some("hello")
         );
     }

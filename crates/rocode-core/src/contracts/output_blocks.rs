@@ -2,6 +2,41 @@ use strum_macros::EnumString;
 
 /// Shared metadata keys used for structured output blocks and UI rendering.
 pub mod keys {
+    /// Output block discriminant key.
+    pub const KIND: &str = "kind";
+    /// Output block tone key.
+    pub const TONE: &str = "tone";
+    /// Output block text key.
+    pub const TEXT: &str = "text";
+    /// Message/reasoning/tool phase key.
+    pub const PHASE: &str = "phase";
+    /// Message role key.
+    pub const ROLE: &str = "role";
+    /// Session event name key.
+    pub const EVENT: &str = "event";
+    /// Shared title key for event/stage blocks.
+    pub const TITLE: &str = "title";
+    /// Shared status key for event/stage blocks.
+    pub const STATUS: &str = "status";
+    /// Shared summary key for event/stage blocks.
+    pub const SUMMARY: &str = "summary";
+    /// Shared fields key for event/stage blocks.
+    pub const FIELDS: &str = "fields";
+    /// Shared body key for event/stage blocks.
+    pub const BODY: &str = "body";
+    /// Tool name key.
+    pub const NAME: &str = "name";
+    /// Tool detail key.
+    pub const DETAIL: &str = "detail";
+    /// Queue position key.
+    pub const POSITION: &str = "position";
+    /// Generic field label key for rendered key-value rows.
+    pub const LABEL: &str = "label";
+    /// Generic field value key for rendered key-value rows.
+    pub const VALUE: &str = "value";
+    /// Scheduler stage embedded decision payload key.
+    pub const DECISION: &str = "decision";
+
     /// Metadata key for a one-line display summary.
     pub const DISPLAY_SUMMARY: &str = "display.summary";
     /// Metadata key for display fields (array of `{ key, value }` objects).
@@ -22,6 +57,55 @@ pub mod keys {
     pub const INTERACTION_STATUS: &str = "status";
     pub const INTERACTION_CAN_REPLY: &str = "can_reply";
     pub const INTERACTION_CAN_REJECT: &str = "can_reject";
+}
+
+/// Output-block JSON keys for `OutputBlock::SchedulerStage`.
+///
+/// These are the serialized field names of `rocode_content::output_blocks::SchedulerStageBlock`.
+pub mod scheduler_stage_keys {
+    pub const STAGE_ID: &str = "stage_id";
+    pub const PROFILE: &str = "profile";
+    pub const STAGE: &str = "stage";
+    pub const STAGE_INDEX: &str = "stage_index";
+    pub const STAGE_TOTAL: &str = "stage_total";
+    pub const STEP: &str = "step";
+    pub const FOCUS: &str = "focus";
+    pub const LAST_EVENT: &str = "last_event";
+    pub const WAITING_ON: &str = "waiting_on";
+    pub const ACTIVITY: &str = "activity";
+    pub const LOOP_BUDGET: &str = "loop_budget";
+    pub const AVAILABLE_SKILL_COUNT: &str = "available_skill_count";
+    pub const AVAILABLE_AGENT_COUNT: &str = "available_agent_count";
+    pub const AVAILABLE_CATEGORY_COUNT: &str = "available_category_count";
+    pub const ACTIVE_SKILLS: &str = "active_skills";
+    pub const ACTIVE_AGENTS: &str = "active_agents";
+    pub const ACTIVE_CATEGORIES: &str = "active_categories";
+    pub const DONE_AGENT_COUNT: &str = "done_agent_count";
+    pub const TOTAL_AGENT_COUNT: &str = "total_agent_count";
+    pub const REASONING_TOKENS: &str = "reasoning_tokens";
+    pub const CACHE_READ_TOKENS: &str = "cache_read_tokens";
+    pub const CACHE_WRITE_TOKENS: &str = "cache_write_tokens";
+    pub const CHILD_SESSION_ID: &str = "child_session_id";
+}
+
+/// JSON keys for embedded scheduler decision blocks inside output blocks.
+pub mod scheduler_decision_keys {
+    pub const KIND: &str = "kind";
+    pub const TITLE: &str = "title";
+    pub const SPEC: &str = "spec";
+    pub const FIELDS: &str = "fields";
+    pub const SECTIONS: &str = "sections";
+}
+
+/// JSON keys for `SchedulerDecisionRenderSpec`.
+pub mod scheduler_decision_spec_keys {
+    pub const VERSION: &str = "version";
+    pub const SHOW_HEADER_DIVIDER: &str = "show_header_divider";
+    pub const FIELD_ORDER: &str = "field_order";
+    pub const FIELD_LABEL_EMPHASIS: &str = "field_label_emphasis";
+    pub const STATUS_PALETTE: &str = "status_palette";
+    pub const SECTION_SPACING: &str = "section_spacing";
+    pub const UPDATE_POLICY: &str = "update_policy";
 }
 
 /// Canonical display mode override values used in `display.mode`.

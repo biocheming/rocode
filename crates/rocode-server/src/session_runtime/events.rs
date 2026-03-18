@@ -382,7 +382,10 @@ mod tests {
         }
         .to_json_value()
         .expect("event json");
-        assert_eq!(value["type"], ServerEventType::ChildSessionAttached.as_str());
+        assert_eq!(
+            value["type"],
+            ServerEventType::ChildSessionAttached.as_str()
+        );
         assert_eq!(value["parentID"], "parent-1");
         assert_eq!(value["childID"], "child-1");
     }
@@ -400,7 +403,10 @@ mod tests {
         .expect("event json");
 
         assert_eq!(value["type"], ServerEventType::QuestionResolved.as_str());
-        assert_eq!(value["resolution"], QuestionResolutionKind::Answered.as_str());
+        assert_eq!(
+            value[rocode_core::contracts::wire::fields::RESOLUTION],
+            QuestionResolutionKind::Answered.as_str()
+        );
         assert_eq!(value["requestID"], "question-1");
     }
 

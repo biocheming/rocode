@@ -399,9 +399,10 @@ mod tests {
                 scope: EventScope::Stage,
                 stage_id: Some("stg_alpha".into()),
                 execution_id: Some("ex_1".into()),
-                event_type: rocode_core::contracts::events::ServerEventType::ExecutionTopologyChanged
-                    .as_str()
-                    .into(),
+                event_type:
+                    rocode_core::contracts::events::ServerEventType::ExecutionTopologyChanged
+                        .as_str()
+                        .into(),
                 ts: 1000,
                 payload: serde_json::json!({}),
             },
@@ -414,9 +415,10 @@ mod tests {
                 scope: EventScope::Stage,
                 stage_id: Some("stg_beta".into()),
                 execution_id: Some("ex_2".into()),
-                event_type: rocode_core::contracts::events::ServerEventType::ExecutionTopologyChanged
-                    .as_str()
-                    .into(),
+                event_type:
+                    rocode_core::contracts::events::ServerEventType::ExecutionTopologyChanged
+                        .as_str()
+                        .into(),
                 ts: 2000,
                 payload: serde_json::json!({}),
             },

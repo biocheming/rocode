@@ -59,9 +59,17 @@ pub mod fields {
     pub const SOURCE: &str = "source";
     pub const STATUS: &str = "status";
     pub const PHASE: &str = "phase";
+    pub const ROLE: &str = "role";
     pub const TOOL_NAME: &str = "toolName";
     pub const TOOL_NAME_SNAKE: &str = "tool_name";
+    pub const RESOLUTION: &str = "resolution";
     pub const QUESTIONS: &str = "questions";
+    pub const QUESTION: &str = "question";
+    pub const HEADER: &str = "header";
+    pub const OPTIONS: &str = "options";
+    pub const MULTIPLE: &str = "multiple";
+    pub const LABEL: &str = "label";
+    pub const VALUE: &str = "value";
     pub const INFO: &str = "info";
     pub const ID: &str = "id";
     pub const DONE: &str = "done";

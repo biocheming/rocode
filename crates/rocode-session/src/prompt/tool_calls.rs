@@ -4,7 +4,7 @@ use crate::{PartType, Session, SessionMessage};
 use rocode_core::contracts::attachments::{keys as attachment_keys, AttachmentTypeWire};
 use rocode_core::contracts::patch::keys as patch_keys;
 use rocode_core::contracts::tools::BuiltinToolName;
-use rocode_core::contracts::wire::keys as wire_keys;
+use rocode_core::contracts::wire::{aliases as wire_aliases, keys as wire_keys};
 
 use super::SessionPrompt;
 
@@ -195,13 +195,13 @@ impl SessionPrompt {
                 });
             let normalized_session_id = obj
                 .get(wire_keys::SESSION_ID)
-                .or_else(|| obj.get("session_id"))
+                .or_else(|| obj.get(wire_aliases::SESSION_ID_SNAKE))
                 .and_then(|v| v.as_str())
                 .unwrap_or(session_id)
                 .to_string();
             let normalized_message_id = obj
                 .get(wire_keys::MESSAGE_ID)
-                .or_else(|| obj.get("message_id"))
+                .or_else(|| obj.get(wire_aliases::MESSAGE_ID_SNAKE))
                 .and_then(|v| v.as_str())
                 .unwrap_or(message_id)
                 .to_string();
@@ -211,7 +211,10 @@ impl SessionPrompt {
                 wire_keys::TYPE.to_string(),
                 serde_json::json!(AttachmentTypeWire::File.as_str()),
             );
-            normalized.insert(attachment_keys::ID.to_string(), serde_json::json!(id.clone()));
+            normalized.insert(
+                attachment_keys::ID.to_string(),
+                serde_json::json!(id.clone()),
+            );
             normalized.insert(
                 wire_keys::SESSION_ID.to_string(),
                 serde_json::json!(normalized_session_id.clone()),
@@ -721,9 +724,21 @@ mod tests {
             .push(SessionMessage::user(sid.clone(), "do something"));
 
         let mut assistant = SessionMessage::assistant(sid.clone());
-        assistant.add_tool_call("call_1", BuiltinToolName::Bash.as_str(), serde_json::json!({}));
-        assistant.add_tool_call("call_2", BuiltinToolName::Read.as_str(), serde_json::json!({}));
-        assistant.add_tool_call("call_3", BuiltinToolName::Write.as_str(), serde_json::json!({}));
+        assistant.add_tool_call(
+            "call_1",
+            BuiltinToolName::Bash.as_str(),
+            serde_json::json!({}),
+        );
+        assistant.add_tool_call(
+            "call_2",
+            BuiltinToolName::Read.as_str(),
+            serde_json::json!({}),
+        );
+        assistant.add_tool_call(
+            "call_3",
+            BuiltinToolName::Write.as_str(),
+            serde_json::json!({}),
+        );
         // No results at all — all three are pending
         session.messages.push(assistant);
 

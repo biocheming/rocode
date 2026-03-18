@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use rocode_core::bus::Bus;
 use rocode_core::contracts::events::BusEventName;
+use rocode_core::contracts::wire::keys as wire_keys;
 use rocode_orchestrator::message_title_request;
 use rocode_provider::{Content, Message, Provider, Role};
 
@@ -221,7 +222,7 @@ pub async fn summarize(
     if let Some(bus) = bus {
         let diff_event = rocode_core::bus::define_event(BusEventName::SessionDiff.as_str());
         let diff_data = serde_json::json!({
-            "sessionID": input.session_id,
+            wire_keys::SESSION_ID: input.session_id,
             "diff": diffs,
         });
         bus.publish(&diff_event, diff_data).await;

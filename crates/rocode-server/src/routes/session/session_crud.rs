@@ -8,6 +8,7 @@ use axum::{
 };
 use rocode_core::contracts::scheduler::keys as scheduler_keys;
 use rocode_core::contracts::session::keys as session_keys;
+use rocode_core::contracts::wire::keys as wire_keys;
 use serde::{Deserialize, Serialize};
 
 use crate::runtime_control::SessionRunStatus;
@@ -792,7 +793,7 @@ pub(super) async fn get_message(
 
     let info = serde_json::json!({
         "id": message.id,
-        "sessionID": session_id,
+        wire_keys::SESSION_ID: session_id,
         "role": super::messages::message_role_name(&message.role),
         "createdAt": message.created_at.timestamp_millis(),
     });

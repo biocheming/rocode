@@ -32,11 +32,12 @@ use rocode_core::agent_task_registry::{global_task_registry, AgentTaskStatus};
 #[cfg(test)]
 use rocode_core::contracts::mcp::McpConnectionStatusWire;
 use rocode_core::contracts::output_blocks::ToolPhaseWire;
-use rocode_core::contracts::permission::PermissionReplyWire;
+use rocode_core::contracts::permission::{keys as permission_keys, PermissionReplyWire};
 use rocode_core::contracts::scheduler::keys as scheduler_keys;
 use rocode_core::contracts::scheduler::{SchedulerStageStatus, SchedulerStageWaitingOn};
 use rocode_core::contracts::session::keys as session_keys;
 use rocode_core::contracts::tools::{QuestionInteractionStatus, ToolCallStatusWire};
+use rocode_core::contracts::wire::keys as wire_keys;
 use rocode_orchestrator::{
     scheduler_plan_from_profile, scheduler_request_defaults_from_plan, SchedulerConfig,
     SchedulerPresetKind, SchedulerProfileConfig, SchedulerRequestDefaults,
@@ -2000,14 +2001,11 @@ impl CliObservedExecutionTopology {
                 stage.stage
             )
         });
-        let parent_id = self
-            .scheduler_id
-            .clone()
-            .unwrap_or_else(|| {
-                self.root_id
-                    .clone()
-                    .unwrap_or_else(|| CLI_NODE_ID_PROMPT.to_string())
-            });
+        let parent_id = self.scheduler_id.clone().unwrap_or_else(|| {
+            self.root_id
+                .clone()
+                .unwrap_or_else(|| CLI_NODE_ID_PROMPT.to_string())
+        });
         let status = stage
             .status
             .clone()
@@ -3280,7 +3278,9 @@ fn cli_frontend_observe_block(
                     CliFrontendPhase::Waiting
                 }
                 Some(SchedulerStageStatus::Cancelling) => CliFrontendPhase::Cancelling,
-                Some(SchedulerStageStatus::Cancelled | SchedulerStageStatus::Done) => projection.phase,
+                Some(SchedulerStageStatus::Cancelled | SchedulerStageStatus::Done) => {
+                    projection.phase
+                }
                 _ => CliFrontendPhase::Busy,
             };
             projection.active_label = Some(cli_stage_activity_label(stage));
@@ -3561,7 +3561,9 @@ fn cli_sidebar_lines(
         let errored = projection
             .mcp_servers
             .iter()
-            .filter(|s| McpConnectionStatusWire::parse(&s.status) == Some(McpConnectionStatusWire::Failed))
+            .filter(|s| {
+                McpConnectionStatusWire::parse(&s.status) == Some(McpConnectionStatusWire::Failed)
+            })
             .count();
         lines.push(String::new());
         lines.push(format!("─ MCP ({} active, {} err) ─", connected, errored));
@@ -4835,7 +4837,7 @@ fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style:
             if !is_related_session(&session_id) {
                 return;
             }
-            let block_payload = payload.get("block").unwrap_or(&payload);
+            let block_payload = payload.get(wire_keys::BLOCK).unwrap_or(&payload);
             let Some(block) = parse_output_block(block_payload) else {
                 tracing::debug!(?id, payload = %block_payload, "failed to parse output_block");
                 return;
@@ -5039,12 +5041,12 @@ async fn handle_permission_from_sse(
 
     let input = info.input.as_object().cloned().unwrap_or_default();
     let permission = input
-        .get("permission")
+        .get(permission_keys::REQUEST_PERMISSION)
         .and_then(|value| value.as_str())
         .unwrap_or(info.tool.as_str())
         .to_string();
     let patterns = input
-        .get("patterns")
+        .get(permission_keys::REQUEST_PATTERNS)
         .and_then(|value| value.as_array())
         .map(|values| {
             values
@@ -5054,7 +5056,7 @@ async fn handle_permission_from_sse(
         })
         .unwrap_or_default();
     let metadata = input
-        .get("metadata")
+        .get(permission_keys::REQUEST_METADATA)
         .and_then(|value| value.as_object())
         .map(|map| {
             map.iter()
@@ -5607,7 +5609,9 @@ fn cli_show_task(id: &str, runtime: Option<&CliExecutionRuntime>) {
     match global_task_registry().get(id) {
         Some(task) => {
             let (status_label, step_info) = match &task.status {
-                AgentTaskStatus::Pending => (task.status.kind().as_str().to_string(), String::new()),
+                AgentTaskStatus::Pending => {
+                    (task.status.kind().as_str().to_string(), String::new())
+                }
                 AgentTaskStatus::Running { step } => {
                     let steps = task
                         .max_steps
@@ -5615,13 +5619,13 @@ fn cli_show_task(id: &str, runtime: Option<&CliExecutionRuntime>) {
                         .unwrap_or(format!(" (step {}/?)", step));
                     (task.status.kind().as_str().to_string(), steps)
                 }
-                AgentTaskStatus::Completed { steps } => {
-                    (
-                        task.status.kind().as_str().to_string(),
-                        format!(" ({} steps)", steps),
-                    )
+                AgentTaskStatus::Completed { steps } => (
+                    task.status.kind().as_str().to_string(),
+                    format!(" ({} steps)", steps),
+                ),
+                AgentTaskStatus::Cancelled => {
+                    (task.status.kind().as_str().to_string(), String::new())
                 }
-                AgentTaskStatus::Cancelled => (task.status.kind().as_str().to_string(), String::new()),
                 AgentTaskStatus::Failed { error } => (
                     format!("{}: {}", task.status.kind().as_str(), error),
                     String::new(),

@@ -657,12 +657,10 @@ pub(super) async fn session_prompt(
                             );
                             assistant.finish =
                                 Some(ProviderFinishReasonWire::Error.as_str().to_string());
-                            assistant
-                                .metadata
-                                .insert(
-                                    session_keys::ERROR.to_string(),
-                                    serde_json::json!(error.to_string()),
-                                );
+                            assistant.metadata.insert(
+                                session_keys::ERROR.to_string(),
+                                serde_json::json!(error.to_string()),
+                            );
                             assistant.add_text(format!("Scheduler error: {}", error));
                         }
                     }
@@ -897,12 +895,10 @@ pub(super) async fn session_prompt(
             );
             let assistant = session.add_assistant_message();
             assistant.finish = Some(ProviderFinishReasonWire::Error.as_str().to_string());
-            assistant
-                .metadata
-                .insert(
-                    session_keys::ERROR.to_string(),
-                    serde_json::json!(error.to_string()),
-                );
+            assistant.metadata.insert(
+                session_keys::ERROR.to_string(),
+                serde_json::json!(error.to_string()),
+            );
             assistant.metadata.insert(
                 session_keys::FINISH_REASON.to_string(),
                 serde_json::json!(ProviderFinishReasonWire::Error.as_str()),

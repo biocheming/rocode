@@ -6,6 +6,7 @@ use axum::{
 use futures::stream::Stream;
 use rocode_core::contracts::scheduler::keys as scheduler_keys;
 use rocode_core::contracts::session::keys as session_keys;
+use rocode_core::contracts::wire::keys as wire_keys;
 use std::convert::Infallible;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
@@ -294,7 +295,7 @@ pub(crate) async fn stream_message(
                 let event_hook: QuestionEventHook = Arc::new(move |payload| {
                     let sse_tx = sse_tx.clone();
                     let event_name = payload
-                        .get("type")
+                        .get(wire_keys::TYPE)
                         .and_then(|value| value.as_str())
                         .unwrap_or("question.event")
                         .to_string();

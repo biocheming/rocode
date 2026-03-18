@@ -213,7 +213,12 @@ async fn list_tool_ids() -> Json<Vec<String>> {
         BuiltinToolName::MultiEdit,
     ];
 
-    Json(TOOL_IDS.iter().map(|tool| tool.as_str().to_string()).collect())
+    Json(
+        TOOL_IDS
+            .iter()
+            .map(|tool| tool.as_str().to_string())
+            .collect(),
+    )
 }
 
 async fn list_tools(Query(_params): Query<HashMap<String, String>>) -> Json<Vec<ToolInfo>> {

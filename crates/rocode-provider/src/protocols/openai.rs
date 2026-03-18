@@ -11,6 +11,7 @@ use tracing;
 
 use rocode_core::contracts::provider::ProviderFinishReasonWire;
 use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::wire::keys as wire_keys;
 
 use crate::custom_fetch::get_custom_fetch_proxy;
 use crate::responses::*;
@@ -297,8 +298,8 @@ fn invalid_tool_payload_for_history(
 ) -> Value {
     json!({
         "tool": tool_name,
-        "toolCallId": tool_call_id,
-        "error": error,
+        wire_keys::TOOL_CALL_ID: tool_call_id,
+        wire_keys::ERROR: error,
         "receivedArgs": received_args,
     })
 }

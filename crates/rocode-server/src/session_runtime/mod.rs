@@ -16,17 +16,20 @@ use rocode_command::output_blocks::{
     SchedulerDecisionBlock, SchedulerDecisionField, SchedulerDecisionRenderSpec,
     SchedulerDecisionSection, SchedulerStageBlock,
 };
-use rocode_core::contracts::output_blocks::keys as output_keys;
+use rocode_core::contracts::output_blocks::{
+    keys as output_keys, scheduler_decision_spec_keys as output_decision_spec_keys,
+};
 use rocode_core::contracts::patch::keys as patch_keys;
 use rocode_core::contracts::scheduler::{
     decision_keys as scheduler_decision_keys, gate_keys as scheduler_gate_keys,
-    keys as scheduler_keys, SchedulerDecisionKind, SchedulerStageName, SchedulerStageStatus,
-    SchedulerStageWaitingOn, SchedulerDecisionFieldLabelEmphasis, SchedulerDecisionFieldOrder,
-    SchedulerDecisionRenderSpecVersion, SchedulerDecisionSectionSpacing,
-    SchedulerDecisionStatusPalette, SchedulerDecisionUpdatePolicy,
+    keys as scheduler_keys, SchedulerDecisionFieldLabelEmphasis, SchedulerDecisionFieldOrder,
+    SchedulerDecisionKind, SchedulerDecisionRenderSpecVersion, SchedulerDecisionSectionSpacing,
+    SchedulerDecisionStatusPalette, SchedulerDecisionUpdatePolicy, SchedulerStageName,
+    SchedulerStageStatus, SchedulerStageWaitingOn,
 };
 use rocode_core::contracts::todo::{keys as todo_keys, TodoPriority, TodoStatus};
 use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_core::contracts::wire::fields as wire_fields;
 use rocode_orchestrator::{
     parse_execution_gate_decision, parse_route_decision, scheduler_stage_observability,
     ExecutionContext as OrchestratorExecutionContext, LifecycleHook, RouteDecision,
@@ -1467,7 +1470,9 @@ fn stage_execution_patch_from_message(message: &SessionMessage) -> ExecutionPatc
 fn runtime_execution_status_from_stage_status(value: &str) -> Option<ExecutionStatus> {
     match SchedulerStageStatus::parse(value)? {
         SchedulerStageStatus::Running => Some(ExecutionStatus::Running),
-        SchedulerStageStatus::Waiting | SchedulerStageStatus::Blocked => Some(ExecutionStatus::Waiting),
+        SchedulerStageStatus::Waiting | SchedulerStageStatus::Blocked => {
+            Some(ExecutionStatus::Waiting)
+        }
         SchedulerStageStatus::Cancelling => Some(ExecutionStatus::Cancelling),
         SchedulerStageStatus::Retrying => Some(ExecutionStatus::Retry),
         SchedulerStageStatus::Done | SchedulerStageStatus::Cancelled => Some(ExecutionStatus::Done),
@@ -1586,19 +1591,19 @@ fn summarize_tool_result_activity(
 }
 
 fn summarize_question_args(tool_args: &serde_json::Value) -> Option<String> {
-    let questions = tool_args.get("questions")?.as_array()?;
+    let questions = tool_args.get(wire_fields::QUESTIONS)?.as_array()?;
     if questions.is_empty() {
         return None;
     }
     let mut lines = vec![format!("Question ({})", questions.len())];
     for question in questions.iter().take(3) {
         let header = question
-            .get("header")
+            .get(wire_fields::HEADER)
             .and_then(|value| value.as_str())
             .filter(|value| !value.is_empty())
             .unwrap_or("Prompt");
         let text = question
-            .get("question")
+            .get(wire_fields::QUESTION)
             .and_then(|value| value.as_str())
             .unwrap_or("");
         if !text.is_empty() {
@@ -1615,7 +1620,9 @@ fn summarize_todo_args(tool_args: &serde_json::Value) -> Option<String> {
     }
     let mut lines = vec![format!("Todo list ({})", todos.len())];
     for todo in todos.iter().take(5) {
-        let content = todo.get(todo_keys::CONTENT).and_then(|value| value.as_str())?;
+        let content = todo
+            .get(todo_keys::CONTENT)
+            .and_then(|value| value.as_str())?;
         let status = todo
             .get(todo_keys::STATUS)
             .and_then(|value| value.as_str())
@@ -1813,11 +1820,10 @@ fn tool_supports_stage_capability_activity_output(
     matches!(
         BuiltinToolName::parse(tool_name),
         Some(BuiltinToolName::Task | BuiltinToolName::TaskFlow)
-    )
-        || metadata
-            .get("delegated")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false)
+    ) || metadata
+        .get("delegated")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
         || metadata.get("agentTaskId").is_some()
         || metadata.get("task").is_some()
 }
@@ -2163,7 +2169,9 @@ fn summarize_todo_result(metadata: Option<&serde_json::Value>) -> Option<String>
     }
     let mut lines = vec![format!("Todo list ({})", todos.len())];
     for todo in todos.iter().take(5) {
-        let content = todo.get(todo_keys::CONTENT).and_then(|value| value.as_str())?;
+        let content = todo
+            .get(todo_keys::CONTENT)
+            .and_then(|value| value.as_str())?;
         let status = todo
             .get(todo_keys::STATUS)
             .and_then(|value| value.as_str())
@@ -2428,28 +2436,28 @@ fn write_scheduler_decision_metadata(
 
 fn decision_field(label: &str, value: &str, tone: Option<&str>) -> serde_json::Value {
     serde_json::json!({
-        "label": label,
-        "value": value,
-        "tone": tone,
+        output_keys::LABEL: label,
+        output_keys::VALUE: value,
+        output_keys::TONE: tone,
     })
 }
 
 fn decision_section(title: &str, body: &str) -> serde_json::Value {
     serde_json::json!({
-        "title": title,
-        "body": body,
+        output_keys::TITLE: title,
+        output_keys::BODY: body,
     })
 }
 
 fn scheduler_decision_render_spec_json() -> serde_json::Value {
     serde_json::json!({
-        "version": SchedulerDecisionRenderSpecVersion::DecisionCardV1.as_str(),
-        "show_header_divider": true,
-        "field_order": SchedulerDecisionFieldOrder::AsProvided.as_str(),
-        "field_label_emphasis": SchedulerDecisionFieldLabelEmphasis::Bold.as_str(),
-        "status_palette": SchedulerDecisionStatusPalette::Semantic.as_str(),
-        "section_spacing": SchedulerDecisionSectionSpacing::Loose.as_str(),
-        "update_policy": SchedulerDecisionUpdatePolicy::StableShellLiveRuntimeAppendDecision.as_str(),
+        output_decision_spec_keys::VERSION: SchedulerDecisionRenderSpecVersion::DecisionCardV1.as_str(),
+        output_decision_spec_keys::SHOW_HEADER_DIVIDER: true,
+        output_decision_spec_keys::FIELD_ORDER: SchedulerDecisionFieldOrder::AsProvided.as_str(),
+        output_decision_spec_keys::FIELD_LABEL_EMPHASIS: SchedulerDecisionFieldLabelEmphasis::Bold.as_str(),
+        output_decision_spec_keys::STATUS_PALETTE: SchedulerDecisionStatusPalette::Semantic.as_str(),
+        output_decision_spec_keys::SECTION_SPACING: SchedulerDecisionSectionSpacing::Loose.as_str(),
+        output_decision_spec_keys::UPDATE_POLICY: SchedulerDecisionUpdatePolicy::StableShellLiveRuntimeAppendDecision.as_str(),
     })
 }
 
@@ -2746,10 +2754,10 @@ fn decision_from_metadata(
                     .iter()
                     .filter_map(|field| {
                         Some(SchedulerDecisionField {
-                            label: field.get("label")?.as_str()?.to_string(),
-                            value: field.get("value")?.as_str()?.to_string(),
+                            label: field.get(output_keys::LABEL)?.as_str()?.to_string(),
+                            value: field.get(output_keys::VALUE)?.as_str()?.to_string(),
                             tone: field
-                                .get("tone")
+                                .get(output_keys::TONE)
                                 .and_then(|value| value.as_str())
                                 .map(|value| value.to_string()),
                         })
@@ -2765,8 +2773,8 @@ fn decision_from_metadata(
                     .iter()
                     .filter_map(|section| {
                         Some(SchedulerDecisionSection {
-                            title: section.get("title")?.as_str()?.to_string(),
-                            body: section.get("body")?.as_str()?.to_string(),
+                            title: section.get(output_keys::TITLE)?.as_str()?.to_string(),
+                            body: section.get(output_keys::BODY)?.as_str()?.to_string(),
                         })
                     })
                     .collect()
@@ -2902,13 +2910,33 @@ fn decision_spec_from_metadata(
 ) -> Option<SchedulerDecisionRenderSpec> {
     let spec = metadata.get(scheduler_decision_keys::SPEC)?;
     Some(SchedulerDecisionRenderSpec {
-        version: spec.get("version")?.as_str()?.to_string(),
-        show_header_divider: spec.get("show_header_divider")?.as_bool()?,
-        field_order: spec.get("field_order")?.as_str()?.to_string(),
-        field_label_emphasis: spec.get("field_label_emphasis")?.as_str()?.to_string(),
-        status_palette: spec.get("status_palette")?.as_str()?.to_string(),
-        section_spacing: spec.get("section_spacing")?.as_str()?.to_string(),
-        update_policy: spec.get("update_policy")?.as_str()?.to_string(),
+        version: spec
+            .get(output_decision_spec_keys::VERSION)?
+            .as_str()?
+            .to_string(),
+        show_header_divider: spec
+            .get(output_decision_spec_keys::SHOW_HEADER_DIVIDER)?
+            .as_bool()?,
+        field_order: spec
+            .get(output_decision_spec_keys::FIELD_ORDER)?
+            .as_str()?
+            .to_string(),
+        field_label_emphasis: spec
+            .get(output_decision_spec_keys::FIELD_LABEL_EMPHASIS)?
+            .as_str()?
+            .to_string(),
+        status_palette: spec
+            .get(output_decision_spec_keys::STATUS_PALETTE)?
+            .as_str()?
+            .to_string(),
+        section_spacing: spec
+            .get(output_decision_spec_keys::SECTION_SPACING)?
+            .as_str()?
+            .to_string(),
+        update_policy: spec
+            .get(output_decision_spec_keys::UPDATE_POLICY)?
+            .as_str()?
+            .to_string(),
     })
 }
 
@@ -2919,8 +2947,12 @@ fn default_decision_render_spec() -> SchedulerDecisionRenderSpec {
             .to_string(),
         show_header_divider: true,
         field_order: SchedulerDecisionFieldOrder::AsProvided.as_str().to_string(),
-        field_label_emphasis: SchedulerDecisionFieldLabelEmphasis::Bold.as_str().to_string(),
-        status_palette: SchedulerDecisionStatusPalette::Semantic.as_str().to_string(),
+        field_label_emphasis: SchedulerDecisionFieldLabelEmphasis::Bold
+            .as_str()
+            .to_string(),
+        status_palette: SchedulerDecisionStatusPalette::Semantic
+            .as_str()
+            .to_string(),
         section_spacing: SchedulerDecisionSectionSpacing::Loose.as_str().to_string(),
         update_policy: SchedulerDecisionUpdatePolicy::StableShellLiveRuntimeAppendDecision
             .as_str()
@@ -3213,23 +3245,21 @@ mod tests {
                 output: "{}".to_string(),
                 is_error: false,
                 title: Some("User response received".to_string()),
-                metadata: Some(serde_json::Value::Object(serde_json::Map::from_iter([
-                    (
-                        output_keys::DISPLAY_FIELDS.to_string(),
-                        serde_json::Value::Array(vec![serde_json::Value::Object(
-                            serde_json::Map::from_iter([
-                                (
-                                    output_keys::DISPLAY_FIELD_KEY.to_string(),
-                                    serde_json::json!("Proceed with schema migration?"),
-                                ),
-                                (
-                                    output_keys::DISPLAY_FIELD_VALUE.to_string(),
-                                    serde_json::json!("Yes"),
-                                ),
-                            ]),
-                        )]),
-                    ),
-                ]))),
+                metadata: Some(serde_json::Value::Object(serde_json::Map::from_iter([(
+                    output_keys::DISPLAY_FIELDS.to_string(),
+                    serde_json::Value::Array(vec![serde_json::Value::Object(
+                        serde_json::Map::from_iter([
+                            (
+                                output_keys::DISPLAY_FIELD_KEY.to_string(),
+                                serde_json::json!("Proceed with schema migration?"),
+                            ),
+                            (
+                                output_keys::DISPLAY_FIELD_VALUE.to_string(),
+                                serde_json::json!("Yes"),
+                            ),
+                        ]),
+                    )]),
+                )]))),
             },
             &exec_ctx,
         )
@@ -4000,8 +4030,14 @@ mod tests {
             .and_then(|value| value.as_array())
             .expect("decision fields should exist");
         assert!(fields.iter().any(|field| {
-            field.get("label").and_then(|value| value.as_str()) == Some("Outcome")
-                && field.get("value").and_then(|value| value.as_str()) == Some("Orchestrate")
+            field
+                .get(output_keys::LABEL)
+                .and_then(|value| value.as_str())
+                == Some("Outcome")
+                && field
+                    .get(output_keys::VALUE)
+                    .and_then(|value| value.as_str())
+                    == Some("Orchestrate")
         }));
     }
 

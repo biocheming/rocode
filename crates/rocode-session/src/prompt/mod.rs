@@ -37,8 +37,11 @@ use rocode_content::output_blocks::{
     MessageBlock, MessageRole as OutputMessageRole, OutputBlock, ReasoningBlock, ToolBlock,
 };
 use rocode_core::contracts::events::{ServerEventType, ToolCallPhase};
+use rocode_core::contracts::plugin_hooks;
 use rocode_core::contracts::provider::ProviderFinishReasonWire;
 use rocode_core::contracts::session::keys as session_keys;
+use rocode_core::contracts::tools::ToolCallStatusWire;
+use rocode_core::contracts::wire::{fields as wire_fields, keys as wire_keys};
 use rocode_orchestrator::runtime::events::{
     CancelToken as RuntimeCancelToken, FinishReason as RuntimeFinishReason,
     LoopError as RuntimeLoopError, LoopEvent, StepBoundary, ToolCallReady as RuntimeToolCallReady,
@@ -706,11 +709,11 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                     // Broadcast canonical tool lifecycle event.
                     if let Some(broadcast) = &self.event_broadcast {
                         let event = serde_json::json!({
-                            "type": ServerEventType::ToolCallLifecycle.as_str(),
-                            "sessionID": self.session.id,
-                            "toolCallId": id,
-                            "phase": ToolCallPhase::Start.as_str(),
-                            "toolName": next_name,
+                            wire_keys::TYPE: ServerEventType::ToolCallLifecycle.as_str(),
+                            wire_keys::SESSION_ID: self.session.id,
+                            wire_keys::TOOL_CALL_ID: id,
+                            wire_fields::PHASE: ToolCallPhase::Start.as_str(),
+                            wire_fields::TOOL_NAME: next_name,
                         });
                         broadcast(event);
                     }
@@ -850,11 +853,11 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                 // Broadcast canonical tool lifecycle event.
                 if let Some(broadcast) = &self.event_broadcast {
                     let event = serde_json::json!({
-                        "type": ServerEventType::ToolCallLifecycle.as_str(),
-                        "sessionID": self.session.id,
-                        "toolCallId": &call.id,
-                        "phase": ToolCallPhase::Complete.as_str(),
-                        "toolName": &call.name,
+                        wire_keys::TYPE: ServerEventType::ToolCallLifecycle.as_str(),
+                        wire_keys::SESSION_ID: self.session.id,
+                        wire_keys::TOOL_CALL_ID: &call.id,
+                        wire_fields::PHASE: ToolCallPhase::Complete.as_str(),
+                        wire_fields::TOOL_NAME: &call.name,
                     });
                     broadcast(event);
                 }
@@ -1920,26 +1923,41 @@ impl SessionPrompt {
 
         let mut hook_ctx = HookContext::new(HookEvent::ChatMessage)
             .with_session(session_id)
-            .with_data("message_id", serde_json::json!(&assistant_msg.id))
-            .with_data("message", session_message_hook_payload(&assistant_msg))
-            .with_data("parts", serde_json::json!(&assistant_msg.parts))
-            .with_data("has_tool_calls", serde_json::json!(has_tool_calls));
+            .with_data(
+                plugin_hooks::aliases::MESSAGE_ID_SNAKE,
+                serde_json::json!(&assistant_msg.id),
+            )
+            .with_data(
+                plugin_hooks::keys::MESSAGE,
+                session_message_hook_payload(&assistant_msg),
+            )
+            .with_data(
+                plugin_hooks::keys::PARTS,
+                serde_json::json!(&assistant_msg.parts),
+            )
+            .with_data(
+                plugin_hooks::keys::HAS_TOOL_CALLS,
+                serde_json::json!(has_tool_calls),
+            );
 
         if let Some(model) = provider.get_model(model_id) {
             hook_ctx = hook_ctx.with_data(
-                "model",
+                plugin_hooks::keys::MODEL,
                 serde_json::json!({
-                    "id": model.id,
+                    plugin_hooks::keys::ID: model.id,
                     "name": model.name,
-                    "provider": model.provider,
+                    plugin_hooks::keys::PROVIDER: model.provider,
                 }),
             );
         } else {
-            hook_ctx = hook_ctx.with_data("model_id", serde_json::json!(model_id));
+            hook_ctx = hook_ctx.with_data(
+                plugin_hooks::aliases::MODEL_ID_SNAKE,
+                serde_json::json!(model_id),
+            );
         }
-        hook_ctx = hook_ctx.with_data("sessionID", serde_json::json!(session_id));
+        hook_ctx = hook_ctx.with_data(wire_keys::SESSION_ID, serde_json::json!(session_id));
         if let Some(agent) = agent_name {
-            hook_ctx = hook_ctx.with_data("agent", serde_json::json!(agent));
+            hook_ctx = hook_ctx.with_data(plugin_hooks::keys::AGENT, serde_json::json!(agent));
         }
 
         let hook_outputs = rocode_plugin::trigger_collect(hook_ctx).await;
@@ -2386,9 +2404,9 @@ impl SessionPrompt {
             if let Some(part) = session.messages[last_user_idx].parts.get_mut(part_index) {
                 if let PartType::Subtask { status, .. } = &mut part.part_type {
                     *status = if is_error {
-                        "error".to_string()
+                        ToolCallStatusWire::Error.as_str().to_string()
                     } else {
-                        "completed".to_string()
+                        ToolCallStatusWire::Completed.as_str().to_string()
                     };
                 }
             }
@@ -2399,7 +2417,11 @@ impl SessionPrompt {
                 .insert("subtask_id".to_string(), serde_json::json!(subtask_id));
             assistant.metadata.insert(
                 "subtask_status".to_string(),
-                serde_json::json!(if is_error { "error" } else { "completed" }),
+                serde_json::json!(if is_error {
+                    ToolCallStatusWire::Error.as_str()
+                } else {
+                    ToolCallStatusWire::Completed.as_str()
+                }),
             );
             assistant.add_text(format!(
                 "Subtask `{}` {}:\n{}",
@@ -3133,9 +3155,7 @@ mod tests {
                     StreamEvent::Start,
                     StreamEvent::TextDelta("Read complete".to_string()),
                     StreamEvent::FinishStep {
-                        finish_reason: Some(
-                            ProviderFinishReasonWire::Stop.as_str().to_string(),
-                        ),
+                        finish_reason: Some(ProviderFinishReasonWire::Stop.as_str().to_string()),
                         usage: StreamUsage::default(),
                         provider_metadata: None,
                     },
