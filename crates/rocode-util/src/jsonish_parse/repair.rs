@@ -1,5 +1,6 @@
 use super::sanitize::{normalize_syntax, sanitize_input};
 use super::types::ToolSchema;
+use serde::Deserialize;
 use serde_json::Value;
 
 // =============================================================================
@@ -727,10 +728,31 @@ fn aggressive_close(input: &str, repairs: &mut Vec<String>) -> String {
 pub(super) fn detect_tool(value: &Value, schemas: &[ToolSchema]) -> Option<String> {
     let obj = value.as_object()?;
 
+    fn deserialize_opt_string_lossy<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(Value::String(value)) => Some(value),
+            Some(Value::Number(value)) => Some(value.to_string()),
+            Some(Value::Bool(value)) => Some(value.to_string()),
+            _ => None,
+        })
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct ToolNameProbeWire {
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        name: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
+        tool: Option<String>,
+    }
+
     // Direct name field takes priority
-    if let Some(name_val) = obj.get("name").or_else(|| obj.get("tool")) {
-        if let Some(name_str) = name_val.as_str() {
-            if let Some(schema) = schemas.iter().find(|s| s.name == name_str) {
+    if let Ok(probe) = serde_json::from_value::<ToolNameProbeWire>(value.clone()) {
+        if let Some(name_str) = probe.name.as_deref().or(probe.tool.as_deref()) {
+            if let Some(schema) = schemas.iter().find(|schema| schema.name == name_str) {
                 return Some(schema.name.clone());
             }
         }

@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use crate::types::ModelRef;
 use rocode_provider::models::{ModelLimit, ModelProvider};
 use rocode_provider::{ChatRequest, Message, ModelsDevInfo, ToolDefinition};
+use serde::Deserialize;
 
 #[derive(Debug, Clone, Default)]
 pub struct ExecutionCapabilities {
@@ -341,16 +342,36 @@ fn thinking_flag_disabled_string(value: &str) -> bool {
     )
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct ThinkingFlagObjectWire {
+    #[serde(default)]
+    enabled: Option<serde_json::Value>,
+    #[serde(rename = "includeThoughts", default)]
+    include_thoughts: Option<serde_json::Value>,
+    #[serde(default)]
+    r#type: Option<serde_json::Value>,
+}
+
 fn thinking_flag_disabled_value(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Bool(false) => true,
         serde_json::Value::String(text) => thinking_flag_disabled_string(text),
-        serde_json::Value::Object(map) => {
-            map.get("enabled").is_some_and(thinking_flag_disabled_value)
-                || map
-                    .get("includeThoughts")
-                    .is_some_and(thinking_flag_disabled_value)
-                || map.get("type").is_some_and(thinking_flag_disabled_value)
+        serde_json::Value::Object(_) => {
+            serde_json::from_value::<ThinkingFlagObjectWire>(value.clone())
+                .ok()
+                .is_some_and(|wire| {
+                    wire.enabled
+                        .as_ref()
+                        .is_some_and(thinking_flag_disabled_value)
+                        || wire
+                            .include_thoughts
+                            .as_ref()
+                            .is_some_and(thinking_flag_disabled_value)
+                        || wire
+                            .r#type
+                            .as_ref()
+                            .is_some_and(thinking_flag_disabled_value)
+                })
         }
         _ => false,
     }

@@ -1,9 +1,49 @@
 use std::collections::HashMap;
 
 use crate::models;
+use serde::Deserialize;
 
 use super::model_config::sdk_key;
 use super::normalize::slug_override;
+
+fn deserialize_opt_bool_lossy<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Bool(value)) => Some(value),
+        Some(serde_json::Value::Number(value)) => value.as_i64().map(|value| value != 0),
+        Some(serde_json::Value::String(value)) => {
+            match value.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" | "yes" | "on" => Some(true),
+                "0" | "false" | "no" | "off" => Some(false),
+                _ => None,
+            }
+        }
+        _ => None,
+    })
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RuntimeOptionsWire {
+    #[serde(
+        rename = "setCacheKey",
+        alias = "set_cache_key",
+        default,
+        deserialize_with = "deserialize_opt_bool_lossy"
+    )]
+    set_cache_key: Option<bool>,
+}
+
+fn provider_runtime_options_wire(
+    provider_options: &HashMap<String, serde_json::Value>,
+) -> RuntimeOptionsWire {
+    serde_json::from_value::<RuntimeOptionsWire>(serde_json::Value::Object(
+        provider_options.clone().into_iter().collect(),
+    ))
+    .unwrap_or_default()
+}
 
 pub fn options(
     provider_id: &str,
@@ -59,12 +99,8 @@ pub fn options(
     }
 
     // OpenAI prompt cache key
-    if provider_id == "openai"
-        || provider_options
-            .get("setCacheKey")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-    {
+    let runtime_options = provider_runtime_options_wire(provider_options);
+    if provider_id == "openai" || runtime_options.set_cache_key.unwrap_or(false) {
         result.insert("promptCacheKey".to_string(), json!(session_id));
     }
 
@@ -230,6 +266,25 @@ pub fn schema(model: &models::ModelInfo, input_schema: serde_json::Value) -> ser
 fn sanitize_gemini(obj: serde_json::Value) -> serde_json::Value {
     use serde_json::{json, Map, Value};
 
+    #[derive(Debug, Default, Deserialize)]
+    struct GeminiSchemaNodeWire {
+        #[serde(rename = "type", default)]
+        schema_type: Option<String>,
+        #[serde(rename = "enum", default)]
+        enum_values: Option<Vec<Value>>,
+        #[serde(default)]
+        properties: Option<Map<String, Value>>,
+        #[serde(default)]
+        required: Option<Vec<Value>>,
+        #[serde(default)]
+        items: Option<Value>,
+    }
+
+    fn gemini_schema_node_wire(map: &Map<String, Value>) -> GeminiSchemaNodeWire {
+        serde_json::from_value::<GeminiSchemaNodeWire>(Value::Object(map.clone()))
+            .unwrap_or_default()
+    }
+
     match obj {
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => obj,
         Value::Array(arr) => Value::Array(arr.into_iter().map(sanitize_gemini).collect()),
@@ -248,16 +303,6 @@ fn sanitize_gemini(obj: serde_json::Value) -> serde_json::Value {
                             })
                             .collect();
                         result.insert(key, Value::Array(string_vals));
-
-                        // If we have integer/number type with enum, change to string
-                        if let Some(Value::String(t)) = result.get("type") {
-                            if t == "integer" || t == "number" {
-                                result.insert(
-                                    "type".to_string(),
-                                    Value::String("string".to_string()),
-                                );
-                            }
-                        }
                     } else {
                         result.insert(key, value);
                     }
@@ -268,22 +313,25 @@ fn sanitize_gemini(obj: serde_json::Value) -> serde_json::Value {
                 }
             }
 
-            // Also check if type was set before enum was processed
-            // (enum might appear before type in iteration order)
-            if let Some(Value::Array(ref enum_vals)) = result.get("enum") {
-                if !enum_vals.is_empty() {
-                    if let Some(Value::String(t)) = result.get("type") {
-                        if t == "integer" || t == "number" {
-                            result.insert("type".to_string(), Value::String("string".to_string()));
-                        }
-                    }
-                }
+            let wire = gemini_schema_node_wire(&result);
+
+            // If we have integer/number type with enum, change to string.
+            if wire
+                .enum_values
+                .as_ref()
+                .is_some_and(|enum_values| !enum_values.is_empty())
+                && wire
+                    .schema_type
+                    .as_deref()
+                    .is_some_and(|schema_type| matches!(schema_type, "integer" | "number"))
+            {
+                result.insert("type".to_string(), Value::String("string".to_string()));
             }
 
             // Filter required array to only include fields in properties
-            if result.get("type") == Some(&json!("object")) {
-                if let (Some(Value::Object(ref props)), Some(Value::Array(ref required))) =
-                    (result.get("properties"), result.get("required"))
+            if wire.schema_type.as_deref() == Some("object") {
+                if let (Some(props), Some(required)) =
+                    (wire.properties.as_ref(), wire.required.as_ref())
                 {
                     let filtered: Vec<Value> = required
                         .iter()
@@ -301,12 +349,12 @@ fn sanitize_gemini(obj: serde_json::Value) -> serde_json::Value {
             }
 
             // Handle array items
-            if result.get("type") == Some(&json!("array")) {
-                if !result.contains_key("items") || result.get("items") == Some(&Value::Null) {
+            if wire.schema_type.as_deref() == Some("array") {
+                if wire.items.is_none() || wire.items.as_ref().is_some_and(Value::is_null) {
                     result.insert("items".to_string(), json!({}));
                 }
                 // Ensure items has at least a type if it's an empty object
-                if let Some(Value::Object(ref mut items)) = result.get_mut("items") {
+                if let Some(Value::Object(items)) = result.get_mut("items") {
                     if !items.contains_key("type") {
                         items.insert("type".to_string(), Value::String("string".to_string()));
                     }
@@ -314,8 +362,8 @@ fn sanitize_gemini(obj: serde_json::Value) -> serde_json::Value {
             }
 
             // Remove properties/required from non-object types
-            if let Some(Value::String(ref t)) = result.get("type") {
-                if t != "object" {
+            if let Some(schema_type) = wire.schema_type.as_deref() {
+                if schema_type != "object" {
                     result.remove("properties");
                     result.remove("required");
                 }

@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::time::{timeout, Duration};
@@ -23,6 +23,48 @@ where
         Some(serde_json::Value::String(raw)) => raw.parse::<u64>().ok(),
         _ => None,
     })
+}
+
+fn deserialize_string_map_lossy<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(serde_json::Value::Object(entries)) = value else {
+        return Ok(HashMap::new());
+    };
+
+    let mut result = HashMap::new();
+    for (key, value) in entries {
+        match value {
+            serde_json::Value::String(value) => {
+                result.insert(key, value);
+            }
+            serde_json::Value::Number(value) => {
+                result.insert(key, value.to_string());
+            }
+            serde_json::Value::Bool(value) => {
+                result.insert(key, value.to_string());
+            }
+            _ => {}
+        }
+    }
+    Ok(result)
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct BashContextExtraWire {
+    #[serde(default, deserialize_with = "deserialize_string_map_lossy")]
+    env: HashMap<String, String>,
+}
+
+fn bash_context_extra_wire(extra: &HashMap<String, serde_json::Value>) -> BashContextExtraWire {
+    serde_json::from_value::<BashContextExtraWire>(serde_json::Value::Object(
+        extra.clone().into_iter().collect(),
+    ))
+    .unwrap_or_default()
 }
 
 #[cfg(unix)]
@@ -162,14 +204,8 @@ impl Tool for BashTool {
         for (key, value) in std::env::vars() {
             env_vars.insert(key, value);
         }
-        if let Some(extra_env) = ctx.extra.get("env") {
-            if let Some(env_obj) = extra_env.as_object() {
-                for (key, value) in env_obj {
-                    if let Some(val_str) = value.as_str() {
-                        env_vars.insert(key.clone(), val_str.to_string());
-                    }
-                }
-            }
+        for (key, value) in bash_context_extra_wire(&ctx.extra).env {
+            env_vars.insert(key, value);
         }
 
         // Plugin hook: shell.env — let plugins inject environment variables
@@ -188,29 +224,25 @@ impl Tool for BashTool {
             struct ShellEnvHookPayload {
                 #[serde(default)]
                 output: Option<ShellEnvHookOutput>,
-                #[serde(default)]
-                env: Option<serde_json::Value>,
+                #[serde(default, deserialize_with = "deserialize_string_map_lossy")]
+                env: HashMap<String, String>,
             }
 
             #[derive(Debug, Deserialize, Default)]
             struct ShellEnvHookOutput {
-                #[serde(default)]
-                env: Option<serde_json::Value>,
+                #[serde(default, deserialize_with = "deserialize_string_map_lossy")]
+                env: HashMap<String, String>,
             }
 
             let parsed: ShellEnvHookPayload =
                 serde_json::from_value(payload.clone()).unwrap_or_default();
-            let env_value = parsed
+            let hook_env = parsed
                 .output
-                .and_then(|output| output.env)
-                .or(parsed.env)
-                .unwrap_or(serde_json::Value::Null);
-            if let serde_json::Value::Object(env) = env_value {
-                for (key, value) in env {
-                    if let Some(value_str) = value.as_str() {
-                        env_vars.insert(key, value_str.to_string());
-                    }
-                }
+                .map(|output| output.env)
+                .filter(|env| !env.is_empty())
+                .unwrap_or(parsed.env);
+            for (key, value) in hook_env {
+                env_vars.insert(key, value);
             }
         }
 
