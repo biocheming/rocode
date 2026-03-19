@@ -13,6 +13,7 @@ rocode-types = { path = "../rocode-types" }
 rocode-util = { path = "../rocode-util" }
 rocode-provider = { path = "../rocode-provider" }
 rocode-orchestrator = { path = "../rocode-orchestrator" }
+rocode-config = { path = "../rocode-config" }
 rocode-tool = { path = "../rocode-tool" }
 rocode-mcp = { path = "../rocode-mcp" }
 rocode-lsp = { path = "../rocode-lsp" }
@@ -31,8 +32,6 @@ futures = { workspace = true }
 async-trait = { workspace = true }
 regex = { workspace = true }
 dirs = { workspace = true }
-glob = { workspace = true }
-reqwest = { workspace = true }
 url = { workspace = true }
 base64 = { workspace = true }
 

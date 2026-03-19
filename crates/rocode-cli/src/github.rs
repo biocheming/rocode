@@ -7,8 +7,10 @@ use std::sync::Arc;
 use rocode_agent::{AgentExecutor, AgentInfo, AgentRegistry};
 use rocode_config::loader::load_config;
 use rocode_config::{Config, SkillTreeNodeConfig};
-use rocode_orchestrator::{resolve_skill_markdown_repo, SkillTreeNode, SkillTreeRequestPlan};
-use rocode_session::system::{EnvironmentContext, SystemPrompt};
+use rocode_orchestrator::{
+    resolve_skill_markdown_repo, EnvironmentContext, SkillTreeNode, SkillTreeRequestPlan,
+    SystemPrompt,
+};
 use rocode_tool::registry::create_default_registry;
 use serde::Deserialize;
 
@@ -1342,10 +1344,10 @@ pub(crate) async fn generate_agent_response(
         };
         let cwd = std::env::current_dir().unwrap_or_default();
         let model_prompt = SystemPrompt::for_model(&model_api_id);
-        let env_ctx = EnvironmentContext::from_current(
+        let env_ctx = EnvironmentContext::from_project_dir(
             &model_api_id,
             &provider_id,
-            cwd.to_string_lossy().as_ref(),
+            &cwd,
         );
         let env_prompt = SystemPrompt::environment(&env_ctx);
         let full_prompt = format!("{}\n\n{}", model_prompt, env_prompt);

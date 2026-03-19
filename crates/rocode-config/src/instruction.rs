@@ -9,7 +9,6 @@ pub const CONTEXT_MD: &str = "CONTEXT.md"; // deprecated
 pub const CURSOR_MD: &str = ".cursorrules";
 pub const COPILOT_MD: &str = ".github/copilot-instructions.md";
 
-/// Well-known instruction file names searched in project directories.
 const PROJECT_FILES: &[&str] = &[AGENTS_MD, CLAUDE_MD, CONTEXT_MD];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,10 +30,6 @@ pub enum InstructionSource {
     Url(String),
     Custom(String),
 }
-
-// ---------------------------------------------------------------------------
-// Environment helpers
-// ---------------------------------------------------------------------------
 
 fn env_truthy(name: &str) -> bool {
     match std::env::var(name) {
@@ -66,11 +61,6 @@ fn rocode_config_dir_env() -> Option<String> {
     env_var_any(&["ROCODE_CONFIG_DIR", "OPENCODE_CONFIG_DIR"])
 }
 
-// ---------------------------------------------------------------------------
-// Path helpers
-// ---------------------------------------------------------------------------
-
-/// Return the XDG config directory for rocode (e.g. `~/.config/rocode`).
 fn global_config_dir() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("rocode"))
 }
@@ -79,16 +69,13 @@ fn legacy_global_config_dir() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("opencode"))
 }
 
-/// Build the list of global instruction file paths to probe.
 fn global_files() -> Vec<PathBuf> {
     let mut files = Vec::new();
 
-    // ROCODE_CONFIG_DIR override comes first (legacy fallback: OPENCODE_CONFIG_DIR)
     if let Some(dir) = rocode_config_dir_env() {
         files.push(PathBuf::from(&dir).join(AGENTS_MD));
     }
 
-    // ~/.config/rocode/AGENTS.md
     if let Some(cfg) = global_config_dir() {
         files.push(cfg.join(AGENTS_MD));
     }
@@ -96,7 +83,6 @@ fn global_files() -> Vec<PathBuf> {
         files.push(legacy_cfg.join(AGENTS_MD));
     }
 
-    // ~/.claude/CLAUDE.md
     if !env_truthy_any(&[
         "ROCODE_DISABLE_CLAUDE_CODE_PROMPT",
         "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT",
@@ -109,8 +95,6 @@ fn global_files() -> Vec<PathBuf> {
     files
 }
 
-/// Walk from `start` up to `stop` (inclusive), collecting every existing
-/// occurrence of `target` (a relative path like "AGENTS.md").
 fn find_up(target: &str, start: &Path, stop: &Path) -> Vec<PathBuf> {
     let mut current = normalize(start);
     let stop = normalize(stop);
@@ -130,8 +114,7 @@ fn find_up(target: &str, start: &Path, stop: &Path) -> Vec<PathBuf> {
     }
     result
 }
-/// Detect the worktree root by walking up from `start` looking for `.git`.
-/// Returns the directory containing `.git`, or the filesystem root.
+
 fn detect_worktree_root(start: &Path) -> PathBuf {
     let mut current = normalize(start);
     loop {
@@ -149,7 +132,6 @@ fn normalize(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-/// Expand a glob pattern rooted at `cwd`, returning absolute paths.
 fn expand_glob(pattern: &str, cwd: &Path) -> Vec<PathBuf> {
     let full = if Path::new(pattern).is_absolute() {
         pattern.to_string()
@@ -165,7 +147,6 @@ fn expand_glob(pattern: &str, cwd: &Path) -> Vec<PathBuf> {
     }
 }
 
-/// Walk up from `start` to `stop`, expanding a glob pattern at each level.
 fn glob_up(pattern: &str, start: &Path, stop: &Path) -> Vec<PathBuf> {
     let mut current = normalize(start);
     let stop = normalize(stop);
@@ -256,30 +237,15 @@ fn resolve_for_file_candidates(
     results
 }
 
-/// Resolve instruction files relevant to a concrete file path.
-///
-/// Mirrors TS `InstructionPrompt.resolve(...)` behavior at a filesystem level:
-/// while walking from the file's directory up to `project_root`, collect the
-/// first matching instruction file in each directory (`AGENTS.md`, `CLAUDE.md`,
-/// `CONTEXT.md`), skipping duplicates and the target file itself.
 pub fn resolve_for_file(file_path: &Path, project_root: &Path) -> Vec<InstructionFile> {
     resolve_for_file_candidates(file_path, project_root, PROJECT_FILES)
 }
 
-/// Resolve per-file instruction context specifically from `AGENTS.md`.
-///
-/// This is used by file-read flows to mimic TS behavior where reading a file
-/// should consult nearby AGENTS instructions in the same directory hierarchy.
 pub fn resolve_agents_for_file(file_path: &Path, project_root: &Path) -> Vec<InstructionFile> {
     resolve_for_file_candidates(file_path, project_root, &[AGENTS_MD])
 }
 
-// ---------------------------------------------------------------------------
-// InstructionLoader
-// ---------------------------------------------------------------------------
-
 pub struct InstructionLoader {
-    /// Tracks already-loaded file paths and URLs for deduplication.
     loaded: HashSet<String>,
 }
 
@@ -290,11 +256,6 @@ impl InstructionLoader {
         }
     }
 
-    /// Load all instructions: global files, project files, and config entries.
-    ///
-    /// * `project_dir` - the project root directory (cwd)
-    /// * `config_instructions` - entries from `config.instructions` (file paths,
-    ///   glob patterns, or URLs)
     pub async fn load_all(
         &mut self,
         project_dir: &Path,
@@ -302,15 +263,12 @@ impl InstructionLoader {
     ) -> Vec<InstructionFile> {
         let mut result = Vec::new();
 
-        // 1. Project-level instruction files (findUp from cwd)
         if !is_project_config_disabled() {
             result.extend(self.load_project_instructions(project_dir));
         }
 
-        // 2. Global instruction files
         result.extend(self.load_global_instructions());
 
-        // 3. Config-specified instructions (files, globs, URLs)
         result.extend(
             self.load_config_instructions(project_dir, config_instructions)
                 .await,
@@ -318,12 +276,7 @@ impl InstructionLoader {
 
         result
     }
-    /// Load project-level instruction files by walking up from `project_dir`
-    /// to the worktree root, looking for well-known files.
-    ///
-    /// Matches TS `systemPaths()`: for each file in PROJECT_FILES, findUp from
-    /// project_dir to worktree root. If any matches are found for a file name,
-    /// add them and stop (don't check the next file name).
+
     fn load_project_instructions(&mut self, project_dir: &Path) -> Vec<InstructionFile> {
         let worktree = detect_worktree_root(project_dir);
         let mut result = Vec::new();
@@ -346,13 +299,13 @@ impl InstructionLoader {
                         });
                     }
                 }
-                break; // TS parity: stop after first file name that has matches
+                break;
             }
         }
 
         result
     }
-    /// Load global instruction files (first existing file wins).
+
     fn load_global_instructions(&mut self) -> Vec<InstructionFile> {
         let mut result = Vec::new();
         for path in global_files() {
@@ -369,13 +322,12 @@ impl InstructionLoader {
                         source: InstructionSource::Global(key),
                     });
                 }
-                break; // TS parity: stop after first existing global file
+                break;
             }
         }
         result
     }
 
-    /// Load instructions specified in config (file paths, globs, URLs).
     async fn load_config_instructions(
         &mut self,
         project_dir: &Path,
@@ -386,7 +338,6 @@ impl InstructionLoader {
 
         for instruction in instructions {
             if is_url(instruction) {
-                // URLs are handled separately below
                 continue;
             }
 
@@ -407,7 +358,6 @@ impl InstructionLoader {
             }
         }
 
-        // Fetch URLs concurrently
         let urls: Vec<&String> = instructions.iter().filter(|i| is_url(i)).collect();
         for url in urls {
             if self.loaded.contains(url.as_str()) {
@@ -422,7 +372,7 @@ impl InstructionLoader {
                         source: InstructionSource::Url(url.clone()),
                     });
                 }
-                Ok(_) => {} // empty response, skip
+                Ok(_) => {}
                 Err(e) => {
                     warn!("Failed to fetch instruction URL {}: {}", url, e);
                 }
@@ -431,7 +381,7 @@ impl InstructionLoader {
 
         result
     }
-    /// Resolve a single config instruction entry to concrete file paths.
+
     fn resolve_config_path(
         &self,
         instruction: &str,
@@ -440,7 +390,6 @@ impl InstructionLoader {
     ) -> Vec<PathBuf> {
         let mut expanded = instruction.to_string();
 
-        // Expand ~/
         if expanded.starts_with("~/") {
             if let Some(home) = dirs::home_dir() {
                 expanded = home.join(&expanded[2..]).to_string_lossy().to_string();
@@ -458,7 +407,6 @@ impl InstructionLoader {
                 Vec::new()
             }
         } else if is_glob_pattern(&expanded) {
-            // Relative glob: walk up from project_dir to worktree
             if !is_project_config_disabled() {
                 glob_up(&expanded, project_dir, worktree)
             } else if let Some(dir) = rocode_config_dir_env() {
@@ -470,26 +418,19 @@ impl InstructionLoader {
                 );
                 Vec::new()
             }
+        } else if !is_project_config_disabled() {
+            find_up(&expanded, project_dir, worktree)
+        } else if let Some(dir) = rocode_config_dir_env() {
+            find_up(&expanded, Path::new(&dir), Path::new(&dir))
         } else {
-            // Relative plain path: walk up from project_dir to worktree
-            if !is_project_config_disabled() {
-                find_up(&expanded, project_dir, worktree)
-            } else if let Some(dir) = rocode_config_dir_env() {
-                find_up(&expanded, Path::new(&dir), Path::new(&dir))
-            } else {
-                warn!(
-                    "Skipping relative instruction \"{}\" - no ROCODE_CONFIG_DIR set while project config is disabled",
-                    instruction
-                );
-                Vec::new()
-            }
+            warn!(
+                "Skipping relative instruction \"{}\" - no ROCODE_CONFIG_DIR set while project config is disabled",
+                instruction
+            );
+            Vec::new()
         }
     }
-    // -----------------------------------------------------------------------
-    // Backward-compatible helpers (kept from original API)
-    // -----------------------------------------------------------------------
 
-    /// Load instruction files from a single directory (original API).
     pub fn load_from_directory(dir: &Path) -> Vec<InstructionFile> {
         let mut instructions = Vec::new();
 
@@ -553,12 +494,10 @@ impl InstructionLoader {
         files
     }
 
-    /// Return the set of already-loaded paths/URLs.
     pub fn loaded_set(&self) -> &HashSet<String> {
         &self.loaded
     }
 
-    /// Mark a path/URL as already loaded (for external dedup, e.g. tool reads).
     pub fn mark_loaded(&mut self, key: &str) {
         self.loaded.insert(key.to_string());
     }
@@ -569,9 +508,6 @@ impl Default for InstructionLoader {
         Self::new()
     }
 }
-// ---------------------------------------------------------------------------
-// HTTP fetching
-// ---------------------------------------------------------------------------
 
 async fn fetch_url(url: &str) -> Result<String, reqwest::Error> {
     let client = reqwest::Client::builder()
@@ -584,10 +520,6 @@ async fn fetch_url(url: &str) -> Result<String, reqwest::Error> {
         Ok(String::new())
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -619,6 +551,7 @@ mod tests {
         let files = InstructionLoader::load_from_directory(tmp.path());
         assert_eq!(files.len(), 4);
     }
+
     #[test]
     fn test_find_up_walks_parents() {
         let tmp = TempDir::new().unwrap();
@@ -629,7 +562,6 @@ mod tests {
 
         let found = find_up(AGENTS_MD, &child, tmp.path());
         assert_eq!(found.len(), 2);
-        // Closest first (child -> parent order)
         assert!(found[0].starts_with(tmp.path().join("a")));
         assert!(found[1].starts_with(tmp.path()));
     }
@@ -669,7 +601,7 @@ mod tests {
         let files1 = loader.load_project_instructions(tmp.path());
         let files2 = loader.load_project_instructions(tmp.path());
         assert_eq!(files1.len(), 1);
-        assert_eq!(files2.len(), 0); // deduped
+        assert_eq!(files2.len(), 0);
     }
 
     #[test]
@@ -706,7 +638,6 @@ mod tests {
 
     #[test]
     fn test_project_files_first_match_wins() {
-        // If AGENTS.md exists, CLAUDE.md and CONTEXT.md should not be loaded
         let tmp = TempDir::new().unwrap();
         fs::write(tmp.path().join(AGENTS_MD), "agents").unwrap();
         fs::write(tmp.path().join(CLAUDE_MD), "claude").unwrap();
@@ -806,7 +737,6 @@ mod tests {
 
         let mut loader = InstructionLoader::new();
         let files = loader.load_all(tmp.path(), &[]).await;
-        // At minimum, the project AGENTS.md should be loaded
         assert!(!files.is_empty());
         assert!(files.iter().any(|f| f.content == "project agents"));
     }

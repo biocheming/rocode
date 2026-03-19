@@ -1,6 +1,6 @@
 use chrono::Local;
+use std::path::Path;
 
-// Embed prompt templates at compile time (matching TS originals from session/prompt/*.txt)
 const PROMPT_ANTHROPIC: &str = include_str!("prompt_templates/anthropic.txt");
 const PROMPT_BEAST: &str = include_str!("prompt_templates/beast.txt");
 const PROMPT_GEMINI: &str = include_str!("prompt_templates/gemini.txt");
@@ -12,19 +12,14 @@ const MAX_MCP_RESOURCE_CHARS: usize = 12_000;
 pub struct SystemPrompt;
 
 impl SystemPrompt {
-    /// Returns the codex/instructions prompt (used as base instructions).
-    /// TS: `SystemPrompt.instructions()` → `PROMPT_CODEX.trim()`
     pub fn instructions() -> &'static str {
         PROMPT_CODEX.trim()
     }
 
-    /// Wrap arbitrary text in a `<system-reminder>` block so it is treated as
-    /// injected runtime context, not user-authored content.
     pub fn system_reminder(content: &str) -> String {
         format!("<system-reminder>\n{}\n</system-reminder>", content.trim())
     }
 
-    /// Build a system-reminder block for MCP resource text content.
     pub fn mcp_resource_reminder(filename: &str, uri: &str, content: &str) -> String {
         let (content, truncated) = trim_for_prompt(content, MAX_MCP_RESOURCE_CHARS);
         let truncation_hint = if truncated {
@@ -39,16 +34,6 @@ impl SystemPrompt {
         Self::system_reminder(&body)
     }
 
-    /// Select the appropriate system prompt based on model API ID.
-    /// TS: `SystemPrompt.provider(model)` in session/system.ts
-    ///
-    /// Matching rules (in priority order):
-    ///   - gpt-5       → PROMPT_CODEX
-    ///   - gpt-* / o1 / o3 → PROMPT_BEAST
-    ///   - gemini-*    → PROMPT_GEMINI
-    ///   - claude*     → PROMPT_ANTHROPIC
-    ///   - trinity     → PROMPT_TRINITY
-    ///   - fallback    → PROMPT_QWEN (anthropic without todo)
     pub fn for_model(model_api_id: &str) -> &'static str {
         let id = model_api_id.to_lowercase();
 
@@ -67,24 +52,9 @@ impl SystemPrompt {
         if id.contains("trinity") {
             return PROMPT_TRINITY;
         }
-        // Default fallback — same as TS (qwen.txt = anthropic without todo)
         PROMPT_QWEN
     }
 
-    /// Build the environment context block.
-    /// TS: `SystemPrompt.environment(model)` in session/system.ts
-    ///
-    /// Produces a string like:
-    /// ```text
-    /// You are powered by the model named claude-sonnet-4-20250514. The exact model ID is anthropic/claude-sonnet-4-20250514
-    /// Here is some useful information about the environment you are running in:
-    /// <env>
-    ///   Working directory: /home/user/project
-    ///   Is directory a git repo: yes
-    ///   Platform: linux
-    ///   Today's date: Wed Feb 19 2026
-    /// </env>
-    /// ```
     pub fn environment(env: &EnvironmentContext) -> String {
         let mut lines = Vec::with_capacity(10);
 
@@ -112,7 +82,6 @@ impl SystemPrompt {
     }
 }
 
-/// Context needed to build the environment block in the system prompt.
 #[derive(Debug, Clone)]
 pub struct EnvironmentContext {
     pub model_api_id: String,
@@ -123,14 +92,13 @@ pub struct EnvironmentContext {
 }
 
 impl EnvironmentContext {
-    /// Build from the current runtime environment.
-    pub fn from_current(
+    pub fn from_project_dir(
         model_api_id: impl Into<String>,
         provider_id: impl Into<String>,
-        working_directory: impl Into<String>,
+        project_dir: impl AsRef<Path>,
     ) -> Self {
-        let wd: String = working_directory.into();
-        let is_git = std::path::Path::new(&wd).join(".git").exists();
+        let wd = project_dir.as_ref().to_string_lossy().to_string();
+        let is_git = project_dir.as_ref().join(".git").exists();
         Self {
             model_api_id: model_api_id.into(),
             provider_id: provider_id.into(),
@@ -138,6 +106,15 @@ impl EnvironmentContext {
             is_git_repo: is_git,
             platform: std::env::consts::OS.to_string(),
         }
+    }
+
+    pub fn from_current(
+        model_api_id: impl Into<String>,
+        provider_id: impl Into<String>,
+        working_directory: impl Into<String>,
+    ) -> Self {
+        let wd: String = working_directory.into();
+        Self::from_project_dir(model_api_id, provider_id, wd)
     }
 }
 
@@ -168,14 +145,12 @@ mod tests {
     #[test]
     fn test_for_model_gpt4() {
         let prompt = SystemPrompt::for_model("gpt-4o");
-        // beast.txt starts with "You are rocode, an agent"
         assert!(prompt.contains("rocode"));
     }
 
     #[test]
     fn test_for_model_gpt5() {
         let prompt = SystemPrompt::for_model("gpt-5-turbo");
-        // codex_header.txt
         assert!(prompt.contains("ROCode"));
     }
 
@@ -194,7 +169,6 @@ mod tests {
     #[test]
     fn test_for_model_fallback() {
         let prompt = SystemPrompt::for_model("some-unknown-model");
-        // qwen.txt fallback
         assert!(prompt.contains("rocode"));
     }
 
@@ -231,10 +205,17 @@ mod tests {
     }
 
     #[test]
+    fn test_from_project_dir_detects_git() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join(".git")).unwrap();
+        let ctx = EnvironmentContext::from_project_dir("gpt-4o", "openai", temp.path());
+        assert!(ctx.is_git_repo);
+    }
+
+    #[test]
     fn test_instructions() {
         let inst = SystemPrompt::instructions();
         assert!(!inst.is_empty());
-        // codex_header.txt starts with "You are ROCode"
         assert!(inst.starts_with("You are ROCode"));
     }
 
@@ -260,7 +241,6 @@ mod tests {
         let wrapped = SystemPrompt::mcp_resource_reminder("big.txt", "repo/big", &content);
         assert!(wrapped.contains("MCP resource context from big.txt (repo/big):"));
         assert!(wrapped.contains("Content truncated for prompt safety."));
-        // sanity check: output should be significantly smaller than full payload.
         assert!(wrapped.len() < 15_000);
     }
 }
