@@ -28,6 +28,10 @@ pub struct SessionRuntimeState {
     pub session_id: String,
     pub run_status: RunStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_reason: Option<PendingReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub current_message_id: Option<String>,
     pub active_tools: Vec<ActiveToolSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -42,6 +46,8 @@ impl SessionRuntimeState {
         Self {
             session_id: session_id.into(),
             run_status: RunStatus::Idle,
+            pending_reason: None,
+            error_message: None,
             current_message_id: None,
             active_tools: Vec::new(),
             pending_question: None,
@@ -60,8 +66,19 @@ pub enum RunStatus {
     Idle,
     Running,
     WaitingOnTool,
-    WaitingOnUser,
+    #[serde(alias = "waiting_on_user")]
+    Pending,
     Cancelling,
+    Error,
+}
+
+/// Why a session is currently in `RunStatus::Pending`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingReason {
+    Question,
+    Permission,
+    QuestionAndPermission,
 }
 
 impl Default for RunStatus {
@@ -112,6 +129,15 @@ pub struct RuntimeStateStore {
 }
 
 impl RuntimeStateStore {
+    fn derive_pending_reason(state: &SessionRuntimeState) -> Option<PendingReason> {
+        match (state.pending_question.is_some(), state.pending_permission.is_some()) {
+            (true, true) => Some(PendingReason::QuestionAndPermission),
+            (true, false) => Some(PendingReason::Question),
+            (false, true) => Some(PendingReason::Permission),
+            (false, false) => None,
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             states: RwLock::new(HashMap::new()),
@@ -151,6 +177,8 @@ impl RuntimeStateStore {
     pub async fn mark_running(&self, session_id: &str, message_id: Option<String>) {
         self.update(session_id, |s| {
             s.run_status = RunStatus::Running;
+            s.pending_reason = None;
+            s.error_message = None;
             s.current_message_id = message_id;
         })
         .await;
@@ -160,6 +188,8 @@ impl RuntimeStateStore {
     pub async fn mark_idle(&self, session_id: &str) {
         self.update(session_id, |s| {
             s.run_status = RunStatus::Idle;
+            s.pending_reason = None;
+            s.error_message = None;
             s.current_message_id = None;
             s.active_tools.clear();
             s.pending_question = None;
@@ -174,6 +204,7 @@ impl RuntimeStateStore {
     pub async fn tool_started(&self, session_id: &str, tool_call_id: &str, tool_name: &str) {
         self.update(session_id, |s| {
             s.run_status = RunStatus::WaitingOnTool;
+            s.pending_reason = None;
             s.active_tools.push(ActiveToolSummary {
                 tool_call_id: tool_call_id.to_string(),
                 tool_name: tool_name.to_string(),
@@ -203,11 +234,12 @@ impl RuntimeStateStore {
         questions: serde_json::Value,
     ) {
         self.update(session_id, |s| {
-            s.run_status = RunStatus::WaitingOnUser;
             s.pending_question = Some(PendingQuestionSummary {
                 request_id: request_id.to_string(),
                 questions,
             });
+            s.pending_reason = Self::derive_pending_reason(s);
+            s.run_status = RunStatus::Pending;
         })
         .await;
     }
@@ -216,10 +248,13 @@ impl RuntimeStateStore {
     pub async fn question_resolved(&self, session_id: &str) {
         self.update(session_id, |s| {
             s.pending_question = None;
+            s.pending_reason = Self::derive_pending_reason(s);
             // Revert to Running only if not waiting on something else.
-            if s.run_status == RunStatus::WaitingOnUser && s.pending_permission.is_none() {
-                s.run_status = RunStatus::Running;
-            }
+            s.run_status = if s.pending_reason.is_some() {
+                RunStatus::Pending
+            } else {
+                RunStatus::Running
+            };
         })
         .await;
     }
@@ -232,11 +267,12 @@ impl RuntimeStateStore {
         info: serde_json::Value,
     ) {
         self.update(session_id, |s| {
-            s.run_status = RunStatus::WaitingOnUser;
             s.pending_permission = Some(PendingPermissionSummary {
                 permission_id: permission_id.to_string(),
                 info,
             });
+            s.pending_reason = Self::derive_pending_reason(s);
+            s.run_status = RunStatus::Pending;
         })
         .await;
     }
@@ -245,10 +281,26 @@ impl RuntimeStateStore {
     pub async fn permission_resolved(&self, session_id: &str) {
         self.update(session_id, |s| {
             s.pending_permission = None;
+            s.pending_reason = Self::derive_pending_reason(s);
             // Revert to Running only if not waiting on something else.
-            if s.run_status == RunStatus::WaitingOnUser && s.pending_question.is_none() {
-                s.run_status = RunStatus::Running;
-            }
+            s.run_status = if s.pending_reason.is_some() {
+                RunStatus::Pending
+            } else {
+                RunStatus::Running
+            };
+        })
+        .await;
+    }
+
+    /// Mark the session as ended with an error.
+    pub async fn mark_error(&self, session_id: &str, error_message: Option<String>) {
+        self.update(session_id, |s| {
+            s.run_status = RunStatus::Error;
+            s.error_message = error_message;
+            s.pending_reason = None;
+            s.active_tools.clear();
+            s.pending_question = None;
+            s.pending_permission = None;
         })
         .await;
     }
@@ -352,7 +404,8 @@ mod tests {
             .question_created("ses_1", "q_1", serde_json::json!([{"question": "ok?"}]))
             .await;
         let state = store.get("ses_1").await.unwrap();
-        assert_eq!(state.run_status, RunStatus::WaitingOnUser);
+        assert_eq!(state.run_status, RunStatus::Pending);
+        assert_eq!(state.pending_reason, Some(PendingReason::Question));
         assert!(state.pending_question.is_some());
 
         store.question_resolved("ses_1").await;
@@ -364,7 +417,8 @@ mod tests {
             .permission_requested("ses_1", "perm_1", serde_json::json!({"tool": "bash"}))
             .await;
         let state = store.get("ses_1").await.unwrap();
-        assert_eq!(state.run_status, RunStatus::WaitingOnUser);
+        assert_eq!(state.run_status, RunStatus::Pending);
+        assert_eq!(state.pending_reason, Some(PendingReason::Permission));
         assert!(state.pending_permission.is_some());
 
         store.permission_resolved("ses_1").await;
@@ -416,16 +470,73 @@ mod tests {
             .permission_requested("ses_1", "p_1", serde_json::json!("p"))
             .await;
         let state = store.get("ses_1").await.unwrap();
-        assert_eq!(state.run_status, RunStatus::WaitingOnUser);
+        assert_eq!(state.run_status, RunStatus::Pending);
+        assert_eq!(state.pending_reason, Some(PendingReason::QuestionAndPermission));
 
         // Resolving question alone should NOT revert to Running
         // because permission is still pending.
         store.question_resolved("ses_1").await;
         let state = store.get("ses_1").await.unwrap();
-        assert_eq!(state.run_status, RunStatus::WaitingOnUser);
+        assert_eq!(state.run_status, RunStatus::Pending);
+        assert_eq!(state.pending_reason, Some(PendingReason::Permission));
 
         store.permission_resolved("ses_1").await;
         let state = store.get("ses_1").await.unwrap();
         assert_eq!(state.run_status, RunStatus::Running);
+        assert!(state.pending_reason.is_none());
+    }
+
+    #[tokio::test]
+    async fn mark_error_sets_error_status_and_clears_pending_state() {
+        let store = RuntimeStateStore::new();
+        store.mark_running("ses_1", Some("msg_001".to_string())).await;
+        store
+            .question_created("ses_1", "q_1", serde_json::json!([{"question": "ok?"}]))
+            .await;
+
+        store
+            .mark_error("ses_1", Some("provider timeout".to_string()))
+            .await;
+
+        let state = store.get("ses_1").await.unwrap();
+        assert_eq!(state.run_status, RunStatus::Error);
+        assert_eq!(state.error_message.as_deref(), Some("provider timeout"));
+        assert!(state.pending_reason.is_none());
+        assert!(state.pending_question.is_none());
+        assert!(state.pending_permission.is_none());
+        assert!(state.active_tools.is_empty());
+    }
+
+    #[test]
+    fn pending_status_serializes_with_reason() {
+        let state = SessionRuntimeState {
+            session_id: "ses_1".to_string(),
+            run_status: RunStatus::Pending,
+            pending_reason: Some(PendingReason::Question),
+            error_message: None,
+            current_message_id: None,
+            active_tools: Vec::new(),
+            pending_question: None,
+            pending_permission: None,
+            child_sessions: Vec::new(),
+        };
+
+        let value = serde_json::to_value(state).expect("serialize pending runtime state");
+        assert_eq!(value["run_status"], "pending");
+        assert_eq!(value["pending_reason"], "question");
+    }
+
+    #[test]
+    fn legacy_waiting_on_user_deserializes_as_pending() {
+        let state: SessionRuntimeState = serde_json::from_value(serde_json::json!({
+            "session_id": "ses_1",
+            "run_status": "waiting_on_user",
+            "pending_question": {"request_id": "q_1", "questions": []},
+            "active_tools": [],
+            "child_sessions": []
+        }))
+        .expect("deserialize legacy waiting_on_user");
+
+        assert_eq!(state.run_status, RunStatus::Pending);
     }
 }

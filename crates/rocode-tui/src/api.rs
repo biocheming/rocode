@@ -120,6 +120,10 @@ pub struct SessionRuntimeState {
     pub session_id: String,
     pub run_status: SessionRunStatusKind,
     #[serde(default)]
+    pub pending_reason: Option<PendingReason>,
+    #[serde(default)]
+    pub error_message: Option<String>,
+    #[serde(default)]
     pub current_message_id: Option<String>,
     #[serde(default)]
     pub active_tools: Vec<ActiveToolSummary>,
@@ -138,8 +142,18 @@ pub enum SessionRunStatusKind {
     Idle,
     Running,
     WaitingOnTool,
-    WaitingOnUser,
+    #[serde(alias = "waiting_on_user")]
+    Pending,
     Cancelling,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingReason {
+    Question,
+    Permission,
+    QuestionAndPermission,
 }
 
 /// Summary of a currently executing tool call.
