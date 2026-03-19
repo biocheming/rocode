@@ -1126,7 +1126,6 @@ impl ShareRepository {
     pub async fn upsert(&self, share: &SessionShareRow) -> Result<(), DatabaseError> {
         let now = Utc::now().timestamp_millis();
         let insert = session_shares::ActiveModel {
-            id: Default::default(),
             session_id: Set(parse_int_id(&share.session_id, "share.session_id")?),
             share_id: Set(share.id.clone()),
             secret: Set(share.secret.clone()),

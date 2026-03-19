@@ -201,8 +201,7 @@ DROP TABLE todos;
 ALTER TABLE todos_new RENAME TO todos;
 
 CREATE TABLE IF NOT EXISTS session_shares_new (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id INTEGER NOT NULL UNIQUE,
+    session_id INTEGER PRIMARY KEY,
     share_id TEXT NOT NULL,
     secret TEXT NOT NULL,
     url TEXT NOT NULL,
@@ -210,9 +209,8 @@ CREATE TABLE IF NOT EXISTS session_shares_new (
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE ON UPDATE CASCADE
 );
 
-INSERT INTO session_shares_new (id, session_id, share_id, secret, url, created_at)
+INSERT INTO session_shares_new (session_id, share_id, secret, url, created_at)
 SELECT
-    session_shares.pk,
     sessions.pk,
     session_shares.id,
     session_shares.secret,

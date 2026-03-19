@@ -97,7 +97,6 @@ pub enum Permissions {
 #[derive(DeriveIden)]
 pub enum SessionShares {
     Table,
-    Id,
     SessionId,
     ShareId,
     Secret,

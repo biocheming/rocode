@@ -148,8 +148,7 @@ CREATE TABLE IF NOT EXISTS permissions (
 /// Session shares table - stores share info for sessions
 pub const CREATE_SESSION_SHARES_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS session_shares (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id INTEGER NOT NULL UNIQUE,
+    session_id INTEGER PRIMARY KEY,
     share_id TEXT NOT NULL,
     secret TEXT NOT NULL,
     url TEXT NOT NULL,

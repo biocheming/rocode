@@ -19,16 +19,10 @@ impl MigrationTrait for Migration {
                     .table(SessionShares::Table)
                     .if_not_exists()
                     .col(
-                        ColumnDef::new(SessionShares::Id)
-                            .big_integer()
-                            .not_null()
-                            .auto_increment()
-                            .primary_key(),
-                    )
-                    .col(
                         ColumnDef::new(SessionShares::SessionId)
                             .big_integer()
-                            .not_null(),
+                            .not_null()
+                            .primary_key(),
                     )
                     .col(ColumnDef::new(SessionShares::ShareId).string().not_null())
                     .col(ColumnDef::new(SessionShares::Secret).string().not_null())
@@ -45,12 +39,6 @@ impl MigrationTrait for Migration {
                             .to(Sessions::Table, Sessions::Id)
                             .on_delete(ForeignKeyAction::Cascade)
                             .on_update(ForeignKeyAction::Cascade),
-                    )
-                    .index(
-                        Index::create()
-                            .name("ux_session_shares_session_id")
-                            .col(SessionShares::SessionId)
-                            .unique(),
                     )
                     .to_owned(),
             )
