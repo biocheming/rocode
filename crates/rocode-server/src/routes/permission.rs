@@ -4,10 +4,11 @@ use axum::{
     Json, Router,
 };
 use once_cell::sync::Lazy;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex, RwLock};
+
+use rocode_permission::{PermissionReply, PermissionReplyRequest, PermissionRequestInfo};
 
 use crate::session_runtime::events::{broadcast_server_event, ServerEvent};
 use crate::{ApiError, Result, ServerState};
@@ -18,83 +19,15 @@ pub(crate) fn permission_routes() -> Router<Arc<ServerState>> {
         .route("/{id}/reply", post(reply_permission))
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct PermissionRequestInfo {
-    pub id: String,
-    pub session_id: String,
-    pub tool: String,
-    pub input: serde_json::Value,
-    pub message: String,
-}
-
 pub(crate) static PERMISSION_REQUESTS: Lazy<RwLock<HashMap<String, PermissionRequestInfo>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
-static PERMISSION_WAITERS: Lazy<Mutex<HashMap<String, oneshot::Sender<PermissionReply>>>> =
+static PERMISSION_WAITERS: Lazy<Mutex<HashMap<String, oneshot::Sender<PermissionResolution>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug)]
-struct PermissionReply {
-    reply: String,
+struct PermissionResolution {
+    reply: PermissionReply,
     message: Option<String>,
-}
-
-fn permission_request_message(request: &rocode_tool::PermissionRequest) -> String {
-    fn deserialize_opt_string_lossy<'de, D>(
-        deserializer: D,
-    ) -> std::result::Result<Option<String>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-        Ok(match value {
-            Some(serde_json::Value::String(value)) => Some(value),
-            _ => None,
-        })
-    }
-
-    #[derive(Debug, Default, Deserialize)]
-    struct PermissionRequestMetadataWire {
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-        description: Option<String>,
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-        question: Option<String>,
-        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
-        command: Option<String>,
-    }
-
-    let metadata = serde_json::to_value(&request.metadata)
-        .ok()
-        .and_then(|value| serde_json::from_value::<PermissionRequestMetadataWire>(value).ok())
-        .unwrap_or_default();
-
-    metadata
-        .description
-        .or(metadata.question)
-        .or(metadata.command)
-        .or_else(|| {
-            (!request.patterns.is_empty())
-                .then(|| format!("{}: {}", request.permission, request.patterns.join(", ")))
-        })
-        .unwrap_or_else(|| format!("Permission required: {}", request.permission))
-}
-
-fn permission_request_info(
-    permission_id: String,
-    session_id: String,
-    request: &rocode_tool::PermissionRequest,
-) -> PermissionRequestInfo {
-    PermissionRequestInfo {
-        id: permission_id,
-        session_id,
-        tool: request.permission.clone(),
-        input: serde_json::json!({
-            "permission": request.permission,
-            "patterns": request.patterns,
-            "metadata": request.metadata,
-            "always": request.always,
-        }),
-        message: permission_request_message(request),
-    }
 }
 
 pub(crate) async fn request_permission(
@@ -103,7 +36,8 @@ pub(crate) async fn request_permission(
     request: rocode_tool::PermissionRequest,
 ) -> std::result::Result<(), rocode_tool::ToolError> {
     let permission_id = format!("permission_{}", uuid::Uuid::new_v4().simple());
-    let info = permission_request_info(permission_id.clone(), session_id.clone(), &request);
+    let info =
+        PermissionRequestInfo::from_request(permission_id.clone(), session_id.clone(), &request);
     let (tx, rx) = oneshot::channel();
 
     PERMISSION_REQUESTS
@@ -120,7 +54,7 @@ pub(crate) async fn request_permission(
         &ServerEvent::PermissionRequested {
             session_id: session_id.clone(),
             permission_id: permission_id.clone(),
-            info: serde_json::to_value(&info).unwrap_or(serde_json::Value::Null),
+            info: info.clone(),
         },
     );
 
@@ -141,16 +75,12 @@ pub(crate) async fn request_permission(
     state.runtime_state.permission_resolved(&session_id).await;
 
     match wait_result {
-        Ok(Ok(PermissionReply { reply, message })) => match reply.as_str() {
-            "once" | "always" => Ok(()),
-            "reject" => Err(rocode_tool::ToolError::PermissionDenied(
+        Ok(Ok(PermissionResolution { reply, message })) => match reply {
+            PermissionReply::Once | PermissionReply::Always => Ok(()),
+            PermissionReply::Reject => Err(rocode_tool::ToolError::PermissionDenied(
                 message
                     .unwrap_or_else(|| format!("Permission rejected for {}", request.permission)),
             )),
-            other => Err(rocode_tool::ToolError::ExecutionError(format!(
-                "Invalid permission reply: {}",
-                other
-            ))),
         },
         Ok(Err(_)) => {
             PERMISSION_REQUESTS.write().await.remove(&permission_id);
@@ -174,26 +104,11 @@ async fn list_permissions() -> Json<Vec<PermissionRequestInfo>> {
     Json(result)
 }
 
-#[derive(Debug, Deserialize)]
-pub struct ReplyPermissionRequest {
-    pub reply: String,
-    pub message: Option<String>,
-}
-
 async fn reply_permission(
     State(state): State<Arc<ServerState>>,
     Path(id): Path<String>,
-    Json(req): Json<ReplyPermissionRequest>,
+    Json(req): Json<PermissionReplyRequest>,
 ) -> Result<Json<bool>> {
-    match req.reply.as_str() {
-        "once" | "always" | "reject" => {}
-        _ => {
-            return Err(ApiError::BadRequest(
-                "Invalid reply; expected `once`, `always`, or `reject`".to_string(),
-            ));
-        }
-    }
-
     let mut pending = PERMISSION_REQUESTS.write().await;
     let permission = pending
         .remove(&id)
@@ -201,8 +116,8 @@ async fn reply_permission(
     drop(pending);
 
     if let Some(waiter) = PERMISSION_WAITERS.lock().await.remove(&id) {
-        let _ = waiter.send(PermissionReply {
-            reply: req.reply.clone(),
+        let _ = waiter.send(PermissionResolution {
+            reply: req.reply,
             message: req.message.clone(),
         });
     }
@@ -259,8 +174,8 @@ mod tests {
         assert_eq!(requested_json["permissionID"], permission_id);
         assert_eq!(requested_json["sessionID"], "session-1");
 
-        let reply = ReplyPermissionRequest {
-            reply: "once".to_string(),
+        let reply = PermissionReplyRequest {
+            reply: PermissionReply::Once,
             message: Some("approved".to_string()),
         };
         let _ = reply_permission(

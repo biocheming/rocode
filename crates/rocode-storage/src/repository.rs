@@ -7,9 +7,9 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-use rocode_types::{
-    MessagePart, MessageRole, MessageUsage, PartType, Session, SessionMessage, SessionShare,
-    SessionStatus, SessionSummary, SessionTime, SessionUsage, ToolCallStatus,
+use rocode_session::{
+    MessagePart, MessageRole, MessageUsage, PartType, Session, SessionMessage, SessionSummary,
+    SessionTime, SessionUsage, ToolCallStatus,
 };
 
 use crate::database::DatabaseError;
@@ -40,40 +40,21 @@ fn normalize_limit_offset(limit: i64, offset: i64) -> Result<(u64, u64), Databas
     Ok((limit as u64, offset as u64))
 }
 
-fn status_to_string(status: &SessionStatus) -> &'static str {
-    match status {
-        SessionStatus::Active => "active",
-        SessionStatus::Completed => "completed",
-        SessionStatus::Archived => "archived",
-        SessionStatus::Compacting => "compacting",
-    }
-}
-
-fn string_to_status(s: &str) -> SessionStatus {
-    match s {
-        "completed" => SessionStatus::Completed,
-        "archived" => SessionStatus::Archived,
-        "compacting" => SessionStatus::Compacting,
-        _ => SessionStatus::Active,
-    }
-}
-
-fn role_to_str(role: &MessageRole) -> &'static str {
+fn role_to_model(role: MessageRole) -> messages::MessageRoleModel {
     match role {
-        MessageRole::User => "user",
-        MessageRole::Assistant => "assistant",
-        MessageRole::System => "system",
-        MessageRole::Tool => "tool",
+        MessageRole::User => messages::MessageRoleModel::User,
+        MessageRole::Assistant => messages::MessageRoleModel::Assistant,
+        MessageRole::System => messages::MessageRoleModel::System,
+        MessageRole::Tool => messages::MessageRoleModel::Tool,
     }
 }
 
-fn string_to_role(s: &str) -> Option<MessageRole> {
-    match s {
-        "user" => Some(MessageRole::User),
-        "assistant" => Some(MessageRole::Assistant),
-        "system" => Some(MessageRole::System),
-        "tool" => Some(MessageRole::Tool),
-        _ => None,
+fn role_from_model(role: messages::MessageRoleModel) -> MessageRole {
+    match role {
+        messages::MessageRoleModel::User => MessageRole::User,
+        messages::MessageRoleModel::Assistant => MessageRole::Assistant,
+        messages::MessageRoleModel::System => MessageRole::System,
+        messages::MessageRoleModel::Tool => MessageRole::Tool,
     }
 }
 
@@ -96,13 +77,11 @@ fn session_insert_model(session: &Session) -> sessions::ActiveModel {
 
     sessions::ActiveModel {
         id: Set(session.id.clone()),
-        project_id: Set(session.project_id.clone()),
         parent_id: Set(session.parent_id.clone()),
-        slug: Set(session.slug.clone()),
         directory: Set(session.directory.clone()),
         title: Set(session.title.clone()),
         version: Set(session.version.clone()),
-        share_url: Set(session.share.as_ref().map(|s| s.url.clone())),
+        share_url: Set(session.share.clone()),
         summary_additions: Set(session
             .summary
             .as_ref()
@@ -128,11 +107,9 @@ fn session_insert_model(session: &Session) -> sessions::ActiveModel {
         usage_cache_write_tokens: Set(usage.map(|u| u.cache_write_tokens as i64).unwrap_or(0)),
         usage_cache_read_tokens: Set(usage.map(|u| u.cache_read_tokens as i64).unwrap_or(0)),
         usage_total_cost: Set(usage.map(|u| u.total_cost).unwrap_or(0.0)),
-        status: Set(status_to_string(&session.status).to_string()),
+        status: Set(session.active),
         created_at: Set(session.time.created),
         updated_at: Set(session.time.updated),
-        time_compacting: Set(session.time.compacting),
-        time_archived: Set(session.time.archived),
     }
 }
 
@@ -157,7 +134,7 @@ fn session_update_model(session: &Session) -> sessions::ActiveModel {
         id: Set(session.id.clone()),
         title: Set(session.title.clone()),
         version: Set(session.version.clone()),
-        share_url: Set(session.share.as_ref().map(|s| s.url.clone())),
+        share_url: Set(session.share.clone()),
         summary_additions: Set(session
             .summary
             .as_ref()
@@ -183,10 +160,8 @@ fn session_update_model(session: &Session) -> sessions::ActiveModel {
         usage_cache_write_tokens: Set(usage.map(|u| u.cache_write_tokens as i64).unwrap_or(0)),
         usage_cache_read_tokens: Set(usage.map(|u| u.cache_read_tokens as i64).unwrap_or(0)),
         usage_total_cost: Set(usage.map(|u| u.total_cost).unwrap_or(0.0)),
-        status: Set(status_to_string(&session.status).to_string()),
+        status: Set(session.active),
         updated_at: Set(session.time.updated),
-        time_compacting: Set(session.time.compacting),
-        time_archived: Set(session.time.archived),
         ..Default::default()
     }
 }
@@ -206,9 +181,6 @@ fn session_from_model(model: sessions::Model) -> Session {
             .and_then(|d| serde_json::from_str(d).ok()),
     });
 
-    let created_dt = DateTime::from_timestamp_millis(model.created_at).unwrap_or_else(Utc::now);
-    let updated_dt = DateTime::from_timestamp_millis(model.updated_at).unwrap_or_else(Utc::now);
-
     let usage_present = model.usage_input_tokens != 0
         || model.usage_output_tokens != 0
         || model.usage_reasoning_tokens != 0
@@ -226,8 +198,6 @@ fn session_from_model(model: sessions::Model) -> Session {
 
     Session {
         id: model.id,
-        slug: model.slug,
-        project_id: model.project_id,
         directory: model.directory,
         parent_id: model.parent_id,
         title: model.title,
@@ -235,12 +205,10 @@ fn session_from_model(model: sessions::Model) -> Session {
         time: SessionTime {
             created: model.created_at,
             updated: model.updated_at,
-            compacting: model.time_compacting,
-            archived: model.time_archived,
         },
         messages: vec![],
         summary,
-        share: model.share_url.map(|url| SessionShare { url }),
+        share: model.share_url,
         revert: model.revert.and_then(|r| serde_json::from_str(&r).ok()),
         permission: model.permission.and_then(|p| serde_json::from_str(&p).ok()),
         metadata: model
@@ -248,9 +216,8 @@ fn session_from_model(model: sessions::Model) -> Session {
             .and_then(|m| serde_json::from_str(&m).ok())
             .unwrap_or_default(),
         usage,
-        status: string_to_status(&model.status),
-        created_at: created_dt,
-        updated_at: updated_dt,
+        active: model.status,
+        cached_at: Utc::now(),
     }
 }
 
@@ -265,7 +232,7 @@ fn message_insert_model(message: &SessionMessage) -> Result<messages::ActiveMode
     Ok(messages::ActiveModel {
         id: Set(message.id.clone()),
         session_id: Set(message.session_id.clone()),
-        role: Set(role_to_str(&message.role).to_string()),
+        role: Set(role_to_model(message.role)),
         created_at: Set(message.created_at.timestamp_millis()),
         tokens_input: Set(usage.map(|u| u.input_tokens as i64).unwrap_or(0)),
         tokens_output: Set(usage.map(|u| u.output_tokens as i64).unwrap_or(0)),
@@ -281,7 +248,7 @@ fn message_insert_model(message: &SessionMessage) -> Result<messages::ActiveMode
 }
 
 fn message_from_model(model: messages::Model) -> Option<SessionMessage> {
-    let msg_role = string_to_role(model.role.as_str())?;
+    let msg_role = role_from_model(model.role);
 
     let parts: Vec<MessagePart> = model
         .data
@@ -442,13 +409,13 @@ impl SessionRepository {
 
     pub async fn list(
         &self,
-        project_id: Option<&str>,
+        directory: Option<&str>,
         limit: i64,
     ) -> Result<Vec<Session>, DatabaseError> {
         let (limit, _offset) = normalize_limit_offset(limit, 0)?;
         let mut query = sessions::Entity::find();
-        if let Some(pid) = project_id {
-            query = query.filter(sessions::Column::ProjectId.eq(pid));
+        if let Some(dir) = directory {
+            query = query.filter(sessions::Column::Directory.eq(dir));
         }
         let rows = query
             .order_by_desc(sessions::Column::UpdatedAt)
@@ -460,24 +427,24 @@ impl SessionRepository {
         Ok(rows.into_iter().map(session_from_model).collect())
     }
 
-    pub async fn count(&self, project_id: Option<&str>) -> Result<u64, DatabaseError> {
+    pub async fn count(&self, directory: Option<&str>) -> Result<u64, DatabaseError> {
         let mut query = sessions::Entity::find();
-        if let Some(pid) = project_id {
-            query = query.filter(sessions::Column::ProjectId.eq(pid));
+        if let Some(dir) = directory {
+            query = query.filter(sessions::Column::Directory.eq(dir));
         }
         query.count(&self.conn).await.map_err(map_query_err)
     }
 
     pub async fn list_page(
         &self,
-        project_id: Option<&str>,
+        directory: Option<&str>,
         limit: i64,
         offset: i64,
     ) -> Result<Vec<Session>, DatabaseError> {
         let (limit, offset) = normalize_limit_offset(limit, offset)?;
         let mut query = sessions::Entity::find();
-        if let Some(pid) = project_id {
-            query = query.filter(sessions::Column::ProjectId.eq(pid));
+        if let Some(dir) = directory {
+            query = query.filter(sessions::Column::Directory.eq(dir));
         }
         let rows = query
             .order_by_desc(sessions::Column::UpdatedAt)
@@ -546,8 +513,6 @@ impl SessionRepository {
                         sessions::Column::UsageTotalCost,
                         sessions::Column::Status,
                         sessions::Column::UpdatedAt,
-                        sessions::Column::TimeCompacting,
-                        sessions::Column::TimeArchived,
                     ])
                     .to_owned(),
             )
@@ -602,8 +567,6 @@ impl SessionRepository {
                         sessions::Column::UsageTotalCost,
                         sessions::Column::Status,
                         sessions::Column::UpdatedAt,
-                        sessions::Column::TimeCompacting,
-                        sessions::Column::TimeArchived,
                     ])
                     .to_owned(),
             )
@@ -805,7 +768,7 @@ pub struct MessageRepository {
 pub struct MessageHeaderRow {
     pub id: String,
     pub session_id: String,
-    pub role: String,
+    pub role: MessageRole,
     pub created_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finish: Option<String>,
@@ -880,7 +843,13 @@ impl MessageRepository {
         offset: i64,
     ) -> Result<Vec<MessageHeaderRow>, DatabaseError> {
         let (limit, offset) = normalize_limit_offset(limit, offset)?;
-        let rows: Vec<(String, String, String, i64, Option<String>)> = messages::Entity::find()
+        let rows: Vec<(
+            String,
+            String,
+            messages::MessageRoleModel,
+            i64,
+            Option<String>,
+        )> = messages::Entity::find()
             .filter(messages::Column::SessionId.eq(session_id))
             .select_only()
             .column(messages::Column::Id)
@@ -897,18 +866,17 @@ impl MessageRepository {
             .await
             .map_err(map_query_err)?;
 
-        Ok(rows
-            .into_iter()
-            .map(
-                |(id, session_id, role, created_at, finish)| MessageHeaderRow {
+        rows.into_iter()
+            .map(|(id, session_id, role, created_at, finish)| {
+                Ok(MessageHeaderRow {
                     id,
                     session_id,
-                    role,
+                    role: role_from_model(role),
                     created_at,
                     finish,
-                },
-            )
-            .collect())
+                })
+            })
+            .collect()
     }
 
     pub async fn list_for_session_page(
@@ -1550,15 +1518,13 @@ mod tests {
     use chrono::Utc;
     use rocode_core::contracts::scheduler::keys as scheduler_keys;
     use rocode_core::contracts::session::keys as session_keys;
-    use rocode_types::{MessageRole, Session, SessionMessage, SessionStatus, SessionTime};
+    use rocode_session::{MessageRole, Session, SessionMessage, SessionTime};
     use sea_orm::{ConnectionTrait, DbBackend, Statement};
     use std::collections::HashMap;
 
     fn make_session(id: &str) -> Session {
         Session {
             id: id.to_string(),
-            slug: format!("slug-{}", id),
-            project_id: "proj-1".to_string(),
             directory: "/tmp/test".to_string(),
             parent_id: None,
             title: format!("Session {}", id),
@@ -1570,10 +1536,9 @@ mod tests {
             revert: None,
             permission: None,
             usage: None,
-            status: SessionStatus::Active,
+            active: true,
             metadata: HashMap::new(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+            cached_at: Utc::now(),
         }
     }
 

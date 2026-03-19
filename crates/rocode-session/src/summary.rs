@@ -756,7 +756,7 @@ mod tests {
 
     #[test]
     fn test_persist_and_load_session_diffs() {
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let session_id = session.id.clone();
         let diffs = vec![SummaryFileDiff {
             file: "src/main.rs".to_string(),
@@ -772,7 +772,7 @@ mod tests {
 
     #[test]
     fn test_set_session_summary_updates_session_record() {
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let summary = SessionSummaryData {
             additions: 7,
             deletions: 2,
@@ -795,7 +795,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_summarize_message_for_session_generates_title() {
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let message = session.add_user_message("Implement summary pipeline for session diffs");
         let message_id = message.id.clone();
         let provider = MockProvider {
@@ -840,7 +840,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_summarize_message_for_session_truncates_multibyte_llm_title() {
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let message = session.add_user_message("生成一个很长的标题");
         let message_id = message.id.clone();
         let provider = MockProvider {

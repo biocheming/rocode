@@ -1,20 +1,23 @@
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use uuid::Uuid;
 
+#[cfg(test)]
+use chrono::Utc;
 use rocode_core::bus::{Bus, BusEventDef};
 use rocode_core::contracts::events::BusEventName;
-#[cfg(test)]
-use rocode_core::contracts::patch::keys as patch_keys;
 #[cfg(test)]
 use rocode_core::contracts::wire::keys as wire_keys;
 use rocode_plugin::{HookContext, HookEvent};
 
 #[cfg(test)]
 use crate::MessageUsage;
-use crate::{MessagePart, MessageRole, SessionMessage};
+use crate::{MessagePart, SessionMessage};
+
+pub use crate::session_model::{
+    FileDiff, PermissionRuleset, Session, SessionPersistPlan, SessionRevert, SessionSummary,
+    SessionTime, SessionUsage,
+};
 
 // ============================================================================
 // Bus Event Definitions (matches TS Session.Event)
@@ -26,10 +29,8 @@ pub static SESSION_UPDATED_EVENT: BusEventDef =
     BusEventDef::new(BusEventName::SessionUpdated.as_str());
 pub static SESSION_DELETED_EVENT: BusEventDef =
     BusEventDef::new(BusEventName::SessionDeleted.as_str());
-pub static SESSION_DIFF_EVENT: BusEventDef =
-    BusEventDef::new(BusEventName::SessionDiff.as_str());
-pub static SESSION_ERROR_EVENT: BusEventDef =
-    BusEventDef::new(BusEventName::SessionError.as_str());
+pub static SESSION_DIFF_EVENT: BusEventDef = BusEventDef::new(BusEventName::SessionDiff.as_str());
+pub static SESSION_ERROR_EVENT: BusEventDef = BusEventDef::new(BusEventName::SessionError.as_str());
 
 // Message-level events (matches TS MessageV2.Event)
 pub static MESSAGE_UPDATED_EVENT: BusEventDef =
@@ -86,91 +87,6 @@ pub fn sanitize_display_text(text: &str) -> String {
 }
 
 // ============================================================================
-// Session Info Schema
-// ============================================================================
-
-/// Summary of changes in a session
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SessionSummary {
-    pub additions: u64,
-    pub deletions: u64,
-    pub files: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub diffs: Option<Vec<FileDiff>>,
-}
-
-/// File diff entry
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileDiff {
-    pub path: String,
-    pub additions: u64,
-    pub deletions: u64,
-}
-
-/// Share information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionShare {
-    pub url: String,
-}
-
-/// Revert information for undo functionality
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionRevert {
-    pub message_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub part_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub snapshot: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub diff: Option<String>,
-}
-
-/// Permission ruleset
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct PermissionRuleset {
-    #[serde(default)]
-    pub allow: Vec<String>,
-    #[serde(default)]
-    pub deny: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mode: Option<String>,
-}
-
-/// Time tracking for session
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionTime {
-    pub created: i64,
-    pub updated: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub compacting: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub archived: Option<i64>,
-}
-
-impl Default for SessionTime {
-    fn default() -> Self {
-        let now = Utc::now().timestamp_millis();
-        Self {
-            created: now,
-            updated: now,
-            compacting: None,
-            archived: None,
-        }
-    }
-}
-
-/// Usage statistics for a session
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SessionUsage {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub reasoning_tokens: u64,
-    pub cache_write_tokens: u64,
-    pub cache_read_tokens: u64,
-    pub total_cost: f64,
-}
-
-// ============================================================================
 // Session Event Types
 // ============================================================================
 
@@ -208,15 +124,6 @@ pub struct SessionError {
 // ============================================================================
 // Session Status
 // ============================================================================
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub enum SessionStatus {
-    #[default]
-    Active,
-    Completed,
-    Archived,
-    Compacting,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum RunStatus {
@@ -324,521 +231,7 @@ impl Default for SessionStateManager {
     }
 }
 
-// ============================================================================
-// Session
-// ============================================================================
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Session {
-    pub id: String,
-    pub slug: String,
-    pub project_id: String,
-    pub directory: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<String>,
-    pub title: String,
-    pub version: String,
-    pub time: SessionTime,
-    pub messages: Vec<SessionMessage>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub summary: Option<SessionSummary>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub share: Option<SessionShare>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub revert: Option<SessionRevert>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub permission: Option<PermissionRuleset>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub usage: Option<SessionUsage>,
-    #[serde(default)]
-    pub status: SessionStatus,
-    #[serde(default)]
-    pub metadata: HashMap<String, serde_json::Value>,
-    #[serde(default, skip_serializing)]
-    pub created_at: DateTime<Utc>,
-    #[serde(default, skip_serializing)]
-    pub updated_at: DateTime<Utc>,
-}
-
-impl Session {
-    const VERSION: &'static str = "1.0.0";
-    const AUTO_TITLE_PENDING_REFINE_KEY: &'static str = "auto_title_pending_refine";
-
-    /// Create a new session
-    pub fn new(project_id: impl Into<String>, directory: impl Into<String>) -> Self {
-        let now = Utc::now();
-        let slug = Self::generate_slug();
-
-        Self {
-            id: format!("ses_{}", Uuid::new_v4().simple()),
-            slug,
-            project_id: project_id.into(),
-            directory: directory.into(),
-            parent_id: None,
-            title: format!("New session - {}", now.to_rfc3339()),
-            version: Self::VERSION.to_string(),
-            time: SessionTime::default(),
-            messages: Vec::new(),
-            summary: None,
-            share: None,
-            revert: None,
-            permission: None,
-            usage: None,
-            status: SessionStatus::Active,
-            metadata: HashMap::new(),
-            created_at: now,
-            updated_at: now,
-        }
-    }
-
-    /// Create a child session
-    pub fn child(parent: &Session) -> Self {
-        let now = Utc::now();
-        let slug = Self::generate_slug();
-
-        Self {
-            id: format!("ses_{}", Uuid::new_v4().simple()),
-            slug,
-            project_id: parent.project_id.clone(),
-            directory: parent.directory.clone(),
-            parent_id: Some(parent.id.clone()),
-            title: format!("Child session - {}", now.to_rfc3339()),
-            version: Self::VERSION.to_string(),
-            time: SessionTime::default(),
-            messages: Vec::new(),
-            summary: None,
-            share: None,
-            revert: None,
-            permission: parent.permission.clone(),
-            usage: None,
-            status: SessionStatus::Active,
-            metadata: HashMap::new(),
-            created_at: now,
-            updated_at: now,
-        }
-    }
-
-    fn generate_slug() -> String {
-        let uuid_part = &Uuid::new_v4().simple().to_string()[..8];
-        format!("session-{}", uuid_part)
-    }
-
-    /// Check if title is a default generated title
-    pub fn is_default_title(&self) -> bool {
-        let prefix = if self.parent_id.is_some() {
-            "Child session - "
-        } else {
-            "New session - "
-        };
-
-        if !self.title.starts_with(prefix) {
-            return false;
-        }
-
-        let timestamp_part = &self.title[prefix.len()..];
-        chrono::DateTime::parse_from_rfc3339(timestamp_part).is_ok()
-    }
-
-    /// Whether the current title is an auto-generated placeholder that may be
-    /// replaced by the refined LLM-generated title after the first assistant turn.
-    pub fn allows_auto_title_regeneration(&self) -> bool {
-        self.is_default_title()
-            || self
-                .metadata
-                .get(Self::AUTO_TITLE_PENDING_REFINE_KEY)
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-    }
-
-    /// Get a forked title
-    pub fn get_forked_title(&self) -> String {
-        // Simple implementation without regex dependency
-        if self.title.ends_with(")") && self.title.contains(" (fork #") {
-            if let Some(pos) = self.title.rfind(" (fork #") {
-                let base = &self.title[..pos];
-                let num_part = &self.title[pos + 8..self.title.len() - 1];
-                if let Ok(num) = num_part.parse::<u32>() {
-                    return format!("{} (fork #{})", base, num + 1);
-                }
-            }
-        }
-        format!("{} (fork #1)", self.title)
-    }
-
-    /// Touch the session (update timestamp)
-    pub fn touch(&mut self) {
-        let now = Utc::now();
-        self.time.updated = now.timestamp_millis();
-        self.updated_at = now;
-    }
-
-    // ========================================================================
-    // Message Operations
-    // ========================================================================
-
-    /// Add a user message
-    pub fn add_user_message(&mut self, text: impl Into<String>) -> &mut SessionMessage {
-        let msg = SessionMessage::user(&self.id, text);
-        self.messages.push(msg);
-        self.touch();
-        self.messages.last_mut().unwrap()
-    }
-
-    /// Add a synthetic user message with optional attachments.
-    pub fn add_synthetic_user_message(
-        &mut self,
-        text: impl Into<String>,
-        attachments: &[crate::FilePart],
-    ) -> &mut SessionMessage {
-        let mut msg = SessionMessage::user(&self.id, text);
-        msg.mark_text_parts_synthetic();
-        for attachment in attachments {
-            msg.add_file(
-                attachment.url.clone(),
-                attachment
-                    .filename
-                    .clone()
-                    .unwrap_or_else(|| "attachment".to_string()),
-                attachment.mime.clone(),
-            );
-        }
-        self.messages.push(msg);
-        self.touch();
-        self.messages.last_mut().unwrap()
-    }
-
-    /// Add an assistant message
-    pub fn add_assistant_message(&mut self) -> &mut SessionMessage {
-        let msg = SessionMessage::assistant(&self.id);
-        self.messages.push(msg);
-        self.touch();
-        self.messages.last_mut().unwrap()
-    }
-
-    /// Get the last user message
-    pub fn last_user_message(&self) -> Option<&SessionMessage> {
-        self.messages
-            .iter()
-            .rev()
-            .find(|m| matches!(m.role, MessageRole::User))
-    }
-
-    /// Get the last assistant message
-    pub fn last_assistant_message(&self) -> Option<&SessionMessage> {
-        self.messages
-            .iter()
-            .rev()
-            .find(|m| matches!(m.role, MessageRole::Assistant))
-    }
-
-    /// Get message count
-    pub fn message_count(&self) -> usize {
-        self.messages.len()
-    }
-
-    /// Get a message by ID
-    pub fn get_message(&self, id: &str) -> Option<&SessionMessage> {
-        self.messages.iter().find(|m| m.id == id)
-    }
-
-    /// Get a mutable message by ID
-    pub fn get_message_mut(&mut self, id: &str) -> Option<&mut SessionMessage> {
-        self.messages.iter_mut().find(|m| m.id == id)
-    }
-
-    /// Remove a message by ID
-    pub fn remove_message(&mut self, id: &str) -> Option<SessionMessage> {
-        if let Some(pos) = self.messages.iter().position(|m| m.id == id) {
-            let msg = self.messages.remove(pos);
-            self.touch();
-            Some(msg)
-        } else {
-            None
-        }
-    }
-
-    // ========================================================================
-    // Part-Level Operations
-    // ========================================================================
-
-    /// Update a message by replacing it entirely
-    pub fn update_message(&mut self, msg: SessionMessage) -> Option<&SessionMessage> {
-        if let Some(pos) = self.messages.iter().position(|m| m.id == msg.id) {
-            self.messages[pos] = msg;
-            self.touch();
-            Some(&self.messages[pos])
-        } else {
-            // New message - append
-            self.messages.push(msg);
-            self.touch();
-            self.messages.last()
-        }
-    }
-
-    /// Update a specific part within a message
-    pub fn update_part(&mut self, msg_id: &str, part: MessagePart) -> Option<&MessagePart> {
-        let part_id = part.id.clone();
-        let msg = self.get_message_mut(msg_id)?;
-        if let Some(pos) = msg.parts.iter().position(|p| p.id == part_id) {
-            msg.parts[pos] = part;
-        } else {
-            msg.parts.push(part);
-        }
-        self.touch();
-        // Return reference to the part
-        let msg = self.get_message(msg_id)?;
-        msg.parts.iter().find(|p| p.id == part_id)
-    }
-
-    /// Remove a specific part from a message
-    pub fn remove_part(&mut self, msg_id: &str, part_id: &str) -> Option<MessagePart> {
-        let msg = self.get_message_mut(msg_id)?;
-        if let Some(pos) = msg.parts.iter().position(|p| p.id == part_id) {
-            let removed = msg.parts.remove(pos);
-            self.touch();
-            Some(removed)
-        } else {
-            None
-        }
-    }
-
-    // ========================================================================
-    // Usage Aggregation
-    // ========================================================================
-
-    /// Aggregate usage across all assistant messages in the session
-    pub fn get_usage(&self) -> SessionUsage {
-        let mut usage = SessionUsage::default();
-        for msg in &self.messages {
-            if matches!(msg.role, MessageRole::Assistant) {
-                if let Some(ref msg_usage) = msg.usage {
-                    usage.input_tokens += msg_usage.input_tokens;
-                    usage.output_tokens += msg_usage.output_tokens;
-                    usage.reasoning_tokens += msg_usage.reasoning_tokens;
-                    usage.cache_write_tokens += msg_usage.cache_write_tokens;
-                    usage.cache_read_tokens += msg_usage.cache_read_tokens;
-                    usage.total_cost += msg_usage.total_cost;
-                }
-            }
-        }
-        usage
-    }
-
-    /// Share the session (set share URL)
-    pub fn share_session(&mut self, url: impl Into<String>) {
-        self.share = Some(SessionShare { url: url.into() });
-        self.touch();
-    }
-
-    /// Unshare the session
-    pub fn unshare_session(&mut self) {
-        self.share = None;
-        self.touch();
-    }
-
-    /// Compute diff summary from messages
-    pub fn diff(&self) -> Vec<FileDiff> {
-        self.summary
-            .as_ref()
-            .and_then(|s| s.diffs.clone())
-            .unwrap_or_default()
-    }
-
-    // ========================================================================
-    // Setters
-    // ========================================================================
-
-    /// Set the title
-    pub fn set_title(&mut self, title: impl Into<String>) {
-        self.title = title.into();
-        self.metadata.remove(Self::AUTO_TITLE_PENDING_REFINE_KEY);
-        self.touch();
-    }
-
-    /// Set an immediate auto-generated title that should still be replaced by
-    /// the refined LLM title after the first completed turn.
-    pub fn set_auto_title(&mut self, title: impl Into<String>) {
-        self.title = title.into();
-        self.metadata.insert(
-            Self::AUTO_TITLE_PENDING_REFINE_KEY.to_string(),
-            serde_json::Value::Bool(true),
-        );
-        self.touch();
-    }
-
-    /// Set the archived status
-    pub fn set_archived(&mut self, time: Option<i64>) {
-        self.time.archived = time.or_else(|| Some(Utc::now().timestamp_millis()));
-        self.status = SessionStatus::Archived;
-        self.touch();
-    }
-
-    /// Set the permission ruleset
-    pub fn set_permission(&mut self, permission: PermissionRuleset) {
-        self.permission = Some(permission);
-        self.touch();
-    }
-
-    /// Set the revert information
-    pub fn set_revert(&mut self, revert: SessionRevert) {
-        self.revert = Some(revert);
-        self.touch();
-    }
-
-    /// Clear the revert information
-    pub fn clear_revert(&mut self) {
-        self.revert = None;
-        self.touch();
-    }
-
-    /// Set the summary
-    pub fn set_summary(&mut self, summary: SessionSummary) {
-        self.summary = Some(summary);
-        self.touch();
-    }
-
-    /// Set the share information
-    pub fn set_share(&mut self, share: SessionShare) {
-        self.share = Some(share);
-        self.touch();
-    }
-
-    /// Clear the share information
-    pub fn clear_share(&mut self) {
-        self.share = None;
-        self.touch();
-    }
-
-    /// Update usage statistics
-    pub fn update_usage(&mut self, usage: SessionUsage) {
-        self.usage = Some(usage);
-        self.touch();
-    }
-
-    /// Start compacting
-    pub fn start_compacting(&mut self) {
-        self.time.compacting = Some(Utc::now().timestamp_millis());
-        self.status = SessionStatus::Compacting;
-    }
-
-    /// Finish compacting
-    pub fn finish_compacting(&mut self) {
-        self.time.compacting = None;
-        self.status = SessionStatus::Active;
-        self.touch();
-    }
-
-    /// Mark as completed
-    pub fn complete(&mut self) {
-        self.status = SessionStatus::Completed;
-        self.touch();
-    }
-
-    // ========================================================================
-    // Serialization Helpers
-    // ========================================================================
-
-    /// Convert to a database row representation
-    pub fn to_row(&self) -> SessionRow {
-        SessionRow {
-            id: self.id.clone(),
-            slug: self.slug.clone(),
-            project_id: self.project_id.clone(),
-            directory: self.directory.clone(),
-            parent_id: self.parent_id.clone(),
-            title: self.title.clone(),
-            version: self.version.clone(),
-            time_created: self.time.created,
-            time_updated: self.time.updated,
-            time_compacting: self.time.compacting,
-            time_archived: self.time.archived,
-            share_url: self.share.as_ref().map(|s| s.url.clone()),
-            summary_additions: self.summary.as_ref().map(|s| s.additions),
-            summary_deletions: self.summary.as_ref().map(|s| s.deletions),
-            summary_files: self.summary.as_ref().map(|s| s.files),
-            revert: self.revert.clone(),
-            permission: self.permission.clone(),
-        }
-    }
-
-    /// Create from a database row representation
-    pub fn from_row(row: SessionRow) -> Self {
-        let summary = if row.summary_additions.is_some()
-            || row.summary_deletions.is_some()
-            || row.summary_files.is_some()
-        {
-            Some(SessionSummary {
-                additions: row.summary_additions.unwrap_or(0),
-                deletions: row.summary_deletions.unwrap_or(0),
-                files: row.summary_files.unwrap_or(0),
-                diffs: None,
-            })
-        } else {
-            None
-        };
-
-        let share = row.share_url.map(|url| SessionShare { url });
-
-        let status = if row.time_archived.is_some() {
-            SessionStatus::Archived
-        } else if row.time_compacting.is_some() {
-            SessionStatus::Compacting
-        } else {
-            SessionStatus::Active
-        };
-
-        let created_at = DateTime::from_timestamp_millis(row.time_created).unwrap_or_else(Utc::now);
-        let updated_at = DateTime::from_timestamp_millis(row.time_updated).unwrap_or_else(Utc::now);
-
-        Self {
-            id: row.id,
-            slug: row.slug,
-            project_id: row.project_id,
-            directory: row.directory,
-            parent_id: row.parent_id,
-            title: row.title,
-            version: row.version,
-            time: SessionTime {
-                created: row.time_created,
-                updated: row.time_updated,
-                compacting: row.time_compacting,
-                archived: row.time_archived,
-            },
-            messages: Vec::new(),
-            summary,
-            share,
-            revert: row.revert,
-            permission: row.permission,
-            usage: None,
-            status,
-            metadata: HashMap::new(),
-            created_at,
-            updated_at,
-        }
-    }
-}
-
-/// Database row representation
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionRow {
-    pub id: String,
-    pub slug: String,
-    pub project_id: String,
-    pub directory: String,
-    pub parent_id: Option<String>,
-    pub title: String,
-    pub version: String,
-    pub time_created: i64,
-    pub time_updated: i64,
-    pub time_compacting: Option<i64>,
-    pub time_archived: Option<i64>,
-    pub share_url: Option<String>,
-    pub summary_additions: Option<u64>,
-    pub summary_deletions: Option<u64>,
-    pub summary_files: Option<u64>,
-    pub revert: Option<SessionRevert>,
-    pub permission: Option<PermissionRuleset>,
-}
+// Session model definitions were extracted to `session_model.rs`.
 
 // ============================================================================
 // Session Manager
@@ -991,12 +384,8 @@ impl SessionManager {
     }
 
     /// Create a new session
-    pub fn create(
-        &mut self,
-        project_id: impl Into<String>,
-        directory: impl Into<String>,
-    ) -> Session {
-        let session = Session::new(project_id, directory);
+    pub fn create(&mut self, directory: impl Into<String>) -> Session {
+        let session = Session::new(directory);
         self.sessions.insert(session.id.clone(), session.clone());
         self.events.push(SessionEvent::Created {
             info: session.clone(),
@@ -1065,7 +454,7 @@ impl SessionManager {
     pub fn share(&mut self, session_id: &str, url: impl Into<String>) -> Option<Session> {
         let updated = {
             let session = self.sessions.get_mut(session_id)?;
-            session.set_share(SessionShare { url: url.into() });
+            session.set_share(url);
             session.clone()
         };
         self.events.push(SessionEvent::Updated {
@@ -1080,20 +469,6 @@ impl SessionManager {
         let updated = {
             let session = self.sessions.get_mut(session_id)?;
             session.clear_share();
-            session.clone()
-        };
-        self.events.push(SessionEvent::Updated {
-            info: updated.clone(),
-        });
-        self.publish_session_event(&SESSION_UPDATED_EVENT, &updated);
-        Some(updated)
-    }
-
-    /// Set archived time and publish session.updated.
-    pub fn set_archived(&mut self, session_id: &str, time: Option<i64>) -> Option<Session> {
-        let updated = {
-            let session = self.sessions.get_mut(session_id)?;
-            session.set_archived(time);
             session.clone()
         };
         self.events.push(SessionEvent::Updated {
@@ -1190,6 +565,67 @@ impl SessionManager {
     /// Get a mutable session by ID
     pub fn get_mut(&mut self, id: &str) -> Option<&mut Session> {
         self.sessions.get_mut(id)
+    }
+
+    /// Mutate a session through a single gateway API.
+    ///
+    /// This is intended to be the primary write entrypoint for callers outside
+    /// this crate so that state changes remain traceable and centralized.
+    pub fn mutate_session<R>(
+        &mut self,
+        session_id: &str,
+        mutator: impl FnOnce(&mut Session) -> R,
+    ) -> Option<R> {
+        let (result, snapshot) = {
+            let session = self.sessions.get_mut(session_id)?;
+            let result = mutator(session);
+            (result, session.clone())
+        };
+
+        self.events.push(SessionEvent::Updated {
+            info: snapshot.clone(),
+        });
+        self.publish_session_event(&SESSION_UPDATED_EVENT, &snapshot);
+        Some(result)
+    }
+
+    /// Add a user message to a session via manager gateway.
+    pub fn add_user_message(
+        &mut self,
+        session_id: &str,
+        text: impl Into<String>,
+    ) -> Option<SessionMessage> {
+        self.mutate_session(session_id, move |session| {
+            session.add_user_message(text).clone()
+        })
+    }
+
+    /// Add an assistant message to a session via manager gateway.
+    pub fn add_assistant_message(&mut self, session_id: &str) -> Option<SessionMessage> {
+        self.mutate_session(session_id, |session| {
+            session.add_assistant_message().clone()
+        })
+    }
+
+    /// Set a metadata key on a session and touch it.
+    pub fn set_metadata_value(
+        &mut self,
+        session_id: &str,
+        key: impl Into<String>,
+        value: serde_json::Value,
+    ) -> Option<()> {
+        self.mutate_session(session_id, move |session| {
+            session.metadata.insert(key.into(), value);
+            session.touch();
+        })
+    }
+
+    /// Remove a metadata key from a session and touch it.
+    pub fn remove_metadata_key(&mut self, session_id: &str, key: &str) -> Option<()> {
+        self.mutate_session(session_id, move |session| {
+            session.metadata.remove(key);
+            session.touch();
+        })
     }
 
     /// List all sessions
@@ -1315,16 +751,17 @@ impl SessionManager {
 
     /// Update a message in a session and publish Bus event
     pub fn update_message(&mut self, session_id: &str, msg: SessionMessage) -> Option<()> {
-        let session = self.sessions.get_mut(session_id)?;
-        session.update_message(msg.clone());
+        self.mutate_session(session_id, |session| {
+            session.update_message(msg.clone());
+        })?;
         self.publish_message_event(&MESSAGE_UPDATED_EVENT, &msg);
         Some(())
     }
 
     /// Remove a message from a session and publish Bus event
     pub fn remove_message(&mut self, session_id: &str, message_id: &str) -> Option<SessionMessage> {
-        let session = self.sessions.get_mut(session_id)?;
-        let msg = session.remove_message(message_id)?;
+        let msg =
+            self.mutate_session(session_id, |session| session.remove_message(message_id))??;
         self.publish_event(
             &MESSAGE_REMOVED_EVENT,
             value_or_null(MessageRemovedEvent {
@@ -1342,8 +779,12 @@ impl SessionManager {
         message_id: &str,
         part: MessagePart,
     ) -> Option<()> {
-        let session = self.sessions.get_mut(session_id)?;
-        session.update_part(message_id, part.clone());
+        let updated = self.mutate_session(session_id, |session| {
+            session.update_part(message_id, part.clone()).is_some()
+        })?;
+        if !updated {
+            return None;
+        }
         self.publish_part_event(&PART_UPDATED_EVENT, &part);
         Some(())
     }
@@ -1355,8 +796,9 @@ impl SessionManager {
         message_id: &str,
         part_id: &str,
     ) -> Option<MessagePart> {
-        let session = self.sessions.get_mut(session_id)?;
-        let part = session.remove_part(message_id, part_id)?;
+        let part = self.mutate_session(session_id, |session| {
+            session.remove_part(message_id, part_id)
+        })??;
         self.publish_event(
             &PART_REMOVED_EVENT,
             value_or_null(PartRemovedEvent {
@@ -1443,16 +885,16 @@ mod tests {
 
     #[test]
     fn test_session_creation() {
-        let session = Session::new("project-1", "/path/to/project");
+        let session = Session::new("/path/to/project");
         assert!(session.id.starts_with("ses_"));
         assert!(session.title.starts_with("New session"));
         assert!(session.parent_id.is_none());
-        assert_eq!(session.status, SessionStatus::Active);
+        assert!(!session.active);
     }
 
     #[test]
     fn test_child_session() {
-        let parent = Session::new("project-1", "/path/to/project");
+        let parent = Session::new("/path/to/project");
         let child = Session::child(&parent);
 
         assert!(child.parent_id.is_some());
@@ -1462,7 +904,7 @@ mod tests {
 
     #[test]
     fn test_add_messages() {
-        let mut session = Session::new("project-1", "/path/to/project");
+        let mut session = Session::new("/path/to/project");
 
         session.add_user_message("Hello");
         assert_eq!(session.message_count(), 1);
@@ -1475,7 +917,7 @@ mod tests {
     fn test_session_manager() {
         let mut manager = SessionManager::new();
 
-        let session = manager.create("project-1", "/path/to/project");
+        let session = manager.create("/path/to/project");
         assert!(manager.get(&session.id).is_some());
         assert_eq!(manager.count(), 1);
 
@@ -1488,7 +930,7 @@ mod tests {
 
     #[test]
     fn test_fork_title() {
-        let session = Session::new("project-1", "/path/to/project");
+        let session = Session::new("/path/to/project");
         let title1 = session.get_forked_title();
         assert!(title1.ends_with("(fork #1)"));
 
@@ -1502,7 +944,7 @@ mod tests {
 
     #[test]
     fn test_auto_title_can_be_refined_but_manual_title_cannot() {
-        let mut session = Session::new("project-1", "/path");
+        let mut session = Session::new("/path");
         assert!(session.allows_auto_title_regeneration());
 
         session.set_auto_title("Immediate Title");
@@ -1522,7 +964,7 @@ mod tests {
 
     #[test]
     fn test_update_message() {
-        let mut session = Session::new("project-1", "/path");
+        let mut session = Session::new("/path");
         let msg = session.add_user_message("Hello");
         let msg_id = msg.id.clone();
 
@@ -1533,7 +975,7 @@ mod tests {
 
     #[test]
     fn test_update_message_new() {
-        let mut session = Session::new("project-1", "/path");
+        let mut session = Session::new("/path");
         let new_msg = SessionMessage::user(&session.id, "Brand new");
         let new_id = new_msg.id.clone();
         session.update_message(new_msg);
@@ -1543,7 +985,7 @@ mod tests {
 
     #[test]
     fn test_update_part() {
-        let mut session = Session::new("project-1", "/path");
+        let mut session = Session::new("/path");
         let msg = session.add_user_message("Hello");
         let msg_id = msg.id.clone();
         let part_id = msg.parts[0].id.clone();
@@ -1566,7 +1008,7 @@ mod tests {
 
     #[test]
     fn test_remove_part() {
-        let mut session = Session::new("project-1", "/path");
+        let mut session = Session::new("/path");
         let msg = session.add_user_message("Hello");
         let msg_id = msg.id.clone();
         let part_id = msg.parts[0].id.clone();
@@ -1579,7 +1021,7 @@ mod tests {
 
     #[test]
     fn test_remove_part_not_found() {
-        let mut session = Session::new("project-1", "/path");
+        let mut session = Session::new("/path");
         let msg = session.add_user_message("Hello");
         let msg_id = msg.id.clone();
 
@@ -1589,13 +1031,13 @@ mod tests {
 
     #[test]
     fn test_share_unshare() {
-        let mut session = Session::new("project-1", "/path");
+        let mut session = Session::new("/path");
 
         session.share_session("https://example.com/share/123");
         assert!(session.share.is_some());
         assert_eq!(
-            session.share.as_ref().unwrap().url,
-            "https://example.com/share/123"
+            session.share.as_deref(),
+            Some("https://example.com/share/123")
         );
 
         session.unshare_session();
@@ -1604,7 +1046,7 @@ mod tests {
 
     #[test]
     fn test_get_usage_empty() {
-        let session = Session::new("project-1", "/path");
+        let session = Session::new("/path");
         let usage = session.get_usage();
         assert_eq!(usage.input_tokens, 0);
         assert_eq!(usage.output_tokens, 0);
@@ -1613,7 +1055,7 @@ mod tests {
 
     #[test]
     fn test_get_usage_aggregation() {
-        let mut session = Session::new("project-1", "/path");
+        let mut session = Session::new("/path");
 
         // Add an assistant message with usage
         let msg = session.add_assistant_message();
@@ -1659,14 +1101,14 @@ mod tests {
 
     #[test]
     fn test_diff_empty() {
-        let session = Session::new("project-1", "/path");
+        let session = Session::new("/path");
         let diffs = session.diff();
         assert!(diffs.is_empty());
     }
 
     #[test]
     fn test_diff_with_summary() {
-        let mut session = Session::new("project-1", "/path");
+        let mut session = Session::new("/path");
         session.set_summary(SessionSummary {
             additions: 10,
             deletions: 5,
@@ -1694,14 +1136,14 @@ mod tests {
     async fn session_share_publishes_updated_event() {
         let bus = Arc::new(Bus::new());
         let mut manager = SessionManager::with_bus(bus.clone());
-        let session = manager.create("project-1", "/path");
+        let session = manager.create("/path");
         let mut rx = bus.subscribe_channel();
 
         let updated = manager
             .share(&session.id, "https://share.opencode.ai/test")
             .expect("session should exist");
         assert_eq!(
-            updated.share.as_ref().map(|share| share.url.as_str()),
+            updated.share.as_deref(),
             Some("https://share.opencode.ai/test")
         );
 

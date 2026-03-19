@@ -7,9 +7,7 @@
 pub const CREATE_SESSIONS_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
     parent_id TEXT,
-    slug TEXT NOT NULL,
     directory TEXT NOT NULL,
     title TEXT NOT NULL,
     version TEXT NOT NULL DEFAULT '1.0.0',
@@ -38,14 +36,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     usage_cache_read_tokens INTEGER DEFAULT 0,
     usage_total_cost REAL DEFAULT 0.0,
     
-    -- Status
-    status TEXT NOT NULL DEFAULT 'active',
+    -- Lifecycle
+    status BOOLEAN NOT NULL DEFAULT FALSE,
     
     -- Timestamps (milliseconds since epoch)
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    time_compacting INTEGER,
-    time_archived INTEGER
+    updated_at INTEGER NOT NULL
 );
 "#;
 
@@ -166,7 +162,6 @@ CREATE TABLE IF NOT EXISTS session_shares (
 /// Create indexes for better query performance
 pub const CREATE_INDEXES: &str = r#"
 -- Session indexes
-CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);

@@ -668,14 +668,39 @@ export function handleSSEEvent(_name: string, payload: unknown) {
     case "permission.requested": {
       if (eventSessionId === state.selectedSession) {
         const info = event.info as Record<string, unknown> | undefined;
+        const input = (info?.input as Record<string, unknown> | undefined) ?? undefined;
+        const metadata =
+          (input?.metadata as Record<string, unknown> | undefined) ?? undefined;
+
+        const permission =
+          (input?.permission as string | undefined) ||
+          (info?.tool as string | undefined) ||
+          (info?.permission as string | undefined);
+
+        const patterns = Array.isArray(input?.patterns)
+          ? (input?.patterns as string[])
+          : Array.isArray(info?.patterns)
+            ? (info?.patterns as string[])
+            : undefined;
+
+        const command =
+          (metadata?.command as string | undefined) ||
+          (info?.command as string | undefined);
+
+        const filepath =
+          (metadata?.filepath as string | undefined) ||
+          (metadata?.filePath as string | undefined) ||
+          (metadata?.path as string | undefined) ||
+          (info?.filepath as string | undefined);
+
         setState("activePermissionInteraction", {
           permission_id: event.permissionID as string,
           session_id: eventSessionId,
           message: (info?.message ?? info?.description) as string | undefined,
-          permission: info?.permission as string | undefined,
-          command: info?.command as string | undefined,
-          filepath: info?.filepath as string | undefined,
-          patterns: info?.patterns as string[] | undefined,
+          permission,
+          command,
+          filepath,
+          patterns,
         });
       }
       break;

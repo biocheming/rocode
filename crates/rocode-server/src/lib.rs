@@ -11,7 +11,6 @@ pub(crate) mod runtime_control;
 pub mod server;
 pub(crate) mod session_runtime;
 pub mod stage_event_log;
-pub mod web;
 pub mod worktree;
 
 pub use error::*;
@@ -20,5 +19,4 @@ pub use oauth::*;
 pub use pty::*;
 pub use routes::*;
 pub use server::*;
-pub use web::*;
 pub use worktree::*;

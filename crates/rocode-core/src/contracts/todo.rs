@@ -17,9 +17,7 @@ pub mod keys {
 /// Canonical todo status strings used across the tool protocol and UI.
 ///
 /// Wire format: snake_case strings (e.g. `"in_progress"`).
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumString,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumString)]
 #[serde(rename_all = "snake_case")]
 #[strum(ascii_case_insensitive)]
 pub enum TodoStatus {
@@ -63,9 +61,7 @@ impl TodoStatus {
 /// Canonical todo priority strings.
 ///
 /// Wire format: lowercase strings (`"high"`, `"medium"`, `"low"`).
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumString,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumString)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum TodoPriority {

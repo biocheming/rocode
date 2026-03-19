@@ -964,7 +964,7 @@ mod tests {
 
     #[test]
     fn persisted_subsessions_roundtrip_via_session_metadata() {
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let mut map = HashMap::new();
         map.insert(
             "task_explore_1".to_string(),
@@ -1033,7 +1033,7 @@ mod tests {
         let tool_registry = Arc::new(rocode_tool::ToolRegistry::new());
         tool_registry.register(SyntheticAttachmentTool).await;
 
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let sid = session.id.clone();
         session.messages.push(SessionMessage::user(
             sid.clone(),
@@ -1140,7 +1140,7 @@ mod tests {
 
     #[test]
     fn mcp_tools_from_session_reads_runtime_metadata() {
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         session.metadata.insert(
             "mcp_tools".to_string(),
             serde_json::json!([{

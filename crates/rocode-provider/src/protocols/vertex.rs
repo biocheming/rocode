@@ -89,7 +89,7 @@ impl VertexProtocol {
                     if let Content::Text(text) = msg.content {
                         system_instruction = Some(VertexContent {
                             parts: vec![VertexPart::text(&text)],
-                            role: "user".to_string(),
+                            role: VertexRole::User,
                         });
                     }
                 }
@@ -97,14 +97,14 @@ impl VertexProtocol {
                     let parts = content_to_parts(&msg.content);
                     contents.push(VertexContent {
                         parts,
-                        role: "user".to_string(),
+                        role: VertexRole::User,
                     });
                 }
                 Role::Assistant => {
                     let parts = content_to_parts(&msg.content);
                     contents.push(VertexContent {
                         parts,
-                        role: "model".to_string(),
+                        role: VertexRole::Model,
                     });
                 }
                 Role::Tool => {
@@ -120,7 +120,7 @@ impl VertexProtocol {
                         if !vertex_parts.is_empty() {
                             contents.push(VertexContent {
                                 parts: vertex_parts,
-                                role: "user".to_string(),
+                                role: VertexRole::User,
                             });
                         }
                     }
@@ -293,9 +293,16 @@ struct VertexRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum VertexRole {
+    User,
+    Model,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct VertexContent {
     parts: Vec<VertexPart>,
-    role: String,
+    role: VertexRole,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

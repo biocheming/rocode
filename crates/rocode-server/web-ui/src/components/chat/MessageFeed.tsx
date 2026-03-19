@@ -9,7 +9,7 @@ import styles from "./MessageFeed.module.css";
 export interface FeedMessage {
   id: string;
   kind: string;
-  role?: string;
+  role?: "user" | "assistant" | "system";
   title?: string;
   text: string;
   tone?: string;

@@ -5,13 +5,14 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState},
     Frame,
 };
+use rocode_message::MessageRole;
 
 use crate::theme::Theme;
 
 #[derive(Clone, Debug)]
 pub struct ForkEntry {
     pub message_id: String,
-    pub role: String,
+    pub role: MessageRole,
     pub preview: String,
     pub timestamp: String,
 }
@@ -129,10 +130,11 @@ impl ForkDialog {
             .entries
             .iter()
             .map(|entry| {
-                let role_icon = match entry.role.as_str() {
-                    "user" => "[U]",
-                    "assistant" => "[A]",
-                    _ => "[S]",
+                let role_icon = match entry.role {
+                    MessageRole::User => "[U]",
+                    MessageRole::Assistant => "[A]",
+                    MessageRole::Tool => "[T]",
+                    MessageRole::System => "[S]",
                 };
                 ListItem::new(Line::from(vec![
                     Span::styled(

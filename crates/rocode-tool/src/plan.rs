@@ -1,11 +1,10 @@
 use async_trait::async_trait;
 use rocode_core::contracts::{
-    output_blocks::MessageRoleWire,
-    session::MessagePartTypeWire,
     task::metadata_keys as task_metadata_keys,
     tools::{arg_keys as tool_arg_keys, BuiltinToolName},
     wire::aliases as wire_aliases,
 };
+use rocode_message::{MessageRole, PartKind};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -68,7 +67,7 @@ async fn create_user_message_with_part(
     // Build the MessageV2.User info matching the TS MessageInfo::User shape
     let user_msg = serde_json::to_value(UserMessageWire {
         id: message_id.clone(),
-        role: MessageRoleWire::User.as_str(),
+        role: MessageRole::User.as_str(),
         time: MessageTime { created: now },
         agent: agent.to_string(),
         session_id: ctx.session_id.clone(),
@@ -82,7 +81,7 @@ async fn create_user_message_with_part(
     // Build the synthetic text part matching the TS MessageV2.TextPart shape
     let text_part = serde_json::to_value(TextPartWire {
         id: part_id,
-        part_type: MessagePartTypeWire::Text.as_str(),
+        part_type: PartKind::Text.as_str(),
         text: text.to_string(),
         synthetic: true,
         message_id,

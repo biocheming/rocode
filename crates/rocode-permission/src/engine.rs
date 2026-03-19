@@ -5,11 +5,12 @@ use std::collections::HashMap;
 use rocode_plugin::{HookContext, HookEvent};
 
 use crate::matching::wildcard_match;
+use crate::{PermissionHookStatus, PermissionKind, PermissionReply};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionInfo {
     pub id: String,
-    pub permission_type: String,
+    pub permission_type: PermissionKind,
     pub pattern: Option<Pattern>,
     pub session_id: String,
     pub message_id: String,
@@ -31,12 +32,7 @@ pub enum Pattern {
     Multiple(Vec<String>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Response {
-    Once,
-    Always,
-    Reject,
-}
+pub type Response = PermissionReply;
 
 #[derive(Debug, Clone)]
 pub struct PendingPermission {
@@ -71,7 +67,7 @@ impl PermissionEngine {
         result
     }
 
-    fn to_keys(pattern: Option<&Pattern>, permission_type: &str) -> Vec<String> {
+    fn to_keys(pattern: Option<&Pattern>, permission_type: &PermissionKind) -> Vec<String> {
         match pattern {
             None => vec![permission_type.to_string()],
             Some(Pattern::Single(s)) => vec![s.clone()],
@@ -89,7 +85,7 @@ impl PermissionEngine {
         &self,
         session_id: &str,
         pattern: Option<&Pattern>,
-        permission_type: &str,
+        permission_type: &PermissionKind,
     ) -> bool {
         let empty = HashMap::new();
         let approved_for_session = self.approved.get(session_id).unwrap_or(&empty);
@@ -108,15 +104,21 @@ impl PermissionEngine {
         // Plugin hook: permission.ask — plugins may decide "ask" | "deny" | "allow".
         let mut hook_ctx = HookContext::new(HookEvent::PermissionAsk)
             .with_session(&session_id)
-            .with_data("permission_type", serde_json::json!(&info.permission_type))
+            .with_data(
+                "permission_type",
+                serde_json::json!(info.permission_type.as_str()),
+            )
             .with_data("permission_id", serde_json::json!(&permission_id))
             .with_data("permission", serde_json::json!(&info))
-            .with_data("status", serde_json::json!("ask"));
+            .with_data(
+                "status",
+                serde_json::json!(PermissionHookStatus::Ask.as_str()),
+            );
         if let Some(call_id) = &info.call_id {
             hook_ctx = hook_ctx.with_data("call_id", serde_json::json!(call_id));
         }
 
-        let mut status = "ask".to_string();
+        let mut status = PermissionHookStatus::Ask;
         let hook_outputs = rocode_plugin::trigger_collect(hook_ctx).await;
         for output in hook_outputs {
             let Some(payload) = output.payload.as_ref() else {
@@ -127,16 +129,16 @@ impl PermissionEngine {
             }
         }
 
-        match status.as_str() {
-            "allow" => return Ok(()),
-            "deny" => {
+        match status {
+            PermissionHookStatus::Allow => return Ok(()),
+            PermissionHookStatus::Deny => {
                 return Err(PermissionError::Rejected {
                     session_id: session_id.clone(),
                     permission_id: permission_id.clone(),
                     tool_call_id: info.call_id.clone(),
                 });
             }
-            _ => {}
+            PermissionHookStatus::Ask => {}
         }
 
         self.pending
@@ -161,7 +163,7 @@ impl PermissionEngine {
             PermissionError::NotFound(session_id.to_string(), permission_id.to_string())
         })?;
 
-        if response == Response::Reject {
+        if response == PermissionReply::Reject {
             return Err(PermissionError::Rejected {
                 session_id: session_id.to_string(),
                 permission_id: permission_id.to_string(),
@@ -169,7 +171,7 @@ impl PermissionEngine {
             });
         }
 
-        if response == Response::Always {
+        if response == PermissionReply::Always {
             let approved_session = self.approved.entry(session_id.to_string()).or_default();
             let approve_keys = Self::to_keys(
                 match_item.info.pattern.as_ref(),
@@ -212,13 +214,10 @@ fn parse_hook_payload<T: DeserializeOwned>(payload: &serde_json::Value) -> Optio
     })
 }
 
-fn extract_permission_status(payload: &serde_json::Value) -> Option<String> {
+fn extract_permission_status(payload: &serde_json::Value) -> Option<PermissionHookStatus> {
     #[derive(Debug, Deserialize, Default)]
     struct PermissionStatusWire {
-        #[serde(
-            default,
-            deserialize_with = "rocode_types::deserialize_opt_string_lossy"
-        )]
+        #[serde(default, deserialize_with = "deserialize_opt_string_lossy")]
         status: Option<String>,
     }
 
@@ -226,8 +225,22 @@ fn extract_permission_status(payload: &serde_json::Value) -> Option<String> {
     parsed
         .status
         .as_deref()
-        .filter(|status| matches!(*status, "ask" | "deny" | "allow"))
-        .map(ToString::to_string)
+        .and_then(PermissionHookStatus::parse)
+}
+
+fn deserialize_opt_string_lossy<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(value)) => Some(value),
+        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+        Some(serde_json::Value::Bool(value)) => Some(value.to_string()),
+        _ => None,
+    })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -288,7 +301,10 @@ mod tests {
                 "status": " allow "
             }
         });
-        assert_eq!(extract_permission_status(&payload).as_deref(), Some("allow"));
+        assert_eq!(
+            extract_permission_status(&payload).as_deref(),
+            Some("allow")
+        );
     }
 
     #[test]

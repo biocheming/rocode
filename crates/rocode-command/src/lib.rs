@@ -298,7 +298,10 @@ impl CommandRegistry {
             HookContext::new(HookEvent::CommandExecuteBefore)
                 .with_data("command", to_value_or_null(hook_payload.command))
                 .with_data("source", to_value_or_null(hook_payload.source.clone()))
-                .with_data("arguments", to_value_or_null(hook_payload.arguments.clone()))
+                .with_data(
+                    "arguments",
+                    to_value_or_null(hook_payload.arguments.clone()),
+                )
                 .with_data("parts", to_value_or_null(&hook_payload.parts)),
         )
         .await;

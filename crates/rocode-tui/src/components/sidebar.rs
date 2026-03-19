@@ -471,9 +471,10 @@ impl Sidebar {
                     McpConnectionStatus::Disabled => {
                         (McpConnectionStatusWire::Disabled.as_str(), theme.text_muted)
                     }
-                    McpConnectionStatus::Disconnected => {
-                        (McpConnectionStatusWire::Disconnected.as_str(), theme.text_muted)
-                    }
+                    McpConnectionStatus::Disconnected => (
+                        McpConnectionStatusWire::Disconnected.as_str(),
+                        theme.text_muted,
+                    ),
                 };
                 mcp_lines.push(Line::from(vec![
                     Span::styled("• ", Style::default().fg(color)),

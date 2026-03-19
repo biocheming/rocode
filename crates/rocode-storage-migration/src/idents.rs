@@ -27,8 +27,6 @@ pub enum Sessions {
     Status,
     CreatedAt,
     UpdatedAt,
-    TimeCompacting,
-    TimeArchived,
 }
 
 #[derive(DeriveIden)]
@@ -105,4 +103,3 @@ pub enum SessionShares {
     Url,
     CreatedAt,
 }
-

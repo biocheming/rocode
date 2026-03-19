@@ -1,5 +1,5 @@
-use serde_json::json;
 use rocode_core::contracts::todo::{TodoPriority, TodoStatus};
+use serde_json::json;
 
 pub fn plan_start_work_command(plan_path: Option<&str>) -> String {
     let Some(plan_path) = plan_path.map(str::trim).filter(|value| !value.is_empty()) else {

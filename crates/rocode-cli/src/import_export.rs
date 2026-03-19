@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use rocode_session::{MessagePart, Session, SessionMessage};
 use rocode_storage::{Database, MessageRepository, SessionRepository};
-use rocode_types::{MessagePart, Session, SessionMessage};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct SessionExportEntry {

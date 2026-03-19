@@ -37,7 +37,7 @@ pub use diff::{DiffLine, DiffLineType, DiffMode, DiffView};
 pub use home::HomeView;
 pub use logo::{exit_logo_lines, Logo};
 pub use markdown::{CodeBlock, MarkdownBlock, MarkdownRenderer};
-pub use permission::{PermissionAction, PermissionPrompt, PermissionRequest, PermissionType};
+pub use permission::{PermissionAction, PermissionPrompt, PermissionRequest};
 pub use prompt::{Prompt, PromptStashEntry};
 pub use question::{
     QuestionOption, QuestionPrompt, QuestionRequest, QuestionType, OTHER_OPTION_ID,

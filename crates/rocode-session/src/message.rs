@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use rocode_core::contracts::agent_tasks::AgentTaskStatusKind;
+pub use rocode_message::MessageRole;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -28,14 +29,6 @@ pub struct SessionMessage {
     /// Set during streaming when FinishStep is received.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finish: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum MessageRole {
-    User,
-    Assistant,
-    System,
-    Tool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

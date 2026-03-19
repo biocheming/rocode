@@ -139,6 +139,14 @@ pub(super) async fn session_prompt(
         ));
     };
 
+    if !state
+        .ensure_session_hydrated(&id)
+        .await
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?
+    {
+        return Err(ApiError::SessionNotFound(id));
+    }
+
     let session_directory = {
         let sessions = state.sessions.lock().await;
         let Some(session) = sessions.get(&id) else {
@@ -677,6 +685,7 @@ pub(super) async fn session_prompt(
                 let mut sessions = task_state.sessions.lock().await;
                 sessions.update(session.clone());
             }
+            task_state.touch_session_cache(&session_id).await;
             broadcast_session_updated(
                 task_state.as_ref(),
                 session_id.clone(),
@@ -706,27 +715,25 @@ pub(super) async fn session_prompt(
                     notify.notified().await;
                     // Drain: grab the latest snapshot, leaving None.
                     let snapshot = latest.lock().await.take();
-                    let Some(snapshot) = snapshot else { continue };
+                    let Some(snapshot) = snapshot else {
+                        continue;
+                    };
                     if let (Some(s_repo), Some(m_repo)) = (&s_repo, &m_repo) {
-                        match serde_json::to_value(&snapshot) {
-                            Ok(val) => match serde_json::from_value::<rocode_types::Session>(val) {
-                                Ok(mut stored) => {
-                                    let messages = std::mem::take(&mut stored.messages);
-                                    if let Err(e) = s_repo.upsert(&stored).await {
-                                        tracing::warn!(session_id = %stored.id, %e, "incremental session upsert failed");
-                                    }
-                                    for msg in messages {
-                                        if let Err(e) = m_repo.upsert(&msg).await {
-                                            tracing::warn!(message_id = %msg.id, %e, "incremental message upsert failed");
-                                        }
+                        match rocode_session::SessionPersistPlan::from_snapshot(snapshot, true) {
+                            rocode_session::SessionPersistPlan::MetadataOnly(session) => {
+                                if let Err(e) = s_repo.upsert(&session).await {
+                                    tracing::warn!(session_id = %session.id, %e, "incremental session upsert failed");
+                                }
+                            }
+                            rocode_session::SessionPersistPlan::Full { session, messages } => {
+                                if let Err(e) = s_repo.upsert(&session).await {
+                                    tracing::warn!(session_id = %session.id, %e, "incremental session upsert failed");
+                                }
+                                for msg in messages {
+                                    if let Err(e) = m_repo.upsert(&msg).await {
+                                        tracing::warn!(message_id = %msg.id, %e, "incremental message upsert failed");
                                     }
                                 }
-                                Err(e) => {
-                                    tracing::warn!(session_id = %snapshot.id, %e, "incremental persist: failed to deserialize session snapshot");
-                                }
-                            },
-                            Err(e) => {
-                                tracing::warn!(session_id = %snapshot.id, %e, "incremental persist: failed to serialize session snapshot");
                             }
                         }
                     }
@@ -740,6 +747,7 @@ pub(super) async fn session_prompt(
                     let mut sessions = update_state.sessions.lock().await;
                     sessions.update(snapshot.clone());
                 }
+                update_state.touch_session_cache(&snapshot.id).await;
 
                 *persist_latest.lock().await = Some(snapshot);
                 persist_notify.notify_one();
@@ -941,6 +949,7 @@ pub(super) async fn session_prompt(
             let mut sessions = task_state.sessions.lock().await;
             sessions.update(session);
         }
+        task_state.touch_session_cache(&session_id).await;
         broadcast_session_updated(task_state.as_ref(), session_id.clone(), "prompt.final");
         // Normal path reached — defuse the guard so we handle cleanup explicitly.
         _idle_guard.defuse();

@@ -96,14 +96,12 @@ impl MigrationTrait for Migration {
                     )
                     .col(
                         ColumnDef::new(Sessions::Status)
-                            .string()
+                            .boolean()
                             .not_null()
-                            .default("active"),
+                            .default(false),
                     )
                     .col(ColumnDef::new(Sessions::CreatedAt).big_integer().not_null())
                     .col(ColumnDef::new(Sessions::UpdatedAt).big_integer().not_null())
-                    .col(ColumnDef::new(Sessions::TimeCompacting).big_integer())
-                    .col(ColumnDef::new(Sessions::TimeArchived).big_integer())
                     .to_owned(),
             )
             .await
@@ -115,4 +113,3 @@ impl MigrationTrait for Migration {
             .await
     }
 }
-

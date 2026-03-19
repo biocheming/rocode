@@ -652,7 +652,7 @@ mod tests {
 
     #[test]
     fn abort_pending_tool_calls_marks_unresolved_calls_as_error() {
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let sid = session.id.clone();
 
         // Add a user message
@@ -695,7 +695,7 @@ mod tests {
 
     #[test]
     fn abort_pending_tool_calls_noop_when_all_resolved() {
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let sid = session.id.clone();
 
         session
@@ -723,7 +723,7 @@ mod tests {
 
     #[test]
     fn abort_pending_tool_calls_handles_multiple_pending() {
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let sid = session.id.clone();
 
         session
@@ -828,7 +828,7 @@ mod tests {
 
     #[test]
     fn abort_pending_tool_calls_sanitizes_pending_tool_input_for_replay() {
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let sid = session.id.clone();
         session
             .messages

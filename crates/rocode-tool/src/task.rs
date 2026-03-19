@@ -484,7 +484,8 @@ impl Tool for TaskTool {
                 provider_id: model.provider_id,
             },
             loaded_skills: (!loaded_skill_names.is_empty()).then_some(loaded_skill_names.clone()),
-            loaded_skill_count: (!loaded_skill_names.is_empty()).then_some(loaded_skill_names.len()),
+            loaded_skill_count: (!loaded_skill_names.is_empty())
+                .then_some(loaded_skill_names.len()),
         };
         let metadata = serde_json::to_value(metadata_wire)
             .ok()

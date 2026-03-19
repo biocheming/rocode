@@ -34,4 +34,3 @@ impl Related<super::sessions::Entity> for Entity {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
-

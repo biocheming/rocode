@@ -2,7 +2,6 @@ use rocode_core::bus::{Bus, BusEventDef};
 use rocode_core::contracts::events::BusEventName;
 use rocode_core::contracts::todo::keys as todo_keys;
 use rocode_core::contracts::wire::keys as wire_keys;
-use rocode_storage::TodoRepository;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -16,26 +15,15 @@ pub struct TodoInfo {
 
 pub struct TodoManager {
     state: Arc<RwLock<HashMap<String, Vec<TodoInfo>>>>,
-    db: Option<Arc<TodoRepository>>,
     bus: Option<Arc<Bus>>,
 }
 
-pub static TODO_UPDATED_EVENT: BusEventDef =
-    BusEventDef::new(BusEventName::TodoUpdated.as_str());
+pub static TODO_UPDATED_EVENT: BusEventDef = BusEventDef::new(BusEventName::TodoUpdated.as_str());
 
 impl TodoManager {
     pub fn new() -> Self {
         Self {
             state: Arc::new(RwLock::new(HashMap::new())),
-            db: None,
-            bus: None,
-        }
-    }
-
-    pub fn with_database(conn: rocode_storage::StorageConnection) -> Self {
-        Self {
-            state: Arc::new(RwLock::new(HashMap::new())),
-            db: Some(Arc::new(TodoRepository::new(conn))),
             bus: None,
         }
     }
@@ -43,26 +31,12 @@ impl TodoManager {
     pub fn with_bus(bus: Arc<Bus>) -> Self {
         Self {
             state: Arc::new(RwLock::new(HashMap::new())),
-            db: None,
             bus: Some(bus),
         }
     }
 
     pub async fn update(&self, session_id: &str, todos: Vec<TodoInfo>) {
         let todos_payload = todos.clone();
-        if let Some(ref db) = self.db {
-            let _ = db.delete_for_session(session_id).await;
-            for (i, todo) in todos.iter().enumerate() {
-                let item = rocode_storage::TodoItem {
-                    id: format!("{}_{}", session_id, i),
-                    content: todo.content.clone(),
-                    status: todo.status.clone(),
-                    priority: todo.priority.clone(),
-                    position: i as i64,
-                };
-                let _ = db.upsert(session_id, &item).await;
-            }
-        }
 
         let mut state = self.state.write().await;
         if todos.is_empty() {
@@ -84,28 +58,11 @@ impl TodoManager {
     }
 
     pub async fn get(&self, session_id: &str) -> Vec<TodoInfo> {
-        if let Some(ref db) = self.db {
-            if let Ok(items) = db.list_for_session(session_id).await {
-                return items
-                    .into_iter()
-                    .map(|item| TodoInfo {
-                        content: item.content,
-                        status: item.status,
-                        priority: item.priority,
-                    })
-                    .collect();
-            }
-        }
-
         let state = self.state.read().await;
         state.get(session_id).cloned().unwrap_or_default()
     }
 
     pub async fn clear(&self, session_id: &str) {
-        if let Some(ref db) = self.db {
-            let _ = db.delete_for_session(session_id).await;
-        }
-
         let mut state = self.state.write().await;
         state.remove(session_id);
     }
@@ -116,17 +73,6 @@ impl TodoManager {
             if index < todos.len() {
                 todos[index].status = status.to_string();
 
-                if let Some(ref db) = self.db {
-                    let item = rocode_storage::TodoItem {
-                        id: format!("{}_{}", session_id, index),
-                        content: todos[index].content.clone(),
-                        status: status.to_string(),
-                        priority: todos[index].priority.clone(),
-                        position: index as i64,
-                    };
-                    let _ = db.upsert(session_id, &item).await;
-                }
-
                 return true;
             }
         }
@@ -135,20 +81,10 @@ impl TodoManager {
 
     pub async fn add(&self, session_id: &str, todo: TodoInfo) {
         let mut state = self.state.write().await;
-        let todos = state.entry(session_id.to_string()).or_insert_with(Vec::new);
-        let position = todos.len();
-        todos.push(todo.clone());
-
-        if let Some(ref db) = self.db {
-            let item = rocode_storage::TodoItem {
-                id: format!("{}_{}", session_id, position),
-                content: todo.content,
-                status: todo.status,
-                priority: todo.priority,
-                position: position as i64,
-            };
-            let _ = db.upsert(session_id, &item).await;
-        }
+        state
+            .entry(session_id.to_string())
+            .or_insert_with(Vec::new)
+            .push(todo);
     }
 
     pub async fn remove(&self, session_id: &str, index: usize) -> bool {
@@ -156,11 +92,6 @@ impl TodoManager {
         if let Some(todos) = state.get_mut(session_id) {
             if index < todos.len() {
                 todos.remove(index);
-
-                if let Some(ref db) = self.db {
-                    let todo_id = format!("{}_{}", session_id, index);
-                    let _ = db.delete(session_id, &todo_id).await;
-                }
 
                 return true;
             }

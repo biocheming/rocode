@@ -202,7 +202,9 @@ impl App {
                         ("●", format!("{}  {}", task.status.kind().as_str(), steps))
                     }
                     AgentTaskStatus::Cancelled => ("✗", task.status.kind().as_str().to_string()),
-                    AgentTaskStatus::Failed { .. } => ("✗", task.status.kind().as_str().to_string()),
+                    AgentTaskStatus::Failed { .. } => {
+                        ("✗", task.status.kind().as_str().to_string())
+                    }
                 };
                 let elapsed = now - task.started_at;
                 let elapsed_str = if elapsed < 60 {
@@ -244,7 +246,9 @@ impl App {
         match global_task_registry().get(id) {
             Some(task) => {
                 let (status_label, step_info) = match &task.status {
-                    AgentTaskStatus::Pending => (task.status.kind().as_str().to_string(), String::new()),
+                    AgentTaskStatus::Pending => {
+                        (task.status.kind().as_str().to_string(), String::new())
+                    }
                     AgentTaskStatus::Running { step } => {
                         let steps = task
                             .max_steps
@@ -252,19 +256,17 @@ impl App {
                             .unwrap_or(format!(" (step {}/?)", step));
                         (task.status.kind().as_str().to_string(), steps)
                     }
-                    AgentTaskStatus::Completed { steps } => {
-                        (
-                            task.status.kind().as_str().to_string(),
-                            format!(" ({} steps)", steps),
-                        )
+                    AgentTaskStatus::Completed { steps } => (
+                        task.status.kind().as_str().to_string(),
+                        format!(" ({} steps)", steps),
+                    ),
+                    AgentTaskStatus::Cancelled => {
+                        (task.status.kind().as_str().to_string(), String::new())
                     }
-                    AgentTaskStatus::Cancelled => (task.status.kind().as_str().to_string(), String::new()),
-                    AgentTaskStatus::Failed { error } => {
-                        (
-                            format!("{}: {}", task.status.kind().as_str(), error),
-                            String::new(),
-                        )
-                    }
+                    AgentTaskStatus::Failed { error } => (
+                        format!("{}: {}", task.status.kind().as_str(), error),
+                        String::new(),
+                    ),
                 };
                 let elapsed = now - task.started_at;
                 let elapsed_str = if elapsed < 60 {

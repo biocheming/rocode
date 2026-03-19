@@ -8,71 +8,14 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
+use rocode_permission::PermissionKind;
 
 use crate::theme::Theme;
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum PermissionType {
-    ReadFile,
-    WriteFile,
-    Edit,
-    ExecuteCommand,
-    Bash,
-    NetworkRequest,
-    Glob,
-    Grep,
-    List,
-    Task,
-    WebFetch,
-    WebSearch,
-    CodeSearch,
-    ExternalDirectory,
-}
-
-impl PermissionType {
-    pub fn label(&self) -> &'static str {
-        match self {
-            PermissionType::ReadFile => "Read file",
-            PermissionType::WriteFile => "Write file",
-            PermissionType::Edit => "Edit file",
-            PermissionType::ExecuteCommand => "Execute command",
-            PermissionType::Bash => "Run shell command",
-            PermissionType::NetworkRequest => "Network request",
-            PermissionType::Glob => "Glob search",
-            PermissionType::Grep => "Grep search",
-            PermissionType::List => "List directory",
-            PermissionType::Task => "Task operation",
-            PermissionType::WebFetch => "Fetch web content",
-            PermissionType::WebSearch => "Web search",
-            PermissionType::CodeSearch => "Code search",
-            PermissionType::ExternalDirectory => "External directory access",
-        }
-    }
-
-    pub fn icon(&self) -> &'static str {
-        match self {
-            PermissionType::ReadFile => "[R]",
-            PermissionType::WriteFile => "[W]",
-            PermissionType::Edit => "[E]",
-            PermissionType::ExecuteCommand => "[X]",
-            PermissionType::Bash => "[!]",
-            PermissionType::NetworkRequest => "[N]",
-            PermissionType::Glob => "[G]",
-            PermissionType::Grep => "[S]",
-            PermissionType::List => "[L]",
-            PermissionType::Task => "[T]",
-            PermissionType::WebFetch => "[F]",
-            PermissionType::WebSearch => "[Q]",
-            PermissionType::CodeSearch => "[C]",
-            PermissionType::ExternalDirectory => "[D]",
-        }
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct PermissionRequest {
     pub id: String,
-    pub permission_type: PermissionType,
+    pub permission: PermissionKind,
     pub resource: String,
     pub tool_name: String,
 }
@@ -246,8 +189,8 @@ impl PermissionPrompt {
 
         let title = format!(
             "{} {} - Permission Request",
-            request.permission_type.icon(),
-            request.permission_type.label()
+            request.permission.icon(),
+            request.permission.label()
         );
 
         let content = vec![

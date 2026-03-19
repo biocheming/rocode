@@ -512,7 +512,7 @@ mod tests {
     #[tokio::test]
     async fn create_user_message_decodes_text_data_url() {
         let prompt = SessionPrompt::default();
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let input = PromptInput {
             session_id: session.id.clone(),
             message_id: None,
@@ -552,7 +552,7 @@ mod tests {
     #[tokio::test]
     async fn create_user_message_file_url_with_range_reads_only_requested_lines() {
         let prompt = SessionPrompt::default();
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let temp_dir = tempfile::tempdir().expect("tempdir should create");
         let file_path = temp_dir.path().join("sample.rs");
         let content = (1..=30)
@@ -623,7 +623,7 @@ mod tests {
             .await
             .expect("file should write");
 
-        let mut session = Session::new("proj", project_root.to_string_lossy().to_string());
+        let mut session = Session::new(project_root.to_string_lossy().to_string());
         let file_url = url::Url::from_file_path(&file_path)
             .expect("file path should convert")
             .to_string();
@@ -687,7 +687,7 @@ mod tests {
             .await
             .expect("file b should write");
 
-        let mut session = Session::new("proj", project_root.to_string_lossy().to_string());
+        let mut session = Session::new(project_root.to_string_lossy().to_string());
         let input = PromptInput {
             session_id: session.id.clone(),
             message_id: None,
@@ -756,7 +756,7 @@ mod tests {
             .await
             .expect("file should write");
 
-        let mut session = Session::new("proj", project_root.to_string_lossy().to_string());
+        let mut session = Session::new(project_root.to_string_lossy().to_string());
         let file_url = url::Url::from_file_path(&file_path)
             .expect("file path should convert")
             .to_string();

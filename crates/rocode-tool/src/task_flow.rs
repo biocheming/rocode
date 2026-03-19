@@ -411,7 +411,10 @@ async fn execute_delegate(
     };
 
     let delegated = TaskTool::new()
-        .execute(serde_json::to_value(task_args).unwrap_or(serde_json::Value::Null), ctx)
+        .execute(
+            serde_json::to_value(task_args).unwrap_or(serde_json::Value::Null),
+            ctx,
+        )
         .await?;
 
     let delegated_metadata = delegated_task_metadata_wire(&delegated.metadata);

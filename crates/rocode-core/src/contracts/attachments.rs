@@ -61,4 +61,3 @@ impl AttachmentTypeWire {
         value.trim().parse().ok()
     }
 }
-

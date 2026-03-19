@@ -2,6 +2,8 @@ use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub use rocode_message::MessageRole as Role;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatRequest {
     pub model: String,
@@ -61,15 +63,6 @@ where
 {
     let value: Option<Content> = Option::deserialize(deserializer)?;
     Ok(value.unwrap_or_else(|| Content::Text(String::new())))
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Role {
-    System,
-    User,
-    Assistant,
-    Tool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

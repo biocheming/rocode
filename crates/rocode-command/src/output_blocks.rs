@@ -3,10 +3,8 @@ use crate::cli_panel::truncate_display;
 use crate::cli_style::CliStyle;
 pub use rocode_content::output_blocks::*;
 use rocode_core::contracts::agent_tasks::AgentTaskStatusKind;
+use rocode_core::contracts::output_blocks::{BlockToneWire, DisplayPreviewKindWire, ToolPhaseWire};
 use rocode_core::contracts::scheduler::{SchedulerDecisionSectionSpacing, SchedulerStageStatus};
-use rocode_core::contracts::output_blocks::{
-    BlockToneWire, DisplayPreviewKindWire, ToolPhaseWire,
-};
 use rocode_core::contracts::tools::BuiltinToolName;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

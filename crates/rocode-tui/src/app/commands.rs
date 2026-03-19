@@ -558,8 +558,6 @@ mod tests {
     fn session_target_matching_accepts_id_prefix_and_title() {
         let session = crate::api::SessionInfo {
             id: "sess_abc123".to_string(),
-            slug: "sess_abc123".to_string(),
-            project_id: "project".to_string(),
             directory: ".".to_string(),
             parent_id: None,
             title: "Atlas Planning".to_string(),
@@ -567,8 +565,6 @@ mod tests {
             time: crate::api::SessionTimeInfo {
                 created: 0,
                 updated: 0,
-                compacting: None,
-                archived: None,
             },
             revert: None,
             metadata: None,

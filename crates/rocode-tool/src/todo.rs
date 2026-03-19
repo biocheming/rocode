@@ -103,7 +103,10 @@ impl Tool for TodoReadTool {
             .collect();
 
         let mut metadata = std::collections::HashMap::new();
-        metadata.insert(todo_keys::TODOS.to_string(), serde_json::Value::Array(todos_json));
+        metadata.insert(
+            todo_keys::TODOS.to_string(),
+            serde_json::Value::Array(todos_json),
+        );
         metadata.insert(
             todo_keys::COUNT.to_string(),
             serde_json::Value::Number((todos.len() as u64).into()),
@@ -252,7 +255,10 @@ impl Tool for TodoWriteTool {
             .collect();
 
         let mut metadata = std::collections::HashMap::new();
-        metadata.insert(todo_keys::TODOS.to_string(), serde_json::Value::Array(todos_json));
+        metadata.insert(
+            todo_keys::TODOS.to_string(),
+            serde_json::Value::Array(todos_json),
+        );
         metadata.insert(
             todo_keys::COUNT.to_string(),
             serde_json::Value::Number((new_todos.len() as u64).into()),

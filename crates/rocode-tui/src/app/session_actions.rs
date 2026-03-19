@@ -330,12 +330,6 @@ impl App {
             .map(|msgs| {
                 msgs.iter()
                     .map(|m| {
-                        let role = match m.role {
-                            MessageRole::User => "user",
-                            MessageRole::Assistant => "assistant",
-                            MessageRole::System => "system",
-                            MessageRole::Tool => "tool",
-                        };
                         let preview = m
                             .content
                             .chars()
@@ -344,7 +338,7 @@ impl App {
                             .replace('\n', " ");
                         TimelineEntry {
                             message_id: m.id.clone(),
-                            role: role.to_string(),
+                            role: m.role,
                             preview,
                             timestamp: m.created_at.format("%H:%M:%S").to_string(),
                         }
@@ -369,12 +363,6 @@ impl App {
             .map(|msgs| {
                 msgs.iter()
                     .map(|m| {
-                        let role = match m.role {
-                            MessageRole::User => "user",
-                            MessageRole::Assistant => "assistant",
-                            MessageRole::System => "system",
-                            MessageRole::Tool => "tool",
-                        };
                         let preview = m
                             .content
                             .chars()
@@ -383,7 +371,7 @@ impl App {
                             .replace('\n', " ");
                         ForkEntry {
                             message_id: m.id.clone(),
-                            role: role.to_string(),
+                            role: m.role,
                             preview,
                             timestamp: m.created_at.format("%H:%M:%S").to_string(),
                         }

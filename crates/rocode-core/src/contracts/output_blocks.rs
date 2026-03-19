@@ -232,37 +232,6 @@ impl BlockToneWire {
     }
 }
 
-/// Canonical role strings for message blocks.
-///
-/// Wire format: lowercase strings (`"user"`, `"assistant"`, `"system"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString)]
-#[strum(serialize_all = "lowercase", ascii_case_insensitive)]
-pub enum MessageRoleWire {
-    User,
-    Assistant,
-    System,
-}
-
-impl std::fmt::Display for MessageRoleWire {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl MessageRoleWire {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::User => "user",
-            Self::Assistant => "assistant",
-            Self::System => "system",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.trim().parse().ok()
-    }
-}
-
 /// Canonical phase strings for streaming message/reasoning blocks.
 ///
 /// Wire format: lowercase strings (`"start"`, `"delta"`, `"end"`, `"full"`).

@@ -1,12 +1,12 @@
-pub mod attachments;
 pub mod agent_tasks;
+pub mod attachments;
 pub mod events;
 pub mod fs;
 pub mod mcp;
 pub mod output_blocks;
 pub mod patch;
-pub mod plugin_hooks;
 pub mod permission;
+pub mod plugin_hooks;
 pub mod provider;
 pub mod scheduler;
 pub mod session;

@@ -825,7 +825,10 @@ mod tests {
         .with_ask(move |req| {
             let permissions_clone = permissions_clone.clone();
             async move {
-                permissions_clone.lock().await.push(req.permission);
+                permissions_clone
+                    .lock()
+                    .await
+                    .push(req.permission.as_str().to_string());
                 Ok(())
             }
         });

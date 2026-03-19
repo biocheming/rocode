@@ -99,14 +99,16 @@ pub(super) async fn abort_session_execution(
             stage_index: info.stage_index,
         })
         .unwrap_or(serde_json::Value::Null),
-        None if prompt_running || scheduler_running => serde_json::to_value(CancelSessionResponse {
-            aborted: true,
-            target: Some("run"),
-            scheduler_profile: None,
-            stage: None,
-            stage_index: None,
-        })
-        .unwrap_or(serde_json::Value::Null),
+        None if prompt_running || scheduler_running => {
+            serde_json::to_value(CancelSessionResponse {
+                aborted: true,
+                target: Some("run"),
+                scheduler_profile: None,
+                stage: None,
+                stage_index: None,
+            })
+            .unwrap_or(serde_json::Value::Null)
+        }
         None => serde_json::to_value(CancelSessionResponse {
             aborted: false,
             target: None,

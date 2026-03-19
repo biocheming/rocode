@@ -379,7 +379,12 @@ async fn submit_prompt(
 }
 
 async fn clear_prompt(State(state): State<Arc<ServerState>>) -> Result<Json<bool>> {
-    enqueue_tui_request(&state, "/tui/clear-prompt", to_value_or_null(EmptyPayload {})).await;
+    enqueue_tui_request(
+        &state,
+        "/tui/clear-prompt",
+        to_value_or_null(EmptyPayload {}),
+    )
+    .await;
     Ok(Json(true))
 }
 

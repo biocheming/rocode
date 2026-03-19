@@ -1,3 +1,4 @@
+use rocode_permission::{PermissionReply, PermissionRequestInfo};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -160,7 +161,7 @@ pub enum ServerEvent {
             alias = "id"
         )]
         permission_id: String,
-        info: serde_json::Value,
+        info: PermissionRequestInfo,
     },
     #[serde(rename = "permission.resolved", alias = "permission.replied")]
     PermissionResolved {
@@ -174,7 +175,7 @@ pub enum ServerEvent {
             alias = "id"
         )]
         permission_id: String,
-        reply: String,
+        reply: PermissionReply,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         message: Option<String>,
     },

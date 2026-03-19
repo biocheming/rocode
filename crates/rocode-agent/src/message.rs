@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub use rocode_message::MessageRole;
+
 /// An attachment carried by an `AgentMessage` for multimodal content.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Attachment {
@@ -22,14 +24,6 @@ pub struct AgentMessage {
     pub tool_calls: Vec<ToolCall>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<Attachment>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum MessageRole {
-    System,
-    User,
-    Assistant,
-    Tool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

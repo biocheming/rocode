@@ -2,7 +2,6 @@ use serde_json::{Map, Value};
 
 use crate::{HookContext, HookEvent};
 use rocode_core::contracts::plugin_hooks::{aliases as hook_aliases, keys as hook_keys};
-use rocode_core::contracts::permission::PermissionHookStatus;
 use rocode_core::contracts::wire::keys as wire_keys;
 
 /// Build (input, output) JSON payloads for script-style hooks.
@@ -16,7 +15,12 @@ pub(crate) fn hook_io_from_context(context: &HookContext) -> (Value, Value) {
 
     match context.event {
         HookEvent::ToolDefinition => {
-            copy_first(&source, &mut input, hook_keys::TOOL_ID, &[hook_keys::TOOL_ID]);
+            copy_first(
+                &source,
+                &mut input,
+                hook_keys::TOOL_ID,
+                &[hook_keys::TOOL_ID],
+            );
             copy_first(
                 &source,
                 &mut output,
@@ -63,7 +67,12 @@ pub(crate) fn hook_io_from_context(context: &HookContext) -> (Value, Value) {
             copy_first(&source, &mut input, hook_keys::ARGS, &[hook_keys::ARGS]);
             copy_first(&source, &mut input, hook_keys::ERROR, &[hook_keys::ERROR]);
             copy_first(&source, &mut output, hook_keys::TITLE, &[hook_keys::TITLE]);
-            copy_first(&source, &mut output, hook_keys::OUTPUT, &[hook_keys::OUTPUT]);
+            copy_first(
+                &source,
+                &mut output,
+                hook_keys::OUTPUT,
+                &[hook_keys::OUTPUT],
+            );
             copy_first(
                 &source,
                 &mut output,
@@ -312,12 +321,7 @@ pub(crate) fn hook_io_from_context(context: &HookContext) -> (Value, Value) {
                 hook_keys::ARGUMENTS,
                 &[hook_keys::ARGUMENTS],
             );
-            copy_first(
-                &source,
-                &mut input,
-                hook_keys::SOURCE,
-                &[hook_keys::SOURCE],
-            );
+            copy_first(&source, &mut input, hook_keys::SOURCE, &[hook_keys::SOURCE]);
             copy_first(&source, &mut output, hook_keys::PARTS, &[hook_keys::PARTS]);
         }
         HookEvent::PermissionAsk => {
@@ -331,7 +335,10 @@ pub(crate) fn hook_io_from_context(context: &HookContext) -> (Value, Value) {
                 &source,
                 &mut input,
                 hook_keys::PERMISSION_TYPE,
-                &[hook_keys::PERMISSION_TYPE, hook_aliases::PERMISSION_TYPE_CAMEL],
+                &[
+                    hook_keys::PERMISSION_TYPE,
+                    hook_aliases::PERMISSION_TYPE_CAMEL,
+                ],
             );
             copy_first(
                 &source,
@@ -394,24 +401,25 @@ fn synthesize_model(source: &Map<String, Value>) -> Option<Value> {
     let mut model = Map::new();
     model.insert(hook_keys::MODEL_ID.to_string(), model_id.clone());
     model.insert(hook_keys::ID.to_string(), model_id);
-    if let Some(provider_id) =
-        first_value(source, &[hook_keys::PROVIDER_ID, hook_aliases::PROVIDER_ID_SNAKE])
-    {
+    if let Some(provider_id) = first_value(
+        source,
+        &[hook_keys::PROVIDER_ID, hook_aliases::PROVIDER_ID_SNAKE],
+    ) {
         model.insert(hook_keys::PROVIDER_ID.to_string(), provider_id);
     }
     Some(Value::Object(model))
 }
 
 fn synthesize_provider(source: &Map<String, Value>) -> Option<Value> {
-    let provider_id = first_value(source, &[hook_keys::PROVIDER_ID, hook_aliases::PROVIDER_ID_SNAKE])?;
+    let provider_id = first_value(
+        source,
+        &[hook_keys::PROVIDER_ID, hook_aliases::PROVIDER_ID_SNAKE],
+    )?;
     let mut provider = Map::new();
     provider.insert(hook_keys::ID.to_string(), provider_id.clone());
     provider.insert(
         hook_keys::INFO.to_string(),
-        Value::Object(Map::from_iter([(
-            hook_keys::ID.to_string(),
-            provider_id,
-        )])),
+        Value::Object(Map::from_iter([(hook_keys::ID.to_string(), provider_id)])),
     );
     Some(Value::Object(provider))
 }
@@ -444,11 +452,7 @@ fn ensure_array(map: &mut Map<String, Value>, key: &str) {
 fn seed_hook_output(event: HookEvent, output: &mut Map<String, Value>) {
     match event {
         HookEvent::ToolDefinition => {
-            ensure_default(
-                output,
-                hook_keys::DESCRIPTION,
-                Value::String(String::new()),
-            );
+            ensure_default(output, hook_keys::DESCRIPTION, Value::String(String::new()));
             ensure_object(output, hook_keys::PARAMETERS);
         }
         HookEvent::ToolExecuteBefore => {
@@ -491,11 +495,7 @@ fn seed_hook_output(event: HookEvent, output: &mut Map<String, Value>) {
             ensure_array(output, hook_keys::PARTS);
         }
         HookEvent::PermissionAsk => {
-            ensure_default(
-                output,
-                hook_keys::STATUS,
-                Value::String(PermissionHookStatus::Ask.as_str().to_string()),
-            );
+            ensure_default(output, hook_keys::STATUS, Value::String("ask".to_string()));
         }
         _ => {}
     }

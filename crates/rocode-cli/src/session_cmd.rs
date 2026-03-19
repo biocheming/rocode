@@ -38,7 +38,6 @@ pub(crate) async fn handle_session_command(action: SessionCommands) -> anyhow::R
                                 "title": s.title,
                                 "updated": s.time.updated,
                                 "created": s.time.created,
-                                "projectId": s.project_id,
                                 "directory": s.directory
                             })
                         })
@@ -78,9 +77,11 @@ pub(crate) async fn handle_session_command(action: SessionCommands) -> anyhow::R
 
             println!("\nSession: {}", session.id);
             println!("  Title: {}", session.title);
-            println!("  Project: {}", session.project_id);
             println!("  Directory: {}", session.directory);
-            println!("  Status: {:?}", session.status);
+            println!(
+                "  Status: {}",
+                if session.active { "active" } else { "idle" }
+            );
             println!("  Created: {}", session.time.created);
             println!("  Updated: {}", session.time.updated);
             println!("  Messages: {}", messages.len());

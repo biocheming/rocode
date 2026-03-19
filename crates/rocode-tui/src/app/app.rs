@@ -41,6 +41,7 @@ use rocode_command::interactive::{parse_interactive_command, InteractiveCommand}
 use rocode_command::output_blocks::{BlockTone, StatusBlock};
 use rocode_command::{CommandRegistry, UiActionId};
 use rocode_core::agent_task_registry::{global_task_registry, AgentTaskStatus};
+use rocode_permission::PermissionReply;
 use serde::Deserialize;
 
 use crate::api::{
@@ -516,7 +517,7 @@ impl App {
                             if let Some(request) = self.permission_prompt.approve() {
                                 self.resolve_permission_request(
                                     &request.id,
-                                    "once",
+                                    PermissionReply::Once,
                                     Some("approved".to_string()),
                                 );
                             }
@@ -525,7 +526,7 @@ impl App {
                             if let Some(request) = self.permission_prompt.deny() {
                                 self.resolve_permission_request(
                                     &request.id,
-                                    "reject",
+                                    PermissionReply::Reject,
                                     Some("rejected".to_string()),
                                 );
                             }
@@ -534,7 +535,7 @@ impl App {
                             if let Some(request) = self.permission_prompt.approve_always() {
                                 self.resolve_permission_request(
                                     &request.id,
-                                    "always",
+                                    PermissionReply::Always,
                                     Some("approved always".to_string()),
                                 );
                             }
@@ -543,7 +544,7 @@ impl App {
                             if let Some(request) = self.permission_prompt.deny() {
                                 self.resolve_permission_request(
                                     &request.id,
-                                    "reject",
+                                    PermissionReply::Reject,
                                     Some("rejected".to_string()),
                                 );
                             }
@@ -1003,7 +1004,7 @@ impl App {
                                         if let Some(request) = self.permission_prompt.approve() {
                                             self.resolve_permission_request(
                                                 &request.id,
-                                                "once",
+                                                PermissionReply::Once,
                                                 Some("approved".to_string()),
                                             );
                                         }
@@ -1012,7 +1013,7 @@ impl App {
                                         if let Some(request) = self.permission_prompt.deny() {
                                             self.resolve_permission_request(
                                                 &request.id,
-                                                "reject",
+                                                PermissionReply::Reject,
                                                 Some("rejected".to_string()),
                                             );
                                         }
@@ -1023,7 +1024,7 @@ impl App {
                                         {
                                             self.resolve_permission_request(
                                                 &request.id,
-                                                "always",
+                                                PermissionReply::Always,
                                                 Some("approved always".to_string()),
                                             );
                                         }
@@ -1721,8 +1722,6 @@ mod tests {
 
         let session = SessionInfo {
             id: session_id.to_string(),
-            slug: "session-1".to_string(),
-            project_id: "project".to_string(),
             directory: ".".to_string(),
             parent_id: None,
             title: "Greeting Session".to_string(),
@@ -1730,8 +1729,6 @@ mod tests {
             time: SessionTimeInfo {
                 created: now,
                 updated: now + 1000,
-                compacting: None,
-                archived: None,
             },
             revert: Some(SessionRevertInfo {
                 message_id: "m2".to_string(),
@@ -1744,7 +1741,7 @@ mod tests {
         let mapped_messages = vec![map_api_message(&MessageInfo {
             id: "m2".to_string(),
             session_id: session_id.to_string(),
-            role: "assistant".to_string(),
+            role: rocode_message::MessageRole::Assistant,
             created_at: now + 500,
             completed_at: None,
             agent: None,

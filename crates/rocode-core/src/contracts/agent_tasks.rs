@@ -17,18 +17,7 @@ pub mod bus_keys {
 /// - API/UI status strings for agent task registry projections
 ///
 /// Keep them stable — they are part of the cross-crate wire contract.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-    EnumString,
-    EnumIter,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumString, EnumIter)]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive)]
 pub enum AgentTaskStatusKind {

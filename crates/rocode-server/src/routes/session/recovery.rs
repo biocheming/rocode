@@ -29,6 +29,13 @@ pub(super) async fn get_session_recovery(
     Path(session_id): Path<String>,
 ) -> Result<Json<SessionRecoveryProtocol>> {
     ensure_session_exists(&state, &session_id).await?;
+    if !state
+        .ensure_session_hydrated(&session_id)
+        .await
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?
+    {
+        return Err(ApiError::SessionNotFound(session_id));
+    }
     let session = {
         let sessions = state.sessions.lock().await;
         sessions
@@ -59,6 +66,13 @@ pub(super) async fn execute_session_recovery(
     Json(req): Json<ExecuteRecoveryRequest>,
 ) -> Result<Json<serde_json::Value>> {
     ensure_session_exists(&state, &session_id).await?;
+    if !state
+        .ensure_session_hydrated(&session_id)
+        .await
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?
+    {
+        return Err(ApiError::SessionNotFound(session_id));
+    }
     let session = {
         let sessions = state.sessions.lock().await;
         sessions

@@ -1,12 +1,19 @@
 // ── API Types ──────────────────────────────────────────────────────────────
 
 export interface Session {
+  /** 会话唯一 ID（后端主键）。 */
   id: string;
+  /** 会话标题（可为默认自动标题或用户自定义标题）。 */
   title: string;
+  /** 所属项目 ID（部分接口可能不返回）。 */
   project_id?: string;
+  /** 会话工作目录（部分接口可能不返回）。 */
   directory?: string;
+  /** 最近更新时间（Unix 毫秒时间戳，部分接口可能不返回）。 */
   updated?: number;
+  /** 分享链接（仅会话已分享时返回）。 */
   share_url?: string;
+  /** 父会话 ID（根会话通常为空）。 */
   parent_id?: string;
 }
 
@@ -51,7 +58,7 @@ export interface UiCommand {
 export interface OutputBlock {
   kind: string;
   phase?: string;
-  role?: string;
+  role?: "user" | "assistant" | "system";
   title?: string;
   text?: string;
   tone?: string;

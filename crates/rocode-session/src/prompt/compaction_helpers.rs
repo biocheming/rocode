@@ -53,8 +53,7 @@ pub fn trigger_compaction(session: &mut Session, messages: &[SessionMessage]) ->
     });
     session.messages.push(compaction_msg);
 
-    // Set the compacting timestamp on the session.
-    session.time.compacting = Some(chrono::Utc::now().timestamp_millis());
+    // Mark session as updated so compaction summary is persisted.
     session.touch();
 
     Some(summary)

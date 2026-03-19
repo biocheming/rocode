@@ -3296,6 +3296,7 @@ dependencies = [
  "futures",
  "rocode-config",
  "rocode-core",
+ "rocode-message",
  "rocode-orchestrator",
  "rocode-permission",
  "rocode-plugin",
@@ -3327,6 +3328,7 @@ dependencies = [
  "rocode-core",
  "rocode-grep",
  "rocode-lsp",
+ "rocode-message",
  "rocode-orchestrator",
  "rocode-permission",
  "rocode-plugin",
@@ -3417,6 +3419,7 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "rand 0.8.5",
+ "rocode-message",
  "serde",
  "serde_json",
  "strum 0.26.3",
@@ -3486,6 +3489,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocode-message"
+version = "2026.3.16"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "rocode-orchestrator"
 version = "2026.3.16"
 dependencies = [
@@ -3515,7 +3528,6 @@ dependencies = [
  "lazy_static",
  "rocode-core",
  "rocode-plugin",
- "rocode-types",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -3561,6 +3573,7 @@ dependencies = [
  "reqwest",
  "reqwest-eventsource",
  "rocode-core",
+ "rocode-message",
  "rocode-util",
  "serde",
  "serde_json",
@@ -3591,6 +3604,7 @@ dependencies = [
  "rocode-config",
  "rocode-core",
  "rocode-mcp",
+ "rocode-message",
  "rocode-orchestrator",
  "rocode-permission",
  "rocode-plugin",
@@ -3629,12 +3643,12 @@ dependencies = [
  "rocode-core",
  "rocode-lsp",
  "rocode-mcp",
+ "rocode-message",
  "rocode-orchestrator",
+ "rocode-permission",
  "rocode-plugin",
  "rocode-provider",
- "rocode-storage",
  "rocode-tool",
- "rocode-types",
  "rocode-util",
  "serde",
  "serde_json",
@@ -3655,8 +3669,8 @@ dependencies = [
  "chrono",
  "dirs",
  "rocode-core",
+ "rocode-session",
  "rocode-storage-migration",
- "rocode-types",
  "rocode-util",
  "sea-orm",
  "sea-orm-migration",
@@ -3674,7 +3688,7 @@ name = "rocode-storage-migration"
 version = "2026.3.16"
 dependencies = [
  "async-trait",
- "rocode-types",
+ "rocode-session",
  "rocode-util",
  "sea-orm",
  "sea-orm-migration",
@@ -3709,6 +3723,7 @@ dependencies = [
  "rocode-core",
  "rocode-grep",
  "rocode-lsp",
+ "rocode-message",
  "rocode-orchestrator",
  "rocode-permission",
  "rocode-plugin",
@@ -3755,7 +3770,9 @@ dependencies = [
  "rocode-config",
  "rocode-core",
  "rocode-mcp",
+ "rocode-message",
  "rocode-orchestrator",
+ "rocode-permission",
  "rocode-provider",
  "rocode-session",
  "rocode-tool",
@@ -3780,6 +3797,7 @@ version = "2026.3.16"
 dependencies = [
  "anyhow",
  "chrono",
+ "rocode-permission",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

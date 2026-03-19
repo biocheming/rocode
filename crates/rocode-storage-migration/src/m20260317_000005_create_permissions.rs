@@ -24,8 +24,16 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(Permissions::CreatedAt).big_integer().not_null())
-                    .col(ColumnDef::new(Permissions::UpdatedAt).big_integer().not_null())
+                    .col(
+                        ColumnDef::new(Permissions::CreatedAt)
+                            .big_integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(Permissions::UpdatedAt)
+                            .big_integer()
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(Permissions::Data).string().not_null())
                     .to_owned(),
             )
@@ -38,4 +46,3 @@ impl MigrationTrait for Migration {
             .await
     }
 }
-

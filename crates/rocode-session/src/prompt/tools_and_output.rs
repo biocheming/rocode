@@ -533,7 +533,7 @@ mod tests {
 
     #[test]
     fn compose_session_title_source_includes_assistant_outcome() {
-        let mut session = Session::new("project", ".");
+        let mut session = Session::new(".");
         session.add_user_message("根据 ./t.html 文件，设计一个科技感更加浓重的网页");
         session
             .add_assistant_message()
@@ -549,7 +549,7 @@ mod tests {
 
     #[tokio::test]
     async fn generate_session_title_for_session_uses_assistant_context() {
-        let mut session = Session::new("project", ".");
+        let mut session = Session::new(".");
         session.add_user_message("Fix the scheduler session title flow after first reply");
         session
             .add_assistant_message()

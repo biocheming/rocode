@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::api::ApiClient;
+use crate::api::PermissionRequestInfo;
 use crate::api::SessionExecutionTopology;
 use crate::context::{ChildSessionInfo, KeybindRegistry, SessionContext};
 use crate::event::EventBus;
@@ -501,16 +502,15 @@ impl AppContext {
     pub fn get_pending_permission(&self) -> Option<(String, PermissionRequestInfo)> {
         self.session_runtime.read().as_ref().and_then(|runtime| {
             runtime.pending_permission.as_ref().map(|perm| {
-                (
-                    perm.permission_id.clone(),
-                    PermissionRequestInfo {
+                let info = serde_json::from_value::<PermissionRequestInfo>(perm.info.clone())
+                    .unwrap_or_else(|_| PermissionRequestInfo {
                         id: perm.permission_id.clone(),
                         session_id: runtime.session_id.clone(),
-                        tool: String::new(), // Extract from info if needed
-                        input: perm.info.clone(),
+                        tool: rocode_permission::PermissionKind::from_name("unknown"),
+                        input: rocode_permission::PermissionRequest::new("unknown"),
                         message: String::new(),
-                    },
-                )
+                    });
+                (perm.permission_id.clone(), info)
             })
         })
     }
@@ -544,16 +544,6 @@ impl Default for AppContext {
 pub struct ToolCallInfo {
     pub id: String,
     pub tool_name: String,
-}
-
-/// Information about a permission request.
-#[derive(Clone, Debug)]
-pub struct PermissionRequestInfo {
-    pub id: String,
-    pub session_id: String,
-    pub tool: String,
-    pub input: serde_json::Value,
-    pub message: String,
 }
 
 fn default_theme_name() -> String {

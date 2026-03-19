@@ -1,7 +1,7 @@
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use sea_orm_migration::prelude::*;
 
-use rocode_types::{MessagePart, PartType};
+use rocode_session::{MessagePart, PartType};
 use serde_json::Value;
 use tracing::{info, warn};
 

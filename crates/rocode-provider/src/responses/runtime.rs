@@ -138,7 +138,9 @@ impl OpenAIResponsesLanguageModel {
             model: &self.model_id,
             input: &input,
         })
-        .map_err(|e| ProviderError::InvalidRequest(format!("failed to build request body: {}", e)))?;
+        .map_err(|e| {
+            ProviderError::InvalidRequest(format!("failed to build request body: {}", e))
+        })?;
         let obj = body.as_object_mut().ok_or_else(|| {
             ProviderError::InvalidRequest("failed to build responses request body".to_string())
         })?;

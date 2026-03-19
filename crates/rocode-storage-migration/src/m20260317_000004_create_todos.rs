@@ -36,11 +36,7 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Todos::Position).big_integer().not_null())
                     .col(ColumnDef::new(Todos::CreatedAt).big_integer().not_null())
                     .col(ColumnDef::new(Todos::UpdatedAt).big_integer().not_null())
-                    .primary_key(
-                        Index::create()
-                            .col(Todos::SessionId)
-                            .col(Todos::TodoId),
-                    )
+                    .primary_key(Index::create().col(Todos::SessionId).col(Todos::TodoId))
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_todos_session")
@@ -60,4 +56,3 @@ impl MigrationTrait for Migration {
             .await
     }
 }
-

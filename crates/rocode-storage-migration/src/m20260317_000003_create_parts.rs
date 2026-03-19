@@ -18,12 +18,7 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Parts::Table)
                     .if_not_exists()
-                    .col(
-                        ColumnDef::new(Parts::Id)
-                            .string()
-                            .not_null()
-                            .primary_key(),
-                    )
+                    .col(ColumnDef::new(Parts::Id).string().not_null().primary_key())
                     .col(ColumnDef::new(Parts::MessageId).string().not_null())
                     .col(ColumnDef::new(Parts::SessionId).string().not_null())
                     .col(ColumnDef::new(Parts::CreatedAt).big_integer().not_null())
@@ -73,4 +68,3 @@ impl MigrationTrait for Migration {
             .await
     }
 }
-

@@ -60,10 +60,9 @@ impl GitLabProtocol {
             .into_iter()
             .map(|msg| GitLabMessage {
                 role: match msg.role {
-                    Role::System => "system".to_string(),
-                    Role::User => "user".to_string(),
-                    Role::Assistant => "assistant".to_string(),
-                    Role::Tool => "user".to_string(),
+                    Role::System => GitLabRole::System,
+                    Role::User | Role::Tool => GitLabRole::User,
+                    Role::Assistant => GitLabRole::Assistant,
                 },
                 content: match msg.content {
                     Content::Text(t) => GitLabContent::Text(t),
@@ -223,9 +222,17 @@ struct GitLabRequest {
     stream: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum GitLabRole {
+    System,
+    User,
+    Assistant,
+}
+
 #[derive(Debug, Serialize)]
 struct GitLabMessage {
-    role: String,
+    role: GitLabRole,
     content: GitLabContent,
 }
 
@@ -252,7 +259,7 @@ struct GitLabChoice {
 
 #[derive(Debug, Deserialize)]
 struct GitLabResponseMessage {
-    _role: String,
+    _role: GitLabRole,
     content: Option<String>,
 }
 
@@ -335,11 +342,9 @@ fn parse_gitlab_sse(data: &str) -> Option<StreamEvent> {
         }
     }
 
-    if choice
-        .finish_reason
-        .as_deref()
-        .is_some_and(|reason| ProviderFinishReasonWire::parse(reason) == Some(ProviderFinishReasonWire::ToolCalls))
-    {
+    if choice.finish_reason.as_deref().is_some_and(|reason| {
+        ProviderFinishReasonWire::parse(reason) == Some(ProviderFinishReasonWire::ToolCalls)
+    }) {
         return Some(StreamEvent::Done);
     }
 

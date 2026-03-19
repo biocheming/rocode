@@ -96,12 +96,12 @@ pub(crate) async fn handle_stats_command(
 
     let mut sessions = session_repo.list(None, 50_000).await?;
     if let Some(project) = project {
-        if project.is_empty() {
-            let cwd = std::env::current_dir()?.display().to_string();
-            sessions.retain(|s| s.directory == cwd);
+        let target = if project.is_empty() {
+            std::env::current_dir()?.display().to_string()
         } else {
-            sessions.retain(|s| s.project_id == project);
-        }
+            project
+        };
+        sessions.retain(|s| s.directory == target);
     }
 
     if let Some(days) = days {
@@ -153,7 +153,7 @@ pub(crate) async fn handle_stats_command(
                     .or_insert(0) += 1;
             }
             for part in message.parts {
-                if let rocode_types::PartType::ToolCall { name, .. } = part.part_type {
+                if let rocode_session::PartType::ToolCall { name, .. } = part.part_type {
                     *tool_usage.entry(name).or_insert(0) += 1;
                 }
             }

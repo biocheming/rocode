@@ -34,7 +34,7 @@ pub(crate) struct SendMessageRequest {
 pub(super) struct MessageInfo {
     pub id: String,
     pub session_id: String,
-    pub role: String,
+    pub role: rocode_session::MessageRole,
     pub parts: Vec<PartInfo>,
     pub created_at: i64,
     pub completed_at: Option<i64>,
@@ -108,20 +108,11 @@ pub(super) struct ToolResultInfo {
     pub attachments: Option<Vec<serde_json::Value>>,
 }
 
-pub(super) fn message_role_name(role: &rocode_session::MessageRole) -> &'static str {
-    match role {
-        rocode_session::MessageRole::User => "user",
-        rocode_session::MessageRole::Assistant => "assistant",
-        rocode_session::MessageRole::System => "system",
-        rocode_session::MessageRole::Tool => "tool",
-    }
-}
-
 #[derive(Debug, Serialize)]
 pub(super) struct MessageSummaryInfo {
     pub id: String,
     pub session_id: String,
-    pub role: String,
+    pub role: rocode_session::MessageRole,
     pub created_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finish: Option<String>,
@@ -213,12 +204,14 @@ pub(super) async fn list_message_summaries(
     Path(session_id): Path<String>,
     Query(query): Query<ListMessageSummariesQuery>,
 ) -> Result<(HeaderMap, Json<Vec<MessageSummaryInfo>>)> {
-    // Validate session exists in the in-memory manager (source of truth for session lifecycle).
-    {
-        let sessions = state.sessions.lock().await;
-        if sessions.get(&session_id).is_none() {
-            return Err(ApiError::SessionNotFound(session_id));
-        }
+    let session_exists = state
+        .ensure_session_loaded(&session_id)
+        .await
+        .map_err(|err| {
+            ApiError::InternalError(format!("failed to load session metadata: {}", err))
+        })?;
+    if !session_exists {
+        return Err(ApiError::SessionNotFound(session_id));
     }
 
     let offset = query.offset.unwrap_or(0);
@@ -283,7 +276,7 @@ pub(super) async fn list_message_summaries(
         infos.push(MessageSummaryInfo {
             id: message.id.clone(),
             session_id: session_id.clone(),
-            role: message_role_name(&message.role).to_string(),
+            role: message.role,
             created_at: message.created_at.timestamp_millis(),
             finish: message.finish.clone(),
         });
@@ -356,6 +349,16 @@ pub(super) async fn list_message_parts(
     Path((session_id, msg_id)): Path<(String, String)>,
     Query(query): Query<ListMessagePartsQuery>,
 ) -> Result<(HeaderMap, Json<Vec<PartSummaryInfo>>)> {
+    let session_exists = state
+        .ensure_session_loaded(&session_id)
+        .await
+        .map_err(|err| {
+            ApiError::InternalError(format!("failed to load session metadata: {}", err))
+        })?;
+    if !session_exists {
+        return Err(ApiError::SessionNotFound(session_id));
+    }
+
     let offset = query.offset.unwrap_or(0);
     let limit = query.limit.filter(|value| *value > 0).unwrap_or(200);
 
@@ -488,6 +491,16 @@ pub(super) async fn get_message_part(
     State(state): State<Arc<ServerState>>,
     Path((session_id, msg_id, part_id)): Path<(String, String, String)>,
 ) -> Result<Json<serde_json::Value>> {
+    let session_exists = state
+        .ensure_session_loaded(&session_id)
+        .await
+        .map_err(|err| {
+            ApiError::InternalError(format!("failed to load session metadata: {}", err))
+        })?;
+    if !session_exists {
+        return Err(ApiError::SessionNotFound(session_id));
+    }
+
     if let Some(part_repo) = state.part_repo.as_ref() {
         let row = part_repo.get(&part_id).await.map_err(map_storage_err)?;
         if let Some(row) = row {
@@ -833,7 +846,7 @@ fn message_to_info(
     MessageInfo {
         id: message.id.clone(),
         session_id: session_id.to_string(),
-        role: message_role_name(&message.role).to_string(),
+        role: message.role,
         parts: message
             .parts
             .iter()
@@ -858,9 +871,11 @@ fn message_to_info(
     }
 }
 
-fn collect_tool_names(session: &rocode_session::Session) -> HashMap<String, String> {
+fn collect_tool_names_from_messages(
+    messages: &[rocode_session::SessionMessage],
+) -> HashMap<String, String> {
     let mut tool_names = HashMap::new();
-    for message in &session.messages {
+    for message in messages {
         for part in &message.parts {
             if let rocode_session::PartType::ToolCall { id, name, .. } = &part.part_type {
                 if !name.trim().is_empty() {
@@ -870,6 +885,10 @@ fn collect_tool_names(session: &rocode_session::Session) -> HashMap<String, Stri
         }
     }
     tool_names
+}
+
+fn collect_tool_names(session: &rocode_session::Session) -> HashMap<String, String> {
+    collect_tool_names_from_messages(&session.messages)
 }
 
 fn augment_scheduler_decision_metadata_for_response(
@@ -1010,26 +1029,37 @@ pub(super) async fn send_message(
     Path(session_id): Path<String>,
     Json(req): Json<SendMessageRequest>,
 ) -> Result<Json<MessageInfo>> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
-    session.add_user_message(&req.content);
-    if let Some(variant) = req.variant.as_deref() {
-        session
-            .metadata
-            .insert("model_variant".to_string(), serde_json::json!(variant));
+    if !state
+        .ensure_session_hydrated(&session_id)
+        .await
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?
+    {
+        return Err(ApiError::SessionNotFound(session_id));
     }
-    let tool_names = collect_tool_names(session);
-    let assistant_msg = session.add_assistant_message();
+
+    let mut sessions = state.sessions.lock().await;
+    let (assistant_msg, tool_names) = sessions
+        .mutate_session(&session_id, |session| {
+            session.add_user_message(&req.content);
+            if let Some(variant) = req.variant.as_deref() {
+                session
+                    .metadata
+                    .insert("model_variant".to_string(), serde_json::json!(variant));
+            }
+            let tool_names = collect_tool_names(session);
+            let assistant_msg = session.add_assistant_message().clone();
+            (assistant_msg, tool_names)
+        })
+        .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
     let mut pending_questions = Vec::new();
     let info = message_to_info(
         &session_id,
-        assistant_msg,
+        &assistant_msg,
         &tool_names,
         &mut pending_questions,
     );
     drop(sessions);
+    state.touch_session_cache(&session_id).await;
     persist_sessions_if_enabled(&state).await;
     Ok(Json(info))
 }
@@ -1063,16 +1093,34 @@ pub(super) async fn list_messages(
 
     let mut pending_questions =
         super::super::tui::list_questions_for_session(&state, &session_id).await;
-    let sessions = state.sessions.lock().await;
-    let session = sessions
-        .get(&session_id)
-        .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
-    let tool_names = collect_tool_names(session);
-    let total = session.messages.len();
+    let (all_messages, tool_names) = if let Some(message_repo) = state.message_repo.as_ref() {
+        let session_exists = state
+            .ensure_session_loaded(&session_id)
+            .await
+            .map_err(|err| {
+                ApiError::InternalError(format!("failed to load session metadata: {}", err))
+            })?;
+        if !session_exists {
+            return Err(ApiError::SessionNotFound(session_id));
+        }
+        let messages = message_repo
+            .list_for_session(&session_id)
+            .await
+            .map_err(map_storage_err)?;
+        let tool_names = collect_tool_names_from_messages(&messages);
+        (messages, tool_names)
+    } else {
+        let sessions = state.sessions.lock().await;
+        let session = sessions
+            .get(&session_id)
+            .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
+        (session.messages.clone(), collect_tool_names(session))
+    };
+
+    let total = all_messages.len();
     let limit = query.limit.filter(|value| *value > 0);
     let start_offset = if let Some(after) = query.after.as_deref() {
-        session
-            .messages
+        all_messages
             .iter()
             .position(|m| m.id == after)
             .map(|pos| pos.saturating_add(1))
@@ -1083,7 +1131,7 @@ pub(super) async fn list_messages(
     };
 
     let mut messages = Vec::new();
-    for message in session.messages.iter().skip(start_offset) {
+    for message in all_messages.iter().skip(start_offset) {
         messages.push(message_to_info(
             &session_id,
             message,
@@ -1245,12 +1293,23 @@ pub(super) async fn delete_message(
     State(state): State<Arc<ServerState>>,
     Path((session_id, msg_id)): Path<(String, String)>,
 ) -> Result<Json<MessageDeletedResponse>> {
+    if !state
+        .ensure_session_hydrated(&session_id)
+        .await
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?
+    {
+        return Err(ApiError::SessionNotFound(session_id));
+    }
+
     let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
-    session.remove_message(&msg_id);
+    if sessions.get(&session_id).is_none() {
+        return Err(ApiError::SessionNotFound(session_id));
+    }
+    if sessions.remove_message(&session_id, &msg_id).is_none() {
+        return Err(ApiError::NotFound(format!("Message not found: {}", msg_id)));
+    }
     drop(sessions);
+    state.touch_session_cache(&session_id).await;
     persist_sessions_if_enabled(&state).await;
     Ok(Json(MessageDeletedResponse { deleted: true }))
 }
@@ -1350,19 +1409,26 @@ pub(super) async fn add_message_part(
     Path((session_id, msg_id)): Path<(String, String)>,
     Json(req): Json<AddPartRequest>,
 ) -> Result<Json<AddPartResponse>> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
-    let message = session
-        .get_message_mut(&msg_id)
-        .ok_or_else(|| ApiError::NotFound(format!("Message not found: {}", msg_id)))?;
+    if !state
+        .ensure_session_hydrated(&session_id)
+        .await
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?
+    {
+        return Err(ApiError::SessionNotFound(session_id));
+    }
 
     let part = build_message_part(req, &msg_id)?;
     let part_id = part.id.clone();
-    message.parts.push(part);
-    session.touch();
+
+    let mut sessions = state.sessions.lock().await;
+    if sessions.get(&session_id).is_none() {
+        return Err(ApiError::SessionNotFound(session_id));
+    }
+    if sessions.update_part(&session_id, &msg_id, part).is_none() {
+        return Err(ApiError::NotFound(format!("Message not found: {}", msg_id)));
+    }
     drop(sessions);
+    state.touch_session_cache(&session_id).await;
     persist_sessions_if_enabled(&state).await;
 
     Ok(Json(AddPartResponse {
@@ -1377,21 +1443,26 @@ pub(super) async fn delete_part(
     State(state): State<Arc<ServerState>>,
     Path((session_id, msg_id, part_id)): Path<(String, String, String)>,
 ) -> Result<Json<DeletePartResponse>> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
-    let message = session
-        .get_message_mut(&msg_id)
-        .ok_or_else(|| ApiError::NotFound(format!("Message not found: {}", msg_id)))?;
+    if !state
+        .ensure_session_hydrated(&session_id)
+        .await
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?
+    {
+        return Err(ApiError::SessionNotFound(session_id));
+    }
 
-    let before = message.parts.len();
-    message.parts.retain(|part| part.id != part_id);
-    if message.parts.len() == before {
+    let mut sessions = state.sessions.lock().await;
+    if sessions.get(&session_id).is_none() {
+        return Err(ApiError::SessionNotFound(session_id));
+    }
+    if sessions
+        .remove_part(&session_id, &msg_id, &part_id)
+        .is_none()
+    {
         return Err(ApiError::NotFound(format!("Part not found: {}", part_id)));
     }
-    session.touch();
     drop(sessions);
+    state.touch_session_cache(&session_id).await;
     persist_sessions_if_enabled(&state).await;
 
     Ok(Json(DeletePartResponse {

@@ -170,7 +170,7 @@ pub struct PruneToolPart {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageForPrune {
-    pub role: String,
+    pub role: Role,
     pub parts: Vec<PruneToolPart>,
     pub summary: bool,
 }
@@ -348,14 +348,14 @@ When constructing the summary, try to stick to this template:
 
         'outer: for msg_index in (0..messages.len()).rev() {
             let msg = &messages[msg_index];
-            if msg.role == "user" {
+            if matches!(msg.role, Role::User) {
                 turns += 1;
             }
             if turns < 2 {
                 continue;
             }
             // TS: if (msg.info.role === "assistant" && msg.info.summary) break loop
-            if msg.role == "assistant" && msg.summary {
+            if matches!(msg.role, Role::Assistant) && msg.summary {
                 break;
             }
 
@@ -1092,8 +1092,8 @@ pub fn messages_to_prune_format(messages: &[MessageWithParts]) -> Vec<MessageFor
         .iter()
         .map(|msg| {
             let role = match &msg.info {
-                MessageInfo::User { .. } => "user".to_string(),
-                MessageInfo::Assistant { .. } => "assistant".to_string(),
+                MessageInfo::User { .. } => Role::User,
+                MessageInfo::Assistant { .. } => Role::Assistant,
             };
             let summary = match &msg.info {
                 MessageInfo::Assistant { summary, .. } => summary.unwrap_or(false),
@@ -1418,7 +1418,7 @@ mod tests {
             ..Default::default()
         });
         let mut messages = vec![MessageForPrune {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             parts: vec![PruneToolPart {
                 id: "p1".to_string(),
                 tool: "read_file".to_string(),
@@ -1437,17 +1437,17 @@ mod tests {
         let engine = CompactionEngine::default();
         let mut messages = vec![
             MessageForPrune {
-                role: "user".to_string(),
+                role: Role::User,
                 parts: vec![],
                 summary: false,
             },
             MessageForPrune {
-                role: "user".to_string(),
+                role: Role::User,
                 parts: vec![],
                 summary: false,
             },
             MessageForPrune {
-                role: "assistant".to_string(),
+                role: Role::Assistant,
                 parts: vec![PruneToolPart {
                     id: "p1".to_string(),
                     tool: "read_file".to_string(),

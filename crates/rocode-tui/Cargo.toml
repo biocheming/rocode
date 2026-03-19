@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 # Workspace dependencies
 rocode-core = { path = "../rocode-core" }
+rocode-message = { path = "../rocode-message" }
 rocode-orchestrator = { path = "../rocode-orchestrator" }
 rocode-util = { path = "../rocode-util" }
 rocode-config = { path = "../rocode-config" }
@@ -18,6 +19,7 @@ rocode-tool = { path = "../rocode-tool" }
 rocode-mcp = { path = "../rocode-mcp" }
 rocode-command = { path = "../rocode-command" }
 rocode-types = { path = "../rocode-types" }
+rocode-permission = { path = "../rocode-permission" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

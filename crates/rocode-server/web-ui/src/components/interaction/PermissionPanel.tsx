@@ -11,7 +11,7 @@ export interface PermissionPanelProps {
 export const PermissionPanel: Component<PermissionPanelProps> = (props) => {
   const [submitting, setSubmitting] = createSignal(false);
 
-  const reply = async (action: "approve" | "always" | "reject") => {
+  const reply = async (action: "once" | "always" | "reject") => {
     setSubmitting(true);
     try {
       await api(`/permission/${props.interaction.permission_id}/reply`, {
@@ -75,7 +75,7 @@ export const PermissionPanel: Component<PermissionPanelProps> = (props) => {
           </button>
           <button
             class={styles.btnAllow}
-            onClick={() => reply("approve")}
+            onClick={() => reply("once")}
             disabled={submitting()}
           >
             Allow

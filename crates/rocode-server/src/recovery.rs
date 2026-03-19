@@ -690,7 +690,7 @@ mod tests {
 
     #[test]
     fn recovery_protocol_surfaces_run_stage_and_subtask_actions() {
-        let mut session = rocode_session::Session::new("default", ".");
+        let mut session = rocode_session::Session::new(".");
         session
             .metadata
             .insert("scheduler_profile".to_string(), serde_json::json!("atlas"));
@@ -816,7 +816,7 @@ mod tests {
 
     #[test]
     fn recovery_protocol_surfaces_abort_actions_while_running() {
-        let session = rocode_session::Session::new("proj", "/tmp");
+        let session = rocode_session::Session::new("/tmp");
         let topology = SessionExecutionTopology {
             session_id: session.id.clone(),
             active_count: 2,

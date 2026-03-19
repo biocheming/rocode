@@ -2858,7 +2858,7 @@ mod tests {
     #[tokio::test]
     async fn prompt_with_update_hook_emits_incremental_snapshots() {
         let prompt = SessionPrompt::default();
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let provider = Arc::new(ScriptedStreamProvider {
             model: ModelInfo {
                 id: "test-model".to_string(),
@@ -2962,7 +2962,7 @@ mod tests {
     #[tokio::test]
     async fn prompt_with_output_block_hook_emits_realtime_blocks() {
         let prompt = SessionPrompt::default();
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let provider = Arc::new(ScriptedStreamProvider {
             model: ModelInfo {
                 id: "test-model".to_string(),
@@ -3071,7 +3071,7 @@ mod tests {
     #[tokio::test]
     async fn prompt_merges_split_usage_snapshots_within_a_step() {
         let prompt = SessionPrompt::default();
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let provider = Arc::new(ScriptedStreamProvider {
             model: ModelInfo {
                 id: "test-model".to_string(),
@@ -3151,7 +3151,7 @@ mod tests {
     #[tokio::test]
     async fn prompt_continues_after_tool_calls_without_finish_step_reason() {
         let prompt = SessionPrompt::default();
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let temp_dir = tempfile::tempdir().expect("tempdir should create");
         let file_path = temp_dir.path().join("sample.txt");
         tokio::fs::write(&file_path, "alpha\nbeta")
@@ -3251,7 +3251,7 @@ mod tests {
     #[tokio::test]
     async fn create_user_message_for_agent_prefers_task_flow_instruction() {
         let prompt = SessionPrompt::default();
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let input = PromptInput {
             session_id: session.id.clone(),
             message_id: None,
@@ -3286,7 +3286,7 @@ mod tests {
     #[tokio::test]
     async fn create_user_message_persists_pending_subtask_payload() {
         let prompt = SessionPrompt::default();
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let input = PromptInput {
             session_id: session.id.clone(),
             message_id: None,
@@ -3375,7 +3375,7 @@ mod tests {
         let tool_registry = Arc::new(rocode_tool::ToolRegistry::new());
         tool_registry.register(NoArgEchoTool).await;
 
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let sid = session.id.clone();
         session
             .messages
@@ -3435,7 +3435,7 @@ mod tests {
         let tool_registry = Arc::new(rocode_tool::ToolRegistry::new());
         tool_registry.register(NoArgEchoTool).await;
 
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let sid = session.id.clone();
         session
             .messages
@@ -3492,7 +3492,7 @@ mod tests {
             .register(rocode_tool::invalid::InvalidTool)
             .await;
 
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let sid = session.id.clone();
         session
             .messages
@@ -3572,7 +3572,7 @@ mod tests {
         let tool_registry = Arc::new(rocode_tool::ToolRegistry::new());
         tool_registry.register(NoArgEchoTool).await;
 
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let sid = session.id.clone();
         session
             .messages
@@ -3634,7 +3634,7 @@ mod tests {
         let tool_registry = Arc::new(rocode_tool::ToolRegistry::new());
         tool_registry.register(NoArgEchoTool).await;
 
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let sid = session.id.clone();
 
         session

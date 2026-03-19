@@ -692,6 +692,6 @@ mod tests {
 
         assert_eq!(session_id, "session-1");
         assert_eq!(permission.id, "permission-1");
-        assert_eq!(permission.tool, "bash");
+        assert_eq!(permission.tool.as_str(), "bash");
     }
 }

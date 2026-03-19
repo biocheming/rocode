@@ -98,10 +98,9 @@ impl CopilotProtocol {
             .into_iter()
             .map(|msg| CopilotMessage {
                 role: match msg.role {
-                    Role::System => "system".to_string(),
-                    Role::User => "user".to_string(),
-                    Role::Assistant => "assistant".to_string(),
-                    Role::Tool => "user".to_string(),
+                    Role::System => CopilotRole::System,
+                    Role::User | Role::Tool => CopilotRole::User,
+                    Role::Assistant => CopilotRole::Assistant,
                 },
                 content: match msg.content {
                     Content::Text(t) => CopilotContent::Text(t),
@@ -275,7 +274,9 @@ impl CopilotProtocol {
         match reason {
             FinishReason::Stop => ProviderFinishReasonWire::Stop.as_str().to_string(),
             FinishReason::Length => ProviderFinishReasonWire::Length.as_str().to_string(),
-            FinishReason::ContentFilter => ProviderFinishReasonWire::ContentFilter.as_str().to_string(),
+            FinishReason::ContentFilter => {
+                ProviderFinishReasonWire::ContentFilter.as_str().to_string()
+            }
             FinishReason::ToolCalls => ProviderFinishReasonWire::ToolCalls.as_str().to_string(),
             FinishReason::Error => ProviderFinishReasonWire::Error.as_str().to_string(),
             FinishReason::Unknown => ProviderFinishReasonWire::Unknown.as_str().to_string(),
@@ -565,9 +566,17 @@ struct CopilotRequest {
     stream: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum CopilotRole {
+    System,
+    User,
+    Assistant,
+}
+
 #[derive(Debug, Serialize)]
 struct CopilotMessage {
-    role: String,
+    role: CopilotRole,
     content: CopilotContent,
 }
 
@@ -610,7 +619,7 @@ struct CopilotChoice {
 
 #[derive(Debug, Deserialize)]
 struct CopilotResponseMessage {
-    _role: String,
+    _role: CopilotRole,
     content: Option<String>,
 }
 
@@ -690,11 +699,9 @@ fn parse_copilot_sse(data: &str) -> Option<StreamEvent> {
         }
     }
 
-    if choice
-        .finish_reason
-        .as_deref()
-        .is_some_and(|reason| ProviderFinishReasonWire::parse(reason) == Some(ProviderFinishReasonWire::ToolCalls))
-    {
+    if choice.finish_reason.as_deref().is_some_and(|reason| {
+        ProviderFinishReasonWire::parse(reason) == Some(ProviderFinishReasonWire::ToolCalls)
+    }) {
         return Some(StreamEvent::Done);
     }
 

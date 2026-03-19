@@ -53,7 +53,7 @@ impl GoogleProtocol {
                     if let Content::Text(text) = msg.content {
                         system_instruction = Some(GoogleContent {
                             parts: vec![GooglePart::text(&text)],
-                            role: "user".to_string(),
+                            role: GoogleRole::User,
                         });
                     }
                 }
@@ -68,7 +68,7 @@ impl GoogleProtocol {
                     };
                     contents.push(GoogleContent {
                         parts: vec![GooglePart::text(&text_content)],
-                        role: "user".to_string(),
+                        role: GoogleRole::User,
                     });
                 }
                 Role::Assistant => {
@@ -82,7 +82,7 @@ impl GoogleProtocol {
                     };
                     contents.push(GoogleContent {
                         parts: vec![GooglePart::text(&text_content)],
-                        role: "model".to_string(),
+                        role: GoogleRole::Model,
                     });
                 }
                 Role::Tool => {}
@@ -239,9 +239,16 @@ struct GoogleRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum GoogleRole {
+    User,
+    Model,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct GoogleContent {
     parts: Vec<GooglePart>,
-    role: String,
+    role: GoogleRole,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

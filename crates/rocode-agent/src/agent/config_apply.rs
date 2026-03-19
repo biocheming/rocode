@@ -140,14 +140,14 @@ fn permission_rules_from_config(permission: &LoadedPermissionConfig) -> Permissi
     for (permission_name, rule) in &permission.rules {
         match rule {
             LoadedPermissionRule::Action(action) => rules.push(PermissionRule {
-                permission: permission_name.clone(),
+                permission: permission_name.clone().into(),
                 pattern: "*".to_string(),
                 action: map_loaded_permission_action(action),
             }),
             LoadedPermissionRule::Object(patterns) => {
                 for (pattern, action) in patterns {
                     rules.push(PermissionRule {
-                        permission: permission_name.clone(),
+                        permission: permission_name.clone().into(),
                         pattern: pattern.clone(),
                         action: map_loaded_permission_action(action),
                     });
@@ -162,7 +162,7 @@ fn permission_rules_from_tools(tool_overrides: &HashMap<String, bool>) -> Permis
     tool_overrides
         .iter()
         .map(|(tool, enabled)| PermissionRule {
-            permission: tool_to_permission(tool).to_string(),
+            permission: tool_to_permission(tool).into(),
             pattern: "*".to_string(),
             action: if *enabled {
                 PermissionAction::Allow

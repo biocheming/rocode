@@ -221,7 +221,7 @@ pub(crate) async fn handle_debug_command(action: DebugCommands) -> anyhow::Resul
             let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
             for session in sessions {
                 grouped
-                    .entry(session.project_id)
+                    .entry(session.directory.clone())
                     .or_default()
                     .push(session.directory);
             }

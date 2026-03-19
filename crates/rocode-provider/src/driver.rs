@@ -8,6 +8,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub type DriverMessageRole = rocode_message::MessageRole;
+
 // ---------------------------------------------------------------------------
 // ApiStyle
 // ---------------------------------------------------------------------------
@@ -47,15 +49,6 @@ pub struct DriverMessage {
     pub content: DriverMessageContent,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DriverMessageRole {
-    System,
-    User,
-    Assistant,
-    Tool,
 }
 
 /// Message content — either plain text or structured blocks for multimodal.

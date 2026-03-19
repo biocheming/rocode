@@ -59,12 +59,8 @@ mod tests {
             FileWatcherEventKind::Unlink,
         ];
         for value in values {
-            assert_eq!(
-                FileWatcherEventKind::parse(value.as_str()),
-                Some(*value)
-            );
+            assert_eq!(FileWatcherEventKind::parse(value.as_str()), Some(*value));
             assert_eq!(value.to_string(), value.as_str());
         }
     }
 }
-

@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 rocode-core = { path = "../rocode-core" }
+rocode-message = { path = "../rocode-message" }
 rocode-orchestrator = { path = "../rocode-orchestrator" }
 rocode-util = { path = "../rocode-util" }
 rocode-config = { path = "../rocode-config" }

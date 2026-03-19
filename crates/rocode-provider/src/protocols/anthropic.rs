@@ -116,10 +116,10 @@ impl AnthropicProtocol {
 
                     messages.push(AnthropicMessage {
                         role: match msg.role {
-                            crate::Role::User => "user".to_string(),
-                            crate::Role::Assistant => "assistant".to_string(),
-                            crate::Role::Tool => "user".to_string(),
-                            crate::Role::System => "user".to_string(),
+                            crate::Role::Assistant => AnthropicRole::Assistant,
+                            crate::Role::User | crate::Role::Tool | crate::Role::System => {
+                                AnthropicRole::User
+                            }
                         },
                         content,
                     });
@@ -294,8 +294,15 @@ struct AnthropicRequest {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum AnthropicRole {
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Serialize)]
 struct AnthropicMessage {
-    role: String,
+    role: AnthropicRole,
     content: Vec<AnthropicContent>,
 }
 

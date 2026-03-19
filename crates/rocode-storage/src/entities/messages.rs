@@ -1,12 +1,25 @@
 use sea_orm::entity::prelude::*;
 
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "String(None)")]
+pub enum MessageRoleModel {
+    #[sea_orm(string_value = "user")]
+    User,
+    #[sea_orm(string_value = "assistant")]
+    Assistant,
+    #[sea_orm(string_value = "system")]
+    System,
+    #[sea_orm(string_value = "tool")]
+    Tool,
+}
+
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "messages")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: String,
     pub session_id: String,
-    pub role: String,
+    pub role: MessageRoleModel,
     pub created_at: i64,
     pub provider_id: Option<String>,
     pub model_id: Option<String>,
@@ -48,4 +61,3 @@ impl Related<super::parts::Entity> for Entity {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
-

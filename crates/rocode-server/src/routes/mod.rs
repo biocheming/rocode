@@ -45,7 +45,6 @@ use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::session_runtime::events::{broadcast_config_updated, ServerEvent};
-use crate::web;
 use crate::{ApiError, Result, ServerState};
 use rocode_agent::{AgentMode, AgentRegistry};
 use rocode_command::{CommandRegistry, ResolvedUiCommand};
@@ -57,9 +56,6 @@ use rocode_provider::AuthInfo;
 
 pub fn router() -> Router<Arc<ServerState>> {
     Router::new()
-        .route("/", get(web::index))
-        .route("/web/app.css", get(web::app_css))
-        .route("/web/app.js", get(web::app_js))
         .route("/health", get(health))
         .route("/event", get(event_stream))
         .route("/path", get(get_paths))

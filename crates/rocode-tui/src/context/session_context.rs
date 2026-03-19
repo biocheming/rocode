@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use rocode_command::output_blocks::SchedulerStageBlock;
+pub use rocode_message::MessageRole;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -127,14 +128,6 @@ pub struct Message {
     pub tokens: TokenUsage,
     pub metadata: Option<HashMap<String, serde_json::Value>>,
     pub parts: Vec<MessagePart>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum MessageRole {
-    User,
-    Assistant,
-    System,
-    Tool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

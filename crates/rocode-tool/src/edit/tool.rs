@@ -395,7 +395,8 @@ async fn get_lsp_diagnostics_impl_with_meta(
                     })
                     .collect();
 
-                let diagnostics_meta: Vec<serde_json::Value> = limited.iter()
+                let diagnostics_meta: Vec<serde_json::Value> = limited
+                    .iter()
                     .map(|d| {
                         serde_json::to_value(LspDiagnosticEntry {
                             line: d.range.start.line + 1,

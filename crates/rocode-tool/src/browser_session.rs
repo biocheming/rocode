@@ -772,7 +772,10 @@ mod tests {
         .with_ask(move |req| {
             let permission_log_clone = permission_log_clone.clone();
             async move {
-                permission_log_clone.lock().await.push(req.permission);
+                permission_log_clone
+                    .lock()
+                    .await
+                    .push(req.permission.as_str().to_string());
                 Ok(())
             }
         });

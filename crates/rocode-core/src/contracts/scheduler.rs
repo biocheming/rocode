@@ -92,17 +92,7 @@ pub mod stage_names {
 /// Scheduler stage name.
 ///
 /// Wire format: kebab-case strings (e.g. `"execution-orchestration"`).
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-    EnumString,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumString)]
 #[serde(rename_all = "kebab-case")]
 #[strum(serialize_all = "kebab-case", ascii_case_insensitive)]
 pub enum SchedulerStageName {
@@ -167,9 +157,7 @@ impl SchedulerStageName {
 /// Scheduler decision kind surfaced in message metadata.
 ///
 /// Wire format: lowercase strings (`"route"`, `"gate"`).
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, EnumString,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, EnumString)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum SchedulerDecisionKind {
@@ -199,9 +187,7 @@ impl SchedulerDecisionKind {
 /// Scheduler stage runtime status.
 ///
 /// Wire format: lowercase strings (e.g. `"running"`, `"waiting"`).
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, EnumString,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, EnumString)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum SchedulerStageStatus {
@@ -242,9 +228,7 @@ impl SchedulerStageStatus {
 /// What the scheduler stage is currently waiting on.
 ///
 /// Wire format: lowercase strings (`"user"`, `"tool"`, `"model"`, `"none"`).
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, EnumString,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, EnumString)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum SchedulerStageWaitingOn {

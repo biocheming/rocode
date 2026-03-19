@@ -2,9 +2,9 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
 #[cfg(test)]
 use serde_json::json;
+use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -108,9 +108,20 @@ struct RawChoice {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum RawMessageRole {
+    User,
+    Assistant,
+    System,
+    Tool,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Deserialize)]
 struct RawMessage {
     #[serde(default)]
-    role: Option<String>,
+    role: Option<RawMessageRole>,
     #[serde(default)]
     content: Option<String>,
     #[serde(default)]
@@ -211,12 +222,11 @@ impl RawChatResponse {
                 Choice {
                     index: c.index.unwrap_or(0),
                     message: Message {
-                        role: match raw_msg.role.as_deref() {
-                            Some("assistant") | None => Role::Assistant,
-                            Some("system") => Role::System,
-                            Some("user") => Role::User,
-                            Some("tool") => Role::Tool,
-                            _ => Role::Assistant,
+                        role: match raw_msg.role.unwrap_or(RawMessageRole::Assistant) {
+                            RawMessageRole::Assistant | RawMessageRole::Unknown => Role::Assistant,
+                            RawMessageRole::System => Role::System,
+                            RawMessageRole::User => Role::User,
+                            RawMessageRole::Tool => Role::Tool,
                         },
                         content,
                         cache_control: None,
@@ -904,7 +914,10 @@ fn to_openai_compatible_chat_messages(messages: &[Message]) -> Vec<Value> {
             Role::User => {
                 let mut user_message = Map::new();
                 user_message.insert("role".to_string(), Value::String("user".to_string()));
-                user_message.insert("content".to_string(), user_content_to_openai(&message.content));
+                user_message.insert(
+                    "content".to_string(),
+                    user_content_to_openai(&message.content),
+                );
                 converted.push(Value::Object(user_message));
             }
             Role::Assistant => {
@@ -1229,7 +1242,7 @@ fn extract_responses_provider_options(
     serde_json::from_value::<ResponsesProviderOptions>(
         serde_json::to_value(options).unwrap_or(Value::Null),
     )
-        .unwrap_or_default()
+    .unwrap_or_default()
 }
 
 fn tools_to_input_tools(tools: Option<&Vec<crate::ToolDefinition>>) -> Option<Vec<InputTool>> {
@@ -1553,7 +1566,7 @@ fn reassemble_sse_chunks(body: &str) -> Result<RawChatResponse, ProviderError> {
         choices: vec![RawChoice {
             index: Some(0),
             message: Some(RawMessage {
-                role: Some("assistant".to_string()),
+                role: Some(RawMessageRole::Assistant),
                 content: if content.is_empty() {
                     None
                 } else {

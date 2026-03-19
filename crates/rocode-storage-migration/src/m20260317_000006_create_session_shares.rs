@@ -27,7 +27,11 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(SessionShares::Id).string().not_null())
                     .col(ColumnDef::new(SessionShares::Secret).string().not_null())
                     .col(ColumnDef::new(SessionShares::Url).string().not_null())
-                    .col(ColumnDef::new(SessionShares::CreatedAt).big_integer().not_null())
+                    .col(
+                        ColumnDef::new(SessionShares::CreatedAt)
+                            .big_integer()
+                            .not_null(),
+                    )
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_session_shares_session")
@@ -47,4 +51,3 @@ impl MigrationTrait for Migration {
             .await
     }
 }
-

@@ -303,49 +303,7 @@ pub type CreateSyntheticMessageCallback = Arc<
         + Sync,
 >;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PermissionRequest {
-    pub permission: String,
-    pub patterns: Vec<String>,
-    pub metadata: HashMap<String, serde_json::Value>,
-    pub always: Vec<String>,
-}
-
-impl PermissionRequest {
-    pub fn new(permission: impl Into<String>) -> Self {
-        Self {
-            permission: permission.into(),
-            patterns: Vec::new(),
-            metadata: HashMap::new(),
-            always: Vec::new(),
-        }
-    }
-
-    pub fn with_pattern(mut self, pattern: impl Into<String>) -> Self {
-        self.patterns.push(pattern.into());
-        self
-    }
-
-    pub fn with_patterns(mut self, patterns: Vec<String>) -> Self {
-        self.patterns = patterns;
-        self
-    }
-
-    pub fn with_metadata(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
-        self.metadata.insert(key.into(), value);
-        self
-    }
-
-    pub fn with_always(mut self, always: impl Into<String>) -> Self {
-        self.always.push(always.into());
-        self
-    }
-
-    pub fn always_allow(mut self) -> Self {
-        self.always.push("*".to_string());
-        self
-    }
-}
+pub use rocode_permission::PermissionRequest;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolRuntimeConfig {

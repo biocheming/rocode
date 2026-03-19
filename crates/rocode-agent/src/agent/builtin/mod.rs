@@ -49,7 +49,11 @@ fn base_agent(name: &str, mode: AgentMode) -> AgentInfo {
     }
 }
 
-fn base_allowlist_agent(name: &str, mode: AgentMode, allowed_tools: &[BuiltinToolName]) -> AgentInfo {
+fn base_allowlist_agent(
+    name: &str,
+    mode: AgentMode,
+    allowed_tools: &[BuiltinToolName],
+) -> AgentInfo {
     let mut agent = base_agent(name, mode);
     agent.allowed_tools = allowed_tools
         .iter()
@@ -280,7 +284,7 @@ impl AgentInfo {
             allowed_tools: Vec::new(),
             options: HashMap::new(),
             permission: vec![PermissionRule {
-                permission: "*".to_string(),
+                permission: "*".into(),
                 pattern: "*".to_string(),
                 action: PermissionAction::Deny,
             }],
@@ -306,7 +310,7 @@ impl AgentInfo {
             allowed_tools: Vec::new(),
             options: HashMap::new(),
             permission: vec![PermissionRule {
-                permission: "*".to_string(),
+                permission: "*".into(),
                 pattern: "*".to_string(),
                 action: PermissionAction::Deny,
             }],
@@ -332,7 +336,7 @@ impl AgentInfo {
             allowed_tools: Vec::new(),
             options: HashMap::new(),
             permission: vec![PermissionRule {
-                permission: "*".to_string(),
+                permission: "*".into(),
                 pattern: "*".to_string(),
                 action: PermissionAction::Deny,
             }],

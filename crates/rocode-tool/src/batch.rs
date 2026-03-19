@@ -1,6 +1,6 @@
 use async_trait::async_trait;
-use rocode_core::contracts::{
-    tools::{arg_keys as tool_arg_keys, BuiltinToolName, ToolCallStatusWire},
+use rocode_core::contracts::tools::{
+    arg_keys as tool_arg_keys, BuiltinToolName, ToolCallStatusWire,
 };
 use serde::{Deserialize, Serialize};
 use std::future::Future;

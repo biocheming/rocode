@@ -267,7 +267,7 @@ pub fn build_cli_permission_callback(
             // Check if already granted
             {
                 let mem = memory.lock().await;
-                if mem.is_granted(&request.permission, &request.patterns) {
+                if mem.is_granted(request.permission.as_str(), &request.patterns) {
                     return Ok(());
                 }
             }
@@ -277,7 +277,7 @@ pub fn build_cli_permission_callback(
             if !request.always.is_empty() {
                 // The tool itself says this should always be allowed
                 let mut mem = memory.lock().await;
-                mem.grant_always(&request.permission, &request.patterns);
+                mem.grant_always(request.permission.as_str(), &request.patterns);
                 return Ok(());
             }
 
@@ -289,7 +289,7 @@ pub fn build_cli_permission_callback(
             guard.pause();
 
             // Prompt user on a blocking task (crossterm raw mode needs real terminal)
-            let permission = request.permission.clone();
+            let permission = request.permission.to_string();
             let patterns = request.patterns.clone();
             let metadata = request.metadata.clone();
 
@@ -313,7 +313,7 @@ pub fn build_cli_permission_callback(
                 PermissionDecision::Allow => Ok(()),
                 PermissionDecision::AllowAlways => {
                     let mut mem = memory.lock().await;
-                    mem.grant_always(&request.permission, &request.patterns);
+                    mem.grant_always(request.permission.as_str(), &request.patterns);
                     Ok(())
                 }
                 PermissionDecision::Deny => Err(rocode_tool::ToolError::PermissionDenied(format!(

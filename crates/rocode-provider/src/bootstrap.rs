@@ -3592,8 +3592,7 @@ mod tests {
         model.provider_id = state.id.clone();
         state.models.insert("gpt-5-mini".to_string(), model);
 
-        let cfg =
-            provider_config_for_protocol("openai-relay", &state, Protocol::OpenAI).unwrap();
+        let cfg = provider_config_for_protocol("openai-relay", &state, Protocol::OpenAI).unwrap();
         assert!(cfg.options.get("legacy_only").is_none());
     }
 }

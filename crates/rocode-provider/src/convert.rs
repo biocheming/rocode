@@ -10,6 +10,8 @@ use std::collections::HashMap;
 
 use crate::responses::{CallWarning, ResponsesInput, SystemMessageMode};
 
+pub type PromptRole = rocode_message::MessageRole;
+
 // ---------------------------------------------------------------------------
 // Prompt Types (language-model-agnostic)
 // ---------------------------------------------------------------------------
@@ -21,15 +23,6 @@ pub struct PromptMessage {
     pub content: PromptContent,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_options: Option<HashMap<String, serde_json::Value>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum PromptRole {
-    System,
-    User,
-    Assistant,
-    Tool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

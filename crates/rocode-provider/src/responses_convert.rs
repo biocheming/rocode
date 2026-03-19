@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
+use serde_json::Value;
 
 use crate::message::{Content, ContentPart, Message, Role};
 use crate::responses::{

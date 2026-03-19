@@ -1,5 +1,6 @@
 use reqwest::blocking::Client;
 use rocode_config::Config as AppConfig;
+use rocode_permission::{PermissionReply, PermissionReplyRequest};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -8,8 +9,6 @@ use tokio::sync::RwLock;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub id: String,
-    pub slug: String,
-    pub project_id: String,
     pub directory: String,
     pub parent_id: Option<String>,
     pub title: String,
@@ -25,8 +24,6 @@ pub struct SessionInfo {
 pub struct SessionTimeInfo {
     pub created: i64,
     pub updated: i64,
-    pub compacting: Option<i64>,
-    pub archived: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,11 +158,7 @@ pub struct PendingQuestionSummary {
 }
 
 /// Summary of a pending permission request awaiting user decision.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PendingPermissionSummary {
-    pub permission_id: String,
-    pub info: serde_json::Value,
-}
+pub type PendingPermissionSummary = rocode_permission::PendingPermissionSummary;
 
 /// Summary of an attached child session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -279,15 +272,7 @@ pub struct QuestionInfo {
     pub items: Vec<QuestionItemInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PermissionRequestInfo {
-    pub id: String,
-    #[serde(alias = "sessionID", alias = "sessionId")]
-    pub session_id: String,
-    pub tool: String,
-    pub input: serde_json::Value,
-    pub message: String,
-}
+pub type PermissionRequestInfo = rocode_permission::PermissionRequestInfo;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessagePart {
@@ -346,7 +331,7 @@ pub struct MessageInfo {
     pub id: String,
     #[serde(alias = "sessionId")]
     pub session_id: String,
-    pub role: String,
+    pub role: rocode_message::MessageRole,
     pub created_at: i64,
     #[serde(default, alias = "completedAt")]
     pub completed_at: Option<i64>,
@@ -804,14 +789,11 @@ impl ApiClient {
     pub fn reply_permission(
         &self,
         permission_id: &str,
-        reply: &str,
+        reply: PermissionReply,
         message: Option<String>,
     ) -> anyhow::Result<()> {
         let url = format!("{}/permission/{}/reply", self.base_url, permission_id);
-        let body = serde_json::json!({
-            "reply": reply,
-            "message": message,
-        });
+        let body = PermissionReplyRequest { reply, message };
         let response = self.client.post(&url).json(&body).send()?;
         if !response.status().is_success() {
             let status = response.status();

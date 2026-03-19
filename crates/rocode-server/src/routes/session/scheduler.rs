@@ -854,11 +854,21 @@ pub async fn run_local_scheduler_prompt(
             Some(existing) => existing.id,
             None => {
                 sessions
-                    .create("rocode-cli", resolved_session_directory(&req.directory))
+                    .create(resolved_session_directory(&req.directory))
                     .id
             }
         }
     };
+    if !state
+        .ensure_session_hydrated(&session_id)
+        .await
+        .map_err(|error| anyhow::anyhow!("failed to hydrate scheduler session: {}", error))?
+    {
+        return Err(anyhow::anyhow!(
+            "failed to initialize local scheduler session: {}",
+            session_id
+        ));
+    }
     let request_config = resolve_prompt_request_config(PromptRequestConfigInput {
         state: &state,
         config: &config,
@@ -985,6 +995,7 @@ pub async fn run_local_scheduler_prompt(
         let mut sessions = state.sessions.lock().await;
         sessions.update(session.clone());
     }
+    state.touch_session_cache(&session_id).await;
 
     let agent_registry = Arc::new(AgentRegistry::from_config(&config));
     if profile_config.available_agents.is_empty() {
@@ -1218,6 +1229,7 @@ pub async fn run_local_scheduler_prompt(
         let mut sessions = state.sessions.lock().await;
         sessions.update(session);
     }
+    state.touch_session_cache(&session_id).await;
     broadcast_session_updated(state.as_ref(), session_id.clone(), "prompt.completed");
     set_session_run_status(&state, &session_id, SessionRunStatus::Idle).await;
 

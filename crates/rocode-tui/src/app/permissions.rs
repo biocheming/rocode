@@ -1,94 +1,32 @@
 use std::collections::HashSet;
 
-use crate::components::{PermissionRequest, PermissionType};
-use serde::Deserialize;
+use crate::components::PermissionRequest;
+use rocode_permission::PermissionReply;
 
 use super::App;
 
 impl App {
-    fn permission_type_from_name(name: &str) -> PermissionType {
-        match name {
-            "read" => PermissionType::ReadFile,
-            "write" => PermissionType::WriteFile,
-            "edit" => PermissionType::Edit,
-            "bash" => PermissionType::Bash,
-            "glob" => PermissionType::Glob,
-            "grep" => PermissionType::Grep,
-            "list" => PermissionType::List,
-            "task" | "task_flow" => PermissionType::Task,
-            "webfetch" => PermissionType::WebFetch,
-            "websearch" => PermissionType::WebSearch,
-            "codesearch" => PermissionType::CodeSearch,
-            "external_directory" => PermissionType::ExternalDirectory,
-            _ => PermissionType::ExecuteCommand,
-        }
-    }
-
     fn permission_request_to_prompt(
         permission: &crate::api::PermissionRequestInfo,
     ) -> PermissionRequest {
-        #[derive(Debug, Deserialize, Default)]
-        struct PermissionInput {
-            #[serde(default)]
-            permission: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_patterns_lossy")]
-            patterns: Vec<String>,
-            #[serde(default)]
-            metadata: Option<PermissionMetadata>,
-        }
-
-        #[derive(Debug, Deserialize, Default)]
-        struct PermissionMetadata {
-            #[serde(default)]
-            command: Option<String>,
-            #[serde(default)]
-            filepath: Option<String>,
-            #[serde(default)]
-            path: Option<String>,
-        }
-
-        fn deserialize_patterns_lossy<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-            let Some(value) = value else {
-                return Ok(Vec::new());
-            };
-            match value {
-                serde_json::Value::Array(values) => Ok(values
-                    .into_iter()
-                    .filter_map(|value| value.as_str().map(str::to_string))
-                    .collect()),
-                _ => Ok(Vec::new()),
-            }
-        }
-
-        let input =
-            serde_json::from_value::<PermissionInput>(permission.input.clone()).unwrap_or_default();
-        let permission_name = input
-            .permission
-            .as_deref()
-            .unwrap_or(permission.tool.as_str());
-
-        let resource = (!input.patterns.is_empty())
-            .then(|| input.patterns.join(", "))
+        let metadata = permission.input.metadata_view();
+        let resource = (!permission.input.patterns.is_empty())
+            .then(|| permission.input.patterns.join(", "))
             .or_else(|| {
-                input.metadata.and_then(|meta| {
-                    meta.command
-                        .or(meta.filepath)
-                        .or(meta.path)
-                        .map(|value| value.trim().to_string())
-                        .filter(|value| !value.is_empty())
-                })
+                metadata
+                    .command
+                    .or(metadata.filepath)
+                    .or(metadata.path)
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
             })
             .unwrap_or_else(|| permission.message.clone());
 
         PermissionRequest {
             id: permission.id.clone(),
-            permission_type: Self::permission_type_from_name(permission_name),
+            permission: permission.tool.clone(),
             resource,
-            tool_name: permission_name.to_string(),
+            tool_name: permission.tool.as_str().to_string(),
         }
     }
 
@@ -141,7 +79,7 @@ impl App {
     pub(super) fn resolve_permission_request(
         &mut self,
         permission_id: &str,
-        reply: &str,
+        reply: PermissionReply,
         message: Option<String>,
     ) {
         let Some(client) = self.context.get_api_client() else {

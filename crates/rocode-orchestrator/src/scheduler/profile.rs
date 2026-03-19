@@ -74,7 +74,17 @@ struct StageEffectsRequest<'a> {
 }
 
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString, IntoStaticStr,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    Display,
+    EnumString,
+    IntoStaticStr,
 )]
 #[serde(rename_all = "kebab-case")]
 #[strum(serialize_all = "kebab-case", ascii_case_insensitive)]

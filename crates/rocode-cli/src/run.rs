@@ -33,6 +33,7 @@ use rocode_orchestrator::{
     scheduler_plan_from_profile, scheduler_request_defaults_from_plan, SchedulerConfig,
     SchedulerPresetKind, SchedulerProfileConfig, SchedulerRequestDefaults,
 };
+use rocode_permission::PermissionReply;
 use rocode_provider::ProviderRegistry;
 use rocode_util::util::color::strip_ansi;
 use tokio::sync::{mpsc, Mutex as AsyncMutex};
@@ -780,7 +781,7 @@ async fn handle_permission_from_sse(
                 let _ = api_client
                     .reply_permission(
                         permission_id,
-                        "reject",
+                        PermissionReply::Reject,
                         Some("Invalid permission request payload".to_string()),
                     )
                     .await;
@@ -788,37 +789,19 @@ async fn handle_permission_from_sse(
             }
         };
 
-    let input = info.input.as_object().cloned().unwrap_or_default();
-    let permission = input
-        .get("permission")
-        .and_then(|value| value.as_str())
-        .unwrap_or(info.tool.as_str())
-        .to_string();
-    let patterns = input
-        .get("patterns")
-        .and_then(|value| value.as_array())
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(|value| value.as_str().map(str::to_string))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let metadata = input
-        .get("metadata")
-        .and_then(|value| value.as_object())
-        .map(|map| {
-            map.iter()
-                .map(|(key, value)| (key.clone(), value.clone()))
-                .collect::<HashMap<_, _>>()
-        })
-        .unwrap_or_default();
+    let permission = info.input.permission.as_str().to_string();
+    let patterns = info.input.patterns.clone();
+    let metadata = info.input.metadata.clone();
 
     {
         let memory = runtime.permission_memory.lock().await;
         if memory.is_granted(&permission, &patterns) {
             let _ = api_client
-                .reply_permission(permission_id, "once", Some("auto-approved".to_string()))
+                .reply_permission(
+                    permission_id,
+                    PermissionReply::Once,
+                    Some("auto-approved".to_string()),
+                )
                 .await;
             return;
         }
@@ -851,7 +834,7 @@ async fn handle_permission_from_sse(
             let _ = api_client
                 .reply_permission(
                     permission_id,
-                    "reject",
+                    PermissionReply::Reject,
                     Some(format!("Permission prompt IO error: {}", error)),
                 )
                 .await;
@@ -862,7 +845,7 @@ async fn handle_permission_from_sse(
             let _ = api_client
                 .reply_permission(
                     permission_id,
-                    "reject",
+                    PermissionReply::Reject,
                     Some(format!("Permission prompt failed: {}", error)),
                 )
                 .await;
@@ -871,13 +854,13 @@ async fn handle_permission_from_sse(
     };
 
     let (reply, message) = match decision {
-        PermissionDecision::Allow => ("once", Some("approved".to_string())),
+        PermissionDecision::Allow => (PermissionReply::Once, Some("approved".to_string())),
         PermissionDecision::AllowAlways => {
             let mut memory = runtime.permission_memory.lock().await;
             memory.grant_always(&permission, &patterns);
-            ("always", Some("approved always".to_string()))
+            (PermissionReply::Always, Some("approved always".to_string()))
         }
-        PermissionDecision::Deny => ("reject", Some("rejected".to_string())),
+        PermissionDecision::Deny => (PermissionReply::Reject, Some("rejected".to_string())),
     };
 
     if let Err(error) = api_client
@@ -928,7 +911,7 @@ async fn cli_refresh_server_info(
             Ok(messages) => {
                 let mut stats = CliSessionTokenStats::default();
                 for msg in &messages {
-                    if msg.role == "assistant" {
+                    if matches!(msg.role, rocode_message::MessageRole::Assistant) {
                         stats.accumulate(&msg.tokens, msg.cost);
                     }
                 }
@@ -1939,8 +1922,6 @@ mod tests {
         let now = Utc::now().timestamp_millis();
         let sessions = vec![SessionInfo {
             id: "s1".to_string(),
-            slug: "s1".to_string(),
-            project_id: "p1".to_string(),
             directory: "/tmp/project".to_string(),
             parent_id: None,
             title: "Research Session".to_string(),
@@ -1948,8 +1929,6 @@ mod tests {
             time: SessionTimeInfo {
                 created: now,
                 updated: now,
-                compacting: None,
-                archived: None,
             },
             revert: None,
             metadata: Some(HashMap::from([

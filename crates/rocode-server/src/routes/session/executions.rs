@@ -52,6 +52,13 @@ pub(super) async fn get_session_executions(
     Path(session_id): Path<String>,
 ) -> Result<Json<SessionExecutionTopology>> {
     ensure_session_exists(&state, &session_id).await?;
+    if !state
+        .ensure_session_hydrated(&session_id)
+        .await
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?
+    {
+        return Err(ApiError::SessionNotFound(session_id));
+    }
     let session = {
         let sessions = state.sessions.lock().await;
         sessions

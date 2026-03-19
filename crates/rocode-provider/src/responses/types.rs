@@ -269,8 +269,17 @@ pub enum ResponsesInputItem {
 pub type ResponsesInput = Vec<serde_json::Value>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponsesRoleWire {
+    System,
+    Developer,
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponsesRoleMessage {
-    pub role: String, // "system" | "developer" | "user" | "assistant"
+    pub role: ResponsesRoleWire,
     pub content: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,

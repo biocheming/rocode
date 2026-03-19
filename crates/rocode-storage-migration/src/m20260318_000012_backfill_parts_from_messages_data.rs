@@ -1,7 +1,7 @@
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use sea_orm_migration::prelude::*;
 
-use rocode_types::{MessagePart, PartType, ToolCallStatus};
+use rocode_session::{MessagePart, PartType, ToolCallStatus};
 use tracing::{info, warn};
 
 pub struct Migration;

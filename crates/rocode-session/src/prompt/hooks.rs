@@ -58,12 +58,7 @@ pub(crate) fn session_message_hook_payload(message: &SessionMessage) -> serde_js
 }
 
 pub(crate) fn hook_message_role(role: &MessageRole) -> &'static str {
-    match role {
-        MessageRole::User => "user",
-        MessageRole::Assistant => "assistant",
-        MessageRole::System => "system",
-        MessageRole::Tool => "tool",
-    }
+    role.as_str()
 }
 
 pub(crate) fn apply_chat_messages_hook_outputs(

@@ -5,9 +5,7 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: String,
-    pub project_id: String,
     pub parent_id: Option<String>,
-    pub slug: String,
     pub directory: String,
     pub title: String,
     pub version: String,
@@ -25,11 +23,9 @@ pub struct Model {
     pub usage_cache_write_tokens: i64,
     pub usage_cache_read_tokens: i64,
     pub usage_total_cost: f64,
-    pub status: String,
+    pub status: bool,
     pub created_at: i64,
     pub updated_at: i64,
-    pub time_compacting: Option<i64>,
-    pub time_archived: Option<i64>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -69,4 +65,3 @@ impl Related<super::session_shares::Entity> for Entity {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
-

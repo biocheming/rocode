@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use glob::Pattern;
-use rocode_core::contracts::permission::PermissionTypeWire;
 use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
+use rocode_permission::PermissionKind;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -131,7 +131,7 @@ impl Tool for LsTool {
         .await?;
 
         ctx.ask_permission(
-            PermissionRequest::new(PermissionTypeWire::List.as_str())
+            PermissionRequest::new(PermissionKind::List)
                 .with_pattern(&base_dir_str)
                 .with_metadata(tool_arg_keys::PATH, serde_json::json!(&base_dir_str))
                 .always_allow(),
@@ -270,7 +270,10 @@ mod tests {
         .with_ask(move |req| {
             let seen_clone = Arc::clone(&seen_clone);
             async move {
-                seen_clone.lock().expect("lock").push(req.permission);
+                seen_clone
+                    .lock()
+                    .expect("lock")
+                    .push(req.permission.as_str().to_string());
                 Ok(())
             }
         });
@@ -284,7 +287,7 @@ mod tests {
             .expect("ls should succeed");
 
         let permissions = seen.lock().expect("lock").clone();
-        assert!(permissions.contains(&PermissionTypeWire::ExternalDirectory.as_str().to_string()));
-        assert!(permissions.contains(&PermissionTypeWire::List.as_str().to_string()));
+        assert!(permissions.contains(&PermissionKind::ExternalDirectory.as_str().to_string()));
+        assert!(permissions.contains(&PermissionKind::List.as_str().to_string()));
     }
 }

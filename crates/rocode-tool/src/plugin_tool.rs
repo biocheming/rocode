@@ -10,9 +10,9 @@ use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::Value;
 
+use rocode_core::contracts::attachments::{keys as attachment_keys, AttachmentTypeWire};
 use rocode_plugin::subprocess::client::PluginToolDef;
 use rocode_plugin::subprocess::loader::PluginLoader;
-use rocode_core::contracts::attachments::{keys as attachment_keys, AttachmentTypeWire};
 
 use crate::tool::{Metadata, Tool, ToolContext, ToolError, ToolResult};
 use crate::truncation;

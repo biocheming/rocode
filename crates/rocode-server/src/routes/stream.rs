@@ -162,6 +162,14 @@ pub(crate) async fn stream_message(
         ));
     }
 
+    if !state
+        .ensure_session_hydrated(&session_id)
+        .await
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?
+    {
+        return Err(ApiError::SessionNotFound(session_id));
+    }
+
     let request_variant = {
         let sessions = state.sessions.lock().await;
         let session = sessions
@@ -290,6 +298,7 @@ pub(crate) async fn stream_message(
                     let mut sessions = update_state.sessions.lock().await;
                     sessions.update(snapshot.clone());
                 }
+                update_state.touch_session_cache(&snapshot.id).await;
             }
         });
 
@@ -464,6 +473,7 @@ pub(crate) async fn stream_message(
             let mut sessions = stream_state.sessions.lock().await;
             sessions.update(session.clone());
         }
+        stream_state.touch_session_cache(&stream_session_id).await;
         emit_latest_assistant_usage(&stream_tx, &stream_session_id, &session).await;
         broadcast_session_updated(
             stream_state.as_ref(),

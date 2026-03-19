@@ -46,16 +46,7 @@ pub struct StageSummary {
 }
 
 #[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    Display,
-    EnumString,
-    IntoStaticStr,
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, EnumString, IntoStaticStr,
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case", ascii_case_insensitive)]

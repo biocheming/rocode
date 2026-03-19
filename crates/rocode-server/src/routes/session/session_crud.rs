@@ -15,6 +15,10 @@ use crate::session_runtime::events::{
 };
 use crate::{ApiError, Result, ServerState};
 
+fn map_storage_err(err: rocode_storage::DatabaseError) -> ApiError {
+    ApiError::InternalError(format!("storage error: {}", err))
+}
+
 // ─── Request / Response structs ───────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -30,8 +34,6 @@ pub struct ListSessionsQuery {
 #[derive(Debug, Serialize)]
 pub struct SessionInfo {
     pub id: String,
-    pub slug: String,
-    pub project_id: String,
     pub directory: String,
     pub parent_id: Option<String>,
     pub title: String,
@@ -49,8 +51,6 @@ pub struct SessionInfo {
 pub struct SessionTimeInfo {
     pub created: i64,
     pub updated: i64,
-    pub compacting: Option<i64>,
-    pub archived: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -75,7 +75,7 @@ pub(super) struct MessageInfoResponse {
     id: String,
     #[serde(rename = "sessionID")]
     session_id: String,
-    role: String,
+    role: rocode_session::MessageRole,
     #[serde(rename = "createdAt")]
     created_at: i64,
 }
@@ -142,12 +142,7 @@ pub struct SessionRevertInfo {
     pub diff: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct PermissionRulesetInfo {
-    pub allow: Vec<String>,
-    pub deny: Vec<String>,
-    pub mode: Option<String>,
-}
+pub type PermissionRulesetInfo = rocode_session::PermissionRuleset;
 
 #[derive(Debug, Serialize)]
 pub struct SessionStatusInfo {
@@ -183,32 +178,16 @@ pub struct CreateSessionRequest {
     pub scheduler_profile: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct PermissionRulesetInput {
-    pub allow: Option<Vec<String>>,
-    pub deny: Option<Vec<String>>,
-    pub mode: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct UpdateSessionTimeRequest {
-    pub archived: Option<i64>,
-}
+pub type PermissionRulesetInput = rocode_session::PermissionRuleset;
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateSessionRequest {
     pub title: Option<String>,
-    pub time: Option<UpdateSessionTimeRequest>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ForkSessionRequest {
     pub message_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ArchiveSessionRequest {
-    pub archive: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -263,8 +242,6 @@ pub struct ExecuteCommandRequest {
 pub(super) fn session_to_info(session: &rocode_session::Session) -> SessionInfo {
     SessionInfo {
         id: session.id.clone(),
-        slug: session.slug.clone(),
-        project_id: session.project_id.clone(),
         directory: session.directory.clone(),
         parent_id: session.parent_id.clone(),
         title: session.title.clone(),
@@ -272,8 +249,6 @@ pub(super) fn session_to_info(session: &rocode_session::Session) -> SessionInfo 
         time: SessionTimeInfo {
             created: session.time.created,
             updated: session.time.updated,
-            compacting: session.time.compacting,
-            archived: session.time.archived,
         },
         summary: session.summary.as_ref().map(|s| SessionSummaryInfo {
             additions: s.additions,
@@ -283,18 +258,14 @@ pub(super) fn session_to_info(session: &rocode_session::Session) -> SessionInfo 
         share: session
             .share
             .as_ref()
-            .map(|s| SessionShareInfo { url: s.url.clone() }),
+            .map(|url| SessionShareInfo { url: url.clone() }),
         revert: session.revert.as_ref().map(|r| SessionRevertInfo {
             message_id: r.message_id.clone(),
             part_id: r.part_id.clone(),
             snapshot: r.snapshot.clone(),
             diff: r.diff.clone(),
         }),
-        permission: session.permission.as_ref().map(|p| PermissionRulesetInfo {
-            allow: p.allow.clone(),
-            deny: p.deny.clone(),
-            mode: p.mode.clone(),
-        }),
+        permission: session.permission.clone(),
         metadata: if session.metadata.is_empty() {
             None
         } else {
@@ -393,6 +364,21 @@ pub(super) async fn set_session_run_status(
     session_id: &str,
     status: SessionRunStatus,
 ) {
+    let is_running = !matches!(status, SessionRunStatus::Idle);
+    {
+        let mut sessions = state.sessions.lock().await;
+        let should_update = sessions
+            .get(session_id)
+            .map(|session| session.active != is_running)
+            .unwrap_or(false);
+        if should_update {
+            let _ = sessions.mutate_session(session_id, |session| {
+                session.set_active(is_running);
+            });
+        }
+    }
+    persist_sessions_if_enabled(state).await;
+
     state
         .runtime_control
         .set_session_run_status(session_id, status.clone())
@@ -527,16 +513,14 @@ pub(super) async fn session_status(
     let status: HashMap<String, SessionStatusInfo> = sessions
         .into_iter()
         .map(|s| {
-            let lifecycle_status = match s.status {
-                rocode_session::SessionStatus::Active => "active",
-                rocode_session::SessionStatus::Completed => "completed",
-                rocode_session::SessionStatus::Archived => "archived",
-                rocode_session::SessionStatus::Compacting => "compacting",
-            };
             let run = run_status.get(&s.id).cloned().unwrap_or_default();
             let (status, idle, busy, attempt, message, next) = match run {
                 SessionRunStatus::Idle => {
-                    (lifecycle_status.to_string(), true, false, None, None, None)
+                    if s.active {
+                        ("busy".to_string(), false, true, None, None, None)
+                    } else {
+                        ("idle".to_string(), true, false, None, None, None)
+                    }
                 }
                 SessionRunStatus::Busy => ("busy".to_string(), false, true, None, None, None),
                 SessionRunStatus::Retry {
@@ -578,7 +562,7 @@ pub(super) async fn create_session(
             .create_child(parent_id)
             .ok_or_else(|| ApiError::SessionNotFound(parent_id.clone()))?
     } else {
-        sessions.create("default", resolved_session_directory("."))
+        sessions.create(resolved_session_directory("."))
     };
     let normalized_directory = resolved_session_directory(&session.directory);
     if session.directory != normalized_directory {
@@ -619,19 +603,14 @@ pub(super) async fn update_session(
     Json(req): Json<UpdateSessionRequest>,
 ) -> Result<Json<SessionInfo>> {
     let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&id)
+    let info = sessions
+        .mutate_session(&id, |session| {
+            if let Some(title) = req.title {
+                session.set_title(title);
+            }
+            session_to_info(session)
+        })
         .ok_or_else(|| ApiError::SessionNotFound(id.clone()))?;
-
-    if let Some(title) = req.title {
-        session.set_title(title);
-    }
-    if let Some(time) = req.time {
-        if let Some(archived) = time.archived {
-            session.set_archived(Some(archived));
-        }
-    }
-    let info = session_to_info(session);
     drop(sessions);
     persist_sessions_if_enabled(&state).await;
     Ok(Json(info))
@@ -652,6 +631,7 @@ pub(super) async fn delete_session(
         .set_session_run_status(&id, SessionRunStatus::Idle)
         .await;
     state.runtime_state.remove(&id).await;
+    state.clear_session_cache(&id).await;
     persist_sessions_if_enabled(&state).await;
     Ok(Json(DeletedResponse { deleted: true }))
 }
@@ -716,6 +696,14 @@ pub(super) async fn fork_session(
     Path(id): Path<String>,
     Json(req): Json<ForkSessionRequest>,
 ) -> Result<Json<SessionInfo>> {
+    if !state
+        .ensure_session_hydrated(&id)
+        .await
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?
+    {
+        return Err(ApiError::SessionNotFound(id));
+    }
+
     let forked = state
         .sessions
         .lock()
@@ -753,40 +741,18 @@ pub(super) async fn unshare_session(
     Ok(Json(UnsharedResponse { unshared: true }))
 }
 
-pub(super) async fn archive_session(
-    State(state): State<Arc<ServerState>>,
-    Path(id): Path<String>,
-    Json(req): Json<ArchiveSessionRequest>,
-) -> Result<Json<SessionInfo>> {
-    let mut sessions = state.sessions.lock().await;
-    let info = if req.archive.unwrap_or(true) {
-        let updated = sessions
-            .set_archived(&id, None)
-            .ok_or_else(|| ApiError::SessionNotFound(id.clone()))?;
-        session_to_info(&updated)
-    } else {
-        let session = sessions
-            .get(&id)
-            .ok_or_else(|| ApiError::SessionNotFound(id.clone()))?;
-        session_to_info(session)
-    };
-    drop(sessions);
-    persist_sessions_if_enabled(&state).await;
-    Ok(Json(info))
-}
-
 pub(super) async fn set_session_title(
     State(state): State<Arc<ServerState>>,
     Path(id): Path<String>,
     Json(req): Json<SetTitleRequest>,
 ) -> Result<Json<SessionInfo>> {
     let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&id)
+    let updated = sessions
+        .mutate_session(&id, |session| {
+            session.set_title(&req.title);
+            session.clone()
+        })
         .ok_or_else(|| ApiError::SessionNotFound(id.clone()))?;
-    session.set_title(&req.title);
-    let updated = session.clone();
-    sessions.update(updated.clone());
     let info = session_to_info(&updated);
     drop(sessions);
     broadcast_session_updated(state.as_ref(), id, "session.title.set");
@@ -801,14 +767,7 @@ pub(super) async fn set_session_permission(
 ) -> Result<Json<SessionInfo>> {
     let mut sessions = state.sessions.lock().await;
     let updated = sessions
-        .set_permission(
-            &id,
-            rocode_session::PermissionRuleset {
-                allow: req.allow.unwrap_or_default(),
-                deny: req.deny.unwrap_or_default(),
-                mode: req.mode,
-            },
-        )
+        .set_permission(&id, req)
         .ok_or_else(|| ApiError::SessionNotFound(id.clone()))?;
     let info = session_to_info(&updated);
     drop(sessions);
@@ -900,25 +859,39 @@ pub(super) async fn clear_session_revert(
     Ok(Json(info))
 }
 
-pub(super) async fn start_compaction(
-    State(state): State<Arc<ServerState>>,
-    Path(id): Path<String>,
-) -> Result<Json<SessionInfo>> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&id)
-        .ok_or_else(|| ApiError::SessionNotFound(id.clone()))?;
-    session.start_compacting();
-    let info = session_to_info(session);
-    drop(sessions);
-    persist_sessions_if_enabled(&state).await;
-    Ok(Json(info))
-}
-
 pub(super) async fn get_message(
     State(state): State<Arc<ServerState>>,
     Path((session_id, msg_id)): Path<(String, String)>,
 ) -> Result<Json<MessageDetailResponse>> {
+    let session_exists = state
+        .ensure_session_loaded(&session_id)
+        .await
+        .map_err(|err| {
+            ApiError::InternalError(format!("failed to load session metadata: {}", err))
+        })?;
+    if !session_exists {
+        return Err(ApiError::SessionNotFound(session_id));
+    }
+
+    if let Some(message_repo) = state.message_repo.as_ref() {
+        if let Some(message) = message_repo.get(&msg_id).await.map_err(map_storage_err)? {
+            if message.session_id != session_id {
+                return Err(ApiError::NotFound(format!("Message not found: {}", msg_id)));
+            }
+            let info = MessageInfoResponse {
+                id: message.id.clone(),
+                session_id,
+                role: message.role,
+                created_at: message.created_at.timestamp_millis(),
+            };
+            return Ok(Json(MessageDetailResponse {
+                info,
+                parts: message.parts,
+            }));
+        }
+        return Err(ApiError::NotFound(format!("Message not found: {}", msg_id)));
+    }
+
     let sessions = state.sessions.lock().await;
     let session = sessions
         .get(&session_id)
@@ -926,11 +899,10 @@ pub(super) async fn get_message(
     let message = session
         .get_message(&msg_id)
         .ok_or_else(|| ApiError::NotFound(format!("Message not found: {}", msg_id)))?;
-
     let info = MessageInfoResponse {
         id: message.id.clone(),
         session_id,
-        role: super::messages::message_role_name(&message.role).to_string(),
+        role: message.role,
         created_at: message.created_at.timestamp_millis(),
     };
     Ok(Json(MessageDetailResponse {
@@ -944,13 +916,13 @@ pub(super) async fn update_part(
     Path((session_id, msg_id, part_id)): Path<(String, String, String)>,
     Json(req): Json<UpdatePartRequest>,
 ) -> Result<Json<UpdatePartResponse>> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
-    let message = session
-        .get_message_mut(&msg_id)
-        .ok_or_else(|| ApiError::NotFound(format!("Message not found: {}", msg_id)))?;
+    if !state
+        .ensure_session_hydrated(&session_id)
+        .await
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?
+    {
+        return Err(ApiError::SessionNotFound(session_id));
+    }
 
     let mut part: rocode_session::MessagePart = serde_json::from_value(req.part)
         .map_err(|e| ApiError::BadRequest(format!("Invalid part payload: {}", e)))?;
@@ -962,17 +934,25 @@ pub(super) async fn update_part(
     }
     part.message_id = Some(msg_id.clone());
 
-    let updated_part = {
-        let target = message
-            .parts
-            .iter_mut()
-            .find(|existing| existing.id == part_id)
-            .ok_or_else(|| ApiError::NotFound(format!("Part not found: {}", part_id)))?;
-        *target = part.clone();
-        target.clone()
-    };
-    session.touch();
+    let mut sessions = state.sessions.lock().await;
+    let updated_part = sessions
+        .mutate_session(&session_id, |session| {
+            let message = session
+                .get_message_mut(&msg_id)
+                .ok_or_else(|| ApiError::NotFound(format!("Message not found: {}", msg_id)))?;
+            let target = message
+                .parts
+                .iter_mut()
+                .find(|existing| existing.id == part_id)
+                .ok_or_else(|| ApiError::NotFound(format!("Part not found: {}", part_id)))?;
+            *target = part.clone();
+            let updated_part = target.clone();
+            session.touch();
+            Ok::<rocode_session::MessagePart, ApiError>(updated_part)
+        })
+        .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))??;
     drop(sessions);
+    state.touch_session_cache(&session_id).await;
     persist_sessions_if_enabled(&state).await;
 
     Ok(Json(UpdatePartResponse {
@@ -986,15 +966,25 @@ pub(super) async fn execute_shell(
     Path(id): Path<String>,
     Json(req): Json<ExecuteShellRequest>,
 ) -> Result<Json<ExecuteShellResponse>> {
+    if !state
+        .ensure_session_hydrated(&id)
+        .await
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?
+    {
+        return Err(ApiError::SessionNotFound(id));
+    }
+
     let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&id)
+    let assistant_id = sessions
+        .mutate_session(&id, |session| {
+            session.add_user_message(format!("$ {}", req.command));
+            let assistant = session.add_assistant_message();
+            assistant.add_text(format!("Shell command queued: {}", req.command));
+            assistant.id.clone()
+        })
         .ok_or_else(|| ApiError::SessionNotFound(id.clone()))?;
-    session.add_user_message(format!("$ {}", req.command));
-    let assistant = session.add_assistant_message();
-    assistant.add_text(format!("Shell command queued: {}", req.command));
-    let assistant_id = assistant.id.clone();
     drop(sessions);
+    state.touch_session_cache(&id).await;
     persist_sessions_if_enabled(&state).await;
 
     Ok(Json(ExecuteShellResponse {
@@ -1017,19 +1007,28 @@ pub(super) async fn execute_command(
     Path(id): Path<String>,
     Json(req): Json<ExecuteCommandRequest>,
 ) -> Result<Json<ExecuteCommandResponse>> {
+    if !state
+        .ensure_session_hydrated(&id)
+        .await
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?
+    {
+        return Err(ApiError::SessionNotFound(id));
+    }
+
     let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&id)
-        .ok_or_else(|| ApiError::SessionNotFound(id.clone()))?;
     let text = req
         .arguments
         .as_deref()
         .map(|args| format!("/{cmd} {args}", cmd = req.command))
         .unwrap_or_else(|| format!("/{}", req.command));
-    session.add_user_message(text);
-    let assistant = session.add_assistant_message();
-    assistant.add_text(format!("Command queued: {}", req.command));
-    let assistant_id = assistant.id.clone();
+    let assistant_id = sessions
+        .mutate_session(&id, |session| {
+            session.add_user_message(text);
+            let assistant = session.add_assistant_message();
+            assistant.add_text(format!("Command queued: {}", req.command));
+            assistant.id.clone()
+        })
+        .ok_or_else(|| ApiError::SessionNotFound(id.clone()))?;
     let arguments = req
         .arguments
         .as_deref()
@@ -1042,6 +1041,7 @@ pub(super) async fn execute_command(
         .unwrap_or_default();
     sessions.publish_command_executed(&req.command, &id, arguments, &assistant_id);
     drop(sessions);
+    state.touch_session_cache(&id).await;
     persist_sessions_if_enabled(&state).await;
 
     Ok(Json(ExecuteCommandResponse {
@@ -1082,6 +1082,14 @@ pub(super) async fn cancel_tool_call(
     State(state): State<Arc<ServerState>>,
     Path((session_id, tool_call_id)): Path<(String, String)>,
 ) -> Result<Json<CancelToolCallResponse>> {
+    if !state
+        .ensure_session_hydrated(&session_id)
+        .await
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?
+    {
+        return Err(ApiError::SessionNotFound(session_id));
+    }
+
     // Verify the tool call exists in the session (hold lock briefly).
     {
         let sessions = state.sessions.lock().await;
@@ -1162,18 +1170,27 @@ pub(super) async fn prompt_async(
     Path(id): Path<String>,
     Json(req): Json<PromptAsyncRequest>,
 ) -> Result<Json<PromptAsyncResponse>> {
+    if !state
+        .ensure_session_hydrated(&id)
+        .await
+        .map_err(|err| ApiError::InternalError(format!("failed to hydrate session: {}", err)))?
+    {
+        return Err(ApiError::SessionNotFound(id));
+    }
+
     let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&id)
-        .ok_or_else(|| ApiError::SessionNotFound(id.clone()))?;
     let text = req
         .message
         .as_deref()
         .ok_or_else(|| ApiError::BadRequest("Field `message` is required".to_string()))?;
-    session.add_user_message(text);
-    let assistant = session.add_assistant_message();
-    let assistant_id = assistant.id.clone();
+    let assistant_id = sessions
+        .mutate_session(&id, |session| {
+            session.add_user_message(text);
+            session.add_assistant_message().id.clone()
+        })
+        .ok_or_else(|| ApiError::SessionNotFound(id.clone()))?;
     drop(sessions);
+    state.touch_session_cache(&id).await;
     persist_sessions_if_enabled(&state).await;
 
     Ok(Json(PromptAsyncResponse {

@@ -26,10 +26,10 @@ pub fn media_reader() -> AgentInfo {
         AgentMode::Subagent,
         &[BuiltinToolName::Read],
     )
-        .with_description(DESCRIPTION)
-        .with_system_prompt(SYSTEM_PROMPT)
-        .with_temperature(0.1)
-        .with_max_steps(12)
-        .with_max_tokens(4096)
-        .with_color("#B45309")
+    .with_description(DESCRIPTION)
+    .with_system_prompt(SYSTEM_PROMPT)
+    .with_temperature(0.1)
+    .with_max_steps(12)
+    .with_max_tokens(4096)
+    .with_color("#B45309")
 }

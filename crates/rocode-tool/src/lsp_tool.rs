@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use rocode_core::contracts::patch::keys as patch_keys;
-use rocode_core::contracts::permission::PermissionTypeWire;
 use rocode_core::contracts::tools::{arg_keys as tool_arg_keys, BuiltinToolName};
+use rocode_permission::PermissionKind;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use strum::IntoEnumIterator;
@@ -121,7 +121,7 @@ impl Tool for LspTool {
 
         if ctx.is_external_path(&path_str) {
             ctx.ask_permission(
-                crate::PermissionRequest::new(PermissionTypeWire::ExternalDirectory.as_str())
+                crate::PermissionRequest::new(PermissionKind::ExternalDirectory)
                     .with_pattern(&path_str)
                     .with_metadata(patch_keys::FILEPATH, serde_json::json!(&path_str)),
             )

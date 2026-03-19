@@ -11,6 +11,7 @@ lsp = ["rocode-lsp", "lsp-types"]
 
 [dependencies]
 rocode-core = { path = "../rocode-core" }
+rocode-message = { path = "../rocode-message" }
 rocode-config = { path = "../rocode-config" }
 rocode-util = { path = "../rocode-util" }
 rocode-grep = { path = "../rocode-grep" }

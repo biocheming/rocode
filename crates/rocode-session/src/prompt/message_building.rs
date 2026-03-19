@@ -214,12 +214,7 @@ impl SessionPrompt {
             }
 
             let content = Self::parts_to_content(&msg.parts);
-            let role = match msg.role {
-                MessageRole::User => Role::User,
-                MessageRole::Assistant => Role::Assistant,
-                MessageRole::System => Role::System,
-                MessageRole::Tool => Role::Tool,
-            };
+            let role = msg.role;
 
             messages.push(Message {
                 role,
@@ -939,8 +934,8 @@ impl SessionPrompt {
                     .collect();
                 MessageForPrune {
                     role: match m.role {
-                        MessageRole::User => "user".to_string(),
-                        _ => "assistant".to_string(),
+                        MessageRole::User => rocode_provider::Role::User,
+                        _ => rocode_provider::Role::Assistant,
                     },
                     parts,
                     summary: false,
@@ -966,8 +961,7 @@ impl SessionPrompt {
             }
         }
 
-        // Record the compacting timestamp so the session DB row reflects that pruning occurred.
-        session.time.compacting = Some(chrono::Utc::now().timestamp_millis());
+        // Mark session as updated so pruning effects are persisted.
         session.touch();
     }
 
@@ -1015,8 +1009,7 @@ impl SessionPrompt {
         });
         session.messages.push(compaction_msg);
 
-        // Set the compacting timestamp on the session.
-        session.time.compacting = Some(chrono::Utc::now().timestamp_millis());
+        // Mark session as updated so compaction summary is persisted.
         session.touch();
 
         Some(summary)
@@ -1132,7 +1125,7 @@ mod tests {
 
     #[test]
     fn prune_after_loop_compacts_large_old_tool_results() {
-        let mut session = Session::new("proj", ".");
+        let mut session = Session::new(".");
         let session_id = session.id.clone();
 
         session

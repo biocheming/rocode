@@ -36,7 +36,10 @@ struct WebSearchMcpArguments<'a> {
     num_results: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     livecrawl: Option<&'a str>,
-    #[serde(rename = "contextMaxCharacters", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "contextMaxCharacters",
+        skip_serializing_if = "Option::is_none"
+    )]
     context_max_characters: Option<usize>,
 }
 
@@ -230,7 +233,10 @@ impl Tool for WebSearchTool {
         // Well-known fields (override options if same key)
         let known = WebSearchMcpArguments {
             query: &input.query,
-            search_type: input.search_type.as_deref().unwrap_or(&self.default_search_type),
+            search_type: input
+                .search_type
+                .as_deref()
+                .unwrap_or(&self.default_search_type),
             num_results,
             livecrawl: input.livecrawl.as_deref(),
             context_max_characters: input.context_max_characters,

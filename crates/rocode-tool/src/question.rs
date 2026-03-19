@@ -308,11 +308,9 @@ fn parse_question_input(args: serde_json::Value) -> Result<QuestionInput, ToolEr
         None | Some(serde_json::Value::Null) => Err(ToolError::InvalidArguments(
             "questions is required".to_string(),
         )),
-        Some(serde_json::Value::Array(array)) if array.is_empty() => {
-            Err(ToolError::InvalidArguments(
-                "questions must not be empty".to_string(),
-            ))
-        }
+        Some(serde_json::Value::Array(array)) if array.is_empty() => Err(
+            ToolError::InvalidArguments("questions must not be empty".to_string()),
+        ),
         Some(serde_json::Value::Bool(_)) | Some(serde_json::Value::Number(_)) => {
             Err(ToolError::InvalidArguments(
                 "questions must be an array/object or a JSON string representing them".to_string(),

@@ -6,6 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
+use rocode_message::MessageRole;
 
 use crate::theme::Theme;
 
@@ -19,7 +20,7 @@ pub struct SubagentInfo {
 
 #[derive(Clone, Debug)]
 pub struct SubagentMessage {
-    pub role: String,
+    pub role: MessageRole,
     pub content: String,
 }
 
@@ -89,13 +90,14 @@ impl SubagentDialog {
         lines.push(Line::from(""));
 
         for msg in &subagent.messages {
-            let role_style = if msg.role == "user" {
-                Style::default().fg(theme.primary)
-            } else {
-                Style::default().fg(theme.success)
+            let role_style = match msg.role {
+                MessageRole::User => Style::default().fg(theme.primary),
+                MessageRole::Assistant => Style::default().fg(theme.success),
+                MessageRole::Tool => Style::default().fg(theme.warning),
+                MessageRole::System => Style::default().fg(theme.text_muted),
             };
             lines.push(Line::from(vec![
-                Span::styled(&msg.role, role_style.bold()),
+                Span::styled(msg.role.as_str(), role_style.bold()),
                 Span::raw(":"),
             ]));
             lines.push(Line::from(Span::styled(

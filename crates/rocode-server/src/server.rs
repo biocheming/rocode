@@ -5,7 +5,7 @@ use once_cell::sync::Lazy;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
@@ -28,7 +28,7 @@ use rocode_provider::{
     CustomFetchProxy, CustomFetchRequest, CustomFetchResponse, CustomFetchStreamResponse,
     ProviderError, ProviderRegistry,
 };
-use rocode_session::{SessionManager, SessionPrompt, SessionStateManager};
+use rocode_session::{SessionManager, SessionPersistPlan, SessionPrompt, SessionStateManager};
 use rocode_storage::{Database, MessageRepository, PartRepository, SessionRepository};
 
 use crate::routes;
@@ -176,6 +176,24 @@ fn plugin_idle_timeout() -> Duration {
     Duration::from_secs(secs)
 }
 
+fn session_cache_idle_timeout() -> Duration {
+    let secs = std::env::var("ROCODE_SESSION_CACHE_IDLE_SECS")
+        .ok()
+        .or_else(|| std::env::var("OPENCODE_SESSION_CACHE_IDLE_SECS").ok())
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .unwrap_or(900);
+    Duration::from_secs(secs)
+}
+
+fn session_cache_sweep_interval(timeout: Duration) -> Duration {
+    Duration::from_secs((timeout.as_secs() / 3).clamp(5, 60))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SessionCacheEntry {
+    last_access_ms: i64,
+}
+
 fn spawn_plugin_idle_monitor(loader: Arc<PluginLoader>) {
     let timeout = plugin_idle_timeout();
     if timeout.is_zero() {
@@ -209,6 +227,9 @@ fn spawn_plugin_idle_monitor(loader: Arc<PluginLoader>) {
 
 pub struct ServerState {
     pub sessions: Mutex<SessionManager>,
+    session_cache: Mutex<HashMap<String, SessionCacheEntry>>,
+    session_cache_idle_timeout: Duration,
+    session_cache_monitor_started: AtomicBool,
     pub providers: tokio::sync::RwLock<ProviderRegistry>,
     pub bootstrap_config: BootstrapConfig,
     pub config_store: Arc<rocode_config::ConfigStore>,
@@ -292,6 +313,9 @@ impl ServerState {
         )));
         Self {
             sessions: Mutex::new(SessionManager::new()),
+            session_cache: Mutex::new(HashMap::new()),
+            session_cache_idle_timeout: session_cache_idle_timeout(),
+            session_cache_monitor_started: AtomicBool::new(false),
             providers: tokio::sync::RwLock::new(ProviderRegistry::new()),
             bootstrap_config: BootstrapConfig::default(),
             config_store: Arc::new(rocode_config::ConfigStore::new(
@@ -431,21 +455,218 @@ impl ServerState {
         *self.providers.write().await = new_registry;
     }
 
+    pub fn start_session_cache_monitor(self: &Arc<Self>) {
+        if self
+            .session_cache_monitor_started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+
+        let timeout = self.session_cache_idle_timeout;
+        if timeout.is_zero() {
+            tracing::info!("session cache idle eviction disabled (timeout=0)");
+            return;
+        }
+
+        let poll = session_cache_sweep_interval(timeout);
+        let state = Arc::clone(self);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(poll).await;
+                match state.evict_idle_sessions().await {
+                    Ok(evicted) if evicted > 0 => {
+                        tracing::info!(evicted, "evicted idle session messages from memory cache");
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        tracing::warn!(%err, "failed to evict idle session messages");
+                    }
+                }
+            }
+        });
+    }
+
+    pub(crate) async fn touch_session_cache(&self, session_id: &str) {
+        let mut cache = self.session_cache.lock().await;
+        cache.insert(
+            session_id.to_string(),
+            SessionCacheEntry {
+                last_access_ms: chrono::Utc::now().timestamp_millis(),
+            },
+        );
+    }
+
+    pub(crate) async fn clear_session_cache(&self, session_id: &str) {
+        let mut cache = self.session_cache.lock().await;
+        cache.remove(session_id);
+    }
+
+    async fn is_session_hydrated(&self, session_id: &str) -> bool {
+        let cache = self.session_cache.lock().await;
+        cache.contains_key(session_id)
+    }
+
+    pub(crate) async fn ensure_session_loaded(&self, session_id: &str) -> anyhow::Result<bool> {
+        {
+            let sessions = self.sessions.lock().await;
+            if sessions.get(session_id).is_some() {
+                return Ok(true);
+            }
+        }
+
+        let Some(session_repo) = &self.session_repo else {
+            return Ok(false);
+        };
+
+        let Some(stored) = session_repo.get(session_id).await? else {
+            return Ok(false);
+        };
+
+        let mut sessions = self.sessions.lock().await;
+        sessions.update(stored);
+        Ok(true)
+    }
+
+    pub(crate) async fn ensure_session_hydrated(&self, session_id: &str) -> anyhow::Result<bool> {
+        if !self.ensure_session_loaded(session_id).await? {
+            return Ok(false);
+        }
+
+        if self.is_session_hydrated(session_id).await {
+            self.touch_session_cache(session_id).await;
+            return Ok(true);
+        }
+
+        if let Some(message_repo) = &self.message_repo {
+            let messages = message_repo.list_for_session(session_id).await?;
+            let mut sessions = self.sessions.lock().await;
+            sessions
+                .mutate_session(session_id, |session| {
+                    session.messages = messages;
+                })
+                .ok_or_else(|| {
+                    anyhow::anyhow!("session missing during hydration: {}", session_id)
+                })?;
+        }
+
+        self.touch_session_cache(session_id).await;
+        Ok(true)
+    }
+
+    async fn evict_idle_sessions(&self) -> anyhow::Result<usize> {
+        let timeout = self.session_cache_idle_timeout;
+        if timeout.is_zero() {
+            return Ok(0);
+        }
+
+        let now = chrono::Utc::now().timestamp_millis();
+        let timeout_ms = i64::try_from(timeout.as_millis()).unwrap_or(i64::MAX);
+
+        let run_statuses = self.runtime_control.session_run_statuses().await;
+        let busy_session_ids: HashSet<String> = run_statuses
+            .into_iter()
+            .filter_map(|(session_id, status)| match status {
+                crate::runtime_control::SessionRunStatus::Busy
+                | crate::runtime_control::SessionRunStatus::Retry { .. } => Some(session_id),
+                crate::runtime_control::SessionRunStatus::Idle => None,
+            })
+            .collect();
+
+        let candidates: Vec<(String, i64)> = {
+            let cache = self.session_cache.lock().await;
+            cache
+                .iter()
+                .filter_map(|(session_id, entry)| {
+                    let idle_for = now.saturating_sub(entry.last_access_ms);
+                    if idle_for < timeout_ms || busy_session_ids.contains(session_id) {
+                        return None;
+                    }
+                    Some((session_id.clone(), entry.last_access_ms))
+                })
+                .collect()
+        };
+
+        let mut evicted = 0usize;
+        for (session_id, observed_last_access) in candidates {
+            let still_idle = {
+                let cache = self.session_cache.lock().await;
+                cache.get(&session_id).map(|entry| {
+                    entry.last_access_ms == observed_last_access
+                        && now.saturating_sub(entry.last_access_ms) >= timeout_ms
+                })
+            }
+            .unwrap_or(false);
+            if !still_idle {
+                continue;
+            }
+
+            if let Err(err) = self.flush_session_to_storage(&session_id).await {
+                tracing::warn!(session_id = %session_id, %err, "failed to flush idle session before eviction");
+            }
+
+            let removed_messages = {
+                let mut sessions = self.sessions.lock().await;
+                sessions
+                    .mutate_session(&session_id, |session| {
+                        if session.messages.is_empty() {
+                            false
+                        } else {
+                            session.messages.clear();
+                            true
+                        }
+                    })
+                    .unwrap_or(false)
+            };
+
+            {
+                let mut cache = self.session_cache.lock().await;
+                if cache
+                    .get(&session_id)
+                    .map(|entry| entry.last_access_ms == observed_last_access)
+                    .unwrap_or(false)
+                {
+                    cache.remove(&session_id);
+                }
+            }
+
+            if removed_messages {
+                evicted += 1;
+            }
+        }
+
+        Ok(evicted)
+    }
+
+    async fn persist_plan(
+        &self,
+        session_repo: &SessionRepository,
+        plan: SessionPersistPlan,
+    ) -> anyhow::Result<()> {
+        match plan {
+            SessionPersistPlan::MetadataOnly(session) => {
+                session_repo.upsert(&session).await?;
+            }
+            SessionPersistPlan::Full { session, messages } => {
+                session_repo
+                    .flush_with_messages(&session, &messages)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn load_sessions_from_storage(&self) -> anyhow::Result<()> {
-        let (Some(session_repo), Some(message_repo)) = (&self.session_repo, &self.message_repo)
-        else {
+        let Some(session_repo) = &self.session_repo else {
             return Ok(());
         };
 
         let stored_sessions = session_repo.list(None, 100_000).await?;
         let mut manager = self.sessions.lock().await;
 
-        for mut stored in stored_sessions {
-            let stored_messages = message_repo.list_for_session(&stored.id).await?;
-            stored.messages = stored_messages;
-            let session: rocode_session::Session =
-                serde_json::from_value(serde_json::to_value(stored)?)?;
-            manager.update(session);
+        for stored in stored_sessions {
+            manager.update(stored);
         }
 
         Ok(())
@@ -467,11 +688,9 @@ impl ServerState {
             return Ok(());
         };
 
-        let mut stored: rocode_types::Session =
-            serde_json::from_value(serde_json::to_value(&session)?)?;
-        let messages = std::mem::take(&mut stored.messages);
-
-        session_repo.flush_with_messages(&stored, &messages).await?;
+        let plan =
+            SessionPersistPlan::from_snapshot(session, self.is_session_hydrated(session_id).await);
+        self.persist_plan(session_repo, plan).await?;
 
         Ok(())
     }
@@ -486,27 +705,36 @@ impl ServerState {
             let manager = self.sessions.lock().await;
             manager.list().into_iter().cloned().collect()
         };
+        let hydrated_session_ids: HashSet<String> = {
+            let cache = self.session_cache.lock().await;
+            cache.keys().cloned().collect()
+        };
 
         // Clean up sessions that were deleted in-memory but still persisted.
         let snapshot_ids: HashSet<String> = snapshot.iter().map(|s| s.id.clone()).collect();
         let persisted = session_repo.list(None, 100_000).await?;
+        let mut deleted_session_ids = Vec::new();
 
         for stale in persisted {
             if !snapshot_ids.contains(&stale.id) {
                 message_repo.delete_for_session(&stale.id).await?;
                 session_repo.delete(&stale.id).await?;
+                deleted_session_ids.push(stale.id);
+            }
+        }
+        if !deleted_session_ids.is_empty() {
+            let mut cache = self.session_cache.lock().await;
+            for stale_id in deleted_session_ids {
+                cache.remove(&stale_id);
             }
         }
 
-        // Flush each session transactionally (upsert session + messages + delete stale).
+        // Active sessions flush session+messages transactionally.
+        // Cold sessions upsert metadata only to avoid clobbering persisted message history.
         for session in snapshot {
-            let mut stored_session: rocode_types::Session =
-                serde_json::from_value(serde_json::to_value(&session)?)?;
-            let stored_messages = std::mem::take(&mut stored_session.messages);
-
-            session_repo
-                .flush_with_messages(&stored_session, &stored_messages)
-                .await?;
+            let hydrated = hydrated_session_ids.contains(&session.id);
+            let plan = SessionPersistPlan::from_snapshot(session, hydrated);
+            self.persist_plan(session_repo, plan).await?;
         }
 
         Ok(())
@@ -788,6 +1016,7 @@ pub async fn run_server(addr: SocketAddr) -> anyhow::Result<()> {
         format!("http://{}", addr)
     };
     let state = Arc::new(ServerState::new_with_storage_for_url(server_url).await?);
+    state.start_session_cache_monitor();
 
     let app = routes::router()
         .layer(cors_layer())
@@ -807,6 +1036,7 @@ pub async fn run_server_with_state(
     addr: SocketAddr,
     state: Arc<ServerState>,
 ) -> anyhow::Result<()> {
+    state.start_session_cache_monitor();
     let app = routes::router()
         .layer(cors_layer())
         .layer(TraceLayer::new_for_http())
@@ -849,7 +1079,7 @@ mod tests {
         );
         let (session_id, user_created_at, assistant_created_at) = {
             let mut manager = state.sessions.lock().await;
-            let session = manager.create("default", ".");
+            let session = manager.create(".");
             let session_id = session.id.clone();
 
             let fixed_user_time = chrono::Utc
@@ -893,6 +1123,23 @@ mod tests {
             .load_sessions_from_storage()
             .await
             .expect("sessions should reload from storage");
+        {
+            let manager = reloaded.sessions.lock().await;
+            let session = manager
+                .get(&session_id)
+                .expect("session metadata should be present after reload");
+            assert!(
+                session.messages.is_empty(),
+                "reload should keep message history cold until hydration"
+            );
+        }
+        assert!(
+            reloaded
+                .ensure_session_hydrated(&session_id)
+                .await
+                .expect("session hydration should succeed"),
+            "reloaded session should exist"
+        );
 
         let manager = reloaded.sessions.lock().await;
         let session = manager
@@ -919,7 +1166,7 @@ mod tests {
         );
         let session_id = {
             let mut manager = state.sessions.lock().await;
-            manager.create("default", ".").id
+            manager.create(".").id
         };
 
         state
@@ -949,5 +1196,71 @@ mod tests {
             .await
             .expect("get should succeed")
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn sync_cold_session_preserves_persisted_messages() {
+        let db = Database::in_memory()
+            .await
+            .expect("in-memory db should initialize");
+        let conn = db.conn().clone();
+
+        let session_repo = SessionRepository::new(conn.clone());
+        let message_repo = MessageRepository::new(conn.clone());
+        let state = state_with_repos(
+            SessionRepository::new(conn.clone()),
+            MessageRepository::new(conn),
+        );
+
+        let session_id = {
+            let mut manager = state.sessions.lock().await;
+            let session = manager.create(".");
+            let session_id = session.id.clone();
+            let session = manager
+                .get_mut(&session_id)
+                .expect("session should be available for mutation");
+            session.add_user_message("hello");
+            session.add_assistant_message().add_text("world");
+            session_id
+        };
+
+        state
+            .sync_sessions_to_storage()
+            .await
+            .expect("initial snapshot should sync");
+        assert_eq!(
+            message_repo
+                .count_for_session(&session_id)
+                .await
+                .expect("message count should query") as usize,
+            2
+        );
+
+        {
+            let mut manager = state.sessions.lock().await;
+            let session = manager
+                .get_mut(&session_id)
+                .expect("session should exist for cold simulation");
+            session.messages.clear();
+        }
+
+        state
+            .sync_sessions_to_storage()
+            .await
+            .expect("cold sync should not drop persisted messages");
+
+        assert!(session_repo
+            .get(&session_id)
+            .await
+            .expect("session fetch should succeed")
+            .is_some());
+        assert_eq!(
+            message_repo
+                .count_for_session(&session_id)
+                .await
+                .expect("message count should query") as usize,
+            2,
+            "cold session sync must preserve DB message history"
+        );
     }
 }

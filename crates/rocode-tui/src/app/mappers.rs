@@ -48,12 +48,7 @@ pub(super) fn map_api_message(message: &MessageInfo) -> Message {
 
     Message {
         id: message.id.clone(),
-        role: match message.role.as_str() {
-            "assistant" => MessageRole::Assistant,
-            "system" => MessageRole::System,
-            "tool" => MessageRole::Tool,
-            _ => MessageRole::User,
-        },
+        role: message.role,
         content: parts
             .iter()
             .map(message_part_text)

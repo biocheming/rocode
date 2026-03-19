@@ -80,7 +80,7 @@ impl BedrockProtocol {
                             .collect(),
                     };
                     messages.push(BedrockMessage {
-                        role: "user".to_string(),
+                        role: BedrockRole::User,
                         content,
                     });
                 }
@@ -93,7 +93,7 @@ impl BedrockProtocol {
                             .collect(),
                     };
                     messages.push(BedrockMessage {
-                        role: "assistant".to_string(),
+                        role: BedrockRole::Assistant,
                         content,
                     });
                 }
@@ -344,9 +344,16 @@ struct BedrockConverseRequest {
     inference_config: Option<BedrockInferenceConfig>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum BedrockRole {
+    User,
+    Assistant,
+}
+
 #[derive(Debug, Serialize)]
 struct BedrockMessage {
-    role: String,
+    role: BedrockRole,
     content: Vec<BedrockContentBlock>,
 }
 
@@ -389,7 +396,7 @@ struct BedrockOutput {
 
 #[derive(Debug, Deserialize)]
 struct BedrockResponseMessage {
-    _role: String,
+    _role: BedrockRole,
     content: Vec<BedrockContentBlock>,
 }
 

@@ -283,7 +283,7 @@ fn insert_reminders_adds_build_switch_after_plan() {
 #[tokio::test]
 async fn prompt_with_update_hook_emits_incremental_snapshots() {
     let prompt = SessionPrompt::default();
-    let mut session = Session::new("proj", ".");
+    let mut session = Session::new(".");
     let provider = Arc::new(ScriptedStreamProvider {
         model: ModelInfo {
             id: "test-model".to_string(),
@@ -387,7 +387,7 @@ async fn prompt_with_update_hook_emits_incremental_snapshots() {
 #[tokio::test]
 async fn prompt_continues_after_tool_calls_without_finish_step_reason() {
     let prompt = SessionPrompt::default();
-    let mut session = Session::new("proj", ".");
+    let mut session = Session::new(".");
     let temp_dir = tempfile::tempdir().expect("tempdir should create");
     let file_path = temp_dir.path().join("sample.txt");
     tokio::fs::write(&file_path, "alpha\nbeta")
@@ -487,7 +487,7 @@ async fn prompt_continues_after_tool_calls_without_finish_step_reason() {
 #[tokio::test]
 async fn create_user_message_persists_pending_subtask_payload() {
     let prompt = SessionPrompt::default();
-    let mut session = Session::new("proj", ".");
+    let mut session = Session::new(".");
     let input = PromptInput {
         session_id: session.id.clone(),
         message_id: None,
@@ -580,7 +580,7 @@ async fn execute_tool_calls_ignores_empty_tool_name() {
     let tool_registry = Arc::new(rocode_tool::ToolRegistry::new());
     tool_registry.register(NoArgEchoTool).await;
 
-    let mut session = Session::new("proj", ".");
+    let mut session = Session::new(".");
     let sid = session.id.clone();
     session
         .messages
@@ -640,7 +640,7 @@ async fn execute_tool_calls_runs_no_arg_tool() {
     let tool_registry = Arc::new(rocode_tool::ToolRegistry::new());
     tool_registry.register(NoArgEchoTool).await;
 
-    let mut session = Session::new("proj", ".");
+    let mut session = Session::new(".");
     let sid = session.id.clone();
     session
         .messages
@@ -697,7 +697,7 @@ async fn execute_tool_calls_routes_invalid_arguments_to_invalid_tool() {
         .register(rocode_tool::invalid::InvalidTool)
         .await;
 
-    let mut session = Session::new("proj", ".");
+    let mut session = Session::new(".");
     let sid = session.id.clone();
     session
         .messages
@@ -777,7 +777,7 @@ async fn execute_tool_calls_only_runs_running_tool_calls() {
     let tool_registry = Arc::new(rocode_tool::ToolRegistry::new());
     tool_registry.register(NoArgEchoTool).await;
 
-    let mut session = Session::new("proj", ".");
+    let mut session = Session::new(".");
     let sid = session.id.clone();
     session
         .messages
@@ -839,7 +839,7 @@ async fn execute_tool_calls_reused_call_id_in_new_turn_still_executes() {
     let tool_registry = Arc::new(rocode_tool::ToolRegistry::new());
     tool_registry.register(NoArgEchoTool).await;
 
-    let mut session = Session::new("proj", ".");
+    let mut session = Session::new(".");
     let sid = session.id.clone();
 
     session

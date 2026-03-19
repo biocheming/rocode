@@ -9,6 +9,7 @@ pub mod prompt;
 pub mod retry;
 pub mod revert;
 pub mod session;
+pub mod session_model;
 pub mod snapshot;
 pub mod status;
 pub mod summary;
@@ -30,6 +31,6 @@ pub use todo::*;
 
 pub use session::{
     BusyError, FileDiff, PermissionRuleset, RunStatus, Session, SessionError, SessionEvent,
-    SessionFilter, SessionManager, SessionRevert, SessionRow, SessionShare, SessionStateEvent,
-    SessionStateManager, SessionStatus, SessionSummary, SessionTime, SessionUsage,
+    SessionFilter, SessionManager, SessionPersistPlan, SessionRevert, SessionStateEvent,
+    SessionStateManager, SessionSummary, SessionTime, SessionUsage,
 };

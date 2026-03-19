@@ -86,9 +86,20 @@ struct StatusWire {
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+enum WireMessageRole {
+    User,
+    #[default]
+    Assistant,
+    System,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Deserialize, Default)]
 struct MessageWire {
     #[serde(default)]
-    role: Option<String>,
+    role: Option<WireMessageRole>,
     #[serde(default)]
     phase: Option<String>,
     #[serde(default)]
@@ -201,10 +212,10 @@ pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBl
             Some(OutputBlock::Status(StatusBlock { tone, text }))
         }
         RemoteOutputBlockFrame::Message(payload) => {
-            let role = match payload.role.as_deref().unwrap_or("assistant") {
-                "user" => MessageRole::User,
-                "system" => MessageRole::System,
-                _ => MessageRole::Assistant,
+            let role = match payload.role.unwrap_or_default() {
+                WireMessageRole::User => MessageRole::User,
+                WireMessageRole::System => MessageRole::System,
+                WireMessageRole::Assistant | WireMessageRole::Unknown => MessageRole::Assistant,
             };
             let phase = match payload.phase.as_deref().unwrap_or("delta") {
                 "start" => MessagePhase::Start,

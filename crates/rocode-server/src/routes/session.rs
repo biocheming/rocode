@@ -40,12 +40,11 @@ use self::messages::{
 use self::prompt::session_prompt;
 use self::recovery::{execute_session_recovery, get_session_recovery};
 use self::session_crud::{
-    archive_session, cancel_tool_call, clear_session_revert, create_session, delete_session,
-    execute_command, execute_shell, fork_session, get_message, get_session, get_session_children,
-    get_session_diff, get_session_runtime, get_session_summary, get_session_todos, list_sessions,
-    prompt_async, session_revert, session_status, session_unrevert, set_session_permission,
-    set_session_summary, set_session_title, share_session, start_compaction, unshare_session,
-    update_part, update_session,
+    cancel_tool_call, clear_session_revert, create_session, delete_session, execute_command,
+    execute_shell, fork_session, get_message, get_session, get_session_children, get_session_diff,
+    get_session_runtime, get_session_summary, get_session_todos, list_sessions, prompt_async,
+    session_revert, session_status, session_unrevert, set_session_permission, set_session_summary,
+    set_session_title, share_session, unshare_session, update_part, update_session,
 };
 
 use super::stream::stream_message;
@@ -75,7 +74,6 @@ pub(crate) fn session_routes() -> Router<Arc<ServerState>> {
         .route("/{id}/abort", post(abort_session))
         .route("/{id}/scheduler/stage/abort", post(abort_scheduler_stage))
         .route("/{id}/share", post(share_session).delete(unshare_session))
-        .route("/{id}/archive", post(archive_session))
         .route("/{id}/title", patch(set_session_title))
         .route("/{id}/permission", patch(set_session_permission))
         .route(
@@ -87,7 +85,6 @@ pub(crate) fn session_routes() -> Router<Arc<ServerState>> {
             post(session_revert).delete(clear_session_revert),
         )
         .route("/{id}/unrevert", post(session_unrevert))
-        .route("/{id}/compaction", post(start_compaction))
         .route("/{id}/command", post(execute_command))
         .route("/{id}/shell", post(execute_shell))
         .route("/{id}/message/summary", get(list_message_summaries))
@@ -268,7 +265,7 @@ mod tests {
 
     #[test]
     fn active_tool_execution_records_attach_to_active_stage() {
-        let mut session = Session::new("proj", "/tmp");
+        let mut session = Session::new("/tmp");
         session.id = "ses_tools".to_string();
         let mut assistant = rocode_session::SessionMessage::assistant(session.id.clone());
         assistant.add_tool_call(

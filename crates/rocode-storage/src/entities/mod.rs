@@ -13,4 +13,3 @@ pub mod prelude {
     pub use super::sessions::Entity as Sessions;
     pub use super::todos::Entity as Todos;
 }
-

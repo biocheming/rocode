@@ -94,9 +94,7 @@ impl ServerEventType {
 /// Phase of the tool call lifecycle events.
 ///
 /// Wire format: lowercase strings (`"start"`, `"complete"`).
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, EnumString,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, EnumString)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum ToolCallPhase {
@@ -157,9 +155,7 @@ impl SessionRunStatusType {
 /// How a question request was resolved.
 ///
 /// Wire format: snake_case strings (`"answered"`, `"rejected"`, `"cancelled"`).
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, EnumString,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, EnumString)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 pub enum QuestionResolutionKind {

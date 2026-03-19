@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use regex::Regex;
 use rocode_core::contracts::events::BusEventName;
 use rocode_core::contracts::fs::{keys as fs_keys, FileWatcherEventKind};
-use rocode_core::contracts::permission::PermissionTypeWire;
 use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_permission::PermissionKind;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -131,7 +131,7 @@ impl Tool for ApplyPatchTool {
             let file_path_str = file_path.to_string_lossy().to_string();
             if ctx.is_external_path(&file_path_str) {
                 ctx.ask_permission(
-                    PermissionRequest::new(PermissionTypeWire::ExternalDirectory.as_str())
+                    PermissionRequest::new(PermissionKind::ExternalDirectory)
                         .with_pattern(&file_path_str),
                 )
                 .await?;
@@ -151,20 +151,20 @@ impl Tool for ApplyPatchTool {
             .iter()
             .map(|change| {
                 let (change_type, move_path, target_relative_path) = match &change.operation {
-                    PatchOperation::Add => (FileChangeType::Add, None, change.relative_path.clone()),
+                    PatchOperation::Add => {
+                        (FileChangeType::Add, None, change.relative_path.clone())
+                    }
                     PatchOperation::Update => {
                         (FileChangeType::Update, None, change.relative_path.clone())
                     }
                     PatchOperation::Delete => {
                         (FileChangeType::Delete, None, change.relative_path.clone())
                     }
-                    PatchOperation::Move { move_path } => {
-                        (
-                            FileChangeType::Move,
-                            Some(move_path.clone()),
-                            move_path.clone(),
-                        )
-                    }
+                    PatchOperation::Move { move_path } => (
+                        FileChangeType::Move,
+                        Some(move_path.clone()),
+                        move_path.clone(),
+                    ),
                 };
 
                 let wire = ApplyPatchFileChangeMeta {
@@ -177,9 +177,8 @@ impl Tool for ApplyPatchTool {
                     file_diff: change.diff.clone(),
                     before: change.old_content.clone(),
                     after: change.new_content.clone(),
-                    move_path: move_path.map(|path| {
-                        base_path.join(path).to_string_lossy().to_string()
-                    }),
+                    move_path: move_path
+                        .map(|path| base_path.join(path).to_string_lossy().to_string()),
                 };
                 serde_json::to_value(wire).unwrap_or(serde_json::Value::Null)
             })
@@ -189,7 +188,10 @@ impl Tool for ApplyPatchTool {
             PermissionRequest::new(BuiltinToolName::Edit.as_str())
                 .with_patterns(relative_paths.clone())
                 .with_metadata(patch_keys::DIFF, serde_json::json!(&total_diff))
-                .with_metadata(patch_keys::FILEPATH, serde_json::json!(relative_paths.join(", ")))
+                .with_metadata(
+                    patch_keys::FILEPATH,
+                    serde_json::json!(relative_paths.join(", ")),
+                )
                 .with_metadata(patch_keys::FILES, serde_json::json!(&files_metadata))
                 .always_allow(),
         )
@@ -226,10 +228,7 @@ impl Tool for ApplyPatchTool {
                         .map_err(|e| {
                             ToolError::ExecutionError(format!("Failed to write file: {}", e))
                         })?;
-                    updates.push((
-                        change.relative_path.clone(),
-                        FileWatcherEventKind::Change,
-                    ));
+                    updates.push((change.relative_path.clone(), FileWatcherEventKind::Change));
                     summary_lines.push(format!("M {}", change.relative_path));
                     edited_files.push(change.relative_path.clone());
                     lsp_targets.push(change.relative_path.clone());
@@ -238,10 +237,7 @@ impl Tool for ApplyPatchTool {
                     tokio::fs::remove_file(&file_path).await.map_err(|e| {
                         ToolError::ExecutionError(format!("Failed to delete file: {}", e))
                     })?;
-                    updates.push((
-                        change.relative_path.clone(),
-                        FileWatcherEventKind::Unlink,
-                    ));
+                    updates.push((change.relative_path.clone(), FileWatcherEventKind::Unlink));
                     summary_lines.push(format!("D {}", change.relative_path));
                 }
                 PatchOperation::Move { ref move_path } => {
@@ -259,10 +255,7 @@ impl Tool for ApplyPatchTool {
                     tokio::fs::remove_file(&file_path).await.map_err(|e| {
                         ToolError::ExecutionError(format!("Failed to remove old file: {}", e))
                     })?;
-                    updates.push((
-                        change.relative_path.clone(),
-                        FileWatcherEventKind::Unlink,
-                    ));
+                    updates.push((change.relative_path.clone(), FileWatcherEventKind::Unlink));
                     updates.push((move_path.clone(), FileWatcherEventKind::Add));
                     summary_lines.push(format!("M {}", move_path));
                     edited_files.push(move_path.clone());
@@ -310,7 +303,10 @@ impl Tool for ApplyPatchTool {
 
         let mut metadata = Metadata::new();
         metadata.insert(patch_keys::DIFF.to_string(), serde_json::json!(total_diff));
-        metadata.insert(patch_keys::FILES.to_string(), serde_json::json!(files_metadata));
+        metadata.insert(
+            patch_keys::FILES.to_string(),
+            serde_json::json!(files_metadata),
+        );
         metadata.insert(
             patch_keys::DIAGNOSTICS.to_string(),
             serde_json::json!(diagnostics_meta),
