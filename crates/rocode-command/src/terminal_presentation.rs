@@ -6,9 +6,8 @@ use crate::output_blocks::{
     MessageRole as OutputMessageRole, OutputBlock, ReasoningBlock as OutputReasoningBlock,
     ToolBlock as OutputToolBlock, ToolPhase,
 };
-use crate::terminal_segment_display::{
-    render_file_segment_line, render_image_segment_line, render_tool_segment_lines,
-    TerminalSegmentDisplayLine,
+use crate::terminal_tool_cli_render::{
+    render_cli_file_lines, render_cli_image_lines, render_cli_tool_lines,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -566,17 +565,14 @@ fn render_semantic_reasoning_start(
     out
 }
 
-fn render_semantic_display_lines(
-    boundary: &mut TerminalStreamRenderState,
-    lines: &[TerminalSegmentDisplayLine],
-) -> String {
+fn render_semantic_text_lines(boundary: &mut TerminalStreamRenderState, lines: &[String]) -> String {
     if lines.is_empty() {
         return String::new();
     }
 
     let mut out = render_terminal_stream_boundary_prefix(boundary);
     for line in lines {
-        out.push_str(&line.text);
+        out.push_str(line);
         out.push('\n');
     }
     out
@@ -717,26 +713,28 @@ pub fn render_terminal_stream_block_semantic(
                     continue;
                 };
                 if !*started {
-                    let lines = render_tool_segment_lines(
+                    let lines = render_cli_tool_lines(
                         &name,
                         &arguments,
                         tool_state,
                         None,
                         false,
+                        style,
                     );
-                    out.push_str(&render_semantic_display_lines(&mut state.boundary, &lines));
+                    out.push_str(&render_semantic_text_lines(&mut state.boundary, &lines));
                     *started = true;
                 }
                 if !*completed {
                     if let Some(info) = result {
-                        let lines = render_tool_segment_lines(
+                        let lines = render_cli_tool_lines(
                             &name,
                             &arguments,
                             tool_state,
                             Some(&info),
                             true,
+                            style,
                         );
-                        out.push_str(&render_semantic_display_lines(&mut state.boundary, &lines));
+                        out.push_str(&render_semantic_text_lines(&mut state.boundary, &lines));
                         *completed = true;
                     } else if matches!(tool_state, TerminalToolState::Failed | TerminalToolState::Completed)
                     {
@@ -755,11 +753,8 @@ pub fn render_terminal_stream_block_semantic(
                 ) {
                     continue;
                 }
-                let line = render_file_segment_line(&path, &mime);
-                out.push_str(&render_semantic_display_lines(
-                    &mut state.boundary,
-                    &[line],
-                ));
+                let lines = render_cli_file_lines(&path, &mime, style);
+                out.push_str(&render_semantic_text_lines(&mut state.boundary, &lines));
                 state
                     .part_states
                     .insert(part_index, TerminalSemanticPartState::File);
@@ -771,11 +766,8 @@ pub fn render_terminal_stream_block_semantic(
                 ) {
                     continue;
                 }
-                let line = render_image_segment_line(&url);
-                out.push_str(&render_semantic_display_lines(
-                    &mut state.boundary,
-                    &[line],
-                ));
+                let lines = render_cli_image_lines(&url, style);
+                out.push_str(&render_semantic_text_lines(&mut state.boundary, &lines));
                 state
                     .part_states
                     .insert(part_index, TerminalSemanticPartState::Image);
@@ -1357,7 +1349,116 @@ mod tests {
         );
 
         assert_eq!(text, "[message:assistant] answer");
-        assert_eq!(tool_start, "\n[tool:running] websearch :: {\"query\":\"青岛天气\"}\n");
-        assert_eq!(tool_done, "[tool:done] websearch :: 晴 18C\n");
+        assert_eq!(tool_start, "\n◌ ◈ websearch  \"青岛天气\"\n");
+        assert_eq!(tool_done, "● ◈ websearch  \"青岛天气\"\n晴 18C\n");
+    }
+
+    #[test]
+    fn semantic_stream_renderer_renders_shared_task_body_items() {
+        let style = CliStyle::plain();
+        let mut accumulator = TerminalStreamAccumulator::new();
+        let mut state = TerminalSemanticStreamRenderState::default();
+
+        accumulator.apply_output_block(
+            Some("assistant-1"),
+            &OutputBlock::Tool(OutputToolBlock::running(
+                "task",
+                r###"{"category":"visual-engineering","prompt":"## 1. TASK\nRedesign page\n- [ ] 修改 t2.html"}"###,
+            )),
+        );
+        let task_start = render_terminal_stream_block_semantic(
+            &mut state,
+            &accumulator,
+            &OutputBlock::Tool(OutputToolBlock::running(
+                "task",
+                r###"{"category":"visual-engineering","prompt":"## 1. TASK\nRedesign page\n- [ ] 修改 t2.html"}"###,
+            )),
+            &style,
+            true,
+        );
+
+        accumulator.apply_output_block(
+            Some("assistant-1"),
+            &OutputBlock::Tool(OutputToolBlock::done(
+                "task",
+                Some(
+                    "task_id: abc123\ntask_status: completed\n<task_result>\n## Summary\n- [x] 修改 t2.html\nDone.\n</task_result>"
+                        .to_string(),
+                ),
+            )),
+        );
+        let task_done = render_terminal_stream_block_semantic(
+            &mut state,
+            &accumulator,
+            &OutputBlock::Tool(OutputToolBlock::done(
+                "task",
+                Some(
+                    "task_id: abc123\ntask_status: completed\n<task_result>\n## Summary\n- [x] 修改 t2.html\nDone.\n</task_result>"
+                        .to_string(),
+                ),
+            )),
+            &style,
+            true,
+        );
+
+        assert!(task_start.contains("◌ # task"));
+        assert!(task_start.contains("Delegating task to subagent"));
+        assert!(task_start.contains("Checklist (1 items):"));
+
+        assert!(task_done.contains("● # task"));
+        assert!(task_done.contains("Task ID: abc123"));
+        assert!(task_done.contains("Checklist (1 items):"));
+        assert!(task_done.contains("## Summary"));
+        assert!(task_done.contains("Done."));
+    }
+
+    #[test]
+    fn semantic_stream_renderer_uses_shared_file_and_image_items() {
+        let style = CliStyle::plain();
+        let mut accumulator = TerminalStreamAccumulator::new();
+        accumulator.apply_output_block(
+            Some("assistant-1"),
+            &OutputBlock::Message(OutputMessageBlock::delta(
+                OutputMessageRole::Assistant,
+                "see attachments",
+            )),
+        );
+        accumulator.apply_output_block(
+            Some("assistant-1"),
+            &OutputBlock::Message(OutputMessageBlock::full(
+                OutputMessageRole::Assistant,
+                "see attachments",
+            )),
+        );
+        if let Some(message) = accumulator
+            .messages
+            .iter_mut()
+            .find(|message| message.id == "assistant-1")
+        {
+            message.parts.push(TerminalMessagePart::File {
+                path: "/tmp/demo.png".to_string(),
+                mime: "image/png".to_string(),
+            });
+            message.parts.push(TerminalMessagePart::Image {
+                url: "data:image/png;base64,QUJDRA==".to_string(),
+            });
+        }
+
+        let mut state = TerminalSemanticStreamRenderState::default();
+        let rendered = render_terminal_stream_block_semantic(
+            &mut state,
+            &accumulator,
+            &OutputBlock::Message(OutputMessageBlock::full(
+                OutputMessageRole::Assistant,
+                "see attachments",
+            )),
+            &style,
+            true,
+        );
+
+        assert!(rendered.contains("[file] /tmp/demo.png"));
+        assert!(rendered.contains("type: image/png"));
+        assert!(rendered.contains("[image] inline image"));
+        assert!(rendered.contains("size: 4 B"));
     }
 }

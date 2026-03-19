@@ -6,8 +6,10 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
+use rocode_command::terminal_tool_block_display::{build_file_items, build_image_items};
 
 use super::markdown::MarkdownRenderer;
+use super::shared_block_items::render_shared_message_block_items;
 use crate::context::{Message, MessagePart};
 use crate::theme::Theme;
 
@@ -83,22 +85,20 @@ pub fn render_user_message(
                     }
                 }
                 MessagePart::File { path, mime } => {
-                    lines.push(Line::from(vec![
-                        Span::styled(border_char, border_style),
-                        Span::styled(
-                            mime_badge(mime),
-                            Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw(" "),
-                        Span::styled(path.clone(), Style::default().fg(theme.text)),
-                    ]));
+                    lines.extend(render_shared_message_block_items(
+                        build_file_items(path, mime),
+                        border_char,
+                        user_border_color_for_agent(agent, theme),
+                        theme,
+                    ));
                 }
                 MessagePart::Image { url } => {
-                    lines.push(Line::from(vec![
-                        Span::styled(border_char, border_style),
-                        Span::styled("[image] ", Style::default().fg(theme.info)),
-                        Span::styled(url.clone(), Style::default().fg(theme.text_muted)),
-                    ]));
+                    lines.extend(render_shared_message_block_items(
+                        build_image_items(url),
+                        border_char,
+                        user_border_color_for_agent(agent, theme),
+                        theme,
+                    ));
                 }
                 _ => {}
             }
@@ -116,19 +116,6 @@ pub fn render_user_message(
     }
 
     lines
-}
-
-fn mime_badge(mime: &str) -> String {
-    let short = if let Some(sub) = mime.strip_prefix("image/") {
-        sub.to_uppercase()
-    } else if let Some(sub) = mime.strip_prefix("text/") {
-        sub.to_uppercase()
-    } else if let Some(sub) = mime.strip_prefix("application/") {
-        sub.to_uppercase()
-    } else {
-        mime.to_uppercase()
-    };
-    format!("[{}]", short)
 }
 
 fn user_border_color_for_agent(agent: Option<&str>, theme: &Theme) -> Color {

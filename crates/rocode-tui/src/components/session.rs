@@ -17,11 +17,12 @@ use rocode_command::terminal_presentation::{
     collect_assistant_tool_results, compose_assistant_segments, is_tool_result_carrier,
     TerminalAssistantSegment, TerminalMessage, TerminalMessagePart, TerminalMessageRole,
 };
-use rocode_command::terminal_segment_display::{
-    render_file_segment_line, render_image_segment_line,
+use rocode_command::terminal_tool_block_display::{
+    build_file_items, build_image_items,
 };
 
 use super::message_palette;
+use super::shared_block_items::render_shared_message_block_items;
 use super::sidebar::SidebarState;
 use crate::components::{Prompt, Sidebar};
 use crate::context::{AppContext, Message, MessagePart, MessageRole, SidebarMode};
@@ -831,20 +832,18 @@ impl SessionView {
                                     );
                                 }
                                 TerminalAssistantSegment::File { path, mime, .. } => {
-                                    let shared_line = render_file_segment_line(&path, &mime);
-                                    let file_line = Line::from(vec![
-                                        Span::styled(
-                                            super::session_text::ASSISTANT_MARKER,
-                                            Style::default().fg(assistant_marker),
-                                        ),
-                                        Span::styled(shared_line.text, Style::default().fg(theme.info)),
-                                    ]);
+                                    let file_lines = render_shared_message_block_items(
+                                        build_file_items(&path, &mime),
+                                        super::session_text::ASSISTANT_MARKER,
+                                        assistant_marker,
+                                        &theme,
+                                    );
                                     append_message_lines(
                                         &mut lines,
                                         &mut line_to_message,
                                         &msg.id,
                                         paint_block_lines(
-                                            vec![file_line],
+                                            file_lines,
                                             message_bg,
                                             message_border,
                                             content_width,
@@ -852,20 +851,18 @@ impl SessionView {
                                     );
                                 }
                                 TerminalAssistantSegment::Image { url, .. } => {
-                                    let shared_line = render_image_segment_line(&url);
-                                    let image_line = Line::from(vec![
-                                        Span::styled(
-                                            super::session_text::ASSISTANT_MARKER,
-                                            Style::default().fg(assistant_marker),
-                                        ),
-                                        Span::styled(shared_line.text, Style::default().fg(theme.info)),
-                                    ]);
+                                    let image_lines = render_shared_message_block_items(
+                                        build_image_items(&url),
+                                        super::session_text::ASSISTANT_MARKER,
+                                        assistant_marker,
+                                        &theme,
+                                    );
                                     append_message_lines(
                                         &mut lines,
                                         &mut line_to_message,
                                         &msg.id,
                                         paint_block_lines(
-                                            vec![image_line],
+                                            image_lines,
                                             message_bg,
                                             message_border,
                                             content_width,

@@ -21,6 +21,7 @@ pub mod interactive;
 pub mod output_blocks;
 pub mod stage_protocol;
 pub mod terminal_segment_display;
+mod terminal_tool_cli_render;
 pub mod terminal_tool_block_display;
 pub mod terminal_presentation;
 pub use actions::{

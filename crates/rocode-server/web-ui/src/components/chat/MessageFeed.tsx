@@ -58,6 +58,21 @@ export function applyOutputBlockToFeed(block: OutputBlock) {
     return;
   }
 
+  if (block.kind === "reasoning") {
+    if (block.phase === "start") {
+      // Insert reasoning block — it will appear before the assistant message
+      appendFeedMessage(block);
+    } else if (block.phase === "delta") {
+      const last = messages.findLast((m) => m.kind === "reasoning");
+      if (last) {
+        updateFeedMessage(last.id, block.text ?? "");
+      }
+    } else if (block.phase === "full") {
+      appendFeedMessage(block);
+    }
+    return;
+  }
+
   if (block.kind === "message") {
     if (block.phase === "start") {
       appendFeedMessage(block);

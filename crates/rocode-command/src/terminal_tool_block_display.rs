@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::terminal_presentation::TerminalToolResultInfo;
+use crate::terminal_presentation::{TerminalToolResultInfo, TerminalToolState};
 use crate::terminal_segment_display::{
     extract_string_key, format_preview_line, normalize_tool_name, tool_argument_preview,
     tool_glyph, TerminalSegmentDisplayLine, TerminalSegmentTone,
@@ -17,7 +17,7 @@ pub struct ToolWriteSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TerminalToolBlockItem {
+pub enum TerminalBlockItem {
     Line(TerminalSegmentDisplayLine),
     Markdown {
         content: String,
@@ -27,6 +27,8 @@ pub enum TerminalToolBlockItem {
         content: String,
     },
 }
+
+pub type TerminalToolBlockItem = TerminalBlockItem;
 
 pub fn build_display_hint_items(info: &TerminalToolResultInfo) -> Option<Vec<TerminalToolBlockItem>> {
     let metadata = info.metadata.as_ref()?;
@@ -57,6 +59,136 @@ pub fn build_display_hint_items(info: &TerminalToolResultInfo) -> Option<Vec<Ter
     }
 
     Some(items)
+}
+
+pub fn build_file_items(path: &str, mime: &str) -> Vec<TerminalBlockItem> {
+    let mut items = vec![TerminalBlockItem::Line(TerminalSegmentDisplayLine::new(
+        format!("[file] {}", path),
+        TerminalSegmentTone::Info,
+    ))];
+    if !mime.trim().is_empty() {
+        items.push(TerminalBlockItem::Line(TerminalSegmentDisplayLine::new(
+            format!("type: {}", mime.trim()),
+            TerminalSegmentTone::Muted,
+        )));
+    }
+    items
+}
+
+pub fn build_image_items(url: &str) -> Vec<TerminalBlockItem> {
+    let trimmed = url.trim();
+    let mut items = Vec::new();
+    if let Some((mime, payload)) = parse_data_url(trimmed) {
+        items.push(TerminalBlockItem::Line(TerminalSegmentDisplayLine::new(
+            "[image] inline image",
+            TerminalSegmentTone::Info,
+        )));
+        items.push(TerminalBlockItem::Line(TerminalSegmentDisplayLine::new(
+            format!("type: {}", mime),
+            TerminalSegmentTone::Muted,
+        )));
+        if let Some(size_bytes) = estimate_data_url_bytes(payload) {
+            items.push(TerminalBlockItem::Line(TerminalSegmentDisplayLine::new(
+                format!("size: {}", format_bytes(size_bytes)),
+                TerminalSegmentTone::Muted,
+            )));
+        }
+        return items;
+    }
+
+    items.push(TerminalBlockItem::Line(TerminalSegmentDisplayLine::new(
+        format!("[image] {}", trimmed),
+        TerminalSegmentTone::Info,
+    )));
+    items
+}
+
+pub fn summarize_block_items_inline(items: &[TerminalBlockItem]) -> String {
+    items.iter()
+        .filter_map(|item| match item {
+            TerminalBlockItem::Line(line) => Some(line.text.trim().to_string()),
+            TerminalBlockItem::Markdown { content } => content
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .map(|line| format_preview_line(line, 96)),
+            TerminalBlockItem::Diff { label, content } => label
+                .as_ref()
+                .map(|label| label.text.trim().to_string())
+                .or_else(|| {
+                    content
+                        .lines()
+                        .map(str::trim)
+                        .find(|line| !line.is_empty())
+                        .map(|line| format_preview_line(line, 96))
+                }),
+        })
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+pub fn build_tool_body_items(
+    name: &str,
+    arguments: &str,
+    state: TerminalToolState,
+    result: Option<&TerminalToolResultInfo>,
+    show_tool_details: bool,
+) -> Vec<TerminalToolBlockItem> {
+    let normalized = normalize_tool_name(name);
+
+    let Some(info) = result else {
+        return if normalized == "task"
+            && matches!(state, TerminalToolState::Pending | TerminalToolState::Running)
+        {
+            build_task_running_items(arguments)
+        } else {
+            Vec::new()
+        };
+    };
+
+    if info.is_error {
+        let mut items = Vec::new();
+        let mut iter = info.output.lines().filter(|line| !line.trim().is_empty());
+        if let Some(first_line) = iter.next() {
+            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
+                format!("Error: {}", format_preview_line(first_line, 96)),
+                TerminalSegmentTone::Error,
+            )));
+        }
+        let extra_error_lines = if show_tool_details { 4 } else { 2 };
+        for line in iter.take(extra_error_lines) {
+            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
+                format_preview_line(line, 96),
+                TerminalSegmentTone::Error,
+            )));
+        }
+        return items;
+    }
+
+    if let Some(items) = build_display_hint_items(info) {
+        return items;
+    }
+
+    match normalized.as_str() {
+        "task" => {
+            build_task_result_items(&info.output, arguments, info.metadata.as_ref(), show_tool_details)
+        }
+        "todowrite" | "todo_write" => build_todowrite_result_items(&info.output, show_tool_details),
+        "batch" => build_batch_result_items(&info.output, arguments, show_tool_details),
+        "question" => build_question_result_items(&info.output, arguments),
+        value if is_write_tool(value) => {
+            build_write_result_items(&info.output, arguments, info.metadata.as_ref(), show_tool_details)
+        }
+        value if is_edit_tool(value) => {
+            build_edit_result_items(&info.output, arguments, info.metadata.as_ref(), show_tool_details)
+        }
+        value if is_patch_tool(value) => {
+            build_patch_result_items(&info.output, info.metadata.as_ref(), show_tool_details)
+        }
+        value if is_read_tool(value) => Vec::new(),
+        _ => build_generic_result_items(&info.output, show_tool_details),
+    }
 }
 
 pub fn build_batch_result_items(
@@ -801,6 +933,65 @@ pub fn build_patch_result_items(
     items
 }
 
+fn is_read_tool(normalized_name: &str) -> bool {
+    matches!(normalized_name, "read" | "readfile" | "read_file")
+}
+
+fn is_write_tool(normalized_name: &str) -> bool {
+    matches!(normalized_name, "write" | "writefile" | "write_file")
+}
+
+fn is_edit_tool(normalized_name: &str) -> bool {
+    matches!(normalized_name, "edit" | "editfile" | "edit_file")
+}
+
+fn is_patch_tool(normalized_name: &str) -> bool {
+    matches!(normalized_name, "apply_patch" | "applypatch")
+}
+
+fn build_generic_result_items(
+    result_text: &str,
+    show_tool_details: bool,
+) -> Vec<TerminalToolBlockItem> {
+    let output_lines: Vec<&str> = result_text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    if output_lines.is_empty() {
+        return Vec::new();
+    }
+
+    let mut items = Vec::new();
+    if show_tool_details {
+        let preview_limit = output_lines.len().min(5);
+        for line in output_lines.iter().take(preview_limit) {
+            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
+                format_preview_line(line, 96),
+                TerminalSegmentTone::Muted,
+            )));
+        }
+        if output_lines.len() > preview_limit {
+            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
+                format!("… ({} more lines)", output_lines.len() - preview_limit),
+                TerminalSegmentTone::Muted,
+            )));
+        }
+    } else {
+        let first_line = format_preview_line(output_lines[0], 96);
+        let suffix = if output_lines.len() > 1 {
+            format!("{first_line} (+{} lines)", output_lines.len() - 1)
+        } else {
+            first_line
+        };
+        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
+            suffix,
+            TerminalSegmentTone::Muted,
+        )));
+    }
+
+    items
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct TaskResultSummary {
     task_id: Option<String>,
@@ -1172,6 +1363,30 @@ fn todo_status_tone(status: &str) -> TerminalSegmentTone {
     }
 }
 
+fn parse_data_url(url: &str) -> Option<(&str, &str)> {
+    let body = url.strip_prefix("data:")?;
+    let (meta, payload) = body.split_once(',')?;
+    let mime = meta
+        .split(';')
+        .next()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("application/octet-stream");
+    Some((mime, payload))
+}
+
+fn estimate_data_url_bytes(payload: &str) -> Option<usize> {
+    let clean_len = payload
+        .chars()
+        .filter(|ch| !matches!(ch, '\n' | '\r' | ' ' | '\t'))
+        .count();
+    if clean_len == 0 {
+        return None;
+    }
+
+    let padding = payload.chars().rev().take_while(|ch| *ch == '=').count();
+    Some((clean_len.saturating_mul(3) / 4).saturating_sub(padding))
+}
+
 fn parse_numeric_token(token: &str) -> Option<usize> {
     let digits: String = token.chars().filter(|c| c.is_ascii_digit()).collect();
     if digits.is_empty() {
@@ -1205,9 +1420,10 @@ fn format_bytes(bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_edit_result_items, build_patch_result_items, build_task_result_items,
-        build_task_running_items, build_todowrite_result_items, build_write_result_items,
-        parse_write_summary, TerminalToolBlockItem,
+        build_edit_result_items, build_file_items, build_image_items, build_patch_result_items,
+        build_task_result_items, build_task_running_items, build_todowrite_result_items,
+        build_write_result_items, parse_write_summary, summarize_block_items_inline,
+        TerminalToolBlockItem,
     };
     use std::collections::HashMap;
 
@@ -1350,5 +1566,47 @@ mod tests {
             TerminalToolBlockItem::Line(line)
                 if line.text.contains("[in progress] 接线 settings panel")
         )));
+    }
+
+    #[test]
+    fn file_items_include_path_and_mime() {
+        let items = build_file_items("/tmp/demo.png", "image/png");
+        assert!(items.iter().any(|item| matches!(
+            item,
+            TerminalToolBlockItem::Line(line) if line.text == "[file] /tmp/demo.png"
+        )));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            TerminalToolBlockItem::Line(line) if line.text == "type: image/png"
+        )));
+    }
+
+    #[test]
+    fn image_items_summarize_inline_data_url() {
+        let items = build_image_items("data:image/png;base64,QUJDRA==");
+        assert!(items.iter().any(|item| matches!(
+            item,
+            TerminalToolBlockItem::Line(line) if line.text == "[image] inline image"
+        )));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            TerminalToolBlockItem::Line(line) if line.text == "type: image/png"
+        )));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            TerminalToolBlockItem::Line(line) if line.text == "size: 4 B"
+        )));
+    }
+
+    #[test]
+    fn inline_summary_flattens_file_items() {
+        let summary = summarize_block_items_inline(&build_file_items("/tmp/demo.png", "image/png"));
+        assert_eq!(summary, "[file] /tmp/demo.png · type: image/png");
+    }
+
+    #[test]
+    fn inline_summary_flattens_inline_image_items() {
+        let summary = summarize_block_items_inline(&build_image_items("data:image/png;base64,QUJDRA=="));
+        assert_eq!(summary, "[image] inline image · type: image/png · size: 4 B");
     }
 }

@@ -233,26 +233,7 @@ pub fn render_tool_segment_lines(
         return Vec::new();
     }
 
-    let icon = match state {
-        TerminalToolState::Pending => "◯",
-        TerminalToolState::Running => "◌",
-        TerminalToolState::Completed => "●",
-        TerminalToolState::Failed => "✗",
-    };
-    let tone = match state {
-        TerminalToolState::Pending => TerminalSegmentTone::Warning,
-        TerminalToolState::Running => TerminalSegmentTone::Info,
-        TerminalToolState::Completed => TerminalSegmentTone::Success,
-        TerminalToolState::Failed => TerminalSegmentTone::Error,
-    };
-
-    let mut header = format!("{} {} {}", icon, tool_glyph(name), name);
-    if let Some(preview) = tool_argument_preview(&normalized, arguments) {
-        header.push_str("  ");
-        header.push_str(&preview);
-    }
-
-    let mut lines = vec![TerminalSegmentDisplayLine::new(header, tone)];
+    let mut lines = vec![render_tool_header_line(name, arguments, state)];
 
     if let Some(info) = result {
         if info.is_error {
@@ -323,6 +304,34 @@ pub fn render_tool_segment_lines(
     }
 
     lines
+}
+
+pub fn render_tool_header_line(
+    name: &str,
+    arguments: &str,
+    state: TerminalToolState,
+) -> TerminalSegmentDisplayLine {
+    let normalized = normalize_tool_name(name);
+    let icon = match state {
+        TerminalToolState::Pending => "◯",
+        TerminalToolState::Running => "◌",
+        TerminalToolState::Completed => "●",
+        TerminalToolState::Failed => "✗",
+    };
+    let tone = match state {
+        TerminalToolState::Pending => TerminalSegmentTone::Warning,
+        TerminalToolState::Running => TerminalSegmentTone::Info,
+        TerminalToolState::Completed => TerminalSegmentTone::Success,
+        TerminalToolState::Failed => TerminalSegmentTone::Error,
+    };
+
+    let mut header = format!("{} {} {}", icon, tool_glyph(name), name);
+    if let Some(preview) = tool_argument_preview(&normalized, arguments) {
+        header.push_str("  ");
+        header.push_str(&preview);
+    }
+
+    TerminalSegmentDisplayLine::new(header, tone)
 }
 
 pub fn render_file_segment_line(path: &str, mime: &str) -> TerminalSegmentDisplayLine {

@@ -9,6 +9,7 @@ mod permission;
 mod prompt;
 mod question;
 mod revert_card;
+mod shared_block_items;
 pub mod semantic_highlight;
 mod session;
 mod session_message;

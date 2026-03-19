@@ -528,10 +528,10 @@ export async function sendPrompt(content: string): Promise<void> {
       body: JSON.stringify(payload),
     });
 
-    // Consume the SSE response — output_block events also arrive via global /event,
-    // but we consume here to keep the connection alive until the stream ends.
-    await parseSSE(response, () => {
-      // Events are handled by the global SSE handler
+    // Consume the /stream SSE response — output_block events are ONLY sent
+    // via this stream (not the global /event bus), so we must handle them here.
+    await parseSSE(response, (_name, payload) => {
+      handleSSEEvent(_name, payload);
     });
   } catch (error) {
     throw error;

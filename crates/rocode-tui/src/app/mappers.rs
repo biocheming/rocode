@@ -1,4 +1,7 @@
 use super::*;
+use rocode_command::terminal_tool_block_display::{
+    build_file_items, build_image_items, summarize_block_items_inline,
+};
 
 pub(super) fn apply_incremental_session_sync(
     session_ctx: &mut crate::context::SessionContext,
@@ -158,8 +161,12 @@ fn message_part_text(part: &ContextMessagePart) -> String {
             }
             format!("[tool-result] {}", result)
         }
-        ContextMessagePart::File { path, .. } => format!("[file] {}", path),
-        ContextMessagePart::Image { url } => format!("[image] {}", url),
+        ContextMessagePart::File { path, mime } => {
+            summarize_block_items_inline(&build_file_items(path, mime))
+        }
+        ContextMessagePart::Image { url } => {
+            summarize_block_items_inline(&build_image_items(url))
+        }
     }
 }
 
