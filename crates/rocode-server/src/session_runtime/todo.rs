@@ -1,8 +1,4 @@
 use rocode_core::bus::{Bus, BusEventDef};
-use rocode_core::contracts::events::BusEventName;
-use rocode_core::contracts::todo::keys as todo_keys;
-use rocode_core::contracts::wire::keys as wire_keys;
-use rocode_storage::TodoRepository;
 use rocode_types::TodoInfo;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -10,26 +6,15 @@ use tokio::sync::RwLock;
 
 pub(crate) struct TodoManager {
     state: Arc<RwLock<HashMap<String, Vec<TodoInfo>>>>,
-    db: Option<Arc<TodoRepository>>,
     bus: Option<Arc<Bus>>,
 }
 
-pub(crate) static TODO_UPDATED_EVENT: BusEventDef =
-    BusEventDef::new(BusEventName::TodoUpdated.as_str());
+pub(crate) static TODO_UPDATED_EVENT: BusEventDef = BusEventDef::new("todo.updated");
 
 impl TodoManager {
     pub(crate) fn new() -> Self {
         Self {
             state: Arc::new(RwLock::new(HashMap::new())),
-            db: None,
-            bus: None,
-        }
-    }
-
-    pub fn with_database(pool: sqlx::SqlitePool) -> Self {
-        Self {
-            state: Arc::new(RwLock::new(HashMap::new())),
-            db: Some(Arc::new(TodoRepository::new(pool))),
             bus: None,
         }
     }
@@ -38,26 +23,12 @@ impl TodoManager {
     pub(crate) fn with_bus(bus: Arc<Bus>) -> Self {
         Self {
             state: Arc::new(RwLock::new(HashMap::new())),
-            db: None,
             bus: Some(bus),
         }
     }
 
     pub(crate) async fn update(&self, session_id: &str, todos: Vec<TodoInfo>) {
         let todos_payload = todos.clone();
-        if let Some(ref db) = self.db {
-            let _ = db.delete_for_session(session_id).await;
-            for (i, todo) in todos.iter().enumerate() {
-                let item = rocode_storage::TodoItem {
-                    id: format!("{}_{}", session_id, i),
-                    content: todo.content.clone(),
-                    status: todo.status.clone(),
-                    priority: todo.priority.clone(),
-                    position: i as i64,
-                };
-                let _ = db.upsert(session_id, &item).await;
-            }
-        }
 
         let mut state = self.state.write().await;
         if todos.is_empty() {
@@ -70,8 +41,8 @@ impl TodoManager {
             bus.publish(
                 &TODO_UPDATED_EVENT,
                 serde_json::json!({
-                    wire_keys::SESSION_ID: session_id,
-                    todo_keys::TODOS: todos_payload,
+                    "sessionID": session_id,
+                    "todos": todos_payload,
                 }),
             )
             .await;
@@ -79,88 +50,8 @@ impl TodoManager {
     }
 
     pub(crate) async fn get(&self, session_id: &str) -> Vec<TodoInfo> {
-        if let Some(ref db) = self.db {
-            if let Ok(items) = db.list_for_session(session_id).await {
-                return items
-                    .into_iter()
-                    .map(|item| TodoInfo {
-                        content: item.content,
-                        status: item.status,
-                        priority: item.priority,
-                    })
-                    .collect();
-            }
-        }
-
         let state = self.state.read().await;
         state.get(session_id).cloned().unwrap_or_default()
-    }
-
-    pub async fn clear(&self, session_id: &str) {
-        if let Some(ref db) = self.db {
-            let _ = db.delete_for_session(session_id).await;
-        }
-
-        let mut state = self.state.write().await;
-        state.remove(session_id);
-    }
-
-    pub async fn set_status(&self, session_id: &str, index: usize, status: &str) -> bool {
-        let mut state = self.state.write().await;
-        if let Some(todos) = state.get_mut(session_id) {
-            if index < todos.len() {
-                todos[index].status = status.to_string();
-
-                if let Some(ref db) = self.db {
-                    let item = rocode_storage::TodoItem {
-                        id: format!("{}_{}", session_id, index),
-                        content: todos[index].content.clone(),
-                        status: status.to_string(),
-                        priority: todos[index].priority.clone(),
-                        position: index as i64,
-                    };
-                    let _ = db.upsert(session_id, &item).await;
-                }
-
-                return true;
-            }
-        }
-        false
-    }
-
-    pub async fn add(&self, session_id: &str, todo: TodoInfo) {
-        let mut state = self.state.write().await;
-        let todos = state.entry(session_id.to_string()).or_insert_with(Vec::new);
-        let position = todos.len();
-        todos.push(todo.clone());
-
-        if let Some(ref db) = self.db {
-            let item = rocode_storage::TodoItem {
-                id: format!("{}_{}", session_id, position),
-                content: todo.content,
-                status: todo.status,
-                priority: todo.priority,
-                position: position as i64,
-            };
-            let _ = db.upsert(session_id, &item).await;
-        }
-    }
-
-    pub async fn remove(&self, session_id: &str, index: usize) -> bool {
-        let mut state = self.state.write().await;
-        if let Some(todos) = state.get_mut(session_id) {
-            if index < todos.len() {
-                todos.remove(index);
-
-                if let Some(ref db) = self.db {
-                    let todo_id = format!("{}_{}", session_id, index);
-                    let _ = db.delete(session_id, &todo_id).await;
-                }
-
-                return true;
-            }
-        }
-        false
     }
 }
 
@@ -197,7 +88,7 @@ mod tests {
             .expect("event timeout")
             .expect("event channel closed");
         assert_eq!(event.event_type, TODO_UPDATED_EVENT.event_type);
-        assert_eq!(event.properties[wire_keys::SESSION_ID], "session-1");
-        assert_eq!(event.properties[todo_keys::TODOS][0][todo_keys::CONTENT], "write tests");
+        assert_eq!(event.properties["sessionID"], "session-1");
+        assert_eq!(event.properties["todos"][0]["content"], "write tests");
     }
 }
