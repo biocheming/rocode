@@ -13,9 +13,9 @@ use self::events::{
 use crate::runtime_control::{ExecutionPatch, ExecutionStatus, FieldUpdate};
 use crate::ServerState;
 use rocode_command::output_blocks::{
-    MessageBlock, Role as OutputMessageRole, OutputBlock, ReasoningBlock,
-    SchedulerDecisionBlock, SchedulerDecisionField, SchedulerDecisionRenderSpec,
-    SchedulerDecisionSection, SchedulerStageBlock,
+    MessageBlock, OutputBlock, ReasoningBlock, Role as OutputMessageRole, SchedulerDecisionBlock,
+    SchedulerDecisionField, SchedulerDecisionRenderSpec, SchedulerDecisionSection,
+    SchedulerStageBlock,
 };
 use rocode_orchestrator::{
     parse_execution_gate_decision, parse_route_decision, scheduler_stage_observability,
@@ -26,7 +26,7 @@ use rocode_orchestrator::{
 use rocode_provider::Provider;
 use rocode_session::prompt::{OutputBlockEvent, OutputBlockHook};
 use rocode_session::snapshot::Snapshot;
-use rocode_session::{Role, MessageUsage, PartType, Session, SessionMessage};
+use rocode_session::{MessageUsage, PartType, Role, Session, SessionMessage};
 
 #[derive(Clone)]
 struct ActiveStageMessage {

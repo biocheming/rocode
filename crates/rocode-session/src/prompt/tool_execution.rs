@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use rocode_orchestrator::inline_subtask_request_defaults;
 use rocode_provider::{Provider, ToolDefinition};
 
-use crate::{FilePart, Role, PartType, Session, SessionMessage};
+use crate::{FilePart, PartType, Role, Session, SessionMessage};
 
 use super::subtask::SubtaskExecutor;
 use super::{

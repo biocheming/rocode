@@ -1167,7 +1167,7 @@ mod tests {
         assert_eq!(event.event_type, SESSION_UPDATED_EVENT.event_type);
         assert_eq!(event.properties["info"]["id"], session.id);
         assert_eq!(
-            event.properties["info"]["share"],
+            event.properties["info"]["share"]["url"],
             "https://share.opencode.ai/test"
         );
     }

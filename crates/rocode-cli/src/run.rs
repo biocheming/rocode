@@ -22,8 +22,8 @@ use rocode_command::cli_spinner::SpinnerGuard;
 use rocode_command::cli_style::CliStyle;
 use rocode_command::interactive::{parse_interactive_command, InteractiveCommand};
 use rocode_command::output_blocks::{
-    render_cli_block_rich, MessageBlock, MessagePhase, Role as OutputMessageRole,
-    OutputBlock, QueueItemBlock, SchedulerStageBlock, StatusBlock,
+    render_cli_block_rich, MessageBlock, MessagePhase, OutputBlock, QueueItemBlock,
+    Role as OutputMessageRole, SchedulerStageBlock, StatusBlock,
 };
 use rocode_command::{CommandRegistry, ResolvedUiCommand, UiActionId};
 use rocode_config::loader::load_config;

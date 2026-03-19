@@ -8,6 +8,6 @@ pub use app_context::{
 };
 pub use keybind::{Keybind, KeybindRegistry};
 pub use session_context::{
-    collect_child_sessions, ChildSessionInfo, DiffEntry, Message, MessagePart, Role,
-    RevertInfo, Session, SessionContext, SessionStatus, TodoItem, TodoStatus, TokenUsage,
+    collect_child_sessions, ChildSessionInfo, DiffEntry, Message, MessagePart, RevertInfo, Role,
+    Session, SessionContext, SessionStatus, TodoItem, TodoStatus, TokenUsage,
 };

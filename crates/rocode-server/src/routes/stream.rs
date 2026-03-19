@@ -16,7 +16,7 @@ use crate::session_runtime::events::{
 use crate::{ApiError, ServerState};
 use rocode_agent::{AgentInfo, AgentRegistry};
 use rocode_provider::ToolDefinition;
-use rocode_session::{Role as SessionMessageRole, MessageUsage, Session};
+use rocode_session::{MessageUsage, Role as SessionMessageRole, Session};
 
 use super::permission::request_permission;
 use super::session::{
@@ -501,7 +501,7 @@ mod tests {
     use crate::session_runtime::scheduler_stage_block_from_message;
     use chrono::Utc;
     use rocode_command::governance_fixtures::canonical_scheduler_stage_fixture;
-    use rocode_session::{MessagePart, Role, PartType, SessionMessage};
+    use rocode_session::{MessagePart, PartType, Role, SessionMessage};
 
     #[test]
     fn scheduler_stage_message_projects_canonical_governance_block() {

@@ -3,7 +3,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use rocode_provider::{get_model_context_limit, ChatResponse, Content, ContentPart, Message, Provider};
+use rocode_provider::{
+    get_model_context_limit, ChatResponse, Content, ContentPart, Message, Provider,
+};
 use serde::Deserialize;
 
 use crate::compaction::{
@@ -433,10 +435,7 @@ impl SessionPrompt {
 
         // Keep the latest user anchor before the compaction boundary so prompt
         // loop invariants hold (`last_user_idx` must exist).
-        if let Some(last_user_idx) = messages
-            .iter()
-            .rposition(|m| matches!(m.role, Role::User))
-        {
+        if let Some(last_user_idx) = messages.iter().rposition(|m| matches!(m.role, Role::User)) {
             if last_user_idx < start {
                 let mut anchored = Vec::with_capacity(messages.len() - last_user_idx);
                 anchored.push(messages[last_user_idx].clone());

@@ -2,7 +2,7 @@
 use crate::output_blocks::SchedulerStageBlock;
 use crate::output_blocks::{
     tool_web_fields, tool_web_header, tool_web_preview, tool_web_summary, BlockTone, MessageBlock,
-    MessagePhase, Role, OutputBlock, QueueItemBlock, ReasoningBlock, SessionEventBlock,
+    MessagePhase, OutputBlock, QueueItemBlock, ReasoningBlock, Role, SessionEventBlock,
     SessionEventField, StatusBlock, ToolBlock, ToolPhase, ToolStructuredDetail,
 };
 use rocode_agent::{AgentRenderEvent, AgentRenderOutcome, AgentToolOutput};
@@ -60,9 +60,9 @@ pub fn map_render_event_to_block(
     config: AgentPresenterConfig,
 ) -> Option<OutputBlock> {
     match event {
-        AgentRenderEvent::AssistantStart => Some(OutputBlock::Message(MessageBlock::start(
-            Role::Assistant,
-        ))),
+        AgentRenderEvent::AssistantStart => {
+            Some(OutputBlock::Message(MessageBlock::start(Role::Assistant)))
+        }
         AgentRenderEvent::AssistantDelta(text) => {
             if text.is_empty() {
                 None
@@ -73,9 +73,9 @@ pub fn map_render_event_to_block(
                 )))
             }
         }
-        AgentRenderEvent::AssistantEnd => Some(OutputBlock::Message(MessageBlock::end(
-            Role::Assistant,
-        ))),
+        AgentRenderEvent::AssistantEnd => {
+            Some(OutputBlock::Message(MessageBlock::end(Role::Assistant)))
+        }
         AgentRenderEvent::ToolStart { name, .. } => Some(OutputBlock::Tool(ToolBlock::start(name))),
         AgentRenderEvent::ToolProgress { name, input, .. } => Some(OutputBlock::Tool(
             ToolBlock::running(name, truncate_text(&input, config.tool_progress_limit)),

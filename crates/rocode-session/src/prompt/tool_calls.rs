@@ -708,7 +708,7 @@ impl SessionPrompt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Role, PartType, Session, SessionMessage};
+    use crate::{PartType, Role, Session, SessionMessage};
     use std::collections::HashMap;
 
     #[test]

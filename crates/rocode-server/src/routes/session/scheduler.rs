@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use rocode_agent::{AgentInfo, AgentMode, AgentRegistry};
-use rocode_command::output_blocks::{MessageBlock, Role as OutputMessageRole, OutputBlock};
+use rocode_command::output_blocks::{MessageBlock, OutputBlock, Role as OutputMessageRole};
 use rocode_config::{Config as AppConfig, SkillTreeNodeConfig};
 use rocode_orchestrator::output_metadata::output_usage;
 use rocode_orchestrator::{

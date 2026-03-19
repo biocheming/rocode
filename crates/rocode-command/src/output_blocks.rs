@@ -1244,16 +1244,12 @@ mod tests {
 
     #[test]
     fn renders_message_blocks() {
-        let start = render_cli_block(&OutputBlock::Message(MessageBlock::start(
-            Role::Assistant,
-        )));
+        let start = render_cli_block(&OutputBlock::Message(MessageBlock::start(Role::Assistant)));
         let delta = render_cli_block(&OutputBlock::Message(MessageBlock::delta(
             Role::Assistant,
             "hello",
         )));
-        let end = render_cli_block(&OutputBlock::Message(MessageBlock::end(
-            Role::Assistant,
-        )));
+        let end = render_cli_block(&OutputBlock::Message(MessageBlock::end(Role::Assistant)));
         assert_eq!(start, "[message:assistant] ");
         assert_eq!(delta, "hello");
         assert_eq!(end, "\n");
@@ -1425,10 +1421,7 @@ mod tests {
             width: 80,
         };
         let out = render_cli_block_rich(
-            &OutputBlock::Message(MessageBlock::full(
-                Role::Assistant,
-                "line one\nline two",
-            )),
+            &OutputBlock::Message(MessageBlock::full(Role::Assistant, "line one\nline two")),
             &style,
         );
         assert!(out.contains("line one"));

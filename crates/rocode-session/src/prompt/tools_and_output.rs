@@ -87,9 +87,7 @@ pub fn insert_reminders(
     agent_name: &str,
     was_plan: bool,
 ) -> Vec<SessionMessage> {
-    let last_user_idx = messages
-        .iter()
-        .rposition(|m| matches!(m.role, Role::User));
+    let last_user_idx = messages.iter().rposition(|m| matches!(m.role, Role::User));
 
     if let Some(idx) = last_user_idx {
         let mut messages = messages.to_vec();

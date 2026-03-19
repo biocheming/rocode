@@ -65,7 +65,7 @@ use crate::components::{
 use crate::context::keybind::{is_primary_key_event, normalize_key_event, LeaderKeyState};
 use crate::context::{
     collect_child_sessions, AppContext, McpConnectionStatus, McpServerStatus, Message,
-    MessagePart as ContextMessagePart, Role, RevertInfo, Session, SessionStatus, TokenUsage,
+    MessagePart as ContextMessagePart, RevertInfo, Role, Session, SessionStatus, TokenUsage,
 };
 use crate::event::{CustomEvent, Event, StateChange};
 use crate::router::Route;

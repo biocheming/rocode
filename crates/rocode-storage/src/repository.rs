@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use rocode_session::{
-    MessagePart, Role, MessageUsage, PartType, Session, SessionMessage, SessionSummary,
+    MessagePart, MessageUsage, PartType, Role, Session, SessionMessage, SessionSummary,
     SessionTime, SessionUsage, ToolCallStatus,
 };
 

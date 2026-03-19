@@ -11,9 +11,7 @@ use ratatui::{
 };
 
 use crate::branding::{APP_NAME, APP_SHORT_NAME, APP_VERSION_DATE};
-use crate::context::{
-    AppContext, LspConnectionStatus, McpConnectionStatus, Role, TodoStatus,
-};
+use crate::context::{AppContext, LspConnectionStatus, McpConnectionStatus, Role, TodoStatus};
 use crate::theme::Theme;
 use rocode_core::contracts::mcp::McpConnectionStatusWire;
 use rocode_core::contracts::scheduler::keys as scheduler_keys;

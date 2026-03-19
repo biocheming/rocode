@@ -34,7 +34,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use rocode_content::output_blocks::{
-    MessageBlock, Role as OutputMessageRole, OutputBlock, ReasoningBlock, ToolBlock,
+    MessageBlock, OutputBlock, ReasoningBlock, Role as OutputMessageRole, ToolBlock,
 };
 use rocode_orchestrator::runtime::events::{
     CancelToken as RuntimeCancelToken, FinishReason as RuntimeFinishReason,
@@ -53,7 +53,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::compaction::{run_compaction, CompactionResult};
 use crate::message_v2::ModelRef as V2ModelRef;
-use crate::{Role, PartType, Session, SessionMessage, SessionStateManager};
+use crate::{PartType, Role, Session, SessionMessage, SessionStateManager};
 
 const MAX_STEPS: u32 = 100;
 const STREAM_UPDATE_INTERVAL_MS: u64 = 120;

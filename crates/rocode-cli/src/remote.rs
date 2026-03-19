@@ -1,9 +1,9 @@
 use futures::StreamExt;
 use rocode_command::cli_style::CliStyle;
 use rocode_command::output_blocks::{
-    render_cli_block_rich, BlockTone, MessageBlock, MessagePhase, Role, OutputBlock,
-    QueueItemBlock, ReasoningBlock, SchedulerStageBlock, SessionEventBlock, SessionEventField,
-    StatusBlock, ToolBlock, ToolPhase,
+    render_cli_block_rich, BlockTone, MessageBlock, MessagePhase, OutputBlock, QueueItemBlock,
+    ReasoningBlock, Role, SchedulerStageBlock, SessionEventBlock, SessionEventField, StatusBlock,
+    ToolBlock, ToolPhase,
 };
 use rocode_config::schema::ShareMode;
 use rocode_config::Config;
