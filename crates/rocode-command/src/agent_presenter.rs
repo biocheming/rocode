@@ -2,7 +2,7 @@
 use crate::output_blocks::SchedulerStageBlock;
 use crate::output_blocks::{
     tool_web_fields, tool_web_header, tool_web_preview, tool_web_summary, BlockTone, MessageBlock,
-    MessagePhase, MessageRole, OutputBlock, QueueItemBlock, ReasoningBlock, SessionEventBlock,
+    MessagePhase, Role, OutputBlock, QueueItemBlock, ReasoningBlock, SessionEventBlock,
     SessionEventField, StatusBlock, ToolBlock, ToolPhase, ToolStructuredDetail,
 };
 use rocode_agent::{AgentRenderEvent, AgentRenderOutcome, AgentToolOutput};
@@ -61,20 +61,20 @@ pub fn map_render_event_to_block(
 ) -> Option<OutputBlock> {
     match event {
         AgentRenderEvent::AssistantStart => Some(OutputBlock::Message(MessageBlock::start(
-            MessageRole::Assistant,
+            Role::Assistant,
         ))),
         AgentRenderEvent::AssistantDelta(text) => {
             if text.is_empty() {
                 None
             } else {
                 Some(OutputBlock::Message(MessageBlock::delta(
-                    MessageRole::Assistant,
+                    Role::Assistant,
                     text,
                 )))
             }
         }
         AgentRenderEvent::AssistantEnd => Some(OutputBlock::Message(MessageBlock::end(
-            MessageRole::Assistant,
+            Role::Assistant,
         ))),
         AgentRenderEvent::ToolStart { name, .. } => Some(OutputBlock::Tool(ToolBlock::start(name))),
         AgentRenderEvent::ToolProgress { name, input, .. } => Some(OutputBlock::Tool(
@@ -1262,11 +1262,11 @@ fn tone_to_web(tone: &BlockTone) -> &'static str {
     }
 }
 
-fn role_to_web(role: &MessageRole) -> &'static str {
+fn role_to_web(role: &Role) -> &'static str {
     match role {
-        MessageRole::User => "user",
-        MessageRole::Assistant => "assistant",
-        MessageRole::System => "system",
+        Role::User => "user",
+        Role::Assistant => "assistant",
+        Role::System => "system",
     }
 }
 
@@ -1417,7 +1417,7 @@ mod tests {
 
     #[test]
     fn converts_output_block_to_web_shape() {
-        let block = OutputBlock::Message(MessageBlock::delta(MessageRole::Assistant, "hello"));
+        let block = OutputBlock::Message(MessageBlock::delta(Role::Assistant, "hello"));
         let web = output_block_to_web(&block);
         assert_eq!(web.get("kind").and_then(|v| v.as_str()), Some("message"));
         assert_eq!(web.get("phase").and_then(|v| v.as_str()), Some("delta"));

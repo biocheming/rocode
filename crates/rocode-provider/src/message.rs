@@ -2,7 +2,7 @@ use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub use rocode_message::MessageRole as Role;
+pub use rocode_types::Role;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatRequest {

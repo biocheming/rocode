@@ -12,7 +12,7 @@ use ratatui::{
 
 use crate::branding::{APP_NAME, APP_SHORT_NAME, APP_VERSION_DATE};
 use crate::context::{
-    AppContext, LspConnectionStatus, McpConnectionStatus, MessageRole, TodoStatus,
+    AppContext, LspConnectionStatus, McpConnectionStatus, Role, TodoStatus,
 };
 use crate::theme::Theme;
 use rocode_core::contracts::mcp::McpConnectionStatusWire;
@@ -363,12 +363,12 @@ impl Sidebar {
 
         let total_cost: f64 = messages
             .iter()
-            .filter(|m| matches!(m.role, MessageRole::Assistant))
+            .filter(|m| matches!(m.role, Role::Assistant))
             .map(|m| m.cost)
             .sum();
         let total_tokens = messages
             .iter()
-            .filter(|m| matches!(m.role, MessageRole::Assistant))
+            .filter(|m| matches!(m.role, Role::Assistant))
             .map(|m| {
                 m.tokens.input
                     + m.tokens.output
@@ -383,7 +383,7 @@ impl Sidebar {
             let active_model = messages
                 .iter()
                 .rev()
-                .find(|m| matches!(m.role, MessageRole::Assistant))
+                .find(|m| matches!(m.role, Role::Assistant))
                 .and_then(|m| m.model.as_deref())
                 .or(current_model.as_deref());
             active_model

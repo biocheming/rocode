@@ -22,7 +22,7 @@ use rocode_command::cli_spinner::SpinnerGuard;
 use rocode_command::cli_style::CliStyle;
 use rocode_command::interactive::{parse_interactive_command, InteractiveCommand};
 use rocode_command::output_blocks::{
-    render_cli_block_rich, MessageBlock, MessagePhase, MessageRole as OutputMessageRole,
+    render_cli_block_rich, MessageBlock, MessagePhase, Role as OutputMessageRole,
     OutputBlock, QueueItemBlock, SchedulerStageBlock, StatusBlock,
 };
 use rocode_command::{CommandRegistry, ResolvedUiCommand, UiActionId};
@@ -911,7 +911,7 @@ async fn cli_refresh_server_info(
             Ok(messages) => {
                 let mut stats = CliSessionTokenStats::default();
                 for msg in &messages {
-                    if matches!(msg.role, rocode_message::MessageRole::Assistant) {
+                    if matches!(msg.role, rocode_message::Role::Assistant) {
                         stats.accumulate(&msg.tokens, msg.cost);
                     }
                 }

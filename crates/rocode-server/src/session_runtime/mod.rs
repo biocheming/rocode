@@ -13,7 +13,7 @@ use self::events::{
 use crate::runtime_control::{ExecutionPatch, ExecutionStatus, FieldUpdate};
 use crate::ServerState;
 use rocode_command::output_blocks::{
-    MessageBlock, MessageRole as OutputMessageRole, OutputBlock, ReasoningBlock,
+    MessageBlock, Role as OutputMessageRole, OutputBlock, ReasoningBlock,
     SchedulerDecisionBlock, SchedulerDecisionField, SchedulerDecisionRenderSpec,
     SchedulerDecisionSection, SchedulerStageBlock,
 };
@@ -26,7 +26,7 @@ use rocode_orchestrator::{
 use rocode_provider::Provider;
 use rocode_session::prompt::{OutputBlockEvent, OutputBlockHook};
 use rocode_session::snapshot::Snapshot;
-use rocode_session::{MessageRole, MessageUsage, PartType, Session, SessionMessage};
+use rocode_session::{Role, MessageUsage, PartType, Session, SessionMessage};
 
 #[derive(Clone)]
 struct ActiveStageMessage {
@@ -433,7 +433,7 @@ fn session_message_metadata_wire(
 
 fn find_active_scheduler_stage_message_mut(session: &mut Session) -> Option<&mut SessionMessage> {
     session.messages.iter_mut().rev().find(|message| {
-        if message.role != MessageRole::Assistant {
+        if message.role != Role::Assistant {
             return false;
         }
 
@@ -1199,7 +1199,7 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                             .messages
                             .iter()
                             .rev()
-                            .find(|m| m.role == MessageRole::Assistant)
+                            .find(|m| m.role == Role::Assistant)
                         {
                             (Some(last_assistant.id.clone()), None, None, false, false)
                         } else {
@@ -3069,7 +3069,7 @@ pub(crate) fn first_user_message_text(session: &Session) -> Option<String> {
     session
         .messages
         .iter()
-        .find(|message| matches!(message.role, MessageRole::User))
+        .find(|message| matches!(message.role, Role::User))
         .map(|message| message.get_text())
         .map(|text| text.trim().to_string())
         .filter(|text| !text.is_empty())

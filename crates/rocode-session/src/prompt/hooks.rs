@@ -1,4 +1,4 @@
-use crate::{MessageRole, SessionMessage};
+use crate::{Role, SessionMessage};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -57,7 +57,7 @@ pub(crate) fn session_message_hook_payload(message: &SessionMessage) -> serde_js
     payload
 }
 
-pub(crate) fn hook_message_role(role: &MessageRole) -> &'static str {
+pub(crate) fn hook_message_role(role: &Role) -> &'static str {
     role.as_str()
 }
 

@@ -47,9 +47,9 @@ fn render_status_block(status: &StatusBlock) -> String {
 
 fn render_message_block(message: &MessageBlock) -> String {
     let role = match message.role {
-        MessageRole::User => "user",
-        MessageRole::Assistant => "assistant",
-        MessageRole::System => "system",
+        Role::User => "user",
+        Role::Assistant => "assistant",
+        Role::System => "system",
     };
     match message.phase {
         MessagePhase::Start => format!("[message:{role}] "),
@@ -342,9 +342,9 @@ fn render_message_rich(message: &MessageBlock, style: &CliStyle) -> String {
     match message.phase {
         MessagePhase::Start => {
             let bullet = match message.role {
-                MessageRole::User => style.bold_green(style.bullet()),
-                MessageRole::Assistant => style.bold_cyan(style.bullet()),
-                MessageRole::System => style.bold_yellow(style.bullet()),
+                Role::User => style.bold_green(style.bullet()),
+                Role::Assistant => style.bold_cyan(style.bullet()),
+                Role::System => style.bold_yellow(style.bullet()),
             };
             format!("{} ", bullet)
         }
@@ -352,20 +352,20 @@ fn render_message_rich(message: &MessageBlock, style: &CliStyle) -> String {
         MessagePhase::End => "\n\n".to_string(),
         MessagePhase::Full => {
             let rendered = match message.role {
-                MessageRole::User => message.text.clone(),
-                MessageRole::Assistant | MessageRole::System => {
+                Role::User => message.text.clone(),
+                Role::Assistant | Role::System => {
                     cli_markdown::render_markdown(&message.text, style)
                 }
             };
             let indent = match message.role {
-                MessageRole::User => "  ",
-                MessageRole::Assistant => "  ",
-                MessageRole::System => "  ",
+                Role::User => "  ",
+                Role::Assistant => "  ",
+                Role::System => "  ",
             };
             let bullet = match message.role {
-                MessageRole::User => style.bold_green(style.bullet()),
-                MessageRole::Assistant => style.bold_cyan(style.bullet()),
-                MessageRole::System => style.bold_yellow(style.bullet()),
+                Role::User => style.bold_green(style.bullet()),
+                Role::Assistant => style.bold_cyan(style.bullet()),
+                Role::System => style.bold_yellow(style.bullet()),
             };
             let indented = indent_continuation_lines(rendered.trim_end(), indent);
             format!("{} {}\n\n", bullet, indented)
@@ -1245,14 +1245,14 @@ mod tests {
     #[test]
     fn renders_message_blocks() {
         let start = render_cli_block(&OutputBlock::Message(MessageBlock::start(
-            MessageRole::Assistant,
+            Role::Assistant,
         )));
         let delta = render_cli_block(&OutputBlock::Message(MessageBlock::delta(
-            MessageRole::Assistant,
+            Role::Assistant,
             "hello",
         )));
         let end = render_cli_block(&OutputBlock::Message(MessageBlock::end(
-            MessageRole::Assistant,
+            Role::Assistant,
         )));
         assert_eq!(start, "[message:assistant] ");
         assert_eq!(delta, "hello");
@@ -1411,7 +1411,7 @@ mod tests {
             width: 80,
         };
         let out = render_cli_block_rich(
-            &OutputBlock::Message(MessageBlock::start(MessageRole::Assistant)),
+            &OutputBlock::Message(MessageBlock::start(Role::Assistant)),
             &style,
         );
         assert!(out.contains("●"));
@@ -1426,7 +1426,7 @@ mod tests {
         };
         let out = render_cli_block_rich(
             &OutputBlock::Message(MessageBlock::full(
-                MessageRole::Assistant,
+                Role::Assistant,
                 "line one\nline two",
             )),
             &style,
@@ -1443,12 +1443,12 @@ mod tests {
             width: 80,
         };
         let prompt = render_cli_block_rich(
-            &OutputBlock::Message(MessageBlock::full(MessageRole::User, "hi")),
+            &OutputBlock::Message(MessageBlock::full(Role::User, "hi")),
             &style,
         );
         let assistant = render_cli_block_rich(
             &OutputBlock::Message(MessageBlock::full(
-                MessageRole::Assistant,
+                Role::Assistant,
                 "Hi! How can I help you today?",
             )),
             &style,

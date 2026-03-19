@@ -9,6 +9,7 @@ license.workspace = true
 rocode-core = { path = "../rocode-core" }
 rocode-content = { path = "../rocode-content" }
 rocode-message = { path = "../rocode-message" }
+rocode-types = { path = "../rocode-types" }
 rocode-util = { path = "../rocode-util" }
 rocode-provider = { path = "../rocode-provider" }
 rocode-orchestrator = { path = "../rocode-orchestrator" }

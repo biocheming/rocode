@@ -240,7 +240,7 @@ impl App {
         let session_ctx = self.context.session.read();
         let messages = session_ctx.messages.get(&session_id);
         let last_user_msg = messages
-            .and_then(|msgs| msgs.iter().rev().find(|m| m.role == MessageRole::User))
+            .and_then(|msgs| msgs.iter().rev().find(|m| m.role == Role::User))
             .map(|m| (m.id.clone(), m.content.clone()));
         drop(session_ctx);
 
@@ -401,10 +401,10 @@ impl App {
 
         for message in messages {
             let role = match message.role {
-                MessageRole::User => "User",
-                MessageRole::Assistant => "Assistant",
-                MessageRole::System => "System",
-                MessageRole::Tool => "Tool",
+                Role::User => "User",
+                Role::Assistant => "Assistant",
+                Role::System => "System",
+                Role::Tool => "Tool",
             };
             output.push_str(&format!("## {}\n\n", role));
             if message.content.trim().is_empty() {

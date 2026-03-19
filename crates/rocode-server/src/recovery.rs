@@ -241,7 +241,7 @@ struct SchedulerStageNodeMetadataWire {
 
 pub(crate) fn latest_user_prompt(session: &rocode_session::Session) -> Option<String> {
     session.messages.iter().rev().find_map(|message| {
-        if !matches!(message.role, rocode_session::MessageRole::User) {
+        if !matches!(message.role, rocode_session::Role::User) {
             return None;
         }
         let meta: UserPromptMetadataWire = parse_wire_from_metadata_map(&message.metadata);
@@ -264,7 +264,7 @@ fn latest_assistant_finish(session: &rocode_session::Session) -> Option<String> 
         .messages
         .iter()
         .rev()
-        .find(|message| matches!(message.role, rocode_session::MessageRole::Assistant))
+        .find(|message| matches!(message.role, rocode_session::Role::Assistant))
         .and_then(|message| message.finish.clone())
 }
 
@@ -318,7 +318,7 @@ pub(crate) fn collect_subtask_recovery_targets(
 ) -> Vec<SubtaskRecoveryTarget> {
     let mut targets = Vec::new();
     for message in session.messages.iter().rev() {
-        if !matches!(message.role, rocode_session::MessageRole::User) {
+        if !matches!(message.role, rocode_session::Role::User) {
             continue;
         }
         for part in message.parts.iter().rev() {

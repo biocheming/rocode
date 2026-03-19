@@ -364,7 +364,7 @@ async fn prompt_with_update_hook_emits_incremental_snapshots() {
         snap.messages
             .iter()
             .rev()
-            .find(|m| matches!(m.role, MessageRole::Assistant))
+            .find(|m| matches!(m.role, Role::Assistant))
             .map(|m| m.get_text() == "Hel")
             .unwrap_or(false)
     });
@@ -378,7 +378,7 @@ async fn prompt_with_update_hook_emits_incremental_snapshots() {
         .messages
         .iter()
         .rev()
-        .find(|m| matches!(m.role, MessageRole::Assistant))
+        .find(|m| matches!(m.role, Role::Assistant))
         .map(SessionMessage::get_text)
         .unwrap_or_default();
     assert_eq!(final_text, "Hello");
@@ -478,7 +478,7 @@ async fn prompt_continues_after_tool_calls_without_finish_step_reason() {
         .messages
         .iter()
         .rev()
-        .find(|m| matches!(m.role, MessageRole::Assistant))
+        .find(|m| matches!(m.role, Role::Assistant))
         .map(SessionMessage::get_text)
         .unwrap_or_default();
     assert_eq!(final_text, "Read complete");
@@ -622,7 +622,7 @@ async fn execute_tool_calls_ignores_empty_tool_name() {
         .messages
         .iter()
         .rev()
-        .find(|m| matches!(m.role, MessageRole::Tool))
+        .find(|m| matches!(m.role, Role::Tool))
         .expect("tool message should exist");
     let result_ids: Vec<&str> = tool_msg
         .parts
@@ -668,7 +668,7 @@ async fn execute_tool_calls_runs_no_arg_tool() {
         .messages
         .iter()
         .rev()
-        .find(|m| matches!(m.role, MessageRole::Tool))
+        .find(|m| matches!(m.role, Role::Tool))
         .expect("tool message should exist");
 
     let (content, is_error) = tool_msg
@@ -725,7 +725,7 @@ async fn execute_tool_calls_routes_invalid_arguments_to_invalid_tool() {
         .messages
         .iter()
         .rev()
-        .find(|m| matches!(m.role, MessageRole::Assistant))
+        .find(|m| matches!(m.role, Role::Assistant))
         .expect("assistant message should exist");
     let tool_call = assistant_msg
         .parts
@@ -753,7 +753,7 @@ async fn execute_tool_calls_routes_invalid_arguments_to_invalid_tool() {
         .messages
         .iter()
         .rev()
-        .find(|m| matches!(m.role, MessageRole::Tool))
+        .find(|m| matches!(m.role, Role::Tool))
         .expect("tool message should exist");
     let (content, is_error) = tool_msg
         .parts
@@ -821,7 +821,7 @@ async fn execute_tool_calls_only_runs_running_tool_calls() {
         .messages
         .iter()
         .rev()
-        .find(|m| matches!(m.role, MessageRole::Tool))
+        .find(|m| matches!(m.role, Role::Tool))
         .expect("tool message should exist");
     let result_ids: Vec<&str> = tool_msg
         .parts
@@ -877,7 +877,7 @@ async fn execute_tool_calls_reused_call_id_in_new_turn_still_executes() {
     let tool_msgs: Vec<&SessionMessage> = session
         .messages
         .iter()
-        .filter(|m| matches!(m.role, MessageRole::Tool))
+        .filter(|m| matches!(m.role, Role::Tool))
         .collect();
     assert!(
         tool_msgs.len() >= 2,
@@ -1093,11 +1093,11 @@ fn early_exit_does_not_break_on_tool_calls_finish() {
 
     let last_user_idx = messages
         .iter()
-        .rposition(|m| matches!(m.role, MessageRole::User))
+        .rposition(|m| matches!(m.role, Role::User))
         .unwrap();
     let last_assistant_idx = messages
         .iter()
-        .rposition(|m| matches!(m.role, MessageRole::Assistant));
+        .rposition(|m| matches!(m.role, Role::Assistant));
 
     // The early-exit check from the prompt loop
     let should_break = if let Some(assistant_idx) = last_assistant_idx {
@@ -1136,11 +1136,11 @@ fn early_exit_breaks_on_terminal_finish() {
 
     let last_user_idx = messages
         .iter()
-        .rposition(|m| matches!(m.role, MessageRole::User))
+        .rposition(|m| matches!(m.role, Role::User))
         .unwrap();
     let last_assistant_idx = messages
         .iter()
-        .rposition(|m| matches!(m.role, MessageRole::Assistant));
+        .rposition(|m| matches!(m.role, Role::Assistant));
 
     let should_break = if let Some(assistant_idx) = last_assistant_idx {
         let assistant = &messages[assistant_idx];
@@ -1176,11 +1176,11 @@ fn early_exit_does_not_break_when_finish_is_none() {
 
     let last_user_idx = messages
         .iter()
-        .rposition(|m| matches!(m.role, MessageRole::User))
+        .rposition(|m| matches!(m.role, Role::User))
         .unwrap();
     let last_assistant_idx = messages
         .iter()
-        .rposition(|m| matches!(m.role, MessageRole::Assistant));
+        .rposition(|m| matches!(m.role, Role::Assistant));
 
     let should_break = if let Some(assistant_idx) = last_assistant_idx {
         let assistant = &messages[assistant_idx];

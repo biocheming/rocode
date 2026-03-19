@@ -1,7 +1,7 @@
 use futures::StreamExt;
 use rocode_command::cli_style::CliStyle;
 use rocode_command::output_blocks::{
-    render_cli_block_rich, BlockTone, MessageBlock, MessagePhase, MessageRole, OutputBlock,
+    render_cli_block_rich, BlockTone, MessageBlock, MessagePhase, Role, OutputBlock,
     QueueItemBlock, ReasoningBlock, SchedulerStageBlock, SessionEventBlock, SessionEventField,
     StatusBlock, ToolBlock, ToolPhase,
 };
@@ -213,9 +213,9 @@ pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBl
         }
         RemoteOutputBlockFrame::Message(payload) => {
             let role = match payload.role.unwrap_or_default() {
-                WireMessageRole::User => MessageRole::User,
-                WireMessageRole::System => MessageRole::System,
-                WireMessageRole::Assistant | WireMessageRole::Unknown => MessageRole::Assistant,
+                WireMessageRole::User => Role::User,
+                WireMessageRole::System => Role::System,
+                WireMessageRole::Assistant | WireMessageRole::Unknown => Role::Assistant,
             };
             let phase = match payload.phase.as_deref().unwrap_or("delta") {
                 "start" => MessagePhase::Start,

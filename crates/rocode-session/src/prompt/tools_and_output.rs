@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use rocode_orchestrator::session_title_request;
-use rocode_provider::{Content, Message, Provider, Role, ToolDefinition};
+use rocode_provider::{Content, Message, Provider, Role as ProviderRole, ToolDefinition};
 use serde::Deserialize;
 
-use crate::{sanitize_display_text, MessageRole, PartType, Session, SessionMessage};
+use crate::{sanitize_display_text, PartType, Role, Session, SessionMessage};
 
 use super::MAX_STEPS;
 
@@ -89,7 +89,7 @@ pub fn insert_reminders(
 ) -> Vec<SessionMessage> {
     let last_user_idx = messages
         .iter()
-        .rposition(|m| matches!(m.role, MessageRole::User));
+        .rposition(|m| matches!(m.role, Role::User));
 
     if let Some(idx) = last_user_idx {
         let mut messages = messages.to_vec();
@@ -297,7 +297,7 @@ pub fn compose_session_title_source(session: &Session) -> Option<(String, String
     let first_user = session
         .messages
         .iter()
-        .find(|message| matches!(message.role, MessageRole::User))
+        .find(|message| matches!(message.role, Role::User))
         .map(SessionMessage::get_text)
         .map(|text| text.trim().to_string())
         .filter(|text| !text.is_empty())?;
@@ -312,7 +312,7 @@ pub fn compose_session_title_source(session: &Session) -> Option<(String, String
         .messages
         .iter()
         .rev()
-        .filter(|message| matches!(message.role, MessageRole::Assistant))
+        .filter(|message| matches!(message.role, Role::Assistant))
         .map(SessionMessage::get_text)
         .map(|text| trim_title_source(&text, 600))
         .find(|text| !text.trim().is_empty())
@@ -337,7 +337,7 @@ pub async fn generate_session_title_for_session(
 
     let request = session_title_request(model_id).to_chat_request_with_system(
         vec![Message {
-            role: Role::User,
+            role: ProviderRole::User,
             content: Content::Text(format!(
                 "Generate a short session title (under 80 chars) for this conversation.\n\
                  Base it on the actual task and outcome, not the user's raw wording.\n\

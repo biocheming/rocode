@@ -18,7 +18,7 @@ use ratatui::{
 use super::message_palette;
 use super::sidebar::SidebarState;
 use crate::components::{Prompt, Sidebar};
-use crate::context::{AppContext, Message, MessagePart, MessageRole, SidebarMode};
+use crate::context::{AppContext, Message, MessagePart, Role, SidebarMode};
 
 const SIDEBAR_WIDTH: u16 = 42;
 const HEADER_NARROW_THRESHOLD: u16 = 80;
@@ -313,12 +313,12 @@ impl SessionView {
         let last_assistant = messages
             .iter()
             .rev()
-            .find(|m| matches!(m.role, MessageRole::Assistant) && m.tokens.output > 0);
+            .find(|m| matches!(m.role, Role::Assistant) && m.tokens.output > 0);
 
         // TS parity: cost only sums assistant messages.
         let total_cost: f64 = messages
             .iter()
-            .filter(|m| matches!(m.role, MessageRole::Assistant))
+            .filter(|m| matches!(m.role, Role::Assistant))
             .map(|m| m.cost)
             .sum();
         let mut context_and_cost = None;
@@ -575,7 +575,7 @@ impl SessionView {
         let revert_info = session_ctx.revert.get(&self.session_id).cloned();
         let last_assistant_idx = messages
             .iter()
-            .rposition(|m| matches!(m.role, MessageRole::Assistant));
+            .rposition(|m| matches!(m.role, Role::Assistant));
 
         let message_gap_lines = 1usize;
 
@@ -587,7 +587,7 @@ impl SessionView {
         let mut lines = Vec::new();
         let mut line_to_message: Vec<Option<String>> = Vec::new();
         let mut message_first_lines: HashMap<String, usize> = HashMap::new();
-        let mut last_visible_role: Option<MessageRole> = None;
+        let mut last_visible_role: Option<Role> = None;
         let mut rendered_first_system_prompt = false;
 
         if let Some(revert) = revert_info.as_ref() {
@@ -617,7 +617,7 @@ impl SessionView {
             // Smart spacing: role transitions always get a blank line;
             // cozy mode adds an extra blank line for breathing room
             if let Some(prev_role) = &last_visible_role {
-                if *prev_role != msg.role || matches!(msg.role, MessageRole::User) {
+                if *prev_role != msg.role || matches!(msg.role, Role::User) {
                     push_spacing_lines(
                         &mut lines,
                         &mut line_to_message,
@@ -632,7 +632,7 @@ impl SessionView {
                 .or_insert(lines.len());
 
             match msg.role {
-                MessageRole::User => {
+                Role::User => {
                     let message_bg = user_bg;
                     let message_border = user_border_color_for_agent(msg.agent.as_deref(), &theme);
                     let show_system_prompt = !rendered_first_system_prompt
@@ -657,7 +657,7 @@ impl SessionView {
                         paint_block_lines(user_lines, message_bg, message_border, content_width),
                     );
                 }
-                MessageRole::Assistant => {
+                Role::Assistant => {
                     let message_bg = theme.background;
                     let message_border = assistant_border;
                     let message_thinking_bg = thinking_bg;
@@ -951,7 +951,7 @@ impl SessionView {
                         );
                     }
                 }
-                MessageRole::System => {
+                Role::System => {
                     let system_lines: Vec<Line<'static>> = msg
                         .content
                         .lines()
@@ -968,7 +968,7 @@ impl SessionView {
                         .collect();
                     append_message_lines(&mut lines, &mut line_to_message, &msg.id, painted);
                 }
-                MessageRole::Tool => {
+                Role::Tool => {
                     // Carrier tool-result messages are rendered inline with the originating
                     // assistant tool call above, so only render non-carrier tool messages.
                     let tool_lines: Vec<Line<'static>> = msg
@@ -1435,7 +1435,7 @@ fn push_merged_span(line: &mut Vec<Span<'static>>, ch: char, style: Style) {
 }
 
 fn is_tool_result_carrier(message: &Message) -> bool {
-    if !matches!(message.role, MessageRole::Tool) {
+    if !matches!(message.role, Role::Tool) {
         return false;
     }
 
@@ -1459,7 +1459,7 @@ fn collect_assistant_tool_results(
     let mut tool_results = HashMap::new();
 
     for (idx, message) in messages.iter().enumerate().skip(assistant_idx) {
-        if idx > assistant_idx && matches!(message.role, MessageRole::Assistant) {
+        if idx > assistant_idx && matches!(message.role, Role::Assistant) {
             break;
         }
 
@@ -1496,7 +1496,7 @@ fn assistant_footer(
     fallback_model: Option<&str>,
     theme: &crate::theme::Theme,
 ) -> Option<Line<'static>> {
-    if !matches!(message.role, MessageRole::Assistant) {
+    if !matches!(message.role, Role::Assistant) {
         return None;
     }
 
@@ -1583,7 +1583,7 @@ fn assistant_duration(
     let user_start = messages[..idx]
         .iter()
         .rev()
-        .find(|m| matches!(m.role, MessageRole::User))
+        .find(|m| matches!(m.role, Role::User))
         .map(|m| m.created_at.timestamp_millis())?;
     let end = message.completed_at?.timestamp_millis();
     if end <= user_start {
@@ -1656,11 +1656,11 @@ mod tests {
     use super::{
         collect_assistant_tool_results, is_tool_result_carrier, map_scrollbar_row_to_offset,
     };
-    use crate::context::{Message, MessagePart, MessageRole, TokenUsage};
+    use crate::context::{Message, MessagePart, Role, TokenUsage};
     use chrono::Utc;
     use ratatui::layout::Rect;
 
-    fn message(id: &str, role: MessageRole, parts: Vec<MessagePart>) -> Message {
+    fn message(id: &str, role: Role, parts: Vec<MessagePart>) -> Message {
         Message {
             id: id.to_string(),
             role,
@@ -1683,7 +1683,7 @@ mod tests {
     fn tool_result_carrier_is_detected() {
         let msg = message(
             "tool-msg",
-            MessageRole::Tool,
+            Role::Tool,
             vec![MessagePart::ToolResult {
                 id: "call-1".to_string(),
                 result: "ok".to_string(),
@@ -1711,10 +1711,10 @@ mod tests {
     #[test]
     fn assistant_collects_tool_results_until_next_assistant() {
         let messages = vec![
-            message("user-1", MessageRole::User, vec![]),
+            message("user-1", Role::User, vec![]),
             message(
                 "assistant-1",
-                MessageRole::Assistant,
+                Role::Assistant,
                 vec![MessagePart::ToolCall {
                     id: "call-1".to_string(),
                     name: "ls".to_string(),
@@ -1723,7 +1723,7 @@ mod tests {
             ),
             message(
                 "tool-1",
-                MessageRole::Tool,
+                Role::Tool,
                 vec![MessagePart::ToolResult {
                     id: "call-1".to_string(),
                     result: "file_a\nfile_b".to_string(),
@@ -1734,7 +1734,7 @@ mod tests {
             ),
             message(
                 "assistant-2",
-                MessageRole::Assistant,
+                Role::Assistant,
                 vec![MessagePart::ToolCall {
                     id: "call-2".to_string(),
                     name: "read".to_string(),
@@ -1743,7 +1743,7 @@ mod tests {
             ),
             message(
                 "tool-2",
-                MessageRole::Tool,
+                Role::Tool,
                 vec![MessagePart::ToolResult {
                     id: "call-2".to_string(),
                     result: "readme".to_string(),

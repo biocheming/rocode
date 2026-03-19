@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use crate::responses::{CallWarning, ResponsesInput, SystemMessageMode};
 
-pub type PromptRole = rocode_message::MessageRole;
+pub type PromptRole = rocode_types::Role;
 
 // ---------------------------------------------------------------------------
 // Prompt Types (language-model-agnostic)

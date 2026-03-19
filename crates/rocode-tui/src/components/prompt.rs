@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthChar;
 
-use crate::context::{AppContext, MessageRole, SessionStatus};
+use crate::context::{AppContext, Role, SessionStatus};
 use crate::file_index::FileIndex;
 use crate::theme::Theme;
 
@@ -1144,7 +1144,7 @@ impl Prompt {
         let last_assistant = messages
             .iter()
             .rev()
-            .find(|message| matches!(message.role, MessageRole::Assistant))?;
+            .find(|message| matches!(message.role, Role::Assistant))?;
         Some((last_assistant.tokens.input, last_assistant.tokens.output))
     }
 

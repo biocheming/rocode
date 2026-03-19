@@ -25,27 +25,15 @@ pub struct PermissionRule {
 }
 
 impl PermissionRule {
-    pub fn allow(permission: impl Into<PermissionMatcher>, pattern: impl Into<String>) -> Self {
+    pub fn new(
+        permission: impl Into<PermissionMatcher>,
+        pattern: impl Into<String>,
+        action: PermissionAction,
+    ) -> Self {
         Self {
             permission: permission.into(),
             pattern: pattern.into(),
-            action: PermissionAction::Allow,
-        }
-    }
-
-    pub fn deny(permission: impl Into<PermissionMatcher>, pattern: impl Into<String>) -> Self {
-        Self {
-            permission: permission.into(),
-            pattern: pattern.into(),
-            action: PermissionAction::Deny,
-        }
-    }
-
-    pub fn ask(permission: impl Into<PermissionMatcher>, pattern: impl Into<String>) -> Self {
-        Self {
-            permission: permission.into(),
-            pattern: pattern.into(),
-            action: PermissionAction::Ask,
+            action,
         }
     }
 }
@@ -82,19 +70,19 @@ pub fn from_config(permission: &ConfigPermission) -> PermissionRuleset {
     for (key, value) in permission.iter() {
         match value {
             ConfigValue::Action(action) => {
-                ruleset.push(PermissionRule {
-                    permission: PermissionMatcher::new(key.clone()),
-                    action: *action,
-                    pattern: "*".to_string(),
-                });
+                ruleset.push(PermissionRule::new(
+                    PermissionMatcher::new(key.clone()),
+                    "*",
+                    *action,
+                ));
             }
             ConfigValue::Patterns(patterns) => {
                 for (pattern, action) in patterns.iter() {
-                    ruleset.push(PermissionRule {
-                        permission: PermissionMatcher::new(key.clone()),
-                        pattern: expand(pattern),
-                        action: *action,
-                    });
+                    ruleset.push(PermissionRule::new(
+                        PermissionMatcher::new(key.clone()),
+                        expand(pattern),
+                        *action,
+                    ));
                 }
             }
         }
@@ -115,11 +103,11 @@ pub fn evaluate(permission: &str, pattern: &str, rulesets: &[PermissionRuleset])
             && wildcard_match(pattern, &rule.pattern)
     });
 
-    matched.cloned().unwrap_or(PermissionRule {
-        action: PermissionAction::Ask,
-        permission: PermissionMatcher::new(permission.to_string()),
-        pattern: "*".to_string(),
-    })
+    matched.cloned().unwrap_or(PermissionRule::new(
+        PermissionMatcher::new(permission.to_string()),
+        "*",
+        PermissionAction::Ask,
+    ))
 }
 
 /// Map a tool name to its permission type.
@@ -185,15 +173,23 @@ pub fn disabled(
 
 pub fn default_ruleset() -> PermissionRuleset {
     vec![
-        PermissionRule::allow(PermissionMatcher::any(), "*"),
-        PermissionRule::ask(PermissionKind::DoomLoop, "*"),
-        PermissionRule::ask(PermissionKind::ExternalDirectory, "*"),
-        PermissionRule::deny(BuiltinToolName::Question, "*"),
-        PermissionRule::deny(BuiltinToolName::PlanEnter, "*"),
-        PermissionRule::deny(BuiltinToolName::PlanExit, "*"),
-        PermissionRule::ask(BuiltinToolName::Read, "*.env"),
-        PermissionRule::ask(BuiltinToolName::Read, "*.env.*"),
-        PermissionRule::allow(BuiltinToolName::Read, "*.env.example"),
+        PermissionRule::new(PermissionMatcher::any(), "*", PermissionAction::Allow),
+        PermissionRule::new(PermissionKind::DoomLoop, "*", PermissionAction::Ask),
+        PermissionRule::new(
+            PermissionKind::ExternalDirectory,
+            "*",
+            PermissionAction::Ask,
+        ),
+        PermissionRule::new(BuiltinToolName::Question, "*", PermissionAction::Deny),
+        PermissionRule::new(BuiltinToolName::PlanEnter, "*", PermissionAction::Deny),
+        PermissionRule::new(BuiltinToolName::PlanExit, "*", PermissionAction::Deny),
+        PermissionRule::new(BuiltinToolName::Read, "*.env", PermissionAction::Ask),
+        PermissionRule::new(BuiltinToolName::Read, "*.env.*", PermissionAction::Ask),
+        PermissionRule::new(
+            BuiltinToolName::Read,
+            "*.env.example",
+            PermissionAction::Allow,
+        ),
     ]
 }
 
@@ -204,31 +200,31 @@ pub fn build_agent_ruleset(agent_name: &str, user_ruleset: &[PermissionRule]) ->
     match agent_name {
         "build" => {
             let build_specific = vec![
-                PermissionRule::allow(BuiltinToolName::Question, "*"),
-                PermissionRule::allow(BuiltinToolName::PlanEnter, "*"),
+                PermissionRule::new(BuiltinToolName::Question, "*", PermissionAction::Allow),
+                PermissionRule::new(BuiltinToolName::PlanEnter, "*", PermissionAction::Allow),
             ];
             merge(&[defaults, build_specific, user])
         }
         "plan" => {
             let plan_specific = vec![
-                PermissionRule::allow(BuiltinToolName::Question, "*"),
-                PermissionRule::allow(BuiltinToolName::PlanExit, "*"),
-                PermissionRule::deny(BuiltinToolName::Edit, "*"),
+                PermissionRule::new(BuiltinToolName::Question, "*", PermissionAction::Allow),
+                PermissionRule::new(BuiltinToolName::PlanExit, "*", PermissionAction::Allow),
+                PermissionRule::new(BuiltinToolName::Edit, "*", PermissionAction::Deny),
             ];
             merge(&[defaults, plan_specific, user])
         }
         "explore" => {
             let explore_specific = vec![
-                PermissionRule::deny(PermissionMatcher::any(), "*"),
-                PermissionRule::allow(BuiltinToolName::Grep, "*"),
-                PermissionRule::allow(BuiltinToolName::Glob, "*"),
-                PermissionRule::allow(PermissionKind::List, "*"),
-                PermissionRule::allow(BuiltinToolName::Bash, "*"),
-                PermissionRule::allow(BuiltinToolName::WebFetch, "*"),
-                PermissionRule::allow(BuiltinToolName::WebSearch, "*"),
-                PermissionRule::allow(BuiltinToolName::CodeSearch, "*"),
-                PermissionRule::allow(BuiltinToolName::AstGrepSearch, "*"),
-                PermissionRule::allow(BuiltinToolName::Read, "*"),
+                PermissionRule::new(PermissionMatcher::any(), "*", PermissionAction::Deny),
+                PermissionRule::new(BuiltinToolName::Grep, "*", PermissionAction::Allow),
+                PermissionRule::new(BuiltinToolName::Glob, "*", PermissionAction::Allow),
+                PermissionRule::new(PermissionKind::List, "*", PermissionAction::Allow),
+                PermissionRule::new(BuiltinToolName::Bash, "*", PermissionAction::Allow),
+                PermissionRule::new(BuiltinToolName::WebFetch, "*", PermissionAction::Allow),
+                PermissionRule::new(BuiltinToolName::WebSearch, "*", PermissionAction::Allow),
+                PermissionRule::new(BuiltinToolName::CodeSearch, "*", PermissionAction::Allow),
+                PermissionRule::new(BuiltinToolName::AstGrepSearch, "*", PermissionAction::Allow),
+                PermissionRule::new(BuiltinToolName::Read, "*", PermissionAction::Allow),
             ];
             merge(&[explore_specific, user])
         }
@@ -269,11 +265,11 @@ mod tests {
 
     #[test]
     fn test_disabled() {
-        let ruleset = vec![PermissionRule {
-            permission: BuiltinToolName::Bash.into(),
-            pattern: "*".to_string(),
-            action: PermissionAction::Deny,
-        }];
+        let ruleset = vec![PermissionRule::new(
+            BuiltinToolName::Bash,
+            "*",
+            PermissionAction::Deny,
+        )];
 
         let tools = vec![
             BuiltinToolName::Bash.as_str().to_string(),
@@ -335,11 +331,11 @@ mod tests {
 
     #[test]
     fn evaluate_tool_permission_allows_tool_in_allowlist() {
-        let ruleset = vec![PermissionRule {
-            permission: PermissionMatcher::any(),
-            pattern: "*".to_string(),
-            action: PermissionAction::Deny,
-        }];
+        let ruleset = vec![PermissionRule::new(
+            PermissionMatcher::any(),
+            "*",
+            PermissionAction::Deny,
+        )];
         // Tool is in allowlist — even with deny-all ruleset, check proceeds to ruleset
         let result = evaluate_tool_permission(
             BuiltinToolName::Grep.as_str(),
@@ -351,11 +347,11 @@ mod tests {
 
     #[test]
     fn evaluate_tool_permission_denies_tool_not_in_allowlist() {
-        let ruleset = vec![PermissionRule {
-            permission: PermissionMatcher::any(),
-            pattern: "*".to_string(),
-            action: PermissionAction::Allow,
-        }];
+        let ruleset = vec![PermissionRule::new(
+            PermissionMatcher::any(),
+            "*",
+            PermissionAction::Allow,
+        )];
         // Tool NOT in non-empty allowlist → Deny regardless of ruleset
         let result = evaluate_tool_permission(
             BuiltinToolName::Write.as_str(),
@@ -367,11 +363,11 @@ mod tests {
 
     #[test]
     fn evaluate_tool_permission_empty_allowlist_means_no_filter() {
-        let ruleset = vec![PermissionRule {
-            permission: PermissionMatcher::any(),
-            pattern: "*".to_string(),
-            action: PermissionAction::Allow,
-        }];
+        let ruleset = vec![PermissionRule::new(
+            PermissionMatcher::any(),
+            "*",
+            PermissionAction::Allow,
+        )];
         // Empty allowlist → no allowlist filter, proceed to ruleset
         let result = evaluate_tool_permission(BuiltinToolName::Write.as_str(), &[], &[ruleset]);
         assert_eq!(result, PermissionAction::Allow);
@@ -379,11 +375,11 @@ mod tests {
 
     #[test]
     fn evaluate_tool_permission_maps_tool_name_to_permission() {
-        let ruleset = vec![PermissionRule {
-            permission: BuiltinToolName::Edit.into(),
-            pattern: "*".to_string(),
-            action: PermissionAction::Ask,
-        }];
+        let ruleset = vec![PermissionRule::new(
+            BuiltinToolName::Edit,
+            "*",
+            PermissionAction::Ask,
+        )];
         // "write" maps to "edit" permission via tool_to_permission
         let result = evaluate_tool_permission(BuiltinToolName::Write.as_str(), &[], &[ruleset]);
         assert_eq!(result, PermissionAction::Ask);

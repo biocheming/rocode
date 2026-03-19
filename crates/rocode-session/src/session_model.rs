@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::{MessagePart, MessageRole, SessionMessage};
+use crate::{MessagePart, Role, SessionMessage};
 
 fn default_session_active() -> bool {
     false
@@ -213,7 +213,7 @@ impl Session {
         self.messages
             .iter()
             .rev()
-            .find(|m| matches!(m.role, MessageRole::User))
+            .find(|m| matches!(m.role, Role::User))
     }
 
     /// Get the last assistant message
@@ -221,7 +221,7 @@ impl Session {
         self.messages
             .iter()
             .rev()
-            .find(|m| matches!(m.role, MessageRole::Assistant))
+            .find(|m| matches!(m.role, Role::Assistant))
     }
 
     /// Get message count
@@ -303,7 +303,7 @@ impl Session {
     pub fn get_usage(&self) -> SessionUsage {
         let mut usage = SessionUsage::default();
         for msg in &self.messages {
-            if matches!(msg.role, MessageRole::Assistant) {
+            if matches!(msg.role, Role::Assistant) {
                 if let Some(ref msg_usage) = msg.usage {
                     usage.input_tokens += msg_usage.input_tokens;
                     usage.output_tokens += msg_usage.output_tokens;

@@ -63,7 +63,7 @@ impl StatusBlock {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MessageRole {
+pub enum Role {
     User,
     Assistant,
     System,
@@ -115,13 +115,13 @@ impl ReasoningBlock {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageBlock {
-    pub role: MessageRole,
+    pub role: Role,
     pub phase: MessagePhase,
     pub text: String,
 }
 
 impl MessageBlock {
-    pub fn start(role: MessageRole) -> Self {
+    pub fn start(role: Role) -> Self {
         Self {
             role,
             phase: MessagePhase::Start,
@@ -129,7 +129,7 @@ impl MessageBlock {
         }
     }
 
-    pub fn delta(role: MessageRole, text: impl Into<String>) -> Self {
+    pub fn delta(role: Role, text: impl Into<String>) -> Self {
         Self {
             role,
             phase: MessagePhase::Delta,
@@ -137,7 +137,7 @@ impl MessageBlock {
         }
     }
 
-    pub fn end(role: MessageRole) -> Self {
+    pub fn end(role: Role) -> Self {
         Self {
             role,
             phase: MessagePhase::End,
@@ -145,7 +145,7 @@ impl MessageBlock {
         }
     }
 
-    pub fn full(role: MessageRole, text: impl Into<String>) -> Self {
+    pub fn full(role: Role, text: impl Into<String>) -> Self {
         Self {
             role,
             phase: MessagePhase::Full,

@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use rocode_core::contracts::agent_tasks::AgentTaskStatusKind;
-pub use rocode_message::MessageRole;
+pub use rocode_types::Role;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -19,7 +19,7 @@ pub struct MessageUsage {
 pub struct SessionMessage {
     pub id: String,
     pub session_id: String,
-    pub role: MessageRole,
+    pub role: Role,
     pub parts: Vec<MessagePart>,
     pub created_at: DateTime<Utc>,
     pub metadata: HashMap<String, serde_json::Value>,
@@ -130,7 +130,7 @@ impl SessionMessage {
         Self {
             id: format!("msg_{}", uuid::Uuid::new_v4()),
             session_id: session_id.into(),
-            role: MessageRole::User,
+            role: Role::User,
             parts: vec![MessagePart {
                 id: format!("prt_{}", uuid::Uuid::new_v4()),
                 part_type: PartType::Text {
@@ -152,7 +152,7 @@ impl SessionMessage {
         Self {
             id: format!("msg_{}", uuid::Uuid::new_v4()),
             session_id: session_id.into(),
-            role: MessageRole::Assistant,
+            role: Role::Assistant,
             parts: Vec::new(),
             created_at: Utc::now(),
             metadata: HashMap::new(),
@@ -165,7 +165,7 @@ impl SessionMessage {
         Self {
             id: format!("msg_{}", uuid::Uuid::new_v4()),
             session_id: session_id.into(),
-            role: MessageRole::Tool,
+            role: Role::Tool,
             parts: Vec::new(),
             created_at: Utc::now(),
             metadata: HashMap::new(),

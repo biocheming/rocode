@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub type DriverMessageRole = rocode_message::MessageRole;
+pub type DriverMessageRole = rocode_types::Role;
 
 // ---------------------------------------------------------------------------
 // ApiStyle

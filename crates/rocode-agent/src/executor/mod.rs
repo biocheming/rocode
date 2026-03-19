@@ -611,7 +611,7 @@ mod tests {
 
         let messages = &executor.conversation().messages;
         assert_eq!(messages.len(), 1);
-        assert!(matches!(messages[0].role, crate::MessageRole::User));
+        assert!(matches!(messages[0].role, crate::Role::User));
         assert_eq!(messages[0].content, "trigger missing provider");
     }
 

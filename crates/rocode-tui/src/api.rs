@@ -331,7 +331,7 @@ pub struct MessageInfo {
     pub id: String,
     #[serde(alias = "sessionId")]
     pub session_id: String,
-    pub role: rocode_message::MessageRole,
+    pub role: rocode_message::Role,
     pub created_at: i64,
     #[serde(default, alias = "completedAt")]
     pub completed_at: Option<i64>,

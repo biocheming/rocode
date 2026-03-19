@@ -238,10 +238,10 @@ impl App {
         };
 
         match last_message.role {
-            MessageRole::User => TaskKind::LlmRequest,
-            MessageRole::Assistant => infer_task_kind_from_message(last_message),
-            MessageRole::System => TaskKind::LlmResponse,
-            MessageRole::Tool => TaskKind::ToolCall,
+            Role::User => TaskKind::LlmRequest,
+            Role::Assistant => infer_task_kind_from_message(last_message),
+            Role::System => TaskKind::LlmResponse,
+            Role::Tool => TaskKind::ToolCall,
         }
     }
 

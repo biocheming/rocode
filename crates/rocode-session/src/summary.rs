@@ -4,12 +4,12 @@ use rocode_core::bus::Bus;
 use rocode_core::contracts::events::BusEventName;
 use rocode_core::contracts::wire::keys as wire_keys;
 use rocode_orchestrator::message_title_request;
-use rocode_provider::{Content, Message, Provider, Role};
+use rocode_provider::{Content, Message, Provider, Role as ProviderRole};
 
 use crate::message_v2::{MessageInfo, MessageWithParts, Part, StepFinishPart, StepStartPart};
 use crate::session::{FileDiff as SessionFileDiff, Session, SessionSummary as SessionSummaryInfo};
 use crate::snapshot::Snapshot;
-use crate::{MessageRole, PartType};
+use crate::{PartType, Role};
 
 // ============================================================================
 // Data types
@@ -288,7 +288,7 @@ pub fn set_session_summary(session: &mut Session, summary: &SessionSummaryData) 
 
 fn first_user_text_for_message(session: &Session, message_id: &str) -> Option<String> {
     let message = session.get_message(message_id)?;
-    if !matches!(message.role, MessageRole::User) {
+    if !matches!(message.role, Role::User) {
         return None;
     }
 
@@ -327,7 +327,7 @@ async fn generate_message_title_llm(
     let fallback = fallback_message_title(text);
     let request = message_title_request(model_id).to_chat_request_with_system(
         vec![Message {
-            role: Role::User,
+            role: ProviderRole::User,
             content: Content::Text(format!(
                 "Generate a concise title (under 80 chars) for this user request.\n\n{}",
                 text
@@ -387,7 +387,7 @@ pub async fn summarize_message_for_session(
     let mut changed = false;
 
     if let Some(mut message) = session.get_message(message_id).cloned() {
-        if matches!(message.role, MessageRole::User) {
+        if matches!(message.role, Role::User) {
             message.metadata.insert(
                 MESSAGE_SUMMARY_DIFFS_KEY.to_string(),
                 serde_json::to_value(&diffs)?,

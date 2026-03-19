@@ -320,7 +320,7 @@ You are Prometheus - Strategic Planning Consultant.",
         );
         let msg = Message {
             id: "m1".to_string(),
-            role: crate::context::MessageRole::User,
+            role: crate::context::Role::User,
             content: "hi".to_string(),
             created_at: Utc::now(),
             agent: None,
@@ -359,7 +359,7 @@ Boundary: planner-only; never execute code or modify non-markdown files."
         );
         let msg = Message {
             id: "m2".to_string(),
-            role: crate::context::MessageRole::User,
+            role: crate::context::Role::User,
             content: "hi".to_string(),
             created_at: Utc::now(),
             agent: None,

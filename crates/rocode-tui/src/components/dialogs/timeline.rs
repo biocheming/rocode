@@ -5,14 +5,14 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState},
     Frame,
 };
-use rocode_message::MessageRole;
+use rocode_message::Role;
 
 use crate::theme::Theme;
 
 #[derive(Clone, Debug)]
 pub struct TimelineEntry {
     pub message_id: String,
-    pub role: MessageRole,
+    pub role: Role,
     pub preview: String,
     pub timestamp: String,
 }
@@ -105,10 +105,10 @@ impl TimelineDialog {
             .iter()
             .map(|entry| {
                 let role_icon = match entry.role {
-                    MessageRole::User => "[U]",
-                    MessageRole::Assistant => "[A]",
-                    MessageRole::Tool => "[T]",
-                    MessageRole::System => "[S]",
+                    Role::User => "[U]",
+                    Role::Assistant => "[A]",
+                    Role::Tool => "[T]",
+                    Role::System => "[S]",
                 };
                 ListItem::new(Line::from(vec![
                     Span::styled(

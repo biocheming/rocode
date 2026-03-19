@@ -647,7 +647,7 @@ impl SessionPrompt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{MessageRole, PartType, Session, SessionMessage};
+    use crate::{Role, PartType, Session, SessionMessage};
     use std::collections::HashMap;
 
     #[test]
@@ -677,7 +677,7 @@ mod tests {
             .messages
             .iter()
             .rev()
-            .find(|m| matches!(m.role, MessageRole::Tool))
+            .find(|m| matches!(m.role, Role::Tool))
             .unwrap();
 
         let error_results: Vec<_> = last_tool_msg
@@ -743,7 +743,7 @@ mod tests {
             .messages
             .iter()
             .rev()
-            .find(|m| matches!(m.role, MessageRole::Tool))
+            .find(|m| matches!(m.role, Role::Tool))
             .unwrap();
 
         let abort_results: Vec<_> = last_tool_msg
@@ -858,7 +858,7 @@ mod tests {
         let assistant = session
             .messages
             .iter()
-            .find(|m| matches!(m.role, MessageRole::Assistant))
+            .find(|m| matches!(m.role, Role::Assistant))
             .expect("assistant message missing");
         let tool_call = assistant
             .parts

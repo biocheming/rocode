@@ -26,7 +26,7 @@ pub(super) fn agent_execution_context(
 pub(super) fn collect_tool_names(conversation: &Conversation) -> HashMap<String, String> {
     let mut tool_name_by_id = HashMap::new();
     for message in &conversation.messages {
-        if !matches!(message.role, crate::MessageRole::Assistant) {
+        if !matches!(message.role, crate::Role::Assistant) {
             continue;
         }
         for call in &message.tool_calls {

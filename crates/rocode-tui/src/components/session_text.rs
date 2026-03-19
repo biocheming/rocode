@@ -1063,7 +1063,7 @@ fn strip_think_tags(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::{MessageRole, TokenUsage};
+    use crate::context::{Role, TokenUsage};
     use chrono::Utc;
     use rocode_command::governance_fixtures::canonical_scheduler_stage_fixture;
     use serde_json::json;
@@ -1101,7 +1101,7 @@ mod tests {
         }
         Message {
             id: "m1".to_string(),
-            role: MessageRole::Assistant,
+            role: Role::Assistant,
             content: String::new(),
             created_at: Utc::now(),
             agent: None,
@@ -1466,7 +1466,7 @@ mod tests {
     fn non_scheduler_message_renders_plain_markdown() {
         let message = Message {
             id: "m1".to_string(),
-            role: MessageRole::Assistant,
+            role: Role::Assistant,
             content: String::new(),
             created_at: Utc::now(),
             agent: None,

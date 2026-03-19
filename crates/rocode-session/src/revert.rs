@@ -101,7 +101,7 @@ impl RevertManager {
         let mut revert: Option<RevertInfo> = None;
 
         for msg in messages {
-            if msg.role == crate::MessageRole::User {
+            if msg.role == crate::Role::User {
                 last_user_id = Some(msg.id.clone());
             }
 

@@ -65,7 +65,7 @@ use crate::components::{
 use crate::context::keybind::{is_primary_key_event, normalize_key_event, LeaderKeyState};
 use crate::context::{
     collect_child_sessions, AppContext, McpConnectionStatus, McpServerStatus, Message,
-    MessagePart as ContextMessagePart, MessageRole, RevertInfo, Session, SessionStatus, TokenUsage,
+    MessagePart as ContextMessagePart, Role, RevertInfo, Session, SessionStatus, TokenUsage,
 };
 use crate::event::{CustomEvent, Event, StateChange};
 use crate::router::Route;
@@ -1702,7 +1702,7 @@ mod tests {
             session_id,
             vec![Message {
                 id: "m1".to_string(),
-                role: MessageRole::User,
+                role: Role::User,
                 content: "hello".to_string(),
                 created_at: Utc::now(),
                 agent: None,
@@ -1741,7 +1741,7 @@ mod tests {
         let mapped_messages = vec![map_api_message(&MessageInfo {
             id: "m2".to_string(),
             session_id: session_id.to_string(),
-            role: rocode_message::MessageRole::Assistant,
+            role: rocode_message::Role::Assistant,
             created_at: now + 500,
             completed_at: None,
             agent: None,

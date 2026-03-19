@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use rocode_command::output_blocks::SchedulerStageBlock;
-pub use rocode_message::MessageRole;
+pub use rocode_types::Role;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -115,7 +115,7 @@ pub struct ShareInfo {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Message {
     pub id: String,
-    pub role: MessageRole,
+    pub role: Role,
     pub content: String,
     pub created_at: DateTime<Utc>,
     pub agent: Option<String>,
@@ -472,7 +472,7 @@ impl SessionContext {
             let pos = messages.len();
             messages.push(Message {
                 id: message_id.to_string(),
-                role: MessageRole::Assistant,
+                role: Role::Assistant,
                 content: String::new(),
                 created_at: chrono::Utc::now(),
                 agent: None,
@@ -583,9 +583,9 @@ impl SessionContext {
         payload: MessageFrame,
     ) {
         let role = match payload.role {
-            WireMessageRole::System => MessageRole::System,
-            WireMessageRole::User => MessageRole::User,
-            _ => MessageRole::Assistant,
+            WireMessageRole::System => Role::System,
+            WireMessageRole::User => Role::User,
+            _ => Role::Assistant,
         };
 
         let pos = self.ensure_message_for_block(session_id, block_id, role.clone());
@@ -653,7 +653,7 @@ impl SessionContext {
                     .and_then(|msgs| {
                         msgs.iter()
                             .rev()
-                            .find(|m| m.role == MessageRole::Assistant)
+                            .find(|m| m.role == Role::Assistant)
                             .map(|m| m.id.clone())
                     })
                     .unwrap_or_else(|| format!("_reasoning_{session_id}"));
@@ -675,7 +675,7 @@ impl SessionContext {
         let tool_name = payload.name.as_str();
         let detail = payload.detail.clone();
 
-        let pos = self.ensure_message_for_block(session_id, None, MessageRole::Assistant);
+        let pos = self.ensure_message_for_block(session_id, None, Role::Assistant);
         let Some(message) = self
             .messages
             .get_mut(session_id)
@@ -748,7 +748,7 @@ impl SessionContext {
         block_id: Option<&str>,
         block: SchedulerStageBlock,
     ) {
-        let pos = self.ensure_message_for_block(session_id, block_id, MessageRole::Assistant);
+        let pos = self.ensure_message_for_block(session_id, block_id, Role::Assistant);
         let Some(message) = self
             .messages
             .get_mut(session_id)
@@ -757,7 +757,7 @@ impl SessionContext {
             return;
         };
 
-        message.role = MessageRole::Assistant;
+        message.role = Role::Assistant;
         message
             .parts
             .retain(|part| !matches!(part, MessagePart::Text { .. }));
@@ -781,7 +781,7 @@ impl SessionContext {
         &mut self,
         session_id: &str,
         block_id: Option<&str>,
-        role: MessageRole,
+        role: Role,
     ) -> usize {
         let messages = self.messages.entry(session_id.to_string()).or_default();
         let index = self
@@ -851,7 +851,7 @@ impl SessionContext {
         }
     }
 
-    fn streaming_placeholder_message(message_id: &str, role: MessageRole) -> Message {
+    fn streaming_placeholder_message(message_id: &str, role: Role) -> Message {
         Message {
             id: message_id.to_string(),
             role,

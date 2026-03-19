@@ -3,9 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use rocode_provider::{
-    get_model_context_limit, ChatResponse, Content, ContentPart, Message, Provider, Role,
-};
+use rocode_provider::{get_model_context_limit, ChatResponse, Content, ContentPart, Message, Provider};
 use serde::Deserialize;
 
 use crate::compaction::{
@@ -18,7 +16,7 @@ use crate::message_v2::{
     StepStartPart, StepTokens, UserTime,
 };
 use crate::summary::{summarize_into_session, SummarizeInput};
-use crate::{MessageRole, PartType, Session, SessionMessage};
+use crate::{Role, PartType, Session, SessionMessage};
 
 use super::tools_and_output::{compose_session_title_source, generate_session_title_for_session};
 use super::SessionPrompt;
@@ -175,7 +173,7 @@ impl SessionPrompt {
                 continue;
             }
 
-            if matches!(msg.role, MessageRole::Assistant)
+            if matches!(msg.role, Role::Assistant)
                 && msg
                     .parts
                     .iter()
@@ -393,7 +391,7 @@ impl SessionPrompt {
         SessionMessage {
             id: format!("msg_{}", uuid::Uuid::new_v4()),
             session_id: String::new(),
-            role: MessageRole::Assistant,
+            role: Role::Assistant,
             parts,
             created_at: now,
             metadata: {
@@ -428,7 +426,7 @@ impl SessionPrompt {
             })
             .unwrap_or(0);
         let tail = messages[start..].to_vec();
-        if tail.iter().any(|m| matches!(m.role, MessageRole::User)) {
+        if tail.iter().any(|m| matches!(m.role, Role::User)) {
             return tail;
         }
 
@@ -436,7 +434,7 @@ impl SessionPrompt {
         // loop invariants hold (`last_user_idx` must exist).
         if let Some(last_user_idx) = messages
             .iter()
-            .rposition(|m| matches!(m.role, MessageRole::User))
+            .rposition(|m| matches!(m.role, Role::User))
         {
             if last_user_idx < start {
                 let mut anchored = Vec::with_capacity(messages.len() - last_user_idx);
@@ -708,7 +706,7 @@ impl SessionPrompt {
             }
 
             let info = match msg.role {
-                MessageRole::User => {
+                Role::User => {
                     last_user_id = msg.id.clone();
                     MessageInfo::User {
                         id: msg.id.clone(),
@@ -870,7 +868,7 @@ impl SessionPrompt {
             .messages
             .iter()
             .rev()
-            .find(|m| matches!(m.role, MessageRole::User))
+            .find(|m| matches!(m.role, Role::User))
             .map(|m| m.id.clone())
             .unwrap_or_default();
         let messages =
@@ -934,7 +932,7 @@ impl SessionPrompt {
                     .collect();
                 MessageForPrune {
                     role: match m.role {
-                        MessageRole::User => rocode_provider::Role::User,
+                        Role::User => rocode_provider::Role::User,
                         _ => rocode_provider::Role::Assistant,
                     },
                     parts,
@@ -1119,7 +1117,7 @@ mod tests {
             SessionPrompt::filter_compacted_messages(&[user.clone(), compact, assistant_after]);
 
         assert_eq!(filtered.len(), 3);
-        assert!(matches!(filtered[0].role, MessageRole::User));
+        assert!(matches!(filtered[0].role, Role::User));
         assert_eq!(filtered[0].id, user.id);
     }
 

@@ -3,9 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::id::new_message_id;
-use crate::{
-    FinishReason, MessagePart, MessageRole, MessageUsage, PartKind, PartType, ToolCallStatus,
-};
+use crate::{FinishReason, MessagePart, MessageUsage, PartKind, PartType, Role, ToolCallStatus};
 
 mod keys {
     pub const MODEL_PROVIDER: &str = "model_provider";
@@ -21,7 +19,7 @@ pub struct SessionMessage {
     pub id: String,
     #[serde(alias = "sessionId")]
     pub session_id: String,
-    pub role: MessageRole,
+    pub role: Role,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parts: Vec<MessagePart>,
     #[serde(alias = "createdAt")]
@@ -40,7 +38,7 @@ pub struct SessionMessage {
 pub type Message = SessionMessage;
 
 impl SessionMessage {
-    pub fn new(role: MessageRole, session_id: impl Into<String>) -> Self {
+    pub fn new(role: Role, session_id: impl Into<String>) -> Self {
         Self {
             id: new_message_id(),
             session_id: session_id.into(),
@@ -54,23 +52,23 @@ impl SessionMessage {
     }
 
     pub fn user(session_id: impl Into<String>, text: impl Into<String>) -> Self {
-        let mut message = Self::new(MessageRole::User, session_id);
+        let mut message = Self::new(Role::User, session_id);
         message.add_text(text);
         message
     }
 
     pub fn assistant(session_id: impl Into<String>) -> Self {
-        Self::new(MessageRole::Assistant, session_id)
+        Self::new(Role::Assistant, session_id)
     }
 
     pub fn system(session_id: impl Into<String>, text: impl Into<String>) -> Self {
-        let mut message = Self::new(MessageRole::System, session_id);
+        let mut message = Self::new(Role::System, session_id);
         message.add_text(text);
         message
     }
 
     pub fn tool(session_id: impl Into<String>) -> Self {
-        Self::new(MessageRole::Tool, session_id)
+        Self::new(Role::Tool, session_id)
     }
 
     pub fn push_part(&mut self, mut part: MessagePart) {
@@ -289,7 +287,7 @@ mod tests {
     #[test]
     fn user_message_has_text_part() {
         let message = SessionMessage::user("ses_1", "hello");
-        assert_eq!(message.role, MessageRole::User);
+        assert_eq!(message.role, Role::User);
         assert_eq!(message.get_text(), "hello");
         assert_eq!(message.parts.len(), 1);
         assert!(message.parts[0].id.starts_with("prt_"));

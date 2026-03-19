@@ -34,7 +34,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use rocode_content::output_blocks::{
-    MessageBlock, MessageRole as OutputMessageRole, OutputBlock, ReasoningBlock, ToolBlock,
+    MessageBlock, Role as OutputMessageRole, OutputBlock, ReasoningBlock, ToolBlock,
 };
 use rocode_orchestrator::runtime::events::{
     CancelToken as RuntimeCancelToken, FinishReason as RuntimeFinishReason,
@@ -53,7 +53,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::compaction::{run_compaction, CompactionResult};
 use crate::message_v2::ModelRef as V2ModelRef;
-use crate::{MessageRole, PartType, Session, SessionMessage, SessionStateManager};
+use crate::{Role, PartType, Session, SessionMessage, SessionStateManager};
 
 const MAX_STEPS: u32 = 100;
 const STREAM_UPDATE_INTERVAL_MS: u64 = 120;
@@ -1204,7 +1204,7 @@ impl SessionPrompt {
         let Some(user_msg) = session
             .messages
             .iter_mut()
-            .rfind(|m| matches!(m.role, MessageRole::User))
+            .rfind(|m| matches!(m.role, Role::User))
         else {
             return;
         };
@@ -1482,7 +1482,7 @@ impl SessionPrompt {
             if let Some(text) = session
                 .messages
                 .iter()
-                .find(|m| matches!(m.role, MessageRole::User))
+                .find(|m| matches!(m.role, Role::User))
                 .map(|m| m.get_text())
             {
                 let immediate = tools_and_output::generate_session_title(&text);
@@ -1587,7 +1587,7 @@ impl SessionPrompt {
             .unwrap_or_default();
 
         let model = session.messages.iter().rev().find_map(|m| match m.role {
-            MessageRole::User => metadata
+            Role::User => metadata
                 .model_provider
                 .as_deref()
                 .zip(metadata.model_id.as_deref())
@@ -2002,11 +2002,11 @@ impl SessionPrompt {
 
             let last_user_idx = filtered_messages
                 .iter()
-                .rposition(|m| matches!(m.role, MessageRole::User));
+                .rposition(|m| matches!(m.role, Role::User));
 
             let last_assistant_idx = filtered_messages
                 .iter()
-                .rposition(|m| matches!(m.role, MessageRole::Assistant));
+                .rposition(|m| matches!(m.role, Role::Assistant));
 
             let last_user_idx = match last_user_idx {
                 Some(idx) => idx,
@@ -2104,7 +2104,7 @@ impl SessionPrompt {
             session.messages.push(SessionMessage {
                 id: assistant_message_id,
                 session_id: session_id.clone(),
-                role: MessageRole::Assistant,
+                role: Role::Assistant,
                 parts: Vec::new(),
                 created_at: chrono::Utc::now(),
                 metadata: assistant_metadata,
@@ -2347,7 +2347,7 @@ impl SessionPrompt {
         let last_user_idx = session
             .messages
             .iter()
-            .rposition(|m| matches!(m.role, MessageRole::User));
+            .rposition(|m| matches!(m.role, Role::User));
         let Some(last_user_idx) = last_user_idx else {
             return Ok(false);
         };
@@ -2939,7 +2939,7 @@ mod tests {
             snap.messages
                 .iter()
                 .rev()
-                .find(|m| matches!(m.role, MessageRole::Assistant))
+                .find(|m| matches!(m.role, Role::Assistant))
                 .map(|m| m.get_text() == "Hel")
                 .unwrap_or(false)
         });
@@ -2953,7 +2953,7 @@ mod tests {
             .messages
             .iter()
             .rev()
-            .find(|m| matches!(m.role, MessageRole::Assistant))
+            .find(|m| matches!(m.role, Role::Assistant))
             .map(SessionMessage::get_text)
             .unwrap_or_default();
         assert_eq!(final_text, "Hello");
@@ -3141,7 +3141,7 @@ mod tests {
             .messages
             .iter()
             .rev()
-            .find(|m| matches!(m.role, MessageRole::Assistant))
+            .find(|m| matches!(m.role, Role::Assistant))
             .expect("assistant should exist");
         let usage = assistant.usage.as_ref().expect("usage should exist");
         assert_eq!(usage.input_tokens, 3);
@@ -3242,7 +3242,7 @@ mod tests {
             .messages
             .iter()
             .rev()
-            .find(|m| matches!(m.role, MessageRole::Assistant))
+            .find(|m| matches!(m.role, Role::Assistant))
             .map(SessionMessage::get_text)
             .unwrap_or_default();
         assert_eq!(final_text, "Read complete");
@@ -3417,7 +3417,7 @@ mod tests {
             .messages
             .iter()
             .rev()
-            .find(|m| matches!(m.role, MessageRole::Tool))
+            .find(|m| matches!(m.role, Role::Tool))
             .expect("tool message should exist");
         let result_ids: Vec<&str> = tool_msg
             .parts
@@ -3463,7 +3463,7 @@ mod tests {
             .messages
             .iter()
             .rev()
-            .find(|m| matches!(m.role, MessageRole::Tool))
+            .find(|m| matches!(m.role, Role::Tool))
             .expect("tool message should exist");
 
         let (content, is_error) = tool_msg
@@ -3520,7 +3520,7 @@ mod tests {
             .messages
             .iter()
             .rev()
-            .find(|m| matches!(m.role, MessageRole::Assistant))
+            .find(|m| matches!(m.role, Role::Assistant))
             .expect("assistant message should exist");
         let tool_call = assistant_msg
             .parts
@@ -3548,7 +3548,7 @@ mod tests {
             .messages
             .iter()
             .rev()
-            .find(|m| matches!(m.role, MessageRole::Tool))
+            .find(|m| matches!(m.role, Role::Tool))
             .expect("tool message should exist");
         let (content, is_error) = tool_msg
             .parts
@@ -3616,7 +3616,7 @@ mod tests {
             .messages
             .iter()
             .rev()
-            .find(|m| matches!(m.role, MessageRole::Tool))
+            .find(|m| matches!(m.role, Role::Tool))
             .expect("tool message should exist");
         let result_ids: Vec<&str> = tool_msg
             .parts
@@ -3672,7 +3672,7 @@ mod tests {
         let tool_msgs: Vec<&SessionMessage> = session
             .messages
             .iter()
-            .filter(|m| matches!(m.role, MessageRole::Tool))
+            .filter(|m| matches!(m.role, Role::Tool))
             .collect();
         assert!(
             tool_msgs.len() >= 2,
@@ -3889,11 +3889,11 @@ mod tests {
 
         let last_user_idx = messages
             .iter()
-            .rposition(|m| matches!(m.role, MessageRole::User))
+            .rposition(|m| matches!(m.role, Role::User))
             .unwrap();
         let last_assistant_idx = messages
             .iter()
-            .rposition(|m| matches!(m.role, MessageRole::Assistant));
+            .rposition(|m| matches!(m.role, Role::Assistant));
 
         // The early-exit check from the prompt loop
         let should_break = if let Some(assistant_idx) = last_assistant_idx {
@@ -3935,11 +3935,11 @@ mod tests {
 
         let last_user_idx = messages
             .iter()
-            .rposition(|m| matches!(m.role, MessageRole::User))
+            .rposition(|m| matches!(m.role, Role::User))
             .unwrap();
         let last_assistant_idx = messages
             .iter()
-            .rposition(|m| matches!(m.role, MessageRole::Assistant));
+            .rposition(|m| matches!(m.role, Role::Assistant));
 
         let should_break = if let Some(assistant_idx) = last_assistant_idx {
             let assistant = &messages[assistant_idx];
@@ -3978,11 +3978,11 @@ mod tests {
 
         let last_user_idx = messages
             .iter()
-            .rposition(|m| matches!(m.role, MessageRole::User))
+            .rposition(|m| matches!(m.role, Role::User))
             .unwrap();
         let last_assistant_idx = messages
             .iter()
-            .rposition(|m| matches!(m.role, MessageRole::Assistant));
+            .rposition(|m| matches!(m.role, Role::Assistant));
 
         let should_break = if let Some(assistant_idx) = last_assistant_idx {
             let assistant = &messages[assistant_idx];

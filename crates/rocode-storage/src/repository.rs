@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use rocode_session::{
-    MessagePart, MessageRole, MessageUsage, PartType, Session, SessionMessage, SessionSummary,
+    MessagePart, Role, MessageUsage, PartType, Session, SessionMessage, SessionSummary,
     SessionTime, SessionUsage, ToolCallStatus,
 };
 
@@ -40,21 +40,21 @@ fn normalize_limit_offset(limit: i64, offset: i64) -> Result<(u64, u64), Databas
     Ok((limit as u64, offset as u64))
 }
 
-fn role_to_model(role: MessageRole) -> messages::MessageRoleModel {
+fn role_to_model(role: Role) -> messages::MessageRoleModel {
     match role {
-        MessageRole::User => messages::MessageRoleModel::User,
-        MessageRole::Assistant => messages::MessageRoleModel::Assistant,
-        MessageRole::System => messages::MessageRoleModel::System,
-        MessageRole::Tool => messages::MessageRoleModel::Tool,
+        Role::User => messages::MessageRoleModel::User,
+        Role::Assistant => messages::MessageRoleModel::Assistant,
+        Role::System => messages::MessageRoleModel::System,
+        Role::Tool => messages::MessageRoleModel::Tool,
     }
 }
 
-fn role_from_model(role: messages::MessageRoleModel) -> MessageRole {
+fn role_from_model(role: messages::MessageRoleModel) -> Role {
     match role {
-        messages::MessageRoleModel::User => MessageRole::User,
-        messages::MessageRoleModel::Assistant => MessageRole::Assistant,
-        messages::MessageRoleModel::System => MessageRole::System,
-        messages::MessageRoleModel::Tool => MessageRole::Tool,
+        messages::MessageRoleModel::User => Role::User,
+        messages::MessageRoleModel::Assistant => Role::Assistant,
+        messages::MessageRoleModel::System => Role::System,
+        messages::MessageRoleModel::Tool => Role::Tool,
     }
 }
 
@@ -768,7 +768,7 @@ pub struct MessageRepository {
 pub struct MessageHeaderRow {
     pub id: String,
     pub session_id: String,
-    pub role: MessageRole,
+    pub role: Role,
     pub created_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finish: Option<String>,
@@ -1518,7 +1518,7 @@ mod tests {
     use chrono::Utc;
     use rocode_core::contracts::scheduler::keys as scheduler_keys;
     use rocode_core::contracts::session::keys as session_keys;
-    use rocode_session::{MessageRole, Session, SessionMessage, SessionTime};
+    use rocode_session::{Role, Session, SessionMessage, SessionTime};
     use sea_orm::{ConnectionTrait, DbBackend, Statement};
     use std::collections::HashMap;
 
@@ -1542,7 +1542,7 @@ mod tests {
         }
     }
 
-    fn make_message(id: &str, session_id: &str, role: MessageRole) -> SessionMessage {
+    fn make_message(id: &str, session_id: &str, role: Role) -> SessionMessage {
         SessionMessage {
             id: id.to_string(),
             session_id: session_id.to_string(),
@@ -1591,7 +1591,7 @@ mod tests {
 
         session_repo.upsert(&make_session("s_meta")).await.unwrap();
 
-        let mut message = make_message("m_meta", "s_meta", MessageRole::User);
+        let mut message = make_message("m_meta", "s_meta", Role::User);
         message.metadata.insert(
             session_keys::RESOLVED_SYSTEM_PROMPT.to_string(),
             serde_json::json!("You are Sisyphus"),
@@ -1629,8 +1629,8 @@ mod tests {
 
         let session = make_session("s1");
         let msgs = vec![
-            make_message("m1", "s1", MessageRole::User),
-            make_message("m2", "s1", MessageRole::Assistant),
+            make_message("m1", "s1", Role::User),
+            make_message("m2", "s1", Role::Assistant),
         ];
 
         session_repo
@@ -1656,9 +1656,9 @@ mod tests {
 
         let session = make_session("s1");
         let msgs = vec![
-            make_message("m1", "s1", MessageRole::User),
-            make_message("m2", "s1", MessageRole::Assistant),
-            make_message("m3", "s1", MessageRole::User),
+            make_message("m1", "s1", Role::User),
+            make_message("m2", "s1", Role::Assistant),
+            make_message("m3", "s1", Role::User),
         ];
 
         session_repo
@@ -1668,7 +1668,7 @@ mod tests {
         assert_eq!(message_repo.list_for_session("s1").await.unwrap().len(), 3);
 
         // Simulate revert: flush with only m1
-        let msgs_after_revert = vec![make_message("m1", "s1", MessageRole::User)];
+        let msgs_after_revert = vec![make_message("m1", "s1", Role::User)];
         session_repo
             .flush_with_messages(&session, &msgs_after_revert)
             .await
@@ -1691,7 +1691,7 @@ mod tests {
         let session = make_session("s1");
 
         let mut msgs: Vec<SessionMessage> = (0..1100)
-            .map(|i| make_message(&format!("m{}", i), "s1", MessageRole::User))
+            .map(|i| make_message(&format!("m{}", i), "s1", Role::User))
             .collect();
 
         session_repo
@@ -1813,7 +1813,7 @@ mod tests {
 
         for (idx, millis) in [10, 20, 30, 40, 50].iter().enumerate() {
             let id = format!("m{}", idx + 1);
-            let mut msg = make_message(&id, "s1", MessageRole::User);
+            let mut msg = make_message(&id, "s1", Role::User);
             msg.created_at = DateTime::from_timestamp_millis(*millis).unwrap_or_else(Utc::now);
             message_repo.create(&msg).await.unwrap();
         }
@@ -1840,8 +1840,8 @@ mod tests {
         let mut session = make_session("s1");
         session.title = "v1".to_string();
         let msgs = vec![
-            make_message("m1", "s1", MessageRole::User),
-            make_message("m2", "s1", MessageRole::Assistant),
+            make_message("m1", "s1", Role::User),
+            make_message("m2", "s1", Role::Assistant),
         ];
         session_repo
             .flush_with_messages(&session, &msgs)
@@ -1860,7 +1860,7 @@ mod tests {
         // Attempt flush with updated title — session upsert succeeds within tx,
         // but message upsert hits the missing table and the whole tx should roll back.
         session.title = "v2".to_string();
-        let new_msgs = vec![make_message("m3", "s1", MessageRole::User)];
+        let new_msgs = vec![make_message("m3", "s1", Role::User)];
         let result = session_repo.flush_with_messages(&session, &new_msgs).await;
         assert!(
             result.is_err(),

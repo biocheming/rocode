@@ -281,7 +281,7 @@ impl App {
         let id = format!("local_user_{}", now.timestamp_millis());
         let message = Message {
             id: id.clone(),
-            role: MessageRole::User,
+            role: Role::User,
             content: content.to_string(),
             created_at: now,
             agent,

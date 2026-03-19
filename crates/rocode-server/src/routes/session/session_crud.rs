@@ -75,7 +75,7 @@ pub(super) struct MessageInfoResponse {
     id: String,
     #[serde(rename = "sessionID")]
     session_id: String,
-    role: rocode_session::MessageRole,
+    role: rocode_session::Role,
     #[serde(rename = "createdAt")]
     created_at: i64,
 }

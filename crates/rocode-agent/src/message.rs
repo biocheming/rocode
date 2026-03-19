@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub use rocode_message::MessageRole;
+pub use rocode_types::Role;
 
 /// An attachment carried by an `AgentMessage` for multimodal content.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,7 +16,7 @@ pub struct Attachment {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentMessage {
-    pub role: MessageRole,
+    pub role: Role,
     pub content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_result: Option<ToolResult>,
@@ -44,7 +44,7 @@ pub struct ToolResult {
 impl AgentMessage {
     pub fn system(content: impl Into<String>) -> Self {
         Self {
-            role: MessageRole::System,
+            role: Role::System,
             content: content.into(),
             tool_result: None,
             tool_calls: Vec::new(),
@@ -54,7 +54,7 @@ impl AgentMessage {
 
     pub fn user(content: impl Into<String>) -> Self {
         Self {
-            role: MessageRole::User,
+            role: Role::User,
             content: content.into(),
             tool_result: None,
             tool_calls: Vec::new(),
@@ -65,7 +65,7 @@ impl AgentMessage {
     /// Create a user message with file/image attachments.
     pub fn user_with_attachments(content: impl Into<String>, attachments: Vec<Attachment>) -> Self {
         Self {
-            role: MessageRole::User,
+            role: Role::User,
             content: content.into(),
             tool_result: None,
             tool_calls: Vec::new(),
@@ -75,7 +75,7 @@ impl AgentMessage {
 
     pub fn assistant(content: impl Into<String>) -> Self {
         Self {
-            role: MessageRole::Assistant,
+            role: Role::Assistant,
             content: content.into(),
             tool_result: None,
             tool_calls: Vec::new(),
@@ -85,7 +85,7 @@ impl AgentMessage {
 
     pub fn assistant_with_tools(content: impl Into<String>, tool_calls: Vec<ToolCall>) -> Self {
         Self {
-            role: MessageRole::Assistant,
+            role: Role::Assistant,
             content: content.into(),
             tool_result: None,
             tool_calls,
@@ -101,7 +101,7 @@ impl AgentMessage {
     ) -> Self {
         let content = content.into();
         Self {
-            role: MessageRole::Tool,
+            role: Role::Tool,
             content: content.clone(),
             tool_result: Some(ToolResult {
                 tool_call_id: tool_call_id.into(),
@@ -178,8 +178,8 @@ impl Conversation {
         self.messages
             .iter()
             .map(|m| match &m.role {
-                MessageRole::System => rocode_provider::Message::system(&m.content),
-                MessageRole::User => {
+                Role::System => rocode_provider::Message::system(&m.content),
+                Role::User => {
                     if m.attachments.is_empty() {
                         rocode_provider::Message::user(&m.content)
                     } else {
@@ -238,7 +238,7 @@ impl Conversation {
                         }
                     }
                 }
-                MessageRole::Assistant => {
+                Role::Assistant => {
                     if m.tool_calls.is_empty() {
                         rocode_provider::Message::assistant(&m.content)
                     } else {
@@ -281,7 +281,7 @@ impl Conversation {
                         }
                     }
                 }
-                MessageRole::Tool => {
+                Role::Tool => {
                     let tool_result =
                         m.tool_result
                             .as_ref()

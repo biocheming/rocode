@@ -34,7 +34,7 @@ pub(crate) struct SendMessageRequest {
 pub(super) struct MessageInfo {
     pub id: String,
     pub session_id: String,
-    pub role: rocode_session::MessageRole,
+    pub role: rocode_session::Role,
     pub parts: Vec<PartInfo>,
     pub created_at: i64,
     pub completed_at: Option<i64>,
@@ -112,7 +112,7 @@ pub(super) struct ToolResultInfo {
 pub(super) struct MessageSummaryInfo {
     pub id: String,
     pub session_id: String,
-    pub role: rocode_session::MessageRole,
+    pub role: rocode_session::Role,
     pub created_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finish: Option<String>,

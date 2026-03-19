@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use rocode_orchestrator::inline_subtask_request_defaults;
 use rocode_provider::{Provider, ToolDefinition};
 
-use crate::{FilePart, MessageRole, PartType, Session, SessionMessage};
+use crate::{FilePart, Role, PartType, Session, SessionMessage};
 
 use super::subtask::SubtaskExecutor;
 use super::{
@@ -138,7 +138,7 @@ impl SessionPrompt {
         let Some(last_assistant_index) = session
             .messages
             .iter()
-            .rposition(|m| matches!(m.role, MessageRole::Assistant))
+            .rposition(|m| matches!(m.role, Role::Assistant))
         else {
             return Ok(0);
         };
@@ -1066,7 +1066,7 @@ mod tests {
             .messages
             .last()
             .expect("synthetic user message should be appended");
-        assert!(matches!(synthetic_msg.role, MessageRole::User));
+        assert!(matches!(synthetic_msg.role, Role::User));
         assert_eq!(
             synthetic_msg
                 .metadata

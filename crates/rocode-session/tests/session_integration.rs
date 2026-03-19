@@ -1,4 +1,4 @@
-use rocode_session::{MessageRole, Session};
+use rocode_session::{Role, Session};
 
 #[test]
 fn test_session_creation() {
@@ -16,7 +16,7 @@ fn test_session_add_user_message() {
     session.add_user_message("Hello, world!");
 
     assert_eq!(session.messages.len(), 1);
-    assert_eq!(session.messages[0].role, MessageRole::User);
+    assert_eq!(session.messages[0].role, Role::User);
 }
 
 #[test]
@@ -27,8 +27,8 @@ fn test_session_add_assistant_message() {
     session.add_assistant_message();
 
     assert_eq!(session.messages.len(), 2);
-    assert_eq!(session.messages[0].role, MessageRole::User);
-    assert_eq!(session.messages[1].role, MessageRole::Assistant);
+    assert_eq!(session.messages[0].role, Role::User);
+    assert_eq!(session.messages[1].role, Role::Assistant);
 }
 
 #[test]
@@ -83,5 +83,5 @@ fn test_session_message_id() {
 
     session.add_user_message("Test message");
     assert!(!session.messages[0].id.is_empty());
-    assert_eq!(session.messages[0].role, MessageRole::User);
+    assert_eq!(session.messages[0].role, Role::User);
 }

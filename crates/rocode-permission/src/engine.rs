@@ -266,7 +266,7 @@ mod tests {
 
         let info = PermissionInfo {
             id: "per_test".to_string(),
-            permission_type: "bash".to_string(),
+            permission_type: "bash".into(),
             pattern: Some(Pattern::Single("ls".to_string())),
             session_id: "ses_test".to_string(),
             message_id: "msg_test".to_string(),
@@ -302,8 +302,8 @@ mod tests {
             }
         });
         assert_eq!(
-            extract_permission_status(&payload).as_deref(),
-            Some("allow")
+            extract_permission_status(&payload),
+            Some(PermissionHookStatus::Allow)
         );
     }
 
@@ -314,7 +314,10 @@ mod tests {
                 "status": "ask"
             }
         });
-        assert_eq!(extract_permission_status(&payload).as_deref(), Some("ask"));
+        assert_eq!(
+            extract_permission_status(&payload),
+            Some(PermissionHookStatus::Ask)
+        );
     }
 
     #[test]
