@@ -2081,7 +2081,7 @@ mod tests {
             choices: vec![RawChoice {
                 index: Some(0),
                 message: Some(RawMessage {
-                    role: Some("assistant".to_string()),
+                    role: Some(RawMessageRole::Assistant),
                     content: None,
                     tool_calls: Some(vec![RawToolCall {
                         id: Some("call_1".to_string()),
@@ -2123,7 +2123,7 @@ mod tests {
             choices: vec![RawChoice {
                 index: Some(0),
                 message: Some(RawMessage {
-                    role: Some("assistant".to_string()),
+                    role: Some(RawMessageRole::Assistant),
                     content: None,
                     tool_calls: Some(vec![RawToolCall {
                         id: Some("call_1".to_string()),
@@ -2169,7 +2169,7 @@ mod tests {
             choices: vec![RawChoice {
                 index: Some(0),
                 message: Some(RawMessage {
-                    role: Some("assistant".to_string()),
+                    role: Some(RawMessageRole::Assistant),
                     content: None,
                     tool_calls: Some(vec![RawToolCall {
                         id: Some("call_1".to_string()),
@@ -2211,7 +2211,7 @@ mod tests {
             choices: vec![RawChoice {
                 index: Some(0),
                 message: Some(RawMessage {
-                    role: Some("assistant".to_string()),
+                    role: Some(RawMessageRole::Assistant),
                     content: None,
                     tool_calls: Some(vec![RawToolCall {
                         id: Some("call_1".to_string()),

@@ -4,9 +4,8 @@ use sea_orm::entity::prelude::*;
 #[sea_orm(table_name = "todos")]
 pub struct Model {
     #[sea_orm(primary_key)]
-    pub pk: i64,
-    pub session_id: String,
-    pub todo_id: String,
+    pub id: i64,
+    pub session_id: i64,
     pub content: String,
     pub status: String,
     pub priority: String,

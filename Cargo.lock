@@ -3365,6 +3365,7 @@ dependencies = [
  "rocode-agent",
  "rocode-content",
  "rocode-core",
+ "rocode-permission",
  "rocode-plugin",
  "rocode-tool",
  "rocode-types",
@@ -3496,7 +3497,6 @@ dependencies = [
  "rocode-types",
  "serde",
  "serde_json",
- "uuid",
 ]
 
 [[package]]
@@ -3509,6 +3509,7 @@ dependencies = [
  "petgraph",
  "rocode-config",
  "rocode-core",
+ "rocode-permission",
  "rocode-provider",
  "serde",
  "serde_json",

@@ -9,53 +9,12 @@
 use crate::cli_select::{interactive_select, SelectOption, SelectResult};
 use crate::cli_spinner::SpinnerGuard;
 use crate::cli_style::CliStyle;
+use rocode_permission::PermissionKind;
+pub use rocode_permission::PermissionMemory;
 use serde::Deserialize;
-use std::collections::HashSet;
 use std::io::{self, Write};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-
-/// Stores permission grants that were approved with "Allow Always".
-///
-/// Key format: `"{permission}:{pattern}"` (e.g. `"bash:ls"`, `"edit:src/main.rs"`).
-/// A wildcard key `"{permission}:*"` means the entire permission type was blanket-approved.
-#[derive(Debug, Clone, Default)]
-pub struct PermissionMemory {
-    granted: HashSet<String>,
-}
-
-impl PermissionMemory {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Record that a specific permission + patterns combination was always-approved.
-    pub fn grant_always(&mut self, permission: &str, patterns: &[String]) {
-        if patterns.is_empty() {
-            // No patterns → blanket grant for the permission type
-            self.granted.insert(format!("{}:*", permission));
-        } else {
-            for pattern in patterns {
-                self.granted.insert(format!("{}:{}", permission, pattern));
-            }
-        }
-    }
-
-    /// Check whether the permission request is already auto-approved.
-    pub fn is_granted(&self, permission: &str, patterns: &[String]) -> bool {
-        // Blanket wildcard grant
-        if self.granted.contains(&format!("{}:*", permission)) {
-            return true;
-        }
-        // Check each pattern
-        if patterns.is_empty() {
-            return false;
-        }
-        patterns
-            .iter()
-            .all(|p| self.granted.contains(&format!("{}:{}", permission, p)))
-    }
-}
 
 /// The three possible user decisions for a permission request.
 #[derive(Debug, Clone, PartialEq)]
@@ -107,7 +66,7 @@ impl PermissionMetadata {
 
 /// Format a permission request into a human-readable summary block for the terminal.
 fn format_permission_summary(
-    permission: &str,
+    permission: &PermissionKind,
     patterns: &[String],
     metadata: &std::collections::HashMap<String, serde_json::Value>,
     style: &CliStyle,
@@ -115,30 +74,15 @@ fn format_permission_summary(
     let mut lines = Vec::new();
     let metadata = PermissionMetadata::from_map(metadata);
 
-    // Permission type icon + label
-    let (icon, label) = match permission {
-        "bash" => ("⚡", "Execute Command"),
-        "edit" => ("✏️ ", "Edit File"),
-        "write" => ("📝", "Write File"),
-        "read" => ("📖", "Read File"),
-        "grep" => ("🔍", "Search Files"),
-        "glob" => ("📂", "Find Files"),
-        "list" => ("📂", "List Directory"),
-        "external_directory" => ("⚠️ ", "Access External Directory"),
-        "websearch" => ("🌐", "Web Search"),
-        "network" => ("🌐", "Network Request"),
-        "browser" => ("🌐", "Browser Session"),
-        "context_docs" => ("📚", "Context Docs"),
-        "media" | "media_inspect" => ("🖼️ ", "Media Inspect"),
-        "task" | "task_flow" => ("📋", "Task Management"),
-        _ => ("🔧", permission),
-    };
+    // Permission type icon + label (canonical model mapping)
+    let icon = permission.icon();
+    let label = permission.label();
 
     lines.push(format!(
         "  {} {} {}",
         icon,
-        style.bold(label),
-        style.dim(&format!("({})", permission))
+        style.bold(label.as_ref()),
+        style.dim(&format!("({})", permission.as_str()))
     ));
 
     // Show patterns (file paths, commands, etc.)
@@ -200,7 +144,7 @@ fn format_permission_summary(
 ///
 /// Returns the user's decision: Allow, Allow Always, or Deny.
 pub fn prompt_permission(
-    permission: &str,
+    permission: &PermissionKind,
     patterns: &[String],
     metadata: &std::collections::HashMap<String, serde_json::Value>,
     style: &CliStyle,
@@ -267,7 +211,7 @@ pub fn build_cli_permission_callback(
             // Check if already granted
             {
                 let mem = memory.lock().await;
-                if mem.is_granted(request.permission.as_str(), &request.patterns) {
+                if mem.is_request_granted(&request) {
                     return Ok(());
                 }
             }
@@ -277,7 +221,7 @@ pub fn build_cli_permission_callback(
             if !request.always.is_empty() {
                 // The tool itself says this should always be allowed
                 let mut mem = memory.lock().await;
-                mem.grant_always(request.permission.as_str(), &request.patterns);
+                mem.grant_request(&request);
                 return Ok(());
             }
 
@@ -289,7 +233,7 @@ pub fn build_cli_permission_callback(
             guard.pause();
 
             // Prompt user on a blocking task (crossterm raw mode needs real terminal)
-            let permission = request.permission.to_string();
+            let permission = request.permission.clone();
             let patterns = request.patterns.clone();
             let metadata = request.metadata.clone();
 
@@ -313,7 +257,7 @@ pub fn build_cli_permission_callback(
                 PermissionDecision::Allow => Ok(()),
                 PermissionDecision::AllowAlways => {
                     let mut mem = memory.lock().await;
-                    mem.grant_always(request.permission.as_str(), &request.patterns);
+                    mem.grant_request(&request);
                     Ok(())
                 }
                 PermissionDecision::Deny => Err(rocode_tool::ToolError::PermissionDenied(format!(
@@ -329,25 +273,35 @@ pub fn build_cli_permission_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocode_core::contracts::tools::BuiltinToolName;
 
     #[test]
     fn permission_memory_grant_and_check() {
         let mut mem = PermissionMemory::new();
 
-        assert!(!mem.is_granted("bash", &["ls".to_string()]));
+        assert!(!mem.is_granted(PermissionKind::from_tool_name("bash"), &["ls".to_string()]));
 
-        mem.grant_always("bash", &["ls".to_string()]);
-        assert!(mem.is_granted("bash", &["ls".to_string()]));
-        assert!(!mem.is_granted("bash", &["rm -rf /".to_string()]));
+        mem.grant_always(PermissionKind::from_tool_name("bash"), &["ls".to_string()]);
+        assert!(mem.is_granted(PermissionKind::from_tool_name("bash"), &["ls".to_string()]));
+        assert!(!mem.is_granted(
+            PermissionKind::from_tool_name("bash"),
+            &["rm -rf /".to_string()]
+        ));
     }
 
     #[test]
     fn permission_memory_wildcard_grant() {
         let mut mem = PermissionMemory::new();
 
-        mem.grant_always("edit", &[]);
-        assert!(mem.is_granted("edit", &["any-file.rs".to_string()]));
-        assert!(mem.is_granted("edit", &["another.rs".to_string()]));
+        mem.grant_always(PermissionKind::from_tool_name("edit"), &[]);
+        assert!(mem.is_granted(
+            PermissionKind::from_tool_name("write"),
+            &["any-file.rs".to_string()]
+        ));
+        assert!(mem.is_granted(
+            PermissionKind::from_tool_name("edit"),
+            &["another.rs".to_string()]
+        ));
     }
 
     #[test]
@@ -355,18 +309,27 @@ mod tests {
         let mut mem = PermissionMemory::new();
 
         let patterns = vec!["src/a.rs".to_string(), "src/b.rs".to_string()];
-        mem.grant_always("edit", &patterns);
+        mem.grant_always(PermissionKind::from_tool_name("edit"), &patterns);
 
-        assert!(mem.is_granted("edit", &["src/a.rs".to_string()]));
-        assert!(mem.is_granted("edit", &["src/b.rs".to_string()]));
-        assert!(mem.is_granted("edit", &patterns));
-        assert!(!mem.is_granted("edit", &["src/c.rs".to_string()]));
+        assert!(mem.is_granted(
+            PermissionKind::from_tool_name("edit"),
+            &["src/a.rs".to_string()]
+        ));
+        assert!(mem.is_granted(
+            PermissionKind::from_tool_name("edit"),
+            &["src/b.rs".to_string()]
+        ));
+        assert!(mem.is_granted(PermissionKind::from_tool_name("edit"), &patterns));
+        assert!(!mem.is_granted(
+            PermissionKind::from_tool_name("edit"),
+            &["src/c.rs".to_string()]
+        ));
     }
 
     #[test]
     fn permission_memory_empty_patterns_not_granted_without_wildcard() {
         let mem = PermissionMemory::new();
-        assert!(!mem.is_granted("bash", &[]));
+        assert!(!mem.is_granted(PermissionKind::from_tool_name("bash"), &[]));
     }
 
     #[test]
@@ -375,10 +338,14 @@ mod tests {
         let mut metadata = std::collections::HashMap::new();
         metadata.insert("command".to_string(), serde_json::json!("cargo test --all"));
 
-        let summary =
-            format_permission_summary("bash", &["cargo test --all".to_string()], &metadata, &style);
+        let summary = format_permission_summary(
+            &PermissionKind::from(BuiltinToolName::Bash),
+            &["cargo test --all".to_string()],
+            &metadata,
+            &style,
+        );
 
-        assert!(summary.contains("Execute Command"));
+        assert!(summary.contains("Run shell command"));
         assert!(summary.contains("cargo test --all"));
     }
 
@@ -392,10 +359,14 @@ mod tests {
         );
         metadata.insert("filepath".to_string(), serde_json::json!("src/main.rs"));
 
-        let summary =
-            format_permission_summary("edit", &["src/main.rs".to_string()], &metadata, &style);
+        let summary = format_permission_summary(
+            &PermissionKind::from_tool_name("edit"),
+            &["src/main.rs".to_string()],
+            &metadata,
+            &style,
+        );
 
-        assert!(summary.contains("Edit File"));
+        assert!(summary.contains("Edit file"));
         assert!(summary.contains("-old line"));
         assert!(summary.contains("+new line"));
     }

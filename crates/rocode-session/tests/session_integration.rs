@@ -4,7 +4,7 @@ use rocode_session::{Role, Session};
 fn test_session_creation() {
     let session = Session::new("/test/directory");
 
-    assert!(session.id.starts_with("ses_"));
+    assert!(session.id.parse::<i64>().is_ok());
     assert!(session.messages.is_empty());
     assert_eq!(session.directory, "/test/directory");
 }

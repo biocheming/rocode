@@ -7,6 +7,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use rocode_core::contracts::tools::BuiltinToolName;
+use rocode_permission::allowlist_allows_tool;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -166,8 +167,9 @@ impl FilteredToolExecutor {
     fn is_allowed(&self, tool_name: &str) -> bool {
         match &self.allowed_tools {
             None => true,
+            Some(allowed) if allowed.is_empty() => false,
             Some(allowed) => {
-                allowed.contains(tool_name) || allowed.contains(&tool_name.to_ascii_lowercase())
+                allowlist_allows_tool(tool_name, &allowed.iter().cloned().collect::<Vec<_>>())
             }
         }
     }

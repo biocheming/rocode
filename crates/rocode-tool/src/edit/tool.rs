@@ -8,6 +8,7 @@ use tokio::fs;
 use super::replacers::CompositeReplacer;
 use crate::path_guard::{resolve_user_path, RootPathFallbackPolicy};
 use crate::{with_file_lock, Metadata, Tool, ToolContext, ToolError, ToolResult};
+use rocode_permission::PermissionKind;
 
 #[cfg(feature = "lsp")]
 const MAX_DIAGNOSTICS_PER_FILE: usize = 20;
@@ -128,7 +129,7 @@ impl Tool for EditTool {
                 .unwrap_or_else(|| path_str.clone());
 
             ctx.ask_permission(
-                crate::PermissionRequest::new("external_directory")
+                crate::PermissionRequest::external_directory()
                     .with_pattern(format!("{}/*", parent))
                     .with_metadata("filepath", serde_json::json!(&path_str))
                     .with_metadata("parentDir", serde_json::json!(parent)),
@@ -168,7 +169,7 @@ impl Tool for EditTool {
                 let diff = create_diff(&path_str_clone, "", &new_string_normalized);
                 ctx_clone
                     .ask_permission(
-                        crate::PermissionRequest::new("edit")
+                        crate::PermissionRequest::for_kind(PermissionKind::from_tool_name("edit"))
                             .with_pattern(&path_str_clone)
                             .with_metadata("diff", serde_json::json!(diff))
                             .always_allow(),
@@ -246,7 +247,7 @@ impl Tool for EditTool {
             let diff = create_diff(&path_str_clone, &content, &new_content);
             ctx_clone
                 .ask_permission(
-                    crate::PermissionRequest::new("edit")
+                    crate::PermissionRequest::for_kind(PermissionKind::from_tool_name("edit"))
                         .with_pattern(&path_str_clone)
                         .with_metadata("diff", serde_json::json!(diff))
                         .always_allow(),

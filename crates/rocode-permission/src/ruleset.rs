@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use rocode_core::contracts::tools::BuiltinToolName;
 
 use crate::matching::wildcard_match;
-use crate::{PermissionKind, PermissionMatcher};
+use crate::{allowlist_allows_tool, PermissionKind, PermissionMatcher};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum PermissionAction {
@@ -62,17 +62,7 @@ fn evaluate(permission: &str, pattern: &str, rulesets: &[PermissionRuleset]) -> 
 /// Edit-family tools map to `edit`, `ls` maps to `list`, others map to
 /// their canonical built-in name (or custom raw name).
 pub fn tool_to_permission(tool_name: &str) -> PermissionKind {
-    match BuiltinToolName::parse(tool_name) {
-        Some(
-            BuiltinToolName::Write
-            | BuiltinToolName::Edit
-            | BuiltinToolName::MultiEdit
-            | BuiltinToolName::ApplyPatch,
-        ) => PermissionKind::from(BuiltinToolName::Edit),
-        Some(BuiltinToolName::Ls) => PermissionKind::List,
-        Some(tool) => PermissionKind::from(tool),
-        None => PermissionKind::from_name(tool_name),
-    }
+    PermissionKind::from_tool_name(tool_name)
 }
 
 /// Evaluate a tool's permission decision against allowlist and rulesets.
@@ -86,7 +76,7 @@ pub fn evaluate_tool_permission(
     rulesets: &[PermissionRuleset],
 ) -> PermissionAction {
     // Step 1: allowlist gate
-    if !allowed_tools.is_empty() && !allowed_tools.iter().any(|tool| tool == tool_name) {
+    if !allowlist_allows_tool(tool_name, allowed_tools) {
         return PermissionAction::Deny;
     }
 
@@ -226,11 +216,7 @@ mod tests {
             PermissionAction::Deny,
         )];
         // Tool is in allowlist — even with deny-all ruleset, check proceeds to ruleset
-        let result = evaluate_tool_permission(
-            BuiltinToolName::Grep.as_str(),
-            &[BuiltinToolName::Grep.as_str().to_string()],
-            &[ruleset],
-        );
+        let result = evaluate_tool_permission("grep", &["search".to_string()], &[ruleset]);
         assert_eq!(result, PermissionAction::Deny);
     }
 
@@ -248,6 +234,23 @@ mod tests {
             &[ruleset],
         );
         assert_eq!(result, PermissionAction::Deny);
+    }
+
+    #[test]
+    fn evaluate_tool_permission_allowlist_is_case_and_alias_tolerant() {
+        let ruleset = vec![PermissionRule::new(
+            PermissionMatcher::any(),
+            "*",
+            PermissionAction::Allow,
+        )];
+        assert_eq!(
+            evaluate_tool_permission("TaSkFlOw", &["task_flow".to_string()], &[ruleset.clone()]),
+            PermissionAction::Allow
+        );
+        assert_eq!(
+            evaluate_tool_permission("ripgrep", &["grep".to_string()], &[ruleset]),
+            PermissionAction::Allow
+        );
     }
 
     #[test]

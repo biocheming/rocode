@@ -10,4 +10,3 @@ rocode-types = { path = "../rocode-types" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
-uuid = { workspace = true }

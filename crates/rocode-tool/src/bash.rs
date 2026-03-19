@@ -6,8 +6,9 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::time::{timeout, Duration};
 
 use crate::{Metadata, Tool, ToolContext, ToolError, ToolResult};
+use rocode_core::contracts::tools::BuiltinToolName;
 use rocode_core::process_registry::{global_registry, ProcessKind};
-use rocode_permission::BashArity;
+use rocode_permission::{BashArity, PermissionKind};
 use rocode_plugin::{HookContext, HookEvent};
 
 const DEFAULT_TIMEOUT_MS: u64 = 2 * 60 * 1000;
@@ -115,7 +116,7 @@ pub(crate) async fn authorize_bash_command(
                 .unwrap_or_else(|| path.clone());
 
             ctx.ask_permission(
-                crate::PermissionRequest::new("external_directory")
+                crate::PermissionRequest::external_directory()
                     .with_pattern(format!("{}/*", parent))
                     .with_metadata("filepath", serde_json::json!(path))
                     .with_metadata("parentDir", serde_json::json!(parent)),
@@ -127,9 +128,10 @@ pub(crate) async fn authorize_bash_command(
     if !parsed.patterns.is_empty() {
         let patterns: Vec<String> = parsed.patterns.into_iter().collect();
         let always: Vec<String> = parsed.always.into_iter().collect();
-        let mut req = crate::PermissionRequest::new("bash")
-            .with_patterns(patterns)
-            .with_metadata("description", serde_json::json!(description));
+        let mut req =
+            crate::PermissionRequest::for_kind(PermissionKind::from(BuiltinToolName::Bash))
+                .with_patterns(patterns)
+                .with_metadata("description", serde_json::json!(description));
         for a in always {
             req = req.with_always(a);
         }

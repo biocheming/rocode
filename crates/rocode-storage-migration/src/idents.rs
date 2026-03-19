@@ -3,7 +3,6 @@ use sea_orm_migration::prelude::*;
 #[derive(DeriveIden)]
 pub enum Sessions {
     Table,
-    Pk,
     Id,
     ProjectId,
     ParentId,
@@ -33,7 +32,6 @@ pub enum Sessions {
 #[derive(DeriveIden)]
 pub enum Messages {
     Table,
-    Pk,
     Id,
     SessionId,
     Role,
@@ -54,7 +52,6 @@ pub enum Messages {
 #[derive(DeriveIden)]
 pub enum Parts {
     Table,
-    Pk,
     Id,
     MessageId,
     SessionId,
@@ -78,9 +75,8 @@ pub enum Parts {
 #[derive(DeriveIden)]
 pub enum Todos {
     Table,
-    Pk,
+    Id,
     SessionId,
-    TodoId,
     Content,
     Status,
     Priority,
@@ -101,9 +97,9 @@ pub enum Permissions {
 #[derive(DeriveIden)]
 pub enum SessionShares {
     Table,
-    Pk,
-    SessionId,
     Id,
+    SessionId,
+    ShareId,
     Secret,
     Url,
     CreatedAt,

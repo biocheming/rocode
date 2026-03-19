@@ -17,9 +17,8 @@ pub enum MessageRoleModel {
 #[sea_orm(table_name = "messages")]
 pub struct Model {
     #[sea_orm(primary_key)]
-    pub pk: i64,
-    pub id: String,
-    pub session_id: String,
+    pub id: i64,
+    pub session_id: i64,
     pub role: MessageRoleModel,
     pub created_at: i64,
     pub provider_id: Option<String>,

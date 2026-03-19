@@ -449,6 +449,6 @@ mod tests {
             synthetic: None,
             ignored: None,
         });
-        assert!(part.id.starts_with("prt_"));
+        assert!(part.id.parse::<i64>().is_ok());
     }
 }

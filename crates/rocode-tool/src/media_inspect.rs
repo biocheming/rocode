@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::attachment_metadata::collect_attachments_from_metadata;
 use crate::path_guard::{resolve_user_path, RootPathFallbackPolicy};
 use crate::{Metadata, PermissionRequest, Tool, ToolContext, ToolError, ToolRegistry, ToolResult};
+use rocode_core::contracts::tools::BuiltinToolName;
 
 const DEFAULT_QUESTION: &str =
     "Describe the relevant contents of this media file and answer the user's need concisely.";
@@ -197,7 +198,7 @@ impl Tool for MediaInspectTool {
             serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
         validate_input(&input)?;
 
-        let mut permission = PermissionRequest::new("media_inspect")
+        let mut permission = PermissionRequest::for_tool(BuiltinToolName::MediaInspect)
             .with_pattern(&input.file_path)
             .with_metadata("file_path", serde_json::json!(&input.file_path))
             .always_allow();

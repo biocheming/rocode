@@ -893,7 +893,7 @@ mod tests {
     #[test]
     fn test_session_creation() {
         let session = Session::new("/path/to/project");
-        assert!(session.id.starts_with("ses_"));
+        assert!(session.id.parse::<i64>().is_ok());
         assert!(session.title.starts_with("New session"));
         assert!(session.parent_id.is_none());
         assert!(!session.active);

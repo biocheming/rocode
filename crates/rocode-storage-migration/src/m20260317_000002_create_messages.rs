@@ -19,14 +19,13 @@ impl MigrationTrait for Migration {
                     .table(Messages::Table)
                     .if_not_exists()
                     .col(
-                        ColumnDef::new(Messages::Pk)
+                        ColumnDef::new(Messages::Id)
                             .big_integer()
                             .not_null()
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(Messages::Id).string().not_null())
-                    .col(ColumnDef::new(Messages::SessionId).string().not_null())
+                    .col(ColumnDef::new(Messages::SessionId).big_integer().not_null())
                     .col(ColumnDef::new(Messages::Role).string().not_null())
                     .col(ColumnDef::new(Messages::CreatedAt).big_integer().not_null())
                     .col(ColumnDef::new(Messages::ProviderId).string())
@@ -77,12 +76,6 @@ impl MigrationTrait for Migration {
                             .to(Sessions::Table, Sessions::Id)
                             .on_delete(ForeignKeyAction::Cascade)
                             .on_update(ForeignKeyAction::Cascade),
-                    )
-                    .index(
-                        Index::create()
-                            .name("ux_messages_id")
-                            .col(Messages::Id)
-                            .unique(),
                     )
                     .to_owned(),
             )

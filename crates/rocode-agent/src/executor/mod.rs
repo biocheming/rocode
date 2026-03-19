@@ -635,7 +635,7 @@ mod tests {
     #[test]
     fn executor_blocks_ask_permissions_without_user_approval() {
         let agent = AgentInfo::custom("review").with_permission(vec![PermissionRule {
-            permission: BuiltinToolName::Bash.as_str().to_string(),
+            permission: BuiltinToolName::Bash.as_str().to_string().into(),
             pattern: "*".to_string(),
             action: PermissionAction::Ask,
         }]);

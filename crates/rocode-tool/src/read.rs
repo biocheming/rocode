@@ -6,6 +6,7 @@ use walkdir::WalkDir;
 
 use crate::path_guard::{resolve_user_path, RootPathFallbackPolicy};
 use crate::{Metadata, Tool, ToolContext, ToolError, ToolResult};
+use rocode_core::contracts::tools::BuiltinToolName;
 
 const DEFAULT_READ_LIMIT: usize = 2000;
 const MAX_LINE_LENGTH: usize = 2000;
@@ -173,7 +174,7 @@ impl Tool for ReadTool {
                 .unwrap_or_else(|| path_str.clone());
 
             ctx.ask_permission(
-                crate::PermissionRequest::new("external_directory")
+                crate::PermissionRequest::external_directory()
                     .with_pattern(format!("{}/*", parent))
                     .with_metadata("filepath", serde_json::json!(path_str))
                     .with_metadata("parentDir", serde_json::json!(parent)),
@@ -182,7 +183,7 @@ impl Tool for ReadTool {
         }
 
         ctx.ask_permission(
-            crate::PermissionRequest::new("read")
+            crate::PermissionRequest::for_tool(BuiltinToolName::Read)
                 .with_pattern(&path_str)
                 .always_allow(),
         )

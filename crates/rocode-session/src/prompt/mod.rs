@@ -46,6 +46,7 @@ use rocode_orchestrator::runtime::run_loop;
 use rocode_orchestrator::runtime::traits::{LoopSink, ToolDispatcher};
 use rocode_orchestrator::runtime::{SimpleModelCaller, SimpleModelCallerConfig};
 use rocode_orchestrator::{session_runtime_request_defaults, CompiledExecutionRequest};
+use rocode_permission::allowlist_allows_tool;
 use rocode_plugin::{HookContext, HookEvent};
 use rocode_provider::transform::{apply_caching, ProviderType};
 use rocode_provider::{Provider, ToolDefinition};
@@ -339,6 +340,18 @@ struct SessionToolExecutor {
     allowed_tools: Option<Arc<HashSet<String>>>,
 }
 
+impl SessionToolExecutor {
+    fn is_allowed_tool(&self, tool_name: &str) -> bool {
+        match self.allowed_tools.as_ref() {
+            None => true,
+            Some(allowed_tools) => {
+                let allowlist = allowed_tools.iter().cloned().collect::<Vec<_>>();
+                allowlist_allows_tool(tool_name, &allowlist)
+            }
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl rocode_orchestrator::ToolExecutor for SessionToolExecutor {
     async fn execute(
@@ -347,12 +360,10 @@ impl rocode_orchestrator::ToolExecutor for SessionToolExecutor {
         arguments: serde_json::Value,
         _exec_ctx: &rocode_orchestrator::ExecutionContext,
     ) -> Result<rocode_orchestrator::ToolOutput, rocode_orchestrator::ToolExecError> {
-        if let Some(allowed_tools) = self.allowed_tools.as_ref() {
-            if !allowed_tools.contains(tool_name) {
-                return Err(rocode_orchestrator::ToolExecError::PermissionDenied(
-                    format!("Tool `{}` is not allowed in this session", tool_name),
-                ));
-            }
+        if !self.is_allowed_tool(tool_name) {
+            return Err(rocode_orchestrator::ToolExecError::PermissionDenied(
+                format!("Tool `{}` is not allowed in this session", tool_name),
+            ));
         }
         let ctx = (self.tool_ctx_builder)();
         let result = self
@@ -389,8 +400,8 @@ impl rocode_orchestrator::ToolExecutor for SessionToolExecutor {
 
     async fn list_ids(&self) -> Vec<String> {
         let mut ids = self.tool_registry.list_ids().await;
-        if let Some(allowed_tools) = self.allowed_tools.as_ref() {
-            ids.retain(|id| allowed_tools.contains(id));
+        if self.allowed_tools.is_some() {
+            ids.retain(|id| self.is_allowed_tool(id));
         }
         ids
     }
@@ -410,8 +421,8 @@ impl rocode_orchestrator::ToolExecutor for SessionToolExecutor {
                 parameters: s.parameters,
             })
             .collect();
-        if let Some(allowed_tools) = self.allowed_tools.as_ref() {
-            tools.retain(|tool| allowed_tools.contains(&tool.name));
+        if self.allowed_tools.is_some() {
+            tools.retain(|tool| self.is_allowed_tool(&tool.name));
         }
         prioritize_tool_definitions(&mut tools);
         tools

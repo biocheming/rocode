@@ -4,9 +4,9 @@ use sea_orm::entity::prelude::*;
 #[sea_orm(table_name = "session_shares")]
 pub struct Model {
     #[sea_orm(primary_key)]
-    pub pk: i64,
-    pub session_id: String,
-    pub id: String,
+    pub id: i64,
+    pub session_id: i64,
+    pub share_id: String,
     pub secret: String,
     pub url: String,
     pub created_at: i64,

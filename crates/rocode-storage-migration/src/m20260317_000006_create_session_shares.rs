@@ -19,14 +19,18 @@ impl MigrationTrait for Migration {
                     .table(SessionShares::Table)
                     .if_not_exists()
                     .col(
-                        ColumnDef::new(SessionShares::Pk)
+                        ColumnDef::new(SessionShares::Id)
                             .big_integer()
                             .not_null()
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(SessionShares::SessionId).string().not_null())
-                    .col(ColumnDef::new(SessionShares::Id).string().not_null())
+                    .col(
+                        ColumnDef::new(SessionShares::SessionId)
+                            .big_integer()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(SessionShares::ShareId).string().not_null())
                     .col(ColumnDef::new(SessionShares::Secret).string().not_null())
                     .col(ColumnDef::new(SessionShares::Url).string().not_null())
                     .col(

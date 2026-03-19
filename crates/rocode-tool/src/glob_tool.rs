@@ -4,6 +4,7 @@ use std::time::SystemTime;
 use walkdir::WalkDir;
 
 use crate::{Metadata, Tool, ToolContext, ToolError, ToolResult};
+use rocode_core::contracts::tools::BuiltinToolName;
 use rocode_types::GlobToolInput;
 
 pub struct GlobTool {
@@ -72,7 +73,7 @@ impl Tool for GlobTool {
 
         if ctx.is_external_path(&base_dir_str) {
             ctx.ask_permission(
-                crate::PermissionRequest::new("external_directory")
+                crate::PermissionRequest::external_directory()
                     .with_pattern(format!("{}/*", base_dir_str))
                     .with_metadata("path", serde_json::json!(&base_dir_str)),
             )
@@ -80,7 +81,7 @@ impl Tool for GlobTool {
         }
 
         ctx.ask_permission(
-            crate::PermissionRequest::new("glob")
+            crate::PermissionRequest::for_tool(BuiltinToolName::Glob)
                 .with_pattern(&pattern)
                 .with_metadata("path", serde_json::json!(&base_dir_str))
                 .always_allow(),

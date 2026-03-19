@@ -14,9 +14,9 @@ impl MigrationName for Migration {
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         // Support common paging queries:
-        // - list parts by message ordered by sort_order/created_at/pk
-        // - list parts by session ordered by sort_order/created_at/pk
-        // - list todos by session ordered by position/pk
+        // - list parts by message ordered by sort_order/created_at/id
+        // - list parts by session ordered by sort_order/created_at/id
+        // - list todos by session ordered by position/id
         manager
             .create_index(
                 Index::create()
@@ -25,7 +25,7 @@ impl MigrationTrait for Migration {
                     .col(Parts::MessageId)
                     .col(Parts::SortOrder)
                     .col(Parts::CreatedAt)
-                    .col(Parts::Pk)
+                    .col(Parts::Id)
                     .to_owned(),
             )
             .await?;
@@ -38,7 +38,7 @@ impl MigrationTrait for Migration {
                     .col(Parts::SessionId)
                     .col(Parts::SortOrder)
                     .col(Parts::CreatedAt)
-                    .col(Parts::Pk)
+                    .col(Parts::Id)
                     .to_owned(),
             )
             .await?;
@@ -50,7 +50,7 @@ impl MigrationTrait for Migration {
                     .table(Todos::Table)
                     .col(Todos::SessionId)
                     .col(Todos::Position)
-                    .col(Todos::Pk)
+                    .col(Todos::Id)
                     .to_owned(),
             )
             .await?;

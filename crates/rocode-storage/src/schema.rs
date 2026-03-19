@@ -6,9 +6,8 @@
 /// Sessions table - stores session metadata
 pub const CREATE_SESSIONS_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS sessions (
-    pk INTEGER PRIMARY KEY AUTOINCREMENT,
-    id TEXT NOT NULL UNIQUE,
-    parent_id TEXT,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_id INTEGER,
     directory TEXT NOT NULL,
     title TEXT NOT NULL,
     version TEXT NOT NULL DEFAULT '1.0.0',
@@ -49,9 +48,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 /// Messages table - stores message metadata
 pub const CREATE_MESSAGES_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS messages (
-    pk INTEGER PRIMARY KEY AUTOINCREMENT,
-    id TEXT NOT NULL UNIQUE,
-    session_id TEXT NOT NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
     role TEXT NOT NULL,
     created_at INTEGER NOT NULL,
 
@@ -83,10 +81,9 @@ CREATE TABLE IF NOT EXISTS messages (
 /// Parts table - stores message parts (text, tool calls, etc.)
 pub const CREATE_PARTS_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS parts (
-    pk INTEGER PRIMARY KEY AUTOINCREMENT,
-    id TEXT NOT NULL UNIQUE,
-    message_id TEXT NOT NULL,
-    session_id TEXT NOT NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id INTEGER NOT NULL,
+    session_id INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
     
     -- Part type
@@ -125,9 +122,8 @@ CREATE TABLE IF NOT EXISTS parts (
 /// Todos table - stores session todos
 pub const CREATE_TODOS_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS todos (
-    pk INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL,
-    todo_id TEXT NOT NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
     content TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending',
     priority TEXT NOT NULL DEFAULT 'medium',
@@ -135,7 +131,6 @@ CREATE TABLE IF NOT EXISTS todos (
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     
-    UNIQUE (session_id, todo_id),
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 "#;
@@ -153,9 +148,9 @@ CREATE TABLE IF NOT EXISTS permissions (
 /// Session shares table - stores share info for sessions
 pub const CREATE_SESSION_SHARES_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS session_shares (
-    pk INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL UNIQUE,
-    id TEXT NOT NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL UNIQUE,
+    share_id TEXT NOT NULL,
     secret TEXT NOT NULL,
     url TEXT NOT NULL,
     created_at INTEGER NOT NULL,
@@ -174,19 +169,19 @@ CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 -- Message indexes
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
-CREATE INDEX IF NOT EXISTS idx_messages_session_created ON messages(session_id, created_at, pk);
+CREATE INDEX IF NOT EXISTS idx_messages_session_created ON messages(session_id, created_at, id);
 
 -- Part indexes
 CREATE INDEX IF NOT EXISTS idx_parts_message ON parts(message_id);
 CREATE INDEX IF NOT EXISTS idx_parts_session ON parts(session_id);
 CREATE INDEX IF NOT EXISTS idx_parts_order ON parts(sort_order);
-CREATE INDEX IF NOT EXISTS idx_parts_message_sort ON parts(message_id, sort_order, created_at, pk);
-CREATE INDEX IF NOT EXISTS idx_parts_session_sort ON parts(session_id, sort_order, created_at, pk);
+CREATE INDEX IF NOT EXISTS idx_parts_message_sort ON parts(message_id, sort_order, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_parts_session_sort ON parts(session_id, sort_order, created_at, id);
 
 -- Todo indexes
 CREATE INDEX IF NOT EXISTS idx_todos_session ON todos(session_id);
 CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status);
-CREATE INDEX IF NOT EXISTS idx_todos_session_position ON todos(session_id, position, pk);
+CREATE INDEX IF NOT EXISTS idx_todos_session_position ON todos(session_id, position, id);
 "#;
 
 /// Add finish column to messages table for existing databases.

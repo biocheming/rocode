@@ -2,12 +2,18 @@ use chrono::{DateTime, Utc};
 use rocode_permission::SessionPermissionRuleset;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use uuid::Uuid;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use crate::{MessagePart, Role, SessionMessage};
 
 fn default_session_active() -> bool {
     false
+}
+
+static NEXT_SESSION_ID: AtomicI64 = AtomicI64::new(1);
+
+fn new_session_id() -> String {
+    NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed).to_string()
 }
 
 // ============================================================================
@@ -76,7 +82,7 @@ impl Session {
         let now = Utc::now();
 
         Self {
-            id: format!("ses_{}", Uuid::new_v4().simple()),
+            id: new_session_id(),
             directory: directory.into(),
             parent_id: None,
             title: format!("New session - {}", now.to_rfc3339()),
@@ -99,7 +105,7 @@ impl Session {
         let now = Utc::now();
 
         Self {
-            id: format!("ses_{}", Uuid::new_v4().simple()),
+            id: new_session_id(),
             directory: parent.directory.clone(),
             parent_id: Some(parent.id.clone()),
             title: format!("Child session - {}", now.to_rfc3339()),

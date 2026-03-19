@@ -19,15 +19,14 @@ impl MigrationTrait for Migration {
                     .table(Parts::Table)
                     .if_not_exists()
                     .col(
-                        ColumnDef::new(Parts::Pk)
+                        ColumnDef::new(Parts::Id)
                             .big_integer()
                             .not_null()
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(Parts::Id).string().not_null())
-                    .col(ColumnDef::new(Parts::MessageId).string().not_null())
-                    .col(ColumnDef::new(Parts::SessionId).string().not_null())
+                    .col(ColumnDef::new(Parts::MessageId).big_integer().not_null())
+                    .col(ColumnDef::new(Parts::SessionId).big_integer().not_null())
                     .col(ColumnDef::new(Parts::CreatedAt).big_integer().not_null())
                     .col(ColumnDef::new(Parts::PartType).string().not_null())
                     .col(ColumnDef::new(Parts::Text).string())
@@ -64,7 +63,6 @@ impl MigrationTrait for Migration {
                             .on_delete(ForeignKeyAction::Cascade)
                             .on_update(ForeignKeyAction::Cascade),
                     )
-                    .index(Index::create().name("ux_parts_id").col(Parts::Id).unique())
                     .to_owned(),
             )
             .await

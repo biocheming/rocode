@@ -6,6 +6,7 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 
 use rocode_session::{
     MessagePart, MessageUsage, PartType, Role, Session, SessionMessage, SessionSummary,
@@ -40,6 +41,30 @@ fn normalize_limit_offset(limit: i64, offset: i64) -> Result<(u64, u64), Databas
     Ok((limit as u64, offset as u64))
 }
 
+fn parse_int_id(value: &str, _field: &str) -> Result<i64, DatabaseError> {
+    if let Ok(id) = value.parse::<i64>() {
+        return Ok(id);
+    }
+
+    let digits: String = value.chars().filter(|ch| ch.is_ascii_digit()).collect();
+    if !digits.is_empty() {
+        if let Ok(id) = digits.parse::<i64>() {
+            return Ok(id);
+        }
+    }
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    Ok((hasher.finish() & i64::MAX as u64) as i64)
+}
+
+fn parse_opt_int_id(value: &Option<String>, field: &str) -> Result<Option<i64>, DatabaseError> {
+    match value {
+        Some(v) => Ok(Some(parse_int_id(v, field)?)),
+        None => Ok(None),
+    }
+}
+
 fn role_to_model(role: Role) -> messages::MessageRoleModel {
     match role {
         Role::User => messages::MessageRoleModel::User,
@@ -58,7 +83,7 @@ fn role_from_model(role: messages::MessageRoleModel) -> Role {
     }
 }
 
-fn session_insert_model(session: &Session) -> sessions::ActiveModel {
+fn session_insert_model(session: &Session) -> Result<sessions::ActiveModel, DatabaseError> {
     let summary_diffs = session
         .summary
         .as_ref()
@@ -75,10 +100,9 @@ fn session_insert_model(session: &Session) -> sessions::ActiveModel {
 
     let usage = session.usage.as_ref();
 
-    sessions::ActiveModel {
-        pk: Default::default(),
-        id: Set(session.id.clone()),
-        parent_id: Set(session.parent_id.clone()),
+    Ok(sessions::ActiveModel {
+        id: Set(parse_int_id(&session.id, "session.id")?),
+        parent_id: Set(parse_opt_int_id(&session.parent_id, "session.parent_id")?),
         directory: Set(session.directory.clone()),
         title: Set(session.title.clone()),
         version: Set(session.version.clone()),
@@ -111,10 +135,10 @@ fn session_insert_model(session: &Session) -> sessions::ActiveModel {
         status: Set(session.active),
         created_at: Set(session.time.created),
         updated_at: Set(session.time.updated),
-    }
+    })
 }
 
-fn session_update_model(session: &Session) -> sessions::ActiveModel {
+fn session_update_model(session: &Session) -> Result<sessions::ActiveModel, DatabaseError> {
     let summary_diffs = session
         .summary
         .as_ref()
@@ -131,8 +155,8 @@ fn session_update_model(session: &Session) -> sessions::ActiveModel {
 
     let usage = session.usage.as_ref();
 
-    sessions::ActiveModel {
-        id: Set(session.id.clone()),
+    Ok(sessions::ActiveModel {
+        id: Set(parse_int_id(&session.id, "session.id")?),
         title: Set(session.title.clone()),
         version: Set(session.version.clone()),
         share_url: Set(session.share.clone()),
@@ -164,7 +188,7 @@ fn session_update_model(session: &Session) -> sessions::ActiveModel {
         status: Set(session.active),
         updated_at: Set(session.time.updated),
         ..Default::default()
-    }
+    })
 }
 
 fn session_from_model(model: sessions::Model) -> Session {
@@ -198,9 +222,9 @@ fn session_from_model(model: sessions::Model) -> Session {
     });
 
     Session {
-        id: model.id,
+        id: model.id.to_string(),
         directory: model.directory,
-        parent_id: model.parent_id,
+        parent_id: model.parent_id.map(|id| id.to_string()),
         title: model.title,
         version: model.version,
         time: SessionTime {
@@ -231,8 +255,8 @@ fn message_insert_model(message: &SessionMessage) -> Result<messages::ActiveMode
     let usage = message.usage.as_ref();
 
     Ok(messages::ActiveModel {
-        id: Set(message.id.clone()),
-        session_id: Set(message.session_id.clone()),
+        id: Set(parse_int_id(&message.id, "message.id")?),
+        session_id: Set(parse_int_id(&message.session_id, "message.session_id")?),
         role: Set(role_to_model(message.role)),
         created_at: Set(message.created_at.timestamp_millis()),
         tokens_input: Set(usage.map(|u| u.input_tokens as i64).unwrap_or(0)),
@@ -274,8 +298,8 @@ fn message_from_model(model: messages::Model) -> Option<SessionMessage> {
     });
 
     Some(SessionMessage {
-        id: model.id,
-        session_id: model.session_id,
+        id: model.id.to_string(),
+        session_id: model.session_id.to_string(),
         role: msg_role,
         parts,
         created_at: created,
@@ -327,9 +351,9 @@ fn part_insert_model(
         .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
 
     let mut active = parts::ActiveModel {
-        id: Set(part.id.clone()),
-        message_id: Set(message_id.to_string()),
-        session_id: Set(session_id.to_string()),
+        id: Set(parse_int_id(&part.id, "part.id")?),
+        message_id: Set(parse_int_id(message_id, "part.message_id")?),
+        session_id: Set(parse_int_id(session_id, "part.session_id")?),
         created_at: Set(created_at),
         part_type: Set(part_type_to_str(&part.part_type).to_string()),
         sort_order: Set(sort_order),
@@ -393,7 +417,7 @@ impl SessionRepository {
     }
 
     pub async fn create(&self, session: &Session) -> Result<(), DatabaseError> {
-        sessions::Entity::insert(session_insert_model(session))
+        sessions::Entity::insert(session_insert_model(session)?)
             .exec(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -402,7 +426,7 @@ impl SessionRepository {
 
     pub async fn get(&self, id: &str) -> Result<Option<Session>, DatabaseError> {
         let row = sessions::Entity::find()
-            .filter(sessions::Column::Id.eq(id))
+            .filter(sessions::Column::Id.eq(parse_int_id(id, "session.id")?))
             .one(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -485,7 +509,7 @@ impl SessionRepository {
     }
 
     pub async fn update(&self, session: &Session) -> Result<(), DatabaseError> {
-        session_update_model(session)
+        session_update_model(session)?
             .update(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -493,7 +517,7 @@ impl SessionRepository {
     }
 
     pub async fn upsert(&self, session: &Session) -> Result<(), DatabaseError> {
-        sessions::Entity::insert(session_insert_model(session))
+        sessions::Entity::insert(session_insert_model(session)?)
             .on_conflict(
                 OnConflict::column(sessions::Column::Id)
                     .update_columns([
@@ -526,7 +550,7 @@ impl SessionRepository {
 
     pub async fn delete(&self, id: &str) -> Result<(), DatabaseError> {
         sessions::Entity::delete_many()
-            .filter(sessions::Column::Id.eq(id))
+            .filter(sessions::Column::Id.eq(parse_int_id(id, "session.id")?))
             .exec(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -535,7 +559,7 @@ impl SessionRepository {
 
     pub async fn list_children(&self, parent_id: &str) -> Result<Vec<Session>, DatabaseError> {
         let rows = sessions::Entity::find()
-            .filter(sessions::Column::ParentId.eq(parent_id))
+            .filter(sessions::Column::ParentId.eq(parse_int_id(parent_id, "session.parent_id")?))
             .order_by_desc(sessions::Column::CreatedAt)
             .all(&self.conn)
             .await
@@ -548,7 +572,7 @@ impl SessionRepository {
         tx: &DatabaseTransaction,
         session: &Session,
     ) -> Result<(), DatabaseError> {
-        sessions::Entity::insert(session_insert_model(session))
+        sessions::Entity::insert(session_insert_model(session)?)
             .on_conflict(
                 OnConflict::column(sessions::Column::Id)
                     .update_columns([
@@ -661,17 +685,22 @@ impl SessionRepository {
         message_id: &str,
         keep_ids: &HashSet<String>,
     ) -> Result<(), DatabaseError> {
+        let message_id_i64 = parse_int_id(message_id, "message.id")?;
+        let keep_ids_i64: HashSet<i64> = keep_ids
+            .iter()
+            .filter_map(|id| parse_int_id(id, "part.id").ok())
+            .collect();
         if keep_ids.is_empty() {
             parts::Entity::delete_many()
-                .filter(parts::Column::MessageId.eq(message_id))
+                .filter(parts::Column::MessageId.eq(message_id_i64))
                 .exec(tx)
                 .await
                 .map_err(map_query_err)?;
             return Ok(());
         }
 
-        let existing_ids: Vec<String> = parts::Entity::find()
-            .filter(parts::Column::MessageId.eq(message_id))
+        let existing_ids: Vec<i64> = parts::Entity::find()
+            .filter(parts::Column::MessageId.eq(message_id_i64))
             .select_only()
             .column(parts::Column::Id)
             .into_tuple()
@@ -679,9 +708,9 @@ impl SessionRepository {
             .await
             .map_err(map_query_err)?;
 
-        let stale: Vec<String> = existing_ids
+        let stale: Vec<i64> = existing_ids
             .into_iter()
-            .filter(|id| !keep_ids.contains(id))
+            .filter(|id| !keep_ids_i64.contains(id))
             .collect();
 
         for chunk in stale.chunks(500) {
@@ -701,8 +730,14 @@ impl SessionRepository {
         session_id: &str,
         keep_ids: &HashSet<String>,
     ) -> Result<(), DatabaseError> {
-        let existing_ids: Vec<String> = messages::Entity::find()
-            .filter(messages::Column::SessionId.eq(session_id))
+        let session_id_i64 = parse_int_id(session_id, "session.id")?;
+        let keep_ids_i64: HashSet<i64> = keep_ids
+            .iter()
+            .filter_map(|id| parse_int_id(id, "message.id").ok())
+            .collect();
+
+        let existing_ids: Vec<i64> = messages::Entity::find()
+            .filter(messages::Column::SessionId.eq(session_id_i64))
             .select_only()
             .column(messages::Column::Id)
             .into_tuple()
@@ -710,9 +745,9 @@ impl SessionRepository {
             .await
             .map_err(map_query_err)?;
 
-        let stale: Vec<String> = existing_ids
+        let stale: Vec<i64> = existing_ids
             .into_iter()
-            .filter(|id| !keep_ids.contains(id))
+            .filter(|id| !keep_ids_i64.contains(id))
             .collect();
 
         for chunk in stale.chunks(500) {
@@ -821,9 +856,9 @@ impl MessageRepository {
         session_id: &str,
     ) -> Result<Vec<SessionMessage>, DatabaseError> {
         let rows = messages::Entity::find()
-            .filter(messages::Column::SessionId.eq(session_id))
+            .filter(messages::Column::SessionId.eq(parse_int_id(session_id, "message.session_id")?))
             .order_by_asc(messages::Column::CreatedAt)
-            .order_by_asc(messages::Column::Pk)
+            .order_by_asc(messages::Column::Id)
             .all(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -833,7 +868,7 @@ impl MessageRepository {
 
     pub async fn count_for_session(&self, session_id: &str) -> Result<u64, DatabaseError> {
         messages::Entity::find()
-            .filter(messages::Column::SessionId.eq(session_id))
+            .filter(messages::Column::SessionId.eq(parse_int_id(session_id, "message.session_id")?))
             .count(&self.conn)
             .await
             .map_err(map_query_err)
@@ -846,34 +881,31 @@ impl MessageRepository {
         offset: i64,
     ) -> Result<Vec<MessageHeaderRow>, DatabaseError> {
         let (limit, offset) = normalize_limit_offset(limit, offset)?;
-        let rows: Vec<(
-            String,
-            String,
-            messages::MessageRoleModel,
-            i64,
-            Option<String>,
-        )> = messages::Entity::find()
-            .filter(messages::Column::SessionId.eq(session_id))
-            .select_only()
-            .column(messages::Column::Id)
-            .column(messages::Column::SessionId)
-            .column(messages::Column::Role)
-            .column(messages::Column::CreatedAt)
-            .column(messages::Column::Finish)
-            .order_by_asc(messages::Column::CreatedAt)
-            .order_by_asc(messages::Column::Pk)
-            .limit(limit)
-            .offset(offset)
-            .into_tuple()
-            .all(&self.conn)
-            .await
-            .map_err(map_query_err)?;
+        let rows: Vec<(i64, i64, messages::MessageRoleModel, i64, Option<String>)> =
+            messages::Entity::find()
+                .filter(
+                    messages::Column::SessionId.eq(parse_int_id(session_id, "message.session_id")?),
+                )
+                .select_only()
+                .column(messages::Column::Id)
+                .column(messages::Column::SessionId)
+                .column(messages::Column::Role)
+                .column(messages::Column::CreatedAt)
+                .column(messages::Column::Finish)
+                .order_by_asc(messages::Column::CreatedAt)
+                .order_by_asc(messages::Column::Id)
+                .limit(limit)
+                .offset(offset)
+                .into_tuple()
+                .all(&self.conn)
+                .await
+                .map_err(map_query_err)?;
 
         rows.into_iter()
             .map(|(id, session_id, role, created_at, finish)| {
                 Ok(MessageHeaderRow {
-                    id,
-                    session_id,
+                    id: id.to_string(),
+                    session_id: session_id.to_string(),
                     role: role_from_model(role),
                     created_at,
                     finish,
@@ -890,9 +922,9 @@ impl MessageRepository {
     ) -> Result<Vec<SessionMessage>, DatabaseError> {
         let (limit, offset) = normalize_limit_offset(limit, offset)?;
         let rows = messages::Entity::find()
-            .filter(messages::Column::SessionId.eq(session_id))
+            .filter(messages::Column::SessionId.eq(parse_int_id(session_id, "message.session_id")?))
             .order_by_asc(messages::Column::CreatedAt)
-            .order_by_asc(messages::Column::Pk)
+            .order_by_asc(messages::Column::Id)
             .limit(limit)
             .offset(offset)
             .all(&self.conn)
@@ -904,7 +936,7 @@ impl MessageRepository {
 
     pub async fn get(&self, id: &str) -> Result<Option<SessionMessage>, DatabaseError> {
         let row = messages::Entity::find()
-            .filter(messages::Column::Id.eq(id))
+            .filter(messages::Column::Id.eq(parse_int_id(id, "message.id")?))
             .one(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -913,7 +945,7 @@ impl MessageRepository {
 
     pub async fn delete(&self, id: &str) -> Result<(), DatabaseError> {
         messages::Entity::delete_many()
-            .filter(messages::Column::Id.eq(id))
+            .filter(messages::Column::Id.eq(parse_int_id(id, "message.id")?))
             .exec(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -922,7 +954,7 @@ impl MessageRepository {
 
     pub async fn delete_for_session(&self, session_id: &str) -> Result<(), DatabaseError> {
         messages::Entity::delete_many()
-            .filter(messages::Column::SessionId.eq(session_id))
+            .filter(messages::Column::SessionId.eq(parse_int_id(session_id, "message.session_id")?))
             .exec(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -951,7 +983,7 @@ impl TodoRepository {
 
     pub async fn list_for_session(&self, session_id: &str) -> Result<Vec<TodoItem>, DatabaseError> {
         let rows = todos::Entity::find()
-            .filter(todos::Column::SessionId.eq(session_id))
+            .filter(todos::Column::SessionId.eq(parse_int_id(session_id, "todo.session_id")?))
             .order_by_asc(todos::Column::Position)
             .all(&self.conn)
             .await
@@ -960,7 +992,7 @@ impl TodoRepository {
         Ok(rows
             .into_iter()
             .map(|row| TodoItem {
-                id: row.todo_id,
+                id: row.id.to_string(),
                 content: row.content,
                 status: row.status,
                 priority: row.priority,
@@ -971,7 +1003,7 @@ impl TodoRepository {
 
     pub async fn count_for_session(&self, session_id: &str) -> Result<u64, DatabaseError> {
         todos::Entity::find()
-            .filter(todos::Column::SessionId.eq(session_id))
+            .filter(todos::Column::SessionId.eq(parse_int_id(session_id, "todo.session_id")?))
             .count(&self.conn)
             .await
             .map_err(map_query_err)
@@ -985,9 +1017,9 @@ impl TodoRepository {
     ) -> Result<Vec<TodoItem>, DatabaseError> {
         let (limit, offset) = normalize_limit_offset(limit, offset)?;
         let rows = todos::Entity::find()
-            .filter(todos::Column::SessionId.eq(session_id))
+            .filter(todos::Column::SessionId.eq(parse_int_id(session_id, "todo.session_id")?))
             .order_by_asc(todos::Column::Position)
-            .order_by_asc(todos::Column::TodoId)
+            .order_by_asc(todos::Column::Id)
             .limit(limit)
             .offset(offset)
             .all(&self.conn)
@@ -997,7 +1029,7 @@ impl TodoRepository {
         Ok(rows
             .into_iter()
             .map(|row| TodoItem {
-                id: row.todo_id,
+                id: row.id.to_string(),
                 content: row.content,
                 status: row.status,
                 priority: row.priority,
@@ -1009,9 +1041,8 @@ impl TodoRepository {
     pub async fn upsert(&self, session_id: &str, todo: &TodoItem) -> Result<(), DatabaseError> {
         let now = Utc::now().timestamp_millis();
         let insert = todos::ActiveModel {
-            pk: Default::default(),
-            session_id: Set(session_id.to_string()),
-            todo_id: Set(todo.id.clone()),
+            id: Set(parse_int_id(&todo.id, "todo.id")?),
+            session_id: Set(parse_int_id(session_id, "todo.session_id")?),
             content: Set(todo.content.clone()),
             status: Set(todo.status.clone()),
             priority: Set(todo.priority.clone()),
@@ -1022,7 +1053,7 @@ impl TodoRepository {
 
         todos::Entity::insert(insert)
             .on_conflict(
-                OnConflict::columns([todos::Column::SessionId, todos::Column::TodoId])
+                OnConflict::column(todos::Column::Id)
                     .update_columns([
                         todos::Column::Content,
                         todos::Column::Status,
@@ -1040,8 +1071,8 @@ impl TodoRepository {
 
     pub async fn delete(&self, session_id: &str, todo_id: &str) -> Result<(), DatabaseError> {
         todos::Entity::delete_many()
-            .filter(todos::Column::SessionId.eq(session_id))
-            .filter(todos::Column::TodoId.eq(todo_id))
+            .filter(todos::Column::SessionId.eq(parse_int_id(session_id, "todo.session_id")?))
+            .filter(todos::Column::Id.eq(parse_int_id(todo_id, "todo.id")?))
             .exec(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -1050,7 +1081,7 @@ impl TodoRepository {
 
     pub async fn delete_for_session(&self, session_id: &str) -> Result<(), DatabaseError> {
         todos::Entity::delete_many()
-            .filter(todos::Column::SessionId.eq(session_id))
+            .filter(todos::Column::SessionId.eq(parse_int_id(session_id, "todo.session_id")?))
             .exec(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -1078,13 +1109,15 @@ impl ShareRepository {
 
     pub async fn get(&self, session_id: &str) -> Result<Option<SessionShareRow>, DatabaseError> {
         let row = session_shares::Entity::find()
-            .filter(session_shares::Column::SessionId.eq(session_id))
+            .filter(
+                session_shares::Column::SessionId.eq(parse_int_id(session_id, "share.session_id")?),
+            )
             .one(&self.conn)
             .await
             .map_err(map_query_err)?;
         Ok(row.map(|r| SessionShareRow {
-            session_id: r.session_id,
-            id: r.id,
+            session_id: r.session_id.to_string(),
+            id: r.share_id,
             secret: r.secret,
             url: r.url,
         }))
@@ -1093,9 +1126,9 @@ impl ShareRepository {
     pub async fn upsert(&self, share: &SessionShareRow) -> Result<(), DatabaseError> {
         let now = Utc::now().timestamp_millis();
         let insert = session_shares::ActiveModel {
-            pk: Default::default(),
-            session_id: Set(share.session_id.clone()),
-            id: Set(share.id.clone()),
+            id: Default::default(),
+            session_id: Set(parse_int_id(&share.session_id, "share.session_id")?),
+            share_id: Set(share.id.clone()),
             secret: Set(share.secret.clone()),
             url: Set(share.url.clone()),
             created_at: Set(now),
@@ -1105,7 +1138,7 @@ impl ShareRepository {
             .on_conflict(
                 OnConflict::column(session_shares::Column::SessionId)
                     .update_columns([
-                        session_shares::Column::Id,
+                        session_shares::Column::ShareId,
                         session_shares::Column::Secret,
                         session_shares::Column::Url,
                     ])
@@ -1119,7 +1152,9 @@ impl ShareRepository {
 
     pub async fn delete(&self, session_id: &str) -> Result<(), DatabaseError> {
         session_shares::Entity::delete_many()
-            .filter(session_shares::Column::SessionId.eq(session_id))
+            .filter(
+                session_shares::Column::SessionId.eq(parse_int_id(session_id, "share.session_id")?),
+            )
             .exec(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -1174,15 +1209,15 @@ impl PartRepository {
 
     pub async fn get(&self, id: &str) -> Result<Option<PartRow>, DatabaseError> {
         let row = parts::Entity::find()
-            .filter(parts::Column::Id.eq(id))
+            .filter(parts::Column::Id.eq(parse_int_id(id, "part.id")?))
             .one(&self.conn)
             .await
             .map_err(map_query_err)?;
 
         Ok(row.map(|r| PartRow {
-            id: r.id,
-            message_id: r.message_id,
-            session_id: r.session_id,
+            id: r.id.to_string(),
+            message_id: r.message_id.to_string(),
+            session_id: r.session_id.to_string(),
             created_at: r.created_at,
             part_type: r.part_type,
             text: r.text,
@@ -1203,10 +1238,10 @@ impl PartRepository {
 
     pub async fn list_for_message(&self, message_id: &str) -> Result<Vec<PartRow>, DatabaseError> {
         let rows = parts::Entity::find()
-            .filter(parts::Column::MessageId.eq(message_id))
+            .filter(parts::Column::MessageId.eq(parse_int_id(message_id, "part.message_id")?))
             .order_by_asc(parts::Column::SortOrder)
             .order_by_asc(parts::Column::CreatedAt)
-            .order_by_asc(parts::Column::Pk)
+            .order_by_asc(parts::Column::Id)
             .all(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -1214,9 +1249,9 @@ impl PartRepository {
         Ok(rows
             .into_iter()
             .map(|r| PartRow {
-                id: r.id,
-                message_id: r.message_id,
-                session_id: r.session_id,
+                id: r.id.to_string(),
+                message_id: r.message_id.to_string(),
+                session_id: r.session_id.to_string(),
                 created_at: r.created_at,
                 part_type: r.part_type,
                 text: r.text,
@@ -1238,7 +1273,7 @@ impl PartRepository {
 
     pub async fn count_for_message(&self, message_id: &str) -> Result<u64, DatabaseError> {
         parts::Entity::find()
-            .filter(parts::Column::MessageId.eq(message_id))
+            .filter(parts::Column::MessageId.eq(parse_int_id(message_id, "part.message_id")?))
             .count(&self.conn)
             .await
             .map_err(map_query_err)
@@ -1252,9 +1287,9 @@ impl PartRepository {
     ) -> Result<Vec<PartSummaryRow>, DatabaseError> {
         let (limit, offset) = normalize_limit_offset(limit, offset)?;
         let rows: Vec<(
-            String,
-            String,
-            String,
+            i64,
+            i64,
+            i64,
             i64,
             String,
             Option<String>,
@@ -1262,7 +1297,7 @@ impl PartRepository {
             Option<String>,
             i64,
         )> = parts::Entity::find()
-            .filter(parts::Column::MessageId.eq(message_id))
+            .filter(parts::Column::MessageId.eq(parse_int_id(message_id, "part.message_id")?))
             .select_only()
             .column(parts::Column::Id)
             .column(parts::Column::MessageId)
@@ -1275,7 +1310,7 @@ impl PartRepository {
             .column(parts::Column::SortOrder)
             .order_by_asc(parts::Column::SortOrder)
             .order_by_asc(parts::Column::CreatedAt)
-            .order_by_asc(parts::Column::Pk)
+            .order_by_asc(parts::Column::Id)
             .limit(limit)
             .offset(offset)
             .into_tuple()
@@ -1297,9 +1332,9 @@ impl PartRepository {
                     tool_status,
                     sort_order,
                 )| PartSummaryRow {
-                    id,
-                    message_id,
-                    session_id,
+                    id: id.to_string(),
+                    message_id: message_id.to_string(),
+                    session_id: session_id.to_string(),
                     created_at,
                     part_type,
                     tool_name,
@@ -1319,10 +1354,10 @@ impl PartRepository {
     ) -> Result<Vec<PartRow>, DatabaseError> {
         let (limit, offset) = normalize_limit_offset(limit, offset)?;
         let rows = parts::Entity::find()
-            .filter(parts::Column::MessageId.eq(message_id))
+            .filter(parts::Column::MessageId.eq(parse_int_id(message_id, "part.message_id")?))
             .order_by_asc(parts::Column::SortOrder)
             .order_by_asc(parts::Column::CreatedAt)
-            .order_by_asc(parts::Column::Pk)
+            .order_by_asc(parts::Column::Id)
             .limit(limit)
             .offset(offset)
             .all(&self.conn)
@@ -1332,9 +1367,9 @@ impl PartRepository {
         Ok(rows
             .into_iter()
             .map(|r| PartRow {
-                id: r.id,
-                message_id: r.message_id,
-                session_id: r.session_id,
+                id: r.id.to_string(),
+                message_id: r.message_id.to_string(),
+                session_id: r.session_id.to_string(),
                 created_at: r.created_at,
                 part_type: r.part_type,
                 text: r.text,
@@ -1356,10 +1391,10 @@ impl PartRepository {
 
     pub async fn list_for_session(&self, session_id: &str) -> Result<Vec<PartRow>, DatabaseError> {
         let rows = parts::Entity::find()
-            .filter(parts::Column::SessionId.eq(session_id))
+            .filter(parts::Column::SessionId.eq(parse_int_id(session_id, "part.session_id")?))
             .order_by_asc(parts::Column::SortOrder)
             .order_by_asc(parts::Column::CreatedAt)
-            .order_by_asc(parts::Column::Pk)
+            .order_by_asc(parts::Column::Id)
             .all(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -1367,9 +1402,9 @@ impl PartRepository {
         Ok(rows
             .into_iter()
             .map(|r| PartRow {
-                id: r.id,
-                message_id: r.message_id,
-                session_id: r.session_id,
+                id: r.id.to_string(),
+                message_id: r.message_id.to_string(),
+                session_id: r.session_id.to_string(),
                 created_at: r.created_at,
                 part_type: r.part_type,
                 text: r.text,
@@ -1391,7 +1426,7 @@ impl PartRepository {
 
     pub async fn count_for_session(&self, session_id: &str) -> Result<u64, DatabaseError> {
         parts::Entity::find()
-            .filter(parts::Column::SessionId.eq(session_id))
+            .filter(parts::Column::SessionId.eq(parse_int_id(session_id, "part.session_id")?))
             .count(&self.conn)
             .await
             .map_err(map_query_err)
@@ -1405,10 +1440,10 @@ impl PartRepository {
     ) -> Result<Vec<PartRow>, DatabaseError> {
         let (limit, offset) = normalize_limit_offset(limit, offset)?;
         let rows = parts::Entity::find()
-            .filter(parts::Column::SessionId.eq(session_id))
+            .filter(parts::Column::SessionId.eq(parse_int_id(session_id, "part.session_id")?))
             .order_by_asc(parts::Column::SortOrder)
             .order_by_asc(parts::Column::CreatedAt)
-            .order_by_asc(parts::Column::Pk)
+            .order_by_asc(parts::Column::Id)
             .limit(limit)
             .offset(offset)
             .all(&self.conn)
@@ -1418,9 +1453,9 @@ impl PartRepository {
         Ok(rows
             .into_iter()
             .map(|r| PartRow {
-                id: r.id,
-                message_id: r.message_id,
-                session_id: r.session_id,
+                id: r.id.to_string(),
+                message_id: r.message_id.to_string(),
+                session_id: r.session_id.to_string(),
                 created_at: r.created_at,
                 part_type: r.part_type,
                 text: r.text,
@@ -1442,9 +1477,9 @@ impl PartRepository {
 
     pub async fn upsert(&self, part: &PartRow) -> Result<(), DatabaseError> {
         let insert = parts::ActiveModel {
-            id: Set(part.id.clone()),
-            message_id: Set(part.message_id.clone()),
-            session_id: Set(part.session_id.clone()),
+            id: Set(parse_int_id(&part.id, "part.id")?),
+            message_id: Set(parse_int_id(&part.message_id, "part.message_id")?),
+            session_id: Set(parse_int_id(&part.session_id, "part.session_id")?),
             created_at: Set(part.created_at),
             part_type: Set(part.part_type.clone()),
             text: Set(part.text.clone()),
@@ -1496,7 +1531,7 @@ impl PartRepository {
 
     pub async fn delete(&self, id: &str) -> Result<(), DatabaseError> {
         parts::Entity::delete_many()
-            .filter(parts::Column::Id.eq(id))
+            .filter(parts::Column::Id.eq(parse_int_id(id, "part.id")?))
             .exec(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -1505,7 +1540,7 @@ impl PartRepository {
 
     pub async fn delete_for_message(&self, message_id: &str) -> Result<(), DatabaseError> {
         parts::Entity::delete_many()
-            .filter(parts::Column::MessageId.eq(message_id))
+            .filter(parts::Column::MessageId.eq(parse_int_id(message_id, "part.message_id")?))
             .exec(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -1514,7 +1549,7 @@ impl PartRepository {
 
     pub async fn delete_for_session(&self, session_id: &str) -> Result<(), DatabaseError> {
         parts::Entity::delete_many()
-            .filter(parts::Column::SessionId.eq(session_id))
+            .filter(parts::Column::SessionId.eq(parse_int_id(session_id, "part.session_id")?))
             .exec(&self.conn)
             .await
             .map_err(map_query_err)?;
@@ -1534,8 +1569,9 @@ mod tests {
     use std::collections::HashMap;
 
     fn make_session(id: &str) -> Session {
+        let id = parse_int_id(id, "test.session.id").unwrap().to_string();
         Session {
-            id: id.to_string(),
+            id: id.clone(),
             directory: "/tmp/test".to_string(),
             parent_id: None,
             title: format!("Session {}", id),
@@ -1554,9 +1590,13 @@ mod tests {
     }
 
     fn make_message(id: &str, session_id: &str, role: Role) -> SessionMessage {
+        let id = parse_int_id(id, "test.message.id").unwrap().to_string();
+        let session_id = parse_int_id(session_id, "test.message.session_id")
+            .unwrap()
+            .to_string();
         SessionMessage {
-            id: id.to_string(),
-            session_id: session_id.to_string(),
+            id,
+            session_id,
             role,
             parts: vec![],
             created_at: Utc::now(),
@@ -1651,12 +1691,12 @@ mod tests {
 
         let loaded = session_repo.get("s1").await.unwrap();
         assert!(loaded.is_some());
-        assert_eq!(loaded.unwrap().title, "Session s1");
+        assert_eq!(loaded.unwrap().title, "Session 1");
 
         let loaded_msgs = message_repo.list_for_session("s1").await.unwrap();
         assert_eq!(loaded_msgs.len(), 2);
-        assert_eq!(loaded_msgs[0].id, "m1");
-        assert_eq!(loaded_msgs[1].id, "m2");
+        assert_eq!(loaded_msgs[0].id, "1");
+        assert_eq!(loaded_msgs[1].id, "2");
     }
 
     #[tokio::test]
@@ -1687,10 +1727,10 @@ mod tests {
 
         let remaining = message_repo.list_for_session("s1").await.unwrap();
         assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].id, "m1");
+        assert_eq!(remaining[0].id, "1");
 
-        assert!(message_repo.get("m2").await.unwrap().is_none());
-        assert!(message_repo.get("m3").await.unwrap().is_none());
+        assert!(message_repo.get("2").await.unwrap().is_none());
+        assert!(message_repo.get("3").await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -1723,8 +1763,8 @@ mod tests {
 
         let remaining = message_repo.list_for_session("s1").await.unwrap();
         assert_eq!(remaining.len(), 1000);
-        assert!(message_repo.get("m1099").await.unwrap().is_none());
-        assert!(message_repo.get("m0").await.unwrap().is_some());
+        assert!(message_repo.get("1099").await.unwrap().is_none());
+        assert!(message_repo.get("0").await.unwrap().is_some());
     }
 
     #[tokio::test]
@@ -1792,13 +1832,13 @@ mod tests {
         let first_two = session_repo.list_page(None, 2, 0).await.unwrap();
         assert_eq!(
             first_two.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
-            vec!["s5", "s4"]
+            vec!["5", "4"]
         );
 
         let middle_two = session_repo.list_page(None, 2, 2).await.unwrap();
         assert_eq!(
             middle_two.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
-            vec!["s3", "s2"]
+            vec!["3", "2"]
         );
 
         let dir_sessions = session_repo
@@ -1810,7 +1850,7 @@ mod tests {
                 .iter()
                 .map(|s| s.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["s4", "s3", "s2", "s1"]
+            vec!["4", "3", "2", "1"]
         );
     }
 
@@ -1837,7 +1877,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             page.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
-            vec!["m3", "m4"]
+            vec!["3", "4"]
         );
     }
 
@@ -1901,7 +1941,7 @@ mod tests {
             2,
             "original messages should survive the failed tx"
         );
-        assert_eq!(loaded_msgs[0].id, "m1");
-        assert_eq!(loaded_msgs[1].id, "m2");
+        assert_eq!(loaded_msgs[0].id, "1");
+        assert_eq!(loaded_msgs[1].id, "2");
     }
 }

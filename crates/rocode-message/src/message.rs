@@ -290,7 +290,7 @@ mod tests {
         assert_eq!(message.role, Role::User);
         assert_eq!(message.get_text(), "hello");
         assert_eq!(message.parts.len(), 1);
-        assert!(message.parts[0].id.starts_with("prt_"));
+        assert!(message.parts[0].id.parse::<i64>().is_ok());
     }
 
     #[test]

@@ -89,6 +89,30 @@ impl PermissionKind {
         }
     }
 
+    /// Canonical permission kind for a tool invocation name.
+    ///
+    /// - edit-family tools (`write`, `edit`, `multiedit`, `apply_patch`) map to `edit`
+    /// - list aliases (`ls`, `list`, ...) map to `list`
+    /// - all other built-ins map to their canonical built-in id
+    /// - unknown names fall back to `from_name`
+    pub fn from_tool_name(value: impl AsRef<str>) -> Self {
+        match BuiltinToolName::parse(value.as_ref()) {
+            Some(
+                BuiltinToolName::Write
+                | BuiltinToolName::Edit
+                | BuiltinToolName::MultiEdit
+                | BuiltinToolName::ApplyPatch,
+            ) => Self::Tool(BuiltinToolName::Edit),
+            Some(BuiltinToolName::Ls) => Self::List,
+            Some(tool) => Self::Tool(tool),
+            None => Self::from_name(value),
+        }
+    }
+
+    pub fn from_tool(tool: BuiltinToolName) -> Self {
+        Self::from_tool_name(tool.as_str())
+    }
+
     pub fn label(&self) -> Cow<'static, str> {
         match self {
             Self::ExternalDirectory => Cow::Borrowed("External directory access"),
@@ -205,7 +229,7 @@ impl From<String> for PermissionKind {
 
 impl From<BuiltinToolName> for PermissionKind {
     fn from(value: BuiltinToolName) -> Self {
-        Self::Tool(value)
+        Self::from_tool(value)
     }
 }
 
@@ -246,6 +270,32 @@ impl PermissionMatcher {
     pub fn matches_name(&self, permission_name: &str) -> bool {
         wildcard_match(permission_name, self.as_str())
     }
+}
+
+/// Canonicalize a tool invocation name to a stable identifier for allowlist checks.
+pub fn canonicalize_tool_name(value: impl AsRef<str>) -> String {
+    let raw = value.as_ref().trim();
+    if raw.is_empty() {
+        return String::new();
+    }
+    if let Some(tool) = BuiltinToolName::parse(raw) {
+        return tool.as_str().to_string();
+    }
+    raw.to_ascii_lowercase().replace('-', "_")
+}
+
+/// Returns true when `tool_name` is allowed by `allowlist`.
+///
+/// Empty allowlist means no filtering.
+pub fn allowlist_allows_tool(tool_name: &str, allowlist: &[String]) -> bool {
+    if allowlist.is_empty() {
+        return true;
+    }
+    let requested = canonicalize_tool_name(tool_name);
+    allowlist
+        .iter()
+        .map(canonicalize_tool_name)
+        .any(|allowed| !allowed.is_empty() && allowed == requested)
 }
 
 impl std::fmt::Display for PermissionMatcher {
@@ -348,6 +398,86 @@ pub struct SessionPermissionRuleset {
 
 impl SessionPermissionRuleset {}
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct PermissionMemoryEntry {
+    pub permission: PermissionMatcher,
+    pub pattern: String,
+}
+
+impl PermissionMemoryEntry {
+    pub fn new(permission: impl Into<PermissionMatcher>, pattern: impl Into<String>) -> Self {
+        Self {
+            permission: permission.into(),
+            pattern: pattern.into(),
+        }
+    }
+
+    fn matches(&self, permission: &PermissionKind, pattern: &str) -> bool {
+        self.permission.matches_name(permission.as_str()) && wildcard_match(pattern, &self.pattern)
+    }
+}
+
+/// Session-scoped remembered approvals from "allow always" style decisions.
+///
+/// This replaces ad-hoc `"{permission}:{pattern}"` string concatenation.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct PermissionMemory {
+    #[serde(default)]
+    grants: Vec<PermissionMemoryEntry>,
+}
+
+impl PermissionMemory {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn grants(&self) -> &[PermissionMemoryEntry] {
+        &self.grants
+    }
+
+    pub fn grant_always(&mut self, permission: impl Into<PermissionKind>, patterns: &[String]) {
+        let permission = PermissionMatcher::from_kind(permission.into());
+        if patterns.is_empty() {
+            self.grants
+                .push(PermissionMemoryEntry::new(permission, "*"));
+            return;
+        }
+        for pattern in patterns {
+            self.grants.push(PermissionMemoryEntry::new(
+                permission.clone(),
+                pattern.clone(),
+            ));
+        }
+    }
+
+    pub fn grant_request(&mut self, request: &PermissionRequest) {
+        self.grant_always(request.permission.clone(), &request.patterns);
+    }
+
+    pub fn is_granted(&self, permission: impl Into<PermissionKind>, patterns: &[String]) -> bool {
+        let permission = permission.into();
+        if self
+            .grants
+            .iter()
+            .any(|entry| entry.matches(&permission, "*"))
+        {
+            return true;
+        }
+        if patterns.is_empty() {
+            return false;
+        }
+        patterns.iter().all(|pattern| {
+            self.grants
+                .iter()
+                .any(|entry| entry.matches(&permission, pattern))
+        })
+    }
+
+    pub fn is_request_granted(&self, request: &PermissionRequest) -> bool {
+        self.is_granted(request.permission.clone(), &request.patterns)
+    }
+}
+
 // ============================================================================
 // Wire models shared by server/cli/tui/tool
 // ============================================================================
@@ -412,6 +542,22 @@ impl PermissionRequest {
             metadata: HashMap::new(),
             always: Vec::new(),
         }
+    }
+
+    pub fn for_kind(kind: PermissionKind) -> Self {
+        Self::new(kind)
+    }
+
+    pub fn for_tool(tool: BuiltinToolName) -> Self {
+        Self::new(PermissionKind::from_tool(tool))
+    }
+
+    pub fn for_tool_name(tool_name: impl AsRef<str>) -> Self {
+        Self::new(PermissionKind::from_tool_name(tool_name))
+    }
+
+    pub fn external_directory() -> Self {
+        Self::new(PermissionKind::ExternalDirectory)
     }
 
     pub fn metadata_view(&self) -> PermissionRequestMetadata {
@@ -496,4 +642,60 @@ pub struct PermissionReplyRequest {
 pub struct PendingPermissionSummary {
     pub permission_id: String,
     pub info: serde_json::Value,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn permission_kind_from_tool_name_normalizes_aliases() {
+        assert_eq!(
+            PermissionKind::from_tool_name("patch"),
+            PermissionKind::Tool(BuiltinToolName::Edit)
+        );
+        assert_eq!(
+            PermissionKind::from_tool_name("LIST_DIRECTORY"),
+            PermissionKind::List
+        );
+        assert_eq!(
+            PermissionKind::from_tool_name("shell"),
+            PermissionKind::Tool(BuiltinToolName::Bash)
+        );
+    }
+
+    #[test]
+    fn allowlist_allows_tool_handles_alias_and_case() {
+        assert!(allowlist_allows_tool("RiPgReP", &["grep".to_string()]));
+        assert!(allowlist_allows_tool(
+            "taskFlow",
+            &["task_flow".to_string()]
+        ));
+        assert!(!allowlist_allows_tool("write", &["read".to_string()]));
+    }
+
+    #[test]
+    fn permission_memory_grants_and_matches_requests() {
+        let mut memory = PermissionMemory::new();
+        memory.grant_always(
+            PermissionKind::from_tool_name("bash"),
+            &["cargo *".to_string()],
+        );
+
+        let granted = PermissionRequest::for_tool(BuiltinToolName::Bash)
+            .with_pattern("cargo test -p rocode-permission");
+        assert!(memory.is_request_granted(&granted));
+
+        let denied = PermissionRequest::for_tool(BuiltinToolName::Bash).with_pattern("rm -rf /");
+        assert!(!memory.is_request_granted(&denied));
+    }
+
+    #[test]
+    fn permission_memory_blanket_grant_works_for_patternless_checks() {
+        let mut memory = PermissionMemory::new();
+        memory.grant_always(PermissionKind::from_tool_name("edit"), &[]);
+
+        assert!(memory.is_granted(PermissionKind::from_tool_name("write"), &["a.rs".into()]));
+        assert!(memory.is_granted(PermissionKind::from_tool_name("edit"), &[]));
+    }
 }
