@@ -21,7 +21,7 @@ pub use config::*;
 pub use file::*;
 pub use global::*;
 pub use mcp::*;
-pub use permission::*;
+pub(crate) use permission::*;
 pub use project::*;
 pub use provider::*;
 pub use pty::*;

@@ -33,81 +33,14 @@ pub enum PermissionReply {
     Reject,
 }
 
-impl PermissionReply {
-    pub const fn as_str(self) -> &'static str {
-        match self {
+impl std::fmt::Display for PermissionReply {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
             Self::Once => "once",
             Self::Always => "always",
             Self::Reject => "reject",
-        }
+        })
     }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "once" | "approve" | "allow" => Some(Self::Once),
-            "always" => Some(Self::Always),
-            "reject" => Some(Self::Reject),
-            _ => None,
-        }
-    }
-
-    pub const fn allows_execution(self) -> bool {
-        matches!(self, Self::Once | Self::Always)
-    }
-}
-
-impl std::fmt::Display for PermissionReply {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// Decision status used by permission hooks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum PermissionHookStatus {
-    Ask,
-    Deny,
-    Allow,
-}
-
-impl PermissionHookStatus {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Ask => "ask",
-            Self::Deny => "deny",
-            Self::Allow => "allow",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "ask" => Some(Self::Ask),
-            "deny" => Some(Self::Deny),
-            "allow" => Some(Self::Allow),
-            _ => None,
-        }
-    }
-}
-
-impl std::fmt::Display for PermissionHookStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// Coarse static category for permission routing and UI rendering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PermissionCategory {
-    FilesRead,
-    FilesWrite,
-    CommandExecution,
-    Network,
-    Task,
-    SessionControl,
-    Safety,
-    Other,
 }
 
 /// Canonical permission kind.
@@ -153,49 +86,6 @@ impl PermissionKind {
             Self::DoomLoop => "doom_loop",
             Self::Tool(tool) => tool.as_str(),
             Self::Custom(raw) => raw.as_str(),
-        }
-    }
-
-    pub fn category(&self) -> PermissionCategory {
-        match self {
-            Self::ExternalDirectory | Self::List => PermissionCategory::FilesRead,
-            Self::DoomLoop => PermissionCategory::Safety,
-            Self::Tool(tool) => match tool {
-                BuiltinToolName::Read
-                | BuiltinToolName::Glob
-                | BuiltinToolName::Grep
-                | BuiltinToolName::CodeSearch
-                | BuiltinToolName::AstGrepSearch
-                | BuiltinToolName::Ls
-                | BuiltinToolName::ContextDocs
-                | BuiltinToolName::RepoHistory
-                | BuiltinToolName::TodoRead => PermissionCategory::FilesRead,
-                BuiltinToolName::Write
-                | BuiltinToolName::Edit
-                | BuiltinToolName::MultiEdit
-                | BuiltinToolName::ApplyPatch
-                | BuiltinToolName::AstGrepReplace
-                | BuiltinToolName::TodoWrite
-                | BuiltinToolName::NotebookEdit => PermissionCategory::FilesWrite,
-                BuiltinToolName::Bash | BuiltinToolName::ShellSession => {
-                    PermissionCategory::CommandExecution
-                }
-                BuiltinToolName::WebFetch
-                | BuiltinToolName::WebSearch
-                | BuiltinToolName::GitHubResearch
-                | BuiltinToolName::BrowserSession => PermissionCategory::Network,
-                BuiltinToolName::Task | BuiltinToolName::TaskFlow | BuiltinToolName::Batch => {
-                    PermissionCategory::Task
-                }
-                BuiltinToolName::Question
-                | BuiltinToolName::PlanEnter
-                | BuiltinToolName::PlanExit
-                | BuiltinToolName::Skill
-                | BuiltinToolName::Lsp
-                | BuiltinToolName::MediaInspect
-                | BuiltinToolName::Invalid => PermissionCategory::SessionControl,
-            },
-            Self::Custom(_) => PermissionCategory::Other,
         }
     }
 
@@ -273,15 +163,6 @@ impl PermissionKind {
             },
             Self::Custom(_) => "[*]",
         }
-    }
-
-    pub fn is_high_risk(&self) -> bool {
-        matches!(
-            self.category(),
-            PermissionCategory::FilesWrite
-                | PermissionCategory::CommandExecution
-                | PermissionCategory::Safety
-        )
     }
 }
 
@@ -364,10 +245,6 @@ impl PermissionMatcher {
 
     pub fn matches_name(&self, permission_name: &str) -> bool {
         wildcard_match(permission_name, self.as_str())
-    }
-
-    pub fn matches_kind(&self, kind: &PermissionKind) -> bool {
-        self.matches_name(kind.as_str())
     }
 }
 
@@ -469,32 +346,7 @@ pub struct SessionPermissionRuleset {
     pub mode: Option<SessionPermissionMode>,
 }
 
-impl SessionPermissionRuleset {
-    pub fn allows(&self, kind: &PermissionKind) -> bool {
-        self.allow
-            .iter()
-            .any(|pattern| wildcard_match(kind.as_str(), pattern))
-    }
-
-    pub fn denies(&self, kind: &PermissionKind) -> bool {
-        self.deny
-            .iter()
-            .any(|pattern| wildcard_match(kind.as_str(), pattern))
-    }
-
-    /// Session-level decision from allow/deny memory.
-    ///
-    /// Return `None` when no explicit rule matched.
-    pub fn decision(&self, kind: &PermissionKind) -> Option<PermissionHookStatus> {
-        if self.denies(kind) {
-            return Some(PermissionHookStatus::Deny);
-        }
-        if self.allows(kind) {
-            return Some(PermissionHookStatus::Allow);
-        }
-        None
-    }
-}
+impl SessionPermissionRuleset {}
 
 // ============================================================================
 // Wire models shared by server/cli/tui/tool
@@ -522,14 +374,14 @@ pub struct PermissionRequestMetadata {
 }
 
 impl PermissionRequestMetadata {
-    pub fn from_map(metadata: &HashMap<String, serde_json::Value>) -> Self {
+    fn from_map(metadata: &HashMap<String, serde_json::Value>) -> Self {
         serde_json::to_value(metadata)
             .ok()
             .and_then(|value| serde_json::from_value::<Self>(value).ok())
             .unwrap_or_default()
     }
 
-    pub fn primary_hint(&self) -> Option<String> {
+    fn primary_hint(&self) -> Option<String> {
         self.description
             .clone()
             .or(self.question.clone())
@@ -562,15 +414,11 @@ impl PermissionRequest {
         }
     }
 
-    pub fn permission_name(&self) -> &str {
-        self.permission.as_str()
-    }
-
     pub fn metadata_view(&self) -> PermissionRequestMetadata {
         PermissionRequestMetadata::from_map(&self.metadata)
     }
 
-    pub fn display_message(&self) -> String {
+    fn display_message(&self) -> String {
         if let Some(hint) = self.metadata_view().primary_hint() {
             return hint;
         }

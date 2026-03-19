@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 use rocode_core::contracts::tools::BuiltinToolName;
 
@@ -40,62 +39,11 @@ impl PermissionRule {
 
 pub type PermissionRuleset = Vec<PermissionRule>;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ConfigValue {
-    Action(PermissionAction),
-    Patterns(HashMap<String, PermissionAction>),
-}
-
-pub type ConfigPermission = HashMap<String, ConfigValue>;
-
-fn expand(pattern: &str) -> String {
-    if let Some(home) = dirs::home_dir() {
-        if pattern.starts_with("~/") {
-            return format!("{}{}", home.display(), &pattern[1..]);
-        }
-        if pattern == "~" {
-            return home.display().to_string();
-        }
-        if pattern.starts_with("$HOME/") {
-            return format!("{}{}", home.display(), &pattern[5..]);
-        }
-    }
-    pattern.to_string()
-}
-
-pub fn from_config(permission: &ConfigPermission) -> PermissionRuleset {
-    let mut ruleset: PermissionRuleset = Vec::new();
-
-    for (key, value) in permission.iter() {
-        match value {
-            ConfigValue::Action(action) => {
-                ruleset.push(PermissionRule::new(
-                    PermissionMatcher::new(key.clone()),
-                    "*",
-                    *action,
-                ));
-            }
-            ConfigValue::Patterns(patterns) => {
-                for (pattern, action) in patterns.iter() {
-                    ruleset.push(PermissionRule::new(
-                        PermissionMatcher::new(key.clone()),
-                        expand(pattern),
-                        *action,
-                    ));
-                }
-            }
-        }
-    }
-
-    ruleset
-}
-
-pub fn merge(rulesets: &[PermissionRuleset]) -> PermissionRuleset {
+fn merge(rulesets: &[PermissionRuleset]) -> PermissionRuleset {
     rulesets.iter().flat_map(|r| r.clone()).collect()
 }
 
-pub fn evaluate(permission: &str, pattern: &str, rulesets: &[PermissionRuleset]) -> PermissionRule {
+fn evaluate(permission: &str, pattern: &str, rulesets: &[PermissionRuleset]) -> PermissionRule {
     let merged = merge(rulesets);
 
     let matched = merged.iter().rev().find(|rule| {
@@ -147,31 +95,7 @@ pub fn evaluate_tool_permission(
     evaluate(permission.as_str(), "*", rulesets).action
 }
 
-pub fn disabled(
-    tools: &[String],
-    ruleset: &PermissionRuleset,
-) -> std::collections::HashSet<String> {
-    let mut result = std::collections::HashSet::new();
-
-    for tool in tools {
-        let permission = tool_to_permission(tool);
-
-        let rule = ruleset
-            .iter()
-            .rev()
-            .find(|r| wildcard_match(permission.as_str(), r.permission.as_str()));
-
-        if let Some(rule) = rule {
-            if rule.pattern == "*" && rule.action == PermissionAction::Deny {
-                result.insert(tool.clone());
-            }
-        }
-    }
-
-    result
-}
-
-pub fn default_ruleset() -> PermissionRuleset {
+fn default_ruleset() -> PermissionRuleset {
     vec![
         PermissionRule::new(PermissionMatcher::any(), "*", PermissionAction::Allow),
         PermissionRule::new(PermissionKind::DoomLoop, "*", PermissionAction::Ask),
@@ -238,47 +162,12 @@ mod tests {
     use rocode_core::contracts::tools::BuiltinToolName;
 
     #[test]
-    fn test_from_config() {
-        let mut config = HashMap::new();
-        config.insert(
-            BuiltinToolName::Bash.as_str().to_string(),
-            ConfigValue::Action(PermissionAction::Allow),
-        );
-
-        let ruleset = from_config(&config);
-        assert_eq!(ruleset.len(), 1);
-        assert_eq!(
-            ruleset[0].permission.as_str(),
-            BuiltinToolName::Bash.as_str()
-        );
-        assert_eq!(ruleset[0].action, PermissionAction::Allow);
-    }
-
-    #[test]
     fn test_wildcard_match() {
         assert!(wildcard_match("foo", "*"));
         assert!(wildcard_match("foo/bar", "foo/*"));
         assert!(wildcard_match("foo/bar/baz", "*/baz"));
         assert!(wildcard_match("foo/bar/baz", "*bar*"));
         assert!(!wildcard_match("foo", "bar"));
-    }
-
-    #[test]
-    fn test_disabled() {
-        let ruleset = vec![PermissionRule::new(
-            BuiltinToolName::Bash,
-            "*",
-            PermissionAction::Deny,
-        )];
-
-        let tools = vec![
-            BuiltinToolName::Bash.as_str().to_string(),
-            BuiltinToolName::Read.as_str().to_string(),
-        ];
-        let disabled_tools = disabled(&tools, &ruleset);
-
-        assert!(disabled_tools.contains(BuiltinToolName::Bash.as_str()));
-        assert!(!disabled_tools.contains(BuiltinToolName::Read.as_str()));
     }
 
     #[test]
