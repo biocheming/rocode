@@ -8,6 +8,7 @@ use std::time::SystemTime;
 use walkdir::WalkDir;
 
 use crate::{Metadata, Tool, ToolContext, ToolError, ToolResult};
+use rocode_core::contracts::tools::BuiltinToolName;
 
 const MAX_LINE_LENGTH: usize = 2000;
 
@@ -112,7 +113,7 @@ impl Tool for GrepTool {
 
         if ctx.is_external_path(&base_dir_str) {
             ctx.ask_permission(
-                crate::PermissionRequest::new("external_directory")
+                crate::PermissionRequest::external_directory()
                     .with_pattern(format!("{}/*", base_dir_str))
                     .with_metadata("path", serde_json::json!(&base_dir_str)),
             )
@@ -120,7 +121,7 @@ impl Tool for GrepTool {
         }
 
         ctx.ask_permission(
-            crate::PermissionRequest::new("grep")
+            crate::PermissionRequest::for_tool(BuiltinToolName::Grep)
                 .with_pattern(&pattern)
                 .always_allow()
                 .with_metadata("path", serde_json::json!(&base_dir_str)),

@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use rocode_core::agent_task_registry::{global_task_registry, AgentTask, AgentTaskStatus};
+use rocode_core::contracts::tools::BuiltinToolName;
 
 use crate::task::TaskTool;
 use crate::todo::TodoWriteTool;
@@ -347,7 +348,7 @@ impl Tool for TaskFlowTool {
             serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
         validate_input(&input)?;
 
-        let mut permission = PermissionRequest::new("task_flow")
+        let mut permission = PermissionRequest::for_tool(BuiltinToolName::TaskFlow)
             .with_metadata("operation", serde_json::json!(input.operation.as_str()))
             .always_allow();
         if let Some(task_id) = input.task_id.as_ref() {

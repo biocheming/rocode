@@ -13,8 +13,8 @@ use std::collections::HashMap;
 
 use rocode_core::contracts::tools::BuiltinToolName;
 use rocode_permission::{
-    build_agent_ruleset, evaluate_tool_permission, PermissionAction, PermissionRule,
-    PermissionRuleset,
+    build_agent_ruleset, evaluate_tool_permission, PermissionAction, PermissionMatcher,
+    PermissionRule, PermissionRuleset,
 };
 
 pub use architecture_advisor::architecture_advisor;
@@ -284,7 +284,7 @@ impl AgentInfo {
             allowed_tools: Vec::new(),
             options: HashMap::new(),
             permission: vec![PermissionRule {
-                permission: "*".into(),
+                permission: PermissionMatcher::any(),
                 pattern: "*".to_string(),
                 action: PermissionAction::Deny,
             }],
@@ -310,7 +310,7 @@ impl AgentInfo {
             allowed_tools: Vec::new(),
             options: HashMap::new(),
             permission: vec![PermissionRule {
-                permission: "*".into(),
+                permission: PermissionMatcher::any(),
                 pattern: "*".to_string(),
                 action: PermissionAction::Deny,
             }],
@@ -336,7 +336,7 @@ impl AgentInfo {
             allowed_tools: Vec::new(),
             options: HashMap::new(),
             permission: vec![PermissionRule {
-                permission: "*".into(),
+                permission: PermissionMatcher::any(),
                 pattern: "*".to_string(),
                 action: PermissionAction::Deny,
             }],

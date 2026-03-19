@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use rocode_core::agent_task_registry::{global_task_registry, AgentTaskStatus};
+use rocode_core::contracts::tools::BuiltinToolName;
 
 use crate::{
     Metadata, PermissionRequest, TaskAgentInfo, TaskAgentModel, Tool, ToolContext, ToolError,
@@ -312,7 +313,7 @@ impl Tool for TaskTool {
 
         if !bypass_check {
             ctx.ask_permission(
-                PermissionRequest::new("task")
+                PermissionRequest::for_tool(BuiltinToolName::Task)
                     .with_pattern(&dispatch_label)
                     .with_metadata(
                         "description",

@@ -657,7 +657,7 @@ async fn authorize_cwd(cwd: &str, ctx: &ToolContext) -> Result<(), ToolError> {
         .map(|path| path.to_string_lossy().to_string())
         .unwrap_or_else(|| cwd.to_string());
     ctx.ask_permission(
-        PermissionRequest::new("external_directory")
+        PermissionRequest::external_directory()
             .with_pattern(format!("{}/*", parent))
             .with_metadata("filepath", serde_json::json!(cwd))
             .with_metadata("parentDir", serde_json::json!(parent)),

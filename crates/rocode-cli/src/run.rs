@@ -789,13 +789,13 @@ async fn handle_permission_from_sse(
             }
         };
 
-    let permission = info.input.permission.as_str().to_string();
+    let permission = info.input.permission.clone();
     let patterns = info.input.patterns.clone();
     let metadata = info.input.metadata.clone();
 
     {
         let memory = runtime.permission_memory.lock().await;
-        if memory.is_granted(&permission, &patterns) {
+        if memory.is_granted(permission.clone(), &patterns) {
             let _ = api_client
                 .reply_permission(
                     permission_id,
@@ -857,7 +857,7 @@ async fn handle_permission_from_sse(
         PermissionDecision::Allow => (PermissionReply::Once, Some("approved".to_string())),
         PermissionDecision::AllowAlways => {
             let mut memory = runtime.permission_memory.lock().await;
-            memory.grant_always(&permission, &patterns);
+            memory.grant_always(permission.clone(), &patterns);
             (PermissionReply::Always, Some("approved always".to_string()))
         }
         PermissionDecision::Deny => (PermissionReply::Reject, Some("rejected".to_string())),
