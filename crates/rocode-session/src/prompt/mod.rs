@@ -3586,7 +3586,7 @@ mod tests {
                 input: serde_json::json!({}),
                 status: crate::ToolCallStatus::Pending,
                 raw: Some("{".to_string()),
-                state: Some(crate::ToolState::Pending {
+                state: Some(rocode_message::ToolState::Pending {
                     input: serde_json::json!({}),
                     raw: "{".to_string(),
                 }),

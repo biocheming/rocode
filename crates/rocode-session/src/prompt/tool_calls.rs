@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 
 use crate::{PartType, Session, SessionMessage};
+use rocode_message::{ErrorTime as MessageErrorTime, ToolState as MessageToolState};
 
 use super::SessionPrompt;
 
@@ -59,7 +60,7 @@ impl SessionPrompt {
                         *part_status = next_status.clone();
                     }
                     if let Some(next_state) = tool_state.as_ref() {
-                        *state = Some(next_state.clone());
+                        *state = Some(Self::v2_tool_state_to_message(next_state));
                     }
                     found = true;
                     break;
@@ -79,11 +80,71 @@ impl SessionPrompt {
                 input: input.unwrap_or_else(|| serde_json::json!({})),
                 status: status.unwrap_or(crate::ToolCallStatus::Pending),
                 raw: raw_input,
-                state: tool_state,
+                state: tool_state
+                    .as_ref()
+                    .map(SessionPrompt::v2_tool_state_to_message),
             },
             created_at: chrono::Utc::now(),
             message_id: None,
         });
+    }
+
+    pub(super) fn v2_tool_state_to_message(state: &crate::ToolState) -> MessageToolState {
+        match state {
+            crate::ToolState::Pending { input, raw } => MessageToolState::Pending {
+                input: input.clone(),
+                raw: raw.clone(),
+            },
+            crate::ToolState::Running {
+                input,
+                title,
+                metadata,
+                time,
+            } => MessageToolState::Running {
+                input: input.clone(),
+                title: title.clone(),
+                metadata: metadata.clone(),
+                time: rocode_message::RunningTime { start: time.start },
+            },
+            crate::ToolState::Completed {
+                input,
+                output,
+                title,
+                metadata,
+                time,
+                attachments,
+            } => MessageToolState::Completed {
+                input: input.clone(),
+                output: output.clone(),
+                title: title.clone(),
+                metadata: metadata.clone(),
+                time: rocode_message::CompletedTime {
+                    start: time.start,
+                    end: time.end,
+                    compacted: time.compacted,
+                },
+                attachments: attachments.as_ref().map(|files| {
+                    files
+                        .iter()
+                        .filter_map(|file| serde_json::to_value(file).ok())
+                        .collect()
+                }),
+            },
+            crate::ToolState::Error {
+                input,
+                error,
+                metadata,
+                time,
+            } => MessageToolState::Error {
+                input: input.clone(),
+                error: error.clone(),
+                metadata: metadata.clone(),
+                time: MessageErrorTime {
+                    start: time.start,
+                    end: time.end,
+                },
+            },
+        }
     }
 
     pub(super) fn state_projection(
@@ -451,7 +512,7 @@ impl SessionPrompt {
         status: &crate::ToolCallStatus,
         input: &serde_json::Value,
         raw: Option<&str>,
-        state: Option<&crate::ToolState>,
+        state: Option<&MessageToolState>,
     ) -> Option<serde_json::Value> {
         tracing::info!(
             status = %format!("{:?}", status),
@@ -459,21 +520,21 @@ impl SessionPrompt {
             raw_len = %raw.map(|r| r.len()).unwrap_or(0),
             raw_preview = %raw.unwrap_or("None").chars().take(200).collect::<String>(),
             state_variant = %match state {
-                Some(crate::ToolState::Pending { .. }) => "Pending",
-                Some(crate::ToolState::Running { .. }) => "Running",
-                Some(crate::ToolState::Completed { .. }) => "Completed",
-                Some(crate::ToolState::Error { .. }) => "Error",
+                Some(MessageToolState::Pending { .. }) => "Pending",
+                Some(MessageToolState::Running { .. }) => "Running",
+                Some(MessageToolState::Completed { .. }) => "Completed",
+                Some(MessageToolState::Error { .. }) => "Error",
                 None => "None",
             },
             "[DIAG] tool_call_input_for_execution entry"
         );
         let (state_input, state_raw) = match state {
-            Some(crate::ToolState::Pending { input, raw }) => {
+            Some(MessageToolState::Pending { input, raw }) => {
                 (Some(input.clone()), Some(raw.as_str()))
             }
-            Some(crate::ToolState::Running { input, .. })
-            | Some(crate::ToolState::Completed { input, .. })
-            | Some(crate::ToolState::Error { input, .. }) => (Some(input.clone()), None),
+            Some(MessageToolState::Running { input, .. })
+            | Some(MessageToolState::Completed { input, .. })
+            | Some(MessageToolState::Error { input, .. }) => (Some(input.clone()), None),
             None => (None, None),
         };
 
@@ -623,11 +684,11 @@ impl SessionPrompt {
                     );
                     *input = sanitized_input.clone();
                     *status = crate::ToolCallStatus::Error;
-                    *state = Some(crate::ToolState::Error {
+                    *state = Some(MessageToolState::Error {
                         input: sanitized_input,
                         error: "Tool execution aborted".to_string(),
                         metadata: None,
-                        time: crate::ErrorTime {
+                        time: MessageErrorTime {
                             start: now,
                             end: now,
                         },
@@ -843,7 +904,7 @@ mod tests {
                 input: serde_json::Value::String("not-json".to_string()),
                 status: crate::ToolCallStatus::Pending,
                 raw: Some("not-json".to_string()),
-                state: Some(crate::ToolState::Pending {
+                state: Some(rocode_message::ToolState::Pending {
                     input: serde_json::json!({}),
                     raw: "not-json".to_string(),
                 }),
