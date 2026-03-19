@@ -343,7 +343,14 @@ impl SessionManager {
 
     /// Publish a session info event (Created/Updated/Deleted)
     fn publish_session_event(&self, def: &'static BusEventDef, session: &Session) {
-        if let Ok(json) = serde_json::to_value(session) {
+        if let Ok(mut json) = serde_json::to_value(session) {
+            if let Some(share_url) = json
+                .get("share")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+            {
+                json["share"] = serde_json::json!({ "url": share_url });
+            }
             self.publish_event(def, value_or_null(InfoEnvelope { info: json }));
         }
     }
