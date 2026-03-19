@@ -141,7 +141,10 @@ pub struct RuntimeStateStore {
 
 impl RuntimeStateStore {
     fn derive_pending_reason(state: &SessionRuntimeState) -> Option<PendingReason> {
-        match (state.pending_question.is_some(), state.pending_permission.is_some()) {
+        match (
+            state.pending_question.is_some(),
+            state.pending_permission.is_some(),
+        ) {
             (true, true) => Some(PendingReason::QuestionAndPermission),
             (true, false) => Some(PendingReason::Question),
             (false, true) => Some(PendingReason::Permission),
@@ -494,7 +497,10 @@ mod tests {
             .await;
         let state = store.get("ses_1").await.unwrap();
         assert_eq!(state.run_status, RunStatus::Pending);
-        assert_eq!(state.pending_reason, Some(PendingReason::QuestionAndPermission));
+        assert_eq!(
+            state.pending_reason,
+            Some(PendingReason::QuestionAndPermission)
+        );
 
         // Resolving question alone should NOT revert to Running
         // because permission is still pending.
@@ -512,12 +518,16 @@ mod tests {
     #[tokio::test]
     async fn mark_error_sets_error_status_and_clears_pending_state() {
         let store = RuntimeStateStore::new();
-        store.mark_running("ses_1", Some("msg_001".to_string())).await;
+        store
+            .mark_running("ses_1", Some("msg_001".to_string()))
+            .await;
         store
             .question_created("ses_1", "q_1", serde_json::json!([{"question": "ok?"}]))
             .await;
 
-        store.mark_error("ses_1", "provider timeout".to_string()).await;
+        store
+            .mark_error("ses_1", "provider timeout".to_string())
+            .await;
 
         let state = store.get("ses_1").await.unwrap();
         assert_eq!(state.run_status, RunStatus::Error);
