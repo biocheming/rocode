@@ -25,6 +25,10 @@ use rocode_command::output_blocks::{
     render_cli_block_rich, MessageBlock, MessagePhase, MessageRole as OutputMessageRole,
     OutputBlock, QueueItemBlock, SchedulerStageBlock, StatusBlock,
 };
+use rocode_command::terminal_presentation::{
+    render_terminal_stream_block_semantic, TerminalSemanticStreamRenderState,
+    TerminalStreamAccumulator,
+};
 use rocode_command::{CommandRegistry, ResolvedUiCommand, UiActionId};
 use rocode_config::loader::load_config;
 use rocode_config::Config;
@@ -229,6 +233,8 @@ struct CliExecutionRuntime {
     /// from the unified event surface but not rendered into the main transcript
     /// until the operator explicitly focuses one.
     child_session_transcripts: Arc<Mutex<HashMap<String, CliRetainedTranscript>>>,
+    stream_accumulators: Arc<Mutex<HashMap<String, TerminalStreamAccumulator>>>,
+    render_states: Arc<Mutex<HashMap<String, TerminalSemanticStreamRenderState>>>,
     /// Local CLI-only focus target. `None` means the root session remains visible.
     focused_session_id: Arc<Mutex<Option<String>>>,
     permission_memory: Arc<AsyncMutex<PermissionMemory>>,
@@ -546,12 +552,6 @@ fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style:
             if !is_root_session(&session_id) {
                 return;
             }
-            let status = OutputBlock::Status(StatusBlock::title(format!("⚙ {}", tool_name)));
-            if cli_is_root_focused(runtime) {
-                let _ = print_block(Some(runtime), status, style);
-            } else {
-                cli_cache_root_session_block(runtime, &status, style);
-            }
         }
         CliServerEvent::ToolCallCompleted {
             session_id,
@@ -591,6 +591,7 @@ fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style:
                 tracing::debug!(?id, payload = %block_payload, "failed to parse output_block");
                 return;
             };
+            cli_observe_terminal_stream_block(runtime, &session_id, id.as_deref(), &block);
             if matches!(block, OutputBlock::Reasoning(_))
                 && !runtime.show_thinking.load(Ordering::SeqCst)
             {
@@ -606,9 +607,10 @@ fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style:
             }
             cli_frontend_observe_block(&runtime.frontend_projection, &block);
             if !is_root_session(&session_id) {
-                cli_cache_child_session_block(runtime, &session_id, &block, style);
+                let rendered = cli_render_session_block(runtime, &session_id, &block, style);
+                cli_cache_child_session_rendered(runtime, &session_id, &rendered);
                 if focused_session_id.as_deref() == Some(session_id.as_str()) {
-                    let _ = print_block(Some(runtime), block, style);
+                    let _ = print_rendered(runtime.terminal_surface.as_deref(), &rendered);
                 }
                 return;
             }
@@ -633,15 +635,17 @@ fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style:
                         projection.active_collapsed = true;
                     }
                     cli_refresh_prompt(runtime);
-                    cli_cache_root_session_block(runtime, &block, style);
+                    let rendered = cli_render_session_block(runtime, "", &block, style);
+                    cli_cache_root_session_rendered(runtime, &rendered);
                     if cli_is_root_focused(runtime) {
-                        let _ = print_block(Some(runtime), block, style);
+                        let _ = print_rendered(runtime.terminal_surface.as_deref(), &rendered);
                     }
                 }
                 _ => {
-                    cli_cache_root_session_block(runtime, &block, style);
+                    let rendered = cli_render_session_block(runtime, "", &block, style);
+                    cli_cache_root_session_rendered(runtime, &rendered);
                     if cli_is_root_focused(runtime) {
-                        let _ = print_block(Some(runtime), block, style);
+                        let _ = print_rendered(runtime.terminal_surface.as_deref(), &rendered);
                     }
                 }
             }
@@ -1100,6 +1104,19 @@ fn print_block(
     )
 }
 
+fn print_rendered(surface: Option<&CliTerminalSurface>, rendered: &str) -> anyhow::Result<()> {
+    if rendered.is_empty() {
+        return Ok(());
+    }
+    if let Some(surface) = surface {
+        surface.print_text(&rendered)?;
+    } else {
+        print!("{rendered}");
+        io::stdout().flush()?;
+    }
+    Ok(())
+}
+
 fn print_block_on_surface(
     surface: Option<&CliTerminalSurface>,
     block: OutputBlock,
@@ -1141,16 +1158,11 @@ async fn cli_ask_question(
     }
 
     // Ensure terminal is in a clean state for the interactive selector:
-    // disable raw mode (the selector will re-enable it), show cursor, and
-    // clear any leftover retained-layout artifacts below the current line.
+    // disable raw mode (the selector will re-enable it) and show cursor.
     {
         let _ = crossterm::terminal::disable_raw_mode();
         let mut stdout = io::stdout();
-        let _ = crossterm::execute!(
-            stdout,
-            crossterm::cursor::Show,
-            crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
-        );
+        let _ = crossterm::execute!(stdout, crossterm::cursor::Show);
         let _ = stdout.flush();
     }
 
@@ -1505,18 +1517,20 @@ fn format_session_time(timestamp: i64) -> String {
 mod tests {
     use super::{
         cli_cycle_child_session, cli_focus_child_session, cli_focus_root_session,
-        cli_prompt_agent_override, cli_prompt_assist_view, cli_prompt_screen_lines,
-        cli_recent_session_info_for_directory, cli_render_retained_layout,
-        cli_render_startup_banner, cli_resolve_registry_ui_action, cli_resolve_show_thinking,
-        cli_session_update_requires_refresh, cli_should_emit_scheduler_stage_block,
-        CliExecutionRuntime, CliFrontendPhase, CliFrontendProjection, CliObservedExecutionTopology,
-        CliPromptCatalog, CliPromptSelectionState, CliRecentSessionInfo, CliRetainedTranscript,
-        CliSessionTokenStats, PermissionMemory,
+        cli_normalize_model_ref, cli_observe_terminal_stream_block, cli_prompt_agent_override,
+        cli_prompt_assist_view, cli_prompt_screen_lines, cli_recent_session_info_for_directory,
+        cli_render_retained_layout, cli_render_startup_banner, cli_resolve_registry_ui_action,
+        cli_resolve_show_thinking, cli_session_update_requires_refresh,
+        cli_set_root_server_session, cli_should_emit_scheduler_stage_block,
+        CliExecutionRuntime, CliFrontendPhase, CliFrontendProjection,
+        CliObservedExecutionTopology, CliPromptCatalog, CliPromptSelectionState,
+        CliRecentSessionInfo, CliRetainedTranscript, CliSessionTokenStats,
+        PermissionMemory, TerminalStreamAccumulator,
     };
     use crate::api_client::SessionInfo;
     use chrono::Utc;
     use rocode_command::cli_style::CliStyle;
-    use rocode_command::output_blocks::SchedulerStageBlock;
+    use rocode_command::output_blocks::{MessageBlock, OutputBlock, SchedulerStageBlock};
     use rocode_command::{CommandRegistry, ResolvedUiCommand, UiActionId, UiCommandArgumentKind};
     use rocode_config::{Config, UiPreferencesConfig};
     use rocode_tui::api::SessionTimeInfo;
@@ -1527,6 +1541,7 @@ mod tests {
     use tokio::sync::Mutex as AsyncMutex;
 
     use rocode_command::cli_spinner::SpinnerGuard;
+    use rocode_command::output_blocks::MessageRole as OutputMessageRole;
 
     #[test]
     fn cli_prompt_omits_agent_when_scheduler_profile_is_active() {
@@ -1626,6 +1641,8 @@ mod tests {
                 "child-session-a".to_string(),
                 child_transcript,
             )]))),
+            stream_accumulators: Arc::new(Mutex::new(HashMap::new())),
+            render_states: Arc::new(Mutex::new(HashMap::new())),
             focused_session_id: Arc::new(Mutex::new(None)),
             permission_memory: Arc::new(AsyncMutex::new(PermissionMemory::new())),
             show_thinking: Arc::new(AtomicBool::new(true)),
@@ -1649,6 +1666,51 @@ mod tests {
                 transcript
             });
         runtime
+    }
+
+    #[test]
+    fn cli_root_session_reset_clears_stream_accumulators() {
+        let mut runtime = test_runtime_with_child_focus_data();
+        runtime
+            .stream_accumulators
+            .lock()
+            .expect("stream accumulators")
+            .insert("root-session".to_string(), TerminalStreamAccumulator::new());
+
+        cli_set_root_server_session(&mut runtime, "next-root".to_string());
+
+        let accumulators = runtime
+            .stream_accumulators
+            .lock()
+            .expect("stream accumulators");
+        assert!(accumulators.is_empty());
+    }
+
+    #[test]
+    fn cli_terminal_stream_observer_maps_empty_session_to_root_session() {
+        let runtime = test_runtime_with_child_focus_data();
+
+        cli_observe_terminal_stream_block(
+            &runtime,
+            "",
+            Some("assistant-1"),
+            &OutputBlock::Message(MessageBlock::full(
+                OutputMessageRole::Assistant,
+                "root message".to_string(),
+            )),
+        );
+
+        let accumulators = runtime
+            .stream_accumulators
+            .lock()
+            .expect("stream accumulators");
+        let root = accumulators
+            .get("root-session")
+            .expect("root session accumulator");
+        let assistant = root
+            .last_assistant_message()
+            .expect("assistant message recorded");
+        assert_eq!(assistant.id, "assistant-1");
     }
 
     #[test]
@@ -1740,6 +1802,27 @@ mod tests {
                 argument: Some("abc123".to_string()),
             })
         );
+    }
+
+    #[test]
+    fn normalize_model_ref_accepts_slash_and_colon_forms() {
+        assert_eq!(
+            cli_normalize_model_ref("openai/gpt-5"),
+            "openai/gpt-5".to_string()
+        );
+        assert_eq!(
+            cli_normalize_model_ref("openai:gpt-5"),
+            "openai/gpt-5".to_string()
+        );
+        assert_eq!(
+            cli_normalize_model_ref(" zhipuai-coding-plan:GLM-5-Turbo "),
+            "zhipuai-coding-plan/GLM-5-Turbo".to_string()
+        );
+    }
+
+    #[test]
+    fn normalize_model_ref_keeps_bare_model_ids_unchanged() {
+        assert_eq!(cli_normalize_model_ref("gpt-5"), "gpt-5".to_string());
     }
 
     #[test]
@@ -2175,4 +2258,5 @@ mod tests {
         assert!(!cli_session_update_requires_refresh(Some("prompt.stream")));
         assert!(!cli_session_update_requires_refresh(None));
     }
+
 }

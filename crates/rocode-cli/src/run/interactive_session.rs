@@ -1,5 +1,5 @@
 use super::*;
-use std::io::BufRead;
+use rocode_command::cli_prompt::{read_inline_prompt_line, PromptHistory, PromptResult};
 
 pub(super) async fn run_chat_session(
     model: Option<String>,
@@ -132,6 +132,8 @@ pub(super) async fn run_chat_session(
     )
     .await;
 
+    let mut compact_history = PromptHistory::new(200);
+
     loop {
         let queued = {
             let mut queue = runtime.queued_inputs.lock().await;
@@ -169,7 +171,7 @@ pub(super) async fn run_chat_session(
                 InteractiveCliMode::Compact => {
                     drain_available_sse_events(&runtime, &api_client, &mut sse_rx, &repl_style)
                         .await;
-                    match read_compact_input(&runtime, &repl_style)? {
+                    match read_compact_input(&runtime, &mut compact_history, &repl_style)? {
                         Some(line) => line,
                         None => {
                             sse_cancel.cancel();
@@ -713,40 +715,23 @@ async fn handle_interactive_sse_event(
 
 fn read_compact_input(
     runtime: &CliExecutionRuntime,
+    history: &mut PromptHistory,
     repl_style: &CliStyle,
 ) -> anyhow::Result<Option<String>> {
-    print!("{}", render_compact_prompt(runtime, repl_style));
-    io::stdout().flush()?;
-
-    let stdin = io::stdin();
-    let mut handle = stdin.lock();
-    let mut line = String::new();
-    let bytes = handle.read_line(&mut line)?;
-    if bytes == 0 {
-        println!();
-        return Ok(None);
+    let prompt = render_compact_prompt(runtime);
+    match read_inline_prompt_line(&prompt, history, repl_style)? {
+        PromptResult::Line(line) => {
+            if !line.trim().is_empty() {
+                history.push(&line);
+            }
+            Ok(Some(line.trim().to_string()))
+        }
+        PromptResult::Interrupt => Ok(Some(String::new())),
+        PromptResult::Eof => Ok(None),
     }
-
-    Ok(Some(line.trim().to_string()))
 }
 
-fn render_compact_prompt(runtime: &CliExecutionRuntime, repl_style: &CliStyle) -> String {
-    let mut context = vec![
-        cli_mode_label(runtime),
-        runtime.resolved_model_label.clone(),
-    ];
-    if let Some(view) = runtime
-        .frontend_projection
-        .lock()
-        .ok()
-        .and_then(|projection| projection.view_label.clone())
-    {
-        context.push(view);
-    }
-
-    format!(
-        "{} {} ",
-        repl_style.bold_cyan("rocode>"),
-        repl_style.dim(&format!("[{}]", context.join(" · "))),
-    )
+fn render_compact_prompt(runtime: &CliExecutionRuntime) -> String {
+    let _ = runtime;
+    "rocode> ".to_string()
 }

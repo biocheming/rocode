@@ -167,7 +167,7 @@ pub fn prompt_permission(
 
     // Print the summary block to stderr
     let mut stderr = io::stderr();
-    write!(stderr, "\n{}\n", summary)?;
+    write!(stderr, "{}\n", summary)?;
     stderr.flush()?;
 
     let options = vec![

@@ -24,7 +24,7 @@ pub(crate) fn list_models_interactive(registry: &ProviderRegistry) {
         }
         println!();
     }
-    println!("Use /model <model_id> to select a model");
+    println!("Use /model <provider/model> to select a model");
     println!();
 }
 

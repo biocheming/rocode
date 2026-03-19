@@ -1,0 +1,1363 @@
+use std::collections::HashMap;
+
+use crate::cli_style::CliStyle;
+use crate::output_blocks::{
+    render_cli_block_rich, MessageBlock as OutputMessageBlock, MessagePhase,
+    MessageRole as OutputMessageRole, OutputBlock, ReasoningBlock as OutputReasoningBlock,
+    ToolBlock as OutputToolBlock, ToolPhase,
+};
+use crate::terminal_segment_display::{
+    render_file_segment_line, render_image_segment_line, render_tool_segment_lines,
+    TerminalSegmentDisplayLine,
+};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TerminalToolResultInfo {
+    pub output: String,
+    pub is_error: bool,
+    pub title: Option<String>,
+    pub metadata: Option<HashMap<String, serde_json::Value>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalToolState {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TerminalMessageRole {
+    User,
+    Assistant,
+    System,
+    Tool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TerminalMessage {
+    pub id: String,
+    pub role: TerminalMessageRole,
+    pub parts: Vec<TerminalMessagePart>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TerminalMessagePart {
+    Text {
+        text: String,
+    },
+    Reasoning {
+        text: String,
+    },
+    File {
+        path: String,
+        mime: String,
+    },
+    Image {
+        url: String,
+    },
+    ToolCall {
+        id: String,
+        name: String,
+        arguments: String,
+    },
+    ToolResult {
+        id: String,
+        result: String,
+        is_error: bool,
+        title: Option<String>,
+        metadata: Option<HashMap<String, serde_json::Value>>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TerminalAssistantSegment {
+    Spacer,
+    Text {
+        part_index: usize,
+        text: String,
+    },
+    Reasoning {
+        part_index: usize,
+        text: String,
+    },
+    ToolCall {
+        part_index: usize,
+        id: String,
+        name: String,
+        arguments: String,
+        state: TerminalToolState,
+        result: Option<TerminalToolResultInfo>,
+    },
+    File {
+        part_index: usize,
+        path: String,
+        mime: String,
+    },
+    Image {
+        part_index: usize,
+        url: String,
+    },
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TerminalStreamAccumulator {
+    messages: Vec<TerminalMessage>,
+    message_index: HashMap<String, usize>,
+    next_generated_id: u64,
+}
+
+impl TerminalStreamAccumulator {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn messages(&self) -> &[TerminalMessage] {
+        &self.messages
+    }
+
+    pub fn message(&self, id: &str) -> Option<&TerminalMessage> {
+        self.message_index
+            .get(id)
+            .and_then(|index| self.messages.get(*index))
+    }
+
+    pub fn last_assistant_message(&self) -> Option<&TerminalMessage> {
+        self.messages
+            .iter()
+            .rev()
+            .find(|message| matches!(message.role, TerminalMessageRole::Assistant))
+    }
+
+    pub fn into_messages(self) -> Vec<TerminalMessage> {
+        self.messages
+    }
+
+    pub fn apply_output_block(&mut self, block_id: Option<&str>, block: &OutputBlock) -> bool {
+        match block {
+            OutputBlock::Message(message) => {
+                self.apply_message_block(block_id, message);
+                true
+            }
+            OutputBlock::Reasoning(reasoning) => {
+                self.apply_reasoning_block(block_id, reasoning);
+                true
+            }
+            OutputBlock::Tool(tool) => {
+                self.apply_tool_block(block_id, tool);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn apply_message_block(&mut self, block_id: Option<&str>, block: &OutputMessageBlock) {
+        let role = match block.role {
+            OutputMessageRole::User => TerminalMessageRole::User,
+            OutputMessageRole::Assistant => TerminalMessageRole::Assistant,
+            OutputMessageRole::System => TerminalMessageRole::System,
+        };
+        let pos = self.ensure_message_for_block(block_id, role.clone());
+        let Some(message) = self.messages.get_mut(pos) else {
+            return;
+        };
+
+        match block.phase {
+            MessagePhase::Start => {
+                message.role = role;
+                message
+                    .parts
+                    .retain(|part| !matches!(part, TerminalMessagePart::Text { .. }));
+            }
+            MessagePhase::Delta => {
+                if let Some(TerminalMessagePart::Text { text }) = message
+                    .parts
+                    .iter_mut()
+                    .rev()
+                    .find(|part| matches!(part, TerminalMessagePart::Text { .. }))
+                {
+                    text.push_str(&block.text);
+                } else if !block.text.is_empty() {
+                    message.parts.push(TerminalMessagePart::Text {
+                        text: block.text.clone(),
+                    });
+                }
+            }
+            MessagePhase::Full => {
+                message.role = role;
+                message
+                    .parts
+                    .retain(|part| !matches!(part, TerminalMessagePart::Text { .. }));
+                if !block.text.is_empty() {
+                    message.parts.push(TerminalMessagePart::Text {
+                        text: block.text.clone(),
+                    });
+                }
+            }
+            MessagePhase::End => {}
+        }
+    }
+
+    fn apply_reasoning_block(&mut self, block_id: Option<&str>, block: &OutputReasoningBlock) {
+        let pos = self.ensure_reasoning_target(block_id);
+        let Some(message) = self.messages.get_mut(pos) else {
+            return;
+        };
+
+        match block.phase {
+            MessagePhase::Start => {
+                let has_reasoning = message
+                    .parts
+                    .iter()
+                    .any(|part| matches!(part, TerminalMessagePart::Reasoning { .. }));
+                if !has_reasoning {
+                    message.parts.push(TerminalMessagePart::Reasoning {
+                        text: String::new(),
+                    });
+                }
+            }
+            MessagePhase::Delta => {
+                if let Some(TerminalMessagePart::Reasoning { text }) = message
+                    .parts
+                    .iter_mut()
+                    .rev()
+                    .find(|part| matches!(part, TerminalMessagePart::Reasoning { .. }))
+                {
+                    text.push_str(&block.text);
+                } else if !block.text.is_empty() {
+                    message.parts.push(TerminalMessagePart::Reasoning {
+                        text: block.text.clone(),
+                    });
+                }
+            }
+            MessagePhase::Full => {
+                message
+                    .parts
+                    .retain(|part| !matches!(part, TerminalMessagePart::Reasoning { .. }));
+                if !block.text.is_empty() {
+                    message.parts.push(TerminalMessagePart::Reasoning {
+                        text: block.text.clone(),
+                    });
+                }
+            }
+            MessagePhase::End => {}
+        }
+    }
+
+    fn apply_tool_block(&mut self, block_id: Option<&str>, block: &OutputToolBlock) {
+        let tool_call_id = block_id
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| self.generate_message_id("tool"));
+        let pos = self.ensure_message_for_block(None, TerminalMessageRole::Assistant);
+        let Some(message) = self.messages.get_mut(pos) else {
+            return;
+        };
+
+        match block.phase {
+            ToolPhase::Start | ToolPhase::Running => {
+                let arguments = block.detail.clone().unwrap_or_default();
+                if let Some(TerminalMessagePart::ToolCall {
+                    name, arguments: existing, ..
+                }) = message.parts.iter_mut().find(|part| {
+                    matches!(part, TerminalMessagePart::ToolCall { id, .. } if *id == tool_call_id)
+                }) {
+                    *name = block.name.clone();
+                    *existing = arguments;
+                } else {
+                    message.parts.push(TerminalMessagePart::ToolCall {
+                        id: tool_call_id,
+                        name: block.name.clone(),
+                        arguments,
+                    });
+                }
+            }
+            ToolPhase::Done | ToolPhase::Error => {
+                let result = block.detail.clone().unwrap_or_default();
+                let is_error = matches!(block.phase, ToolPhase::Error);
+                let title = Some(block.name.clone());
+                if let Some(TerminalMessagePart::ToolResult {
+                    result: existing,
+                    is_error: existing_is_error,
+                    title: existing_title,
+                    ..
+                }) = message.parts.iter_mut().find(|part| {
+                    matches!(
+                        part,
+                        TerminalMessagePart::ToolResult { id, .. } if *id == tool_call_id
+                    )
+                }) {
+                    *existing = result;
+                    *existing_is_error = is_error;
+                    *existing_title = title;
+                } else {
+                    message.parts.push(TerminalMessagePart::ToolResult {
+                        id: tool_call_id,
+                        result,
+                        is_error,
+                        title,
+                        metadata: None,
+                    });
+                }
+            }
+        }
+    }
+
+    fn ensure_reasoning_target(&mut self, block_id: Option<&str>) -> usize {
+        if let Some(message_id) = block_id.filter(|value| !value.is_empty()) {
+            return self.ensure_message_for_block(Some(message_id), TerminalMessageRole::Assistant);
+        }
+
+        if let Some((index, _)) = self
+            .messages
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, message)| matches!(message.role, TerminalMessageRole::Assistant))
+        {
+            return index;
+        }
+
+        let generated_id = self.generate_message_id("reasoning");
+        self.ensure_message_for_block(Some(&generated_id), TerminalMessageRole::Assistant)
+    }
+
+    fn ensure_message_for_block(
+        &mut self,
+        block_id: Option<&str>,
+        role: TerminalMessageRole,
+    ) -> usize {
+        if let Some(message_id) = block_id.filter(|value| !value.is_empty()) {
+            if let Some(index) = self.message_index.get(message_id).copied() {
+                return index;
+            }
+
+            let index = self.messages.len();
+            self.messages.push(TerminalMessage {
+                id: message_id.to_string(),
+                role,
+                parts: Vec::new(),
+            });
+            self.message_index.insert(message_id.to_string(), index);
+            return index;
+        }
+
+        if let Some((index, _)) = self
+            .messages
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, message)| message.role == role)
+        {
+            return index;
+        }
+
+        let generated_id = self.generate_message_id("streaming");
+        let index = self.messages.len();
+        self.messages.push(TerminalMessage {
+            id: generated_id.clone(),
+            role,
+            parts: Vec::new(),
+        });
+        self.message_index.insert(generated_id, index);
+        index
+    }
+
+    fn generate_message_id(&mut self, prefix: &str) -> String {
+        let id = format!("{prefix}_{}", self.next_generated_id);
+        self.next_generated_id = self.next_generated_id.saturating_add(1);
+        id
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TerminalStreamRenderState {
+    assistant_open: bool,
+    assistant_visible: bool,
+    reasoning_open: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TerminalSemanticStreamRenderState {
+    boundary: TerminalStreamRenderState,
+    current_message_id: Option<String>,
+    part_states: HashMap<usize, TerminalSemanticPartState>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TerminalSemanticPartState {
+    Text { emitted_len: usize },
+    Reasoning { started: bool, emitted_len: usize },
+    ToolCall { started: bool, completed: bool },
+    File,
+    Image,
+}
+
+pub fn render_terminal_stream_block_with_state(
+    state: &mut TerminalStreamRenderState,
+    block: &OutputBlock,
+    style: &CliStyle,
+) -> String {
+    match block {
+        OutputBlock::Message(message) if message.role == OutputMessageRole::Assistant => {
+            render_terminal_assistant_block(state, message, style)
+        }
+        OutputBlock::Reasoning(reasoning) => render_terminal_reasoning_block(state, reasoning, style),
+        _ => {
+            let mut out = render_terminal_stream_boundary_prefix(state);
+            out.push_str(&render_cli_block_rich(block, style));
+            out
+        }
+    }
+}
+
+fn render_terminal_assistant_block(
+    state: &mut TerminalStreamRenderState,
+    message: &OutputMessageBlock,
+    style: &CliStyle,
+) -> String {
+    match message.phase {
+        MessagePhase::Start => {
+            state.assistant_open = true;
+            String::new()
+        }
+        MessagePhase::Delta => {
+            let mut out = String::new();
+            if state.reasoning_open {
+                out.push('\n');
+                state.reasoning_open = false;
+                state.assistant_visible = false;
+            }
+            if !state.assistant_open {
+                state.assistant_open = true;
+            }
+            if !state.assistant_visible {
+                out.push_str(&render_cli_block_rich(
+                    &OutputBlock::Message(OutputMessageBlock::start(
+                        OutputMessageRole::Assistant,
+                    )),
+                    style,
+                ));
+                state.assistant_visible = true;
+            }
+            out.push_str(&render_cli_block_rich(
+                &OutputBlock::Message(message.clone()),
+                style,
+            ));
+            out
+        }
+        MessagePhase::End => {
+            let mut out = String::new();
+            if state.reasoning_open {
+                out.push('\n');
+                state.reasoning_open = false;
+            }
+            if state.assistant_visible {
+                out.push_str(&render_cli_block_rich(
+                    &OutputBlock::Message(OutputMessageBlock::end(
+                        OutputMessageRole::Assistant,
+                    )),
+                    style,
+                ));
+            }
+            state.assistant_open = false;
+            state.assistant_visible = false;
+            out
+        }
+        MessagePhase::Full => {
+            let mut out = render_terminal_stream_boundary_prefix(state);
+            out.push_str(&render_cli_block_rich(
+                &OutputBlock::Message(message.clone()),
+                style,
+            ));
+            state.assistant_open = false;
+            state.assistant_visible = false;
+            out
+        }
+    }
+}
+
+fn render_terminal_reasoning_block(
+    state: &mut TerminalStreamRenderState,
+    reasoning: &OutputReasoningBlock,
+    style: &CliStyle,
+) -> String {
+    match reasoning.phase {
+        MessagePhase::Start => {
+            let mut out = String::new();
+            if state.assistant_open && state.assistant_visible {
+                out.push('\n');
+                state.assistant_visible = false;
+            }
+            state.reasoning_open = true;
+            out.push_str(&render_cli_block_rich(
+                &OutputBlock::Reasoning(OutputReasoningBlock::start()),
+                style,
+            ));
+            out
+        }
+        MessagePhase::Delta => {
+            if !state.reasoning_open {
+                state.reasoning_open = true;
+                let mut out = render_cli_block_rich(
+                    &OutputBlock::Reasoning(OutputReasoningBlock::start()),
+                    style,
+                );
+                out.push_str(&render_cli_block_rich(
+                    &OutputBlock::Reasoning(reasoning.clone()),
+                    style,
+                ));
+                return out;
+            }
+            render_cli_block_rich(&OutputBlock::Reasoning(reasoning.clone()), style)
+        }
+        MessagePhase::End => {
+            if !state.reasoning_open {
+                return String::new();
+            }
+            state.reasoning_open = false;
+            render_cli_block_rich(&OutputBlock::Reasoning(OutputReasoningBlock::end()), style)
+        }
+        MessagePhase::Full => {
+            let mut out = String::new();
+            if state.assistant_open && state.assistant_visible {
+                out.push('\n');
+                state.assistant_visible = false;
+            }
+            out.push_str(&render_cli_block_rich(
+                &OutputBlock::Reasoning(reasoning.clone()),
+                style,
+            ));
+            state.reasoning_open = false;
+            out
+        }
+    }
+}
+
+fn render_terminal_stream_boundary_prefix(state: &mut TerminalStreamRenderState) -> String {
+    let mut out = String::new();
+    if state.reasoning_open {
+        out.push('\n');
+        state.reasoning_open = false;
+    }
+    if state.assistant_open && state.assistant_visible {
+        out.push('\n');
+        state.assistant_visible = false;
+    }
+    out
+}
+
+fn render_semantic_reasoning_start(
+    state: &mut TerminalSemanticStreamRenderState,
+    style: &CliStyle,
+) -> String {
+    let rendered = render_cli_block_rich(&OutputBlock::Reasoning(OutputReasoningBlock::start()), style);
+    let mut out = String::new();
+    if state.boundary.assistant_open
+        && state.boundary.assistant_visible
+        && !rendered.starts_with('\n')
+    {
+        out.push('\n');
+    }
+    state.boundary.assistant_visible = false;
+    state.boundary.reasoning_open = true;
+    out.push_str(&rendered);
+    out
+}
+
+fn render_semantic_display_lines(
+    boundary: &mut TerminalStreamRenderState,
+    lines: &[TerminalSegmentDisplayLine],
+) -> String {
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    let mut out = render_terminal_stream_boundary_prefix(boundary);
+    for line in lines {
+        out.push_str(&line.text);
+        out.push('\n');
+    }
+    out
+}
+
+pub fn render_terminal_stream_block_semantic(
+    state: &mut TerminalSemanticStreamRenderState,
+    accumulator: &TerminalStreamAccumulator,
+    block: &OutputBlock,
+    style: &CliStyle,
+    show_thinking: bool,
+) -> String {
+    let is_semantic_block = match block {
+        OutputBlock::Message(message) => message.role == OutputMessageRole::Assistant,
+        OutputBlock::Reasoning(_) | OutputBlock::Tool(_) => true,
+        _ => false,
+    };
+    if !is_semantic_block {
+        return render_terminal_stream_block_with_state(&mut state.boundary, block, style);
+    }
+
+    let Some((assistant_idx, message)) = accumulator
+        .messages()
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, message)| matches!(message.role, TerminalMessageRole::Assistant))
+    else {
+        return render_terminal_stream_block_with_state(&mut state.boundary, block, style);
+    };
+
+    if state.current_message_id.as_deref() != Some(message.id.as_str()) {
+        state.current_message_id = Some(message.id.clone());
+        state.part_states.clear();
+    }
+
+    let tool_results = collect_assistant_tool_results(accumulator.messages(), assistant_idx);
+    let running_tool_call = message.parts.iter().find_map(|part| match part {
+        TerminalMessagePart::ToolCall { id, .. } if !tool_results.contains_key(id) => {
+            Some(id.as_str())
+        }
+        _ => None,
+    });
+    let segments =
+        compose_assistant_segments(message, &tool_results, running_tool_call, show_thinking);
+    let mut out = String::new();
+
+    for segment in segments {
+        match segment {
+            TerminalAssistantSegment::Spacer => {}
+            TerminalAssistantSegment::Text { part_index, text } => {
+                let entry = state
+                    .part_states
+                    .entry(part_index)
+                    .or_insert(TerminalSemanticPartState::Text { emitted_len: 0 });
+                let TerminalSemanticPartState::Text { emitted_len } = entry else {
+                    continue;
+                };
+                if text.len() > *emitted_len {
+                    let delta = &text[*emitted_len..];
+                    out.push_str(&render_terminal_stream_block_with_state(
+                        &mut state.boundary,
+                        &OutputBlock::Message(OutputMessageBlock::delta(
+                            OutputMessageRole::Assistant,
+                            delta,
+                        )),
+                        style,
+                    ));
+                    *emitted_len = text.len();
+                }
+            }
+            TerminalAssistantSegment::Reasoning { part_index, text } => {
+                let mut emit_start = false;
+                let entry = state
+                    .part_states
+                    .entry(part_index)
+                    .or_insert(TerminalSemanticPartState::Reasoning {
+                        started: false,
+                        emitted_len: 0,
+                    });
+                let TerminalSemanticPartState::Reasoning {
+                    started,
+                    emitted_len,
+                } = entry
+                else {
+                    continue;
+                };
+                if !*started {
+                    emit_start = true;
+                }
+                let prior_len = *emitted_len;
+                if emit_start {
+                    out.push_str(&render_semantic_reasoning_start(state, style));
+                }
+                let entry = state
+                    .part_states
+                    .entry(part_index)
+                    .or_insert(TerminalSemanticPartState::Reasoning {
+                        started: false,
+                        emitted_len: 0,
+                    });
+                let TerminalSemanticPartState::Reasoning {
+                    started,
+                    emitted_len,
+                } = entry
+                else {
+                    continue;
+                };
+                if emit_start {
+                    *started = true;
+                }
+                if text.len() > prior_len {
+                    let delta = &text[prior_len..];
+                    out.push_str(&render_terminal_stream_block_with_state(
+                        &mut state.boundary,
+                        &OutputBlock::Reasoning(OutputReasoningBlock::delta(delta)),
+                        style,
+                    ));
+                    *emitted_len = text.len();
+                }
+            }
+            TerminalAssistantSegment::ToolCall {
+                part_index,
+                name,
+                arguments,
+                state: tool_state,
+                result,
+                ..
+            } => {
+                let entry = state
+                    .part_states
+                    .entry(part_index)
+                    .or_insert(TerminalSemanticPartState::ToolCall {
+                        started: false,
+                        completed: false,
+                    });
+                let TerminalSemanticPartState::ToolCall { started, completed } = entry else {
+                    continue;
+                };
+                if !*started {
+                    let lines = render_tool_segment_lines(
+                        &name,
+                        &arguments,
+                        tool_state,
+                        None,
+                        false,
+                    );
+                    out.push_str(&render_semantic_display_lines(&mut state.boundary, &lines));
+                    *started = true;
+                }
+                if !*completed {
+                    if let Some(info) = result {
+                        let lines = render_tool_segment_lines(
+                            &name,
+                            &arguments,
+                            tool_state,
+                            Some(&info),
+                            true,
+                        );
+                        out.push_str(&render_semantic_display_lines(&mut state.boundary, &lines));
+                        *completed = true;
+                    } else if matches!(tool_state, TerminalToolState::Failed | TerminalToolState::Completed)
+                    {
+                        *completed = true;
+                    }
+                }
+            }
+            TerminalAssistantSegment::File {
+                part_index,
+                path,
+                mime,
+            } => {
+                if matches!(
+                    state.part_states.get(&part_index),
+                    Some(TerminalSemanticPartState::File)
+                ) {
+                    continue;
+                }
+                let line = render_file_segment_line(&path, &mime);
+                out.push_str(&render_semantic_display_lines(
+                    &mut state.boundary,
+                    &[line],
+                ));
+                state
+                    .part_states
+                    .insert(part_index, TerminalSemanticPartState::File);
+            }
+            TerminalAssistantSegment::Image { part_index, url } => {
+                if matches!(
+                    state.part_states.get(&part_index),
+                    Some(TerminalSemanticPartState::Image)
+                ) {
+                    continue;
+                }
+                let line = render_image_segment_line(&url);
+                out.push_str(&render_semantic_display_lines(
+                    &mut state.boundary,
+                    &[line],
+                ));
+                state
+                    .part_states
+                    .insert(part_index, TerminalSemanticPartState::Image);
+            }
+        }
+    }
+
+    out
+}
+
+pub fn is_tool_result_carrier(message: &TerminalMessage) -> bool {
+    if !matches!(message.role, TerminalMessageRole::Tool) {
+        return false;
+    }
+
+    let mut has_tool_result = false;
+    for part in &message.parts {
+        match part {
+            TerminalMessagePart::ToolResult { .. } => has_tool_result = true,
+            TerminalMessagePart::Text { text } | TerminalMessagePart::Reasoning { text }
+                if text.trim().is_empty() => {}
+            _ => return false,
+        }
+    }
+
+    has_tool_result
+}
+
+pub fn collect_assistant_tool_results(
+    messages: &[TerminalMessage],
+    assistant_idx: usize,
+) -> HashMap<String, TerminalToolResultInfo> {
+    let mut tool_results = HashMap::new();
+
+    for (idx, message) in messages.iter().enumerate().skip(assistant_idx) {
+        if idx > assistant_idx && matches!(message.role, TerminalMessageRole::Assistant) {
+            break;
+        }
+
+        for part in &message.parts {
+            if let TerminalMessagePart::ToolResult {
+                id,
+                result,
+                is_error,
+                title,
+                metadata,
+            } = part
+            {
+                tool_results.insert(
+                    id.clone(),
+                    TerminalToolResultInfo {
+                        output: result.clone(),
+                        is_error: *is_error,
+                        title: title.clone(),
+                        metadata: metadata.clone(),
+                    },
+                );
+            }
+        }
+    }
+
+    tool_results
+}
+
+pub fn compose_assistant_segments(
+    message: &TerminalMessage,
+    tool_results: &HashMap<String, TerminalToolResultInfo>,
+    running_tool_call: Option<&str>,
+    show_thinking: bool,
+) -> Vec<TerminalAssistantSegment> {
+    let mut segments = Vec::new();
+    let mut prev_was_text = false;
+    let mut prev_was_tool = false;
+
+    for (part_index, part) in message.parts.iter().enumerate() {
+        match part {
+            TerminalMessagePart::Text { text } => {
+                if prev_was_tool {
+                    segments.push(TerminalAssistantSegment::Spacer);
+                }
+                segments.push(TerminalAssistantSegment::Text {
+                    part_index,
+                    text: text.clone(),
+                });
+                prev_was_text = true;
+                prev_was_tool = false;
+            }
+            TerminalMessagePart::Reasoning { text } => {
+                if !show_thinking {
+                    continue;
+                }
+                if prev_was_text || prev_was_tool {
+                    segments.push(TerminalAssistantSegment::Spacer);
+                }
+                segments.push(TerminalAssistantSegment::Reasoning {
+                    part_index,
+                    text: text.clone(),
+                });
+                prev_was_text = false;
+                prev_was_tool = false;
+            }
+            TerminalMessagePart::ToolCall {
+                id,
+                name,
+                arguments,
+            } => {
+                if prev_was_text {
+                    segments.push(TerminalAssistantSegment::Spacer);
+                }
+                let state = if let Some(info) = tool_results.get(id) {
+                    if info.is_error {
+                        TerminalToolState::Failed
+                    } else {
+                        TerminalToolState::Completed
+                    }
+                } else if running_tool_call == Some(id.as_str()) {
+                    TerminalToolState::Running
+                } else {
+                    TerminalToolState::Pending
+                };
+                segments.push(TerminalAssistantSegment::ToolCall {
+                    part_index,
+                    id: id.clone(),
+                    name: name.clone(),
+                    arguments: arguments.clone(),
+                    state,
+                    result: tool_results.get(id).cloned(),
+                });
+                prev_was_text = false;
+                prev_was_tool = true;
+            }
+            TerminalMessagePart::ToolResult { .. } => {}
+            TerminalMessagePart::File { path, mime } => {
+                segments.push(TerminalAssistantSegment::File {
+                    part_index,
+                    path: path.clone(),
+                    mime: mime.clone(),
+                });
+                prev_was_text = false;
+                prev_was_tool = false;
+            }
+            TerminalMessagePart::Image { url } => {
+                segments.push(TerminalAssistantSegment::Image {
+                    part_index,
+                    url: url.clone(),
+                });
+                prev_was_text = false;
+                prev_was_tool = false;
+            }
+        }
+    }
+
+    segments
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message(
+        id: &str,
+        role: TerminalMessageRole,
+        parts: Vec<TerminalMessagePart>,
+    ) -> TerminalMessage {
+        TerminalMessage {
+            id: id.to_string(),
+            role,
+            parts,
+        }
+    }
+
+    #[test]
+    fn tool_result_carrier_is_detected() {
+        let msg = message(
+            "tool-msg",
+            TerminalMessageRole::Tool,
+            vec![TerminalMessagePart::ToolResult {
+                id: "call-1".to_string(),
+                result: "ok".to_string(),
+                is_error: false,
+                title: None,
+                metadata: None,
+            }],
+        );
+        assert!(is_tool_result_carrier(&msg));
+    }
+
+    #[test]
+    fn assistant_collects_tool_results_until_next_assistant() {
+        let messages = vec![
+            message("user-1", TerminalMessageRole::User, vec![]),
+            message(
+                "assistant-1",
+                TerminalMessageRole::Assistant,
+                vec![TerminalMessagePart::ToolCall {
+                    id: "call-1".to_string(),
+                    name: "ls".to_string(),
+                    arguments: r#"{"path":"."}"#.to_string(),
+                }],
+            ),
+            message(
+                "tool-1",
+                TerminalMessageRole::Tool,
+                vec![TerminalMessagePart::ToolResult {
+                    id: "call-1".to_string(),
+                    result: "file_a\nfile_b".to_string(),
+                    is_error: false,
+                    title: None,
+                    metadata: None,
+                }],
+            ),
+            message(
+                "assistant-2",
+                TerminalMessageRole::Assistant,
+                vec![TerminalMessagePart::ToolCall {
+                    id: "call-2".to_string(),
+                    name: "read".to_string(),
+                    arguments: r#"{"file_path":"README.md"}"#.to_string(),
+                }],
+            ),
+            message(
+                "tool-2",
+                TerminalMessageRole::Tool,
+                vec![TerminalMessagePart::ToolResult {
+                    id: "call-2".to_string(),
+                    result: "readme".to_string(),
+                    is_error: false,
+                    title: None,
+                    metadata: None,
+                }],
+            ),
+        ];
+
+        let first_results = collect_assistant_tool_results(&messages, 1);
+        assert!(first_results.contains_key("call-1"));
+        assert!(!first_results.contains_key("call-2"));
+    }
+
+    #[test]
+    fn assistant_segments_insert_spacers_between_text_reasoning_and_tools() {
+        let message = message(
+            "assistant-1",
+            TerminalMessageRole::Assistant,
+            vec![
+                TerminalMessagePart::Text {
+                    text: "one".to_string(),
+                },
+                TerminalMessagePart::Reasoning {
+                    text: "think".to_string(),
+                },
+                TerminalMessagePart::ToolCall {
+                    id: "call-1".to_string(),
+                    name: "websearch".to_string(),
+                    arguments: "{}".to_string(),
+                },
+                TerminalMessagePart::Text {
+                    text: "two".to_string(),
+                },
+            ],
+        );
+
+        let segments = compose_assistant_segments(&message, &HashMap::new(), Some("call-1"), true);
+
+        assert!(matches!(
+            segments.as_slice(),
+            [
+                TerminalAssistantSegment::Text { .. },
+                TerminalAssistantSegment::Spacer,
+                TerminalAssistantSegment::Reasoning { .. },
+                TerminalAssistantSegment::ToolCall {
+                    state: TerminalToolState::Running,
+                    ..
+                },
+                TerminalAssistantSegment::Spacer,
+                TerminalAssistantSegment::Text { .. }
+            ]
+        ));
+    }
+
+    #[test]
+    fn accumulator_preserves_reasoning_when_assistant_message_starts() {
+        let mut accumulator = TerminalStreamAccumulator::new();
+
+        assert!(accumulator.apply_output_block(
+            Some("assistant-1"),
+            &OutputBlock::Reasoning(OutputReasoningBlock::start())
+        ));
+        assert!(accumulator.apply_output_block(
+            Some("assistant-1"),
+            &OutputBlock::Reasoning(OutputReasoningBlock::delta("thinking..."))
+        ));
+        assert!(accumulator.apply_output_block(
+            Some("assistant-1"),
+            &OutputBlock::Message(OutputMessageBlock::start(OutputMessageRole::Assistant))
+        ));
+
+        let message = accumulator
+            .message("assistant-1")
+            .expect("assistant message should exist");
+        assert!(message.parts.iter().any(|part| {
+            matches!(
+                part,
+                TerminalMessagePart::Reasoning { text } if text == "thinking..."
+            )
+        }));
+    }
+
+    #[test]
+    fn accumulator_routes_tool_calls_and_results_into_last_assistant_message() {
+        let mut accumulator = TerminalStreamAccumulator::new();
+
+        assert!(accumulator.apply_output_block(
+            Some("assistant-1"),
+            &OutputBlock::Message(OutputMessageBlock::delta(
+                OutputMessageRole::Assistant,
+                "answer"
+            ))
+        ));
+        assert!(accumulator.apply_output_block(
+            Some("tool-1"),
+            &OutputBlock::Tool(OutputToolBlock::start("websearch"))
+        ));
+        assert!(accumulator.apply_output_block(
+            Some("tool-1"),
+            &OutputBlock::Tool(OutputToolBlock::done(
+                "websearch",
+                Some("query finished".to_string())
+            ))
+        ));
+
+        let message = accumulator
+            .message("assistant-1")
+            .expect("assistant message should exist");
+        assert!(message.parts.iter().any(|part| {
+            matches!(
+                part,
+                TerminalMessagePart::ToolCall { id, name, .. }
+                    if id == "tool-1" && name == "websearch"
+            )
+        }));
+        assert!(message.parts.iter().any(|part| {
+            matches!(
+                part,
+                TerminalMessagePart::ToolResult {
+                    id,
+                    result,
+                    is_error,
+                    ..
+                } if id == "tool-1" && result == "query finished" && !is_error
+            )
+        }));
+    }
+
+    #[test]
+    fn accumulator_falls_back_to_last_assistant_for_reasoning_without_id() {
+        let mut accumulator = TerminalStreamAccumulator::new();
+
+        assert!(accumulator.apply_output_block(
+            Some("assistant-1"),
+            &OutputBlock::Message(OutputMessageBlock::delta(
+                OutputMessageRole::Assistant,
+                "answer"
+            ))
+        ));
+        assert!(accumulator.apply_output_block(
+            None,
+            &OutputBlock::Reasoning(OutputReasoningBlock::delta("thinking"))
+        ));
+
+        let message = accumulator
+            .message("assistant-1")
+            .expect("assistant message should exist");
+        assert!(message.parts.iter().any(|part| {
+            matches!(
+                part,
+                TerminalMessagePart::Reasoning { text } if text == "thinking"
+            )
+        }));
+    }
+
+    #[test]
+    fn stream_render_state_moves_assistant_start_after_reasoning_boundary() {
+        let style = CliStyle::plain();
+        let mut state = TerminalStreamRenderState::default();
+
+        let assistant_start = render_terminal_stream_block_with_state(
+            &mut state,
+            &OutputBlock::Message(OutputMessageBlock::start(
+                OutputMessageRole::Assistant,
+            )),
+            &style,
+        );
+        let reasoning_start = render_terminal_stream_block_with_state(
+            &mut state,
+            &OutputBlock::Reasoning(OutputReasoningBlock::start()),
+            &style,
+        );
+        let reasoning_delta = render_terminal_stream_block_with_state(
+            &mut state,
+            &OutputBlock::Reasoning(OutputReasoningBlock::delta("thinking")),
+            &style,
+        );
+        let assistant_delta = render_terminal_stream_block_with_state(
+            &mut state,
+            &OutputBlock::Message(OutputMessageBlock::delta(
+                OutputMessageRole::Assistant,
+                "answer",
+            )),
+            &style,
+        );
+
+        assert_eq!(assistant_start, "");
+        assert_eq!(reasoning_start, "\n[thinking]\n│ ");
+        assert_eq!(reasoning_delta, "thinking");
+        assert_eq!(assistant_delta, "\n[message:assistant] answer");
+    }
+
+    #[test]
+    fn stream_render_state_inserts_newline_before_tool_when_assistant_end_is_missing() {
+        let style = CliStyle::plain();
+        let mut state = TerminalStreamRenderState::default();
+
+        let assistant_start = render_terminal_stream_block_with_state(
+            &mut state,
+            &OutputBlock::Message(OutputMessageBlock::start(
+                OutputMessageRole::Assistant,
+            )),
+            &style,
+        );
+        let assistant_delta = render_terminal_stream_block_with_state(
+            &mut state,
+            &OutputBlock::Message(OutputMessageBlock::delta(
+                OutputMessageRole::Assistant,
+                "answer",
+            )),
+            &style,
+        );
+        let tool_start = render_terminal_stream_block_with_state(
+            &mut state,
+            &OutputBlock::Tool(OutputToolBlock::start("websearch")),
+            &style,
+        );
+
+        assert_eq!(assistant_start, "");
+        assert_eq!(assistant_delta, "[message:assistant] answer");
+        assert_eq!(tool_start, "\n[tool:start] websearch\n");
+    }
+
+    #[test]
+    fn semantic_stream_renderer_groups_reasoning_between_assistant_segments() {
+        let style = CliStyle::plain();
+        let mut accumulator = TerminalStreamAccumulator::new();
+        let mut state = TerminalSemanticStreamRenderState::default();
+
+        accumulator.apply_output_block(
+            Some("assistant-1"),
+            &OutputBlock::Message(OutputMessageBlock::delta(
+                OutputMessageRole::Assistant,
+                "answer",
+            )),
+        );
+        let text = render_terminal_stream_block_semantic(
+            &mut state,
+            &accumulator,
+            &OutputBlock::Message(OutputMessageBlock::delta(
+                OutputMessageRole::Assistant,
+                "answer",
+            )),
+            &style,
+            true,
+        );
+
+        accumulator.apply_output_block(
+            Some("assistant-1"),
+            &OutputBlock::Reasoning(OutputReasoningBlock::start()),
+        );
+        let reasoning_start = render_terminal_stream_block_semantic(
+            &mut state,
+            &accumulator,
+            &OutputBlock::Reasoning(OutputReasoningBlock::start()),
+            &style,
+            true,
+        );
+
+        accumulator.apply_output_block(
+            Some("assistant-1"),
+            &OutputBlock::Reasoning(OutputReasoningBlock::delta("thinking")),
+        );
+        let reasoning_delta = render_terminal_stream_block_semantic(
+            &mut state,
+            &accumulator,
+            &OutputBlock::Reasoning(OutputReasoningBlock::delta("thinking")),
+            &style,
+            true,
+        );
+
+        accumulator.apply_output_block(
+            Some("assistant-1"),
+            &OutputBlock::Message(OutputMessageBlock::delta(
+                OutputMessageRole::Assistant,
+                " done",
+            )),
+        );
+        let trailing_text = render_terminal_stream_block_semantic(
+            &mut state,
+            &accumulator,
+            &OutputBlock::Message(OutputMessageBlock::delta(
+                OutputMessageRole::Assistant,
+                " done",
+            )),
+            &style,
+            true,
+        );
+
+        assert_eq!(text, "[message:assistant] answer");
+        assert_eq!(reasoning_start, "\n[thinking]\n│ ");
+        assert_eq!(reasoning_delta, "thinking");
+        assert_eq!(trailing_text, "\n[message:assistant]  done");
+    }
+
+    #[test]
+    fn semantic_stream_renderer_uses_segment_order_for_tool_start_and_result() {
+        let style = CliStyle::plain();
+        let mut accumulator = TerminalStreamAccumulator::new();
+        let mut state = TerminalSemanticStreamRenderState::default();
+
+        accumulator.apply_output_block(
+            Some("assistant-1"),
+            &OutputBlock::Message(OutputMessageBlock::delta(
+                OutputMessageRole::Assistant,
+                "answer",
+            )),
+        );
+        let text = render_terminal_stream_block_semantic(
+            &mut state,
+            &accumulator,
+            &OutputBlock::Message(OutputMessageBlock::delta(
+                OutputMessageRole::Assistant,
+                "answer",
+            )),
+            &style,
+            true,
+        );
+
+        accumulator.apply_output_block(
+            Some("tool-1"),
+            &OutputBlock::Tool(OutputToolBlock::running(
+                "websearch",
+                r#"{"query":"青岛天气"}"#,
+            )),
+        );
+        let tool_start = render_terminal_stream_block_semantic(
+            &mut state,
+            &accumulator,
+            &OutputBlock::Tool(OutputToolBlock::running(
+                "websearch",
+                r#"{"query":"青岛天气"}"#,
+            )),
+            &style,
+            true,
+        );
+
+        accumulator.apply_output_block(
+            Some("tool-1"),
+            &OutputBlock::Tool(OutputToolBlock::done(
+                "websearch",
+                Some("晴 18C".to_string()),
+            )),
+        );
+        let tool_done = render_terminal_stream_block_semantic(
+            &mut state,
+            &accumulator,
+            &OutputBlock::Tool(OutputToolBlock::done(
+                "websearch",
+                Some("晴 18C".to_string()),
+            )),
+            &style,
+            true,
+        );
+
+        assert_eq!(text, "[message:assistant] answer");
+        assert_eq!(tool_start, "\n[tool:running] websearch :: {\"query\":\"青岛天气\"}\n");
+        assert_eq!(tool_done, "[tool:done] websearch :: 晴 18C\n");
+    }
+}

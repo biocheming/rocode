@@ -630,6 +630,35 @@ pub fn read_prompt_line(
     read_raw_line(frame, history)
 }
 
+/// Read a single inline prompt line with raw editing and history support.
+///
+/// Unlike [`read_prompt_line`], this keeps the interaction in a native
+/// single-line CLI form instead of rendering the boxed prompt chrome.
+pub fn read_inline_prompt_line(
+    prompt_str: &str,
+    history: &PromptHistory,
+    style: &CliStyle,
+) -> io::Result<PromptResult> {
+    if !style.color {
+        return read_plain_line(prompt_str);
+    }
+
+    let max_prompt_width = usize::from(style.width).saturating_sub(8).clamp(4, 32);
+    let visible_prompt = if prompt_str.chars().count() > max_prompt_width {
+        let mut truncated = prompt_str
+            .chars()
+            .take(max_prompt_width.saturating_sub(1))
+            .collect::<String>();
+        truncated.push(' ');
+        truncated
+    } else {
+        prompt_str.to_string()
+    };
+    let prompt_width = visible_prompt.chars().count();
+    let content_width = usize::from(style.width).saturating_sub(prompt_width).max(8);
+    read_raw_inline_line(&visible_prompt, prompt_width, content_width, history)
+}
+
 fn read_plain_line(prompt_str: &str) -> io::Result<PromptResult> {
     print!("{}", prompt_str);
     io::stdout().flush()?;
@@ -828,6 +857,210 @@ fn read_raw_line(frame: &PromptFrame, history: &PromptHistory) -> io::Result<Pro
 
     terminal::disable_raw_mode()?;
     Ok(result)
+}
+
+fn read_raw_inline_line(
+    prompt_str: &str,
+    prompt_width: usize,
+    content_width: usize,
+    history: &PromptHistory,
+) -> io::Result<PromptResult> {
+    let mut line = String::new();
+    let mut cursor_pos = 0usize;
+    let mut history_index: Option<usize> = None;
+    let mut saved_input = String::new();
+    let mut stdout = io::stdout();
+
+    terminal::enable_raw_mode()?;
+    let mut render_state = render_inline_prompt(
+        &mut stdout,
+        prompt_str,
+        prompt_width,
+        content_width,
+        &line,
+        cursor_pos,
+        None,
+    )?;
+
+    let result = loop {
+        let ev = event::read()?;
+        match ev {
+            Event::Key(key)
+                if is_primary_key_event(&key)
+                    && key.code == KeyCode::Char('j')
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                write!(stdout, "\r\n")?;
+                stdout.flush()?;
+                break PromptResult::Line(line);
+            }
+            Event::Key(key) if is_primary_key_event(&key) && key.code == KeyCode::Enter => {
+                write!(stdout, "\r\n")?;
+                stdout.flush()?;
+                break PromptResult::Line(line);
+            }
+            Event::Key(key)
+                if is_primary_key_event(&key)
+                    && key.code == KeyCode::Char('c')
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                dismiss_inline_prompt(&mut stdout, &render_state)?;
+                writeln!(stdout)?;
+                stdout.flush()?;
+                break PromptResult::Interrupt;
+            }
+            Event::Key(key)
+                if is_primary_key_event(&key)
+                    && key.code == KeyCode::Char('d')
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                if line.is_empty() {
+                    dismiss_inline_prompt(&mut stdout, &render_state)?;
+                    writeln!(stdout)?;
+                    stdout.flush()?;
+                    break PromptResult::Eof;
+                }
+            }
+            Event::Key(key)
+                if is_primary_key_event(&key)
+                    && key.code == KeyCode::Char('u')
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                line.clear();
+                cursor_pos = 0;
+                history_index = None;
+            }
+            Event::Key(key)
+                if is_primary_key_event(&key)
+                    && key.code == KeyCode::Char('w')
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                if cursor_pos > 0 {
+                    let chars: Vec<char> = line.chars().collect();
+                    let mut new_pos = cursor_pos;
+                    while new_pos > 0 && chars[new_pos - 1].is_whitespace() {
+                        new_pos -= 1;
+                    }
+                    while new_pos > 0 && !chars[new_pos - 1].is_whitespace() {
+                        new_pos -= 1;
+                    }
+                    replace_char_range(&mut line, new_pos, cursor_pos, "");
+                    cursor_pos = new_pos;
+                    history_index = None;
+                }
+            }
+            Event::Key(key) if is_history_prev_key(&key) => {
+                browse_history_prev(
+                    history,
+                    &mut history_index,
+                    &mut saved_input,
+                    &mut line,
+                    &mut cursor_pos,
+                );
+            }
+            Event::Key(key) if is_history_next_key(&key) => {
+                browse_history_next(
+                    history,
+                    &mut history_index,
+                    &saved_input,
+                    &mut line,
+                    &mut cursor_pos,
+                );
+            }
+            Event::Key(key) if is_primary_key_event(&key) && key.code == KeyCode::Backspace => {
+                if cursor_pos > 0 {
+                    replace_char_range(&mut line, cursor_pos - 1, cursor_pos, "");
+                    cursor_pos -= 1;
+                    history_index = None;
+                }
+            }
+            Event::Key(key) if is_primary_key_event(&key) && key.code == KeyCode::Delete => {
+                if cursor_pos < line.chars().count() {
+                    replace_char_range(&mut line, cursor_pos, cursor_pos + 1, "");
+                    history_index = None;
+                }
+            }
+            Event::Key(key) if is_primary_key_event(&key) && key.code == KeyCode::Left => {
+                cursor_pos = cursor_pos.saturating_sub(1);
+            }
+            Event::Key(key) if is_primary_key_event(&key) && key.code == KeyCode::Right => {
+                if cursor_pos < line.chars().count() {
+                    cursor_pos += 1;
+                }
+            }
+            Event::Key(key) if is_primary_key_event(&key) && key.code == KeyCode::Home => {
+                cursor_pos = 0;
+            }
+            Event::Key(key) if is_primary_key_event(&key) && key.code == KeyCode::End => {
+                cursor_pos = line.chars().count();
+            }
+            Event::Key(key)
+                if is_primary_key_event(&key)
+                    && matches!(key.code, KeyCode::Char(_))
+                    && !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                let KeyCode::Char(ch) = key.code else {
+                    unreachable!();
+                };
+                insert_char_at_cursor(&mut line, cursor_pos, ch);
+                cursor_pos += 1;
+                history_index = None;
+            }
+            _ => {}
+        }
+
+        render_state = render_inline_prompt(
+            &mut stdout,
+            prompt_str,
+            prompt_width,
+            content_width,
+            &line,
+            cursor_pos,
+            Some(&render_state),
+        )?;
+    };
+
+    terminal::disable_raw_mode()?;
+    Ok(result)
+}
+
+fn render_inline_prompt<W: Write>(
+    stdout: &mut W,
+    prompt_str: &str,
+    prompt_width: usize,
+    content_width: usize,
+    line: &str,
+    cursor_pos: usize,
+    previous_state: Option<&PromptRenderState>,
+) -> io::Result<PromptRenderState> {
+    let _ = previous_state;
+
+    let (rows, row_index, cursor_col) = current_wrapped_position(line, cursor_pos, content_width);
+    let row = rows
+        .get(row_index)
+        .map(|row| row.text.as_str())
+        .unwrap_or("");
+    write!(stdout, "\r\x1b[2K{}{}", prompt_str, row)?;
+
+    execute!(
+        stdout,
+        cursor::MoveToColumn((prompt_width + cursor_col) as u16)
+    )?;
+    stdout.flush()?;
+
+    Ok(PromptRenderState {
+        cursor_row_in_view: 0,
+        screen_rows: 0,
+        frame_height: 1,
+    })
+}
+
+fn dismiss_inline_prompt<W: Write>(stdout: &mut W, state: &PromptRenderState) -> io::Result<()> {
+    let _ = state;
+    write!(stdout, "\r\x1b[2K")?;
+    stdout.flush()?;
+    Ok(())
 }
 
 fn render_prompt_frame<W: Write>(

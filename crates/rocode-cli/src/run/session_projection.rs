@@ -14,10 +14,65 @@ fn cli_set_root_server_session(runtime: &mut CliExecutionRuntime, session_id: St
     if let Ok(mut transcripts) = runtime.child_session_transcripts.lock() {
         transcripts.clear();
     }
+    if let Ok(mut accumulators) = runtime.stream_accumulators.lock() {
+        accumulators.clear();
+    }
+    if let Ok(mut render_states) = runtime.render_states.lock() {
+        render_states.clear();
+    }
     if let Ok(mut focused) = runtime.focused_session_id.lock() {
         *focused = None;
     }
     cli_set_view_label(runtime, None);
+}
+
+fn cli_render_session_block(
+    runtime: &CliExecutionRuntime,
+    session_id: &str,
+    block: &OutputBlock,
+    style: &CliStyle,
+) -> String {
+    let key = cli_canonical_session_id(runtime, session_id);
+    let show_thinking = runtime.show_thinking.load(Ordering::SeqCst);
+    let accumulators = match runtime.stream_accumulators.lock() {
+        Ok(accumulators) => accumulators,
+        Err(_) => return render_cli_block_rich(block, style),
+    };
+    let Some(accumulator) = accumulators.get(&key) else {
+        return render_cli_block_rich(block, style);
+    };
+    let mut render_states = match runtime.render_states.lock() {
+        Ok(states) => states,
+        Err(_) => return render_cli_block_rich(block, style),
+    };
+    let state = render_states.entry(key).or_default();
+    render_terminal_stream_block_semantic(state, accumulator, block, style, show_thinking)
+}
+
+fn cli_canonical_session_id(runtime: &CliExecutionRuntime, session_id: &str) -> String {
+    if !session_id.is_empty() {
+        return session_id.to_string();
+    }
+
+    runtime
+        .server_session_id
+        .clone()
+        .unwrap_or_else(|| "__root__".to_string())
+}
+
+fn cli_observe_terminal_stream_block(
+    runtime: &CliExecutionRuntime,
+    session_id: &str,
+    block_id: Option<&str>,
+    block: &OutputBlock,
+) {
+    let key = cli_canonical_session_id(runtime, session_id);
+    if let Ok(mut accumulators) = runtime.stream_accumulators.lock() {
+        accumulators
+            .entry(key)
+            .or_insert_with(TerminalStreamAccumulator::new)
+            .apply_output_block(block_id, block);
+    }
 }
 
 fn cli_tracks_related_session(runtime: &CliExecutionRuntime, session_id: &str) -> bool {
@@ -64,18 +119,16 @@ fn cli_untrack_child_session(
         .unwrap_or(false)
 }
 
-fn cli_cache_child_session_block(
+fn cli_cache_child_session_rendered(
     runtime: &CliExecutionRuntime,
     session_id: &str,
-    block: &OutputBlock,
-    style: &CliStyle,
+    rendered: &str,
 ) {
-    let rendered = render_cli_block_rich(block, style);
     if let Ok(mut transcripts) = runtime.child_session_transcripts.lock() {
         transcripts
             .entry(session_id.to_string())
             .or_default()
-            .append_rendered(&rendered);
+            .append_rendered(rendered);
     }
 }
 
@@ -84,9 +137,13 @@ fn cli_cache_root_session_block(
     block: &OutputBlock,
     style: &CliStyle,
 ) {
-    let rendered = render_cli_block_rich(block, style);
+    let rendered = cli_render_session_block(runtime, "", block, style);
+    cli_cache_root_session_rendered(runtime, &rendered);
+}
+
+fn cli_cache_root_session_rendered(runtime: &CliExecutionRuntime, rendered: &str) {
     if let Ok(mut transcript) = runtime.root_session_transcript.lock() {
-        transcript.append_rendered(&rendered);
+        transcript.append_rendered(rendered);
     }
 }
 
@@ -1156,4 +1213,3 @@ fn cli_render_retained_layout(
 
     screen
 }
-

@@ -345,7 +345,7 @@ fn render_message_rich(message: &MessageBlock, style: &CliStyle) -> String {
             format!("{} ", bullet)
         }
         MessagePhase::Delta => message.text.clone(),
-        MessagePhase::End => "\n\n".to_string(),
+        MessagePhase::End => "\n".to_string(),
         MessagePhase::Full => {
             let rendered = match message.role {
                 MessageRole::User => message.text.clone(),
@@ -364,7 +364,7 @@ fn render_message_rich(message: &MessageBlock, style: &CliStyle) -> String {
                 MessageRole::System => style.bold_yellow(style.bullet()),
             };
             let indented = indent_continuation_lines(rendered.trim_end(), indent);
-            format!("{} {}\n\n", bullet, indented)
+            format!("{} {}\n", bullet, indented)
         }
     }
 }
@@ -394,7 +394,7 @@ fn strip_think_tags(text: &str) -> String {
 fn render_reasoning_rich(reasoning: &ReasoningBlock, style: &CliStyle) -> String {
     match reasoning.phase {
         MessagePhase::Start => format!(
-            "\n{} {}\n{} ",
+            "  {} {}\n  {} ",
             style.dim("╭"),
             style.dim("thinking"),
             style.dim("│")
@@ -416,7 +416,7 @@ fn render_reasoning_rich(reasoning: &ReasoningBlock, style: &CliStyle) -> String
             } else {
                 let indented = indent_continuation_lines(&cleaned, "│ ");
                 format!(
-                    "{} {}\n{}\n",
+                    "  {} {}\n  {}\n",
                     style.dim("╭"),
                     style.dim("thinking"),
                     style.dim(&format!("│ {}", indented))
@@ -431,7 +431,7 @@ fn render_tool_rich(tool: &ToolBlock, style: &CliStyle) -> String {
         ToolPhase::Start => {
             let label = format_tool_header(tool);
             format!(
-                "\n{} {}\n",
+                "{} {}\n",
                 style.bold_cyan(style.bullet()),
                 style.bold(&label)
             )
@@ -471,29 +471,24 @@ fn render_session_event_rich(event: &SessionEventBlock, style: &CliStyle) -> Str
         _ => style.bold(&event.title),
     };
     let mut out = format!(
-        "\n{} {} {}\n",
+        "{} {} {}\n",
         style.bold_cyan(style.bullet()),
         heading,
         style.dim(&format!("[{}]", event.event))
     );
     if let Some(summary) = event.summary.as_deref().filter(|value| !value.is_empty()) {
-        out.push_str(&format!(
-            "  {} {}\n",
-            style.dim(style.tree_end()),
-            style.dim(summary)
-        ));
+        out.push_str(&format!("  {}\n", style.dim(summary)));
     }
     for field in &event.fields {
         out.push_str(&format!(
-            "  {} {}: {}\n",
-            style.dim(style.tree_end()),
+            "  {}: {}\n",
             style.bold(&field.label),
             field.value
         ));
     }
     if let Some(body) = event.body.as_deref().filter(|value| !value.is_empty()) {
         for line in body.lines() {
-            out.push_str(&format!("  {} {}\n", style.dim(style.tree_end()), line));
+            out.push_str(&format!("  {}\n", line));
         }
     }
     out
@@ -1010,7 +1005,11 @@ fn render_tool_done_rich(tool: &ToolBlock, style: &CliStyle) -> String {
             } => {
                 if let Some(diff) = diff_preview {
                     let rendered_diff = render_diff_preview(diff, style);
-                    return format!("  {} {}\n", style.tree_end(), rendered_diff);
+                    return render_tool_detail_block(
+                        Some(style.dim("updated")),
+                        Some(rendered_diff),
+                        style,
+                    );
                 }
             }
             ToolStructuredDetail::FileWrite {
@@ -1033,14 +1032,13 @@ fn render_tool_done_rich(tool: &ToolBlock, style: &CliStyle) -> String {
                 };
                 if let Some(diff) = diff_preview {
                     let rendered_diff = render_diff_preview(diff, style);
-                    return format!(
-                        "  {} {}\n{}\n",
-                        style.tree_end(),
-                        style.dim(&summary),
-                        rendered_diff
+                    return render_tool_detail_block(
+                        Some(style.dim(&summary)),
+                        Some(rendered_diff),
+                        style,
                     );
                 }
-                return format!("  {} {}\n", style.tree_end(), style.dim(&summary));
+                return render_tool_detail_block(Some(style.dim(&summary)), None, style);
             }
             ToolStructuredDetail::FileRead {
                 file_path: _,
@@ -1059,7 +1057,7 @@ fn render_tool_done_rich(tool: &ToolBlock, style: &CliStyle) -> String {
                 } else {
                     parts.join(", ")
                 };
-                return format!("  {} {}\n", style.tree_end(), style.dim(&summary));
+                return render_tool_detail_block(Some(style.dim(&summary)), None, style);
             }
             ToolStructuredDetail::BashExec {
                 command_preview: _,
@@ -1067,15 +1065,10 @@ fn render_tool_done_rich(tool: &ToolBlock, style: &CliStyle) -> String {
                 output_preview,
                 truncated,
             } => {
-                let mut out = String::new();
-                if let Some(preview) = output_preview {
+                let preview_line = output_preview.as_ref().map(|preview| {
                     let collapsed = style.collapse_with_width(preview, 5, 2, None);
-                    out.push_str(&format!(
-                        "  {} {}\n",
-                        style.tree_end(),
-                        style.dim(&collapsed)
-                    ));
-                }
+                    style.dim(&collapsed)
+                });
                 let exit_str = match exit_code {
                     Some(0) | None => style.green("exit 0"),
                     Some(code) => style.red(&format!("exit {}", code)),
@@ -1084,8 +1077,11 @@ fn render_tool_done_rich(tool: &ToolBlock, style: &CliStyle) -> String {
                 if *truncated {
                     suffix.push_str(&style.dim(" (truncated)"));
                 }
-                out.push_str(&format!("  {} {}\n", style.tree_end(), suffix));
-                return out;
+                let body = preview_line
+                    .as_ref()
+                    .map(|preview| format!("{preview}\n{suffix}"))
+                    .unwrap_or(suffix);
+                return render_tool_detail_block(None, Some(body), style);
             }
             ToolStructuredDetail::Search {
                 pattern: _,
@@ -1104,7 +1100,7 @@ fn render_tool_done_rich(tool: &ToolBlock, style: &CliStyle) -> String {
                 } else {
                     parts.join(", ")
                 };
-                return format!("  {} {}\n", style.tree_end(), style.dim(&summary));
+                return render_tool_detail_block(Some(style.dim(&summary)), None, style);
             }
             ToolStructuredDetail::Generic => {}
         }
@@ -1113,11 +1109,28 @@ fn render_tool_done_rich(tool: &ToolBlock, style: &CliStyle) -> String {
     // Fallback: no structured data
     let detail = tool.detail.as_deref().unwrap_or("");
     if detail.is_empty() {
-        format!("  {} {}\n", style.tree_end(), style.green("Done"))
+        render_tool_detail_block(Some(style.green("Done")), None, style)
     } else {
         let collapsed = style.collapse_with_width(detail, 5, 2, None);
-        format!("  {} {}\n", style.tree_end(), collapsed)
+        render_tool_detail_block(Some(collapsed), None, style)
     }
+}
+
+fn render_tool_detail_block(
+    summary: Option<String>,
+    body: Option<String>,
+    style: &CliStyle,
+) -> String {
+    let mut out = String::new();
+    if let Some(summary) = summary.filter(|value| !value.trim().is_empty()) {
+        out.push_str(&format!("  {} {}\n", style.tree_end(), summary));
+    }
+    if let Some(body) = body.filter(|value| !value.trim().is_empty()) {
+        for line in body.lines() {
+            out.push_str(&format!("    {}\n", line));
+        }
+    }
+    out
 }
 
 /// Render a unified diff preview with ± color.
@@ -1137,20 +1150,17 @@ fn render_diff_preview(diff: &str, style: &CliStyle) -> String {
 
     for (i, line) in visible.iter().enumerate() {
         if total > max_lines && i == max_lines {
-            out.push(format!(
-                "     {}",
-                style.dim(&format!("… +{} lines", total - max_lines))
-            ));
+            out.push(style.dim(&format!("… +{} lines", total - max_lines)));
             break;
         }
         let rendered = if line.starts_with('+') && !line.starts_with("+++") {
-            format!("     {}", style.green(line))
+            style.green(line)
         } else if line.starts_with('-') && !line.starts_with("---") {
-            format!("     {}", style.red(line))
+            style.red(line)
         } else if line.starts_with("@@") {
-            format!("     {}", style.cyan(line))
+            style.cyan(line)
         } else {
-            format!("     {}", style.dim(line))
+            style.dim(line)
         };
         out.push(rendered);
     }
@@ -1391,6 +1401,7 @@ mod tests {
         let out = render_cli_block_rich(&OutputBlock::Tool(ToolBlock::start("edit")), &style);
         assert!(out.contains("Edit"));
         assert!(out.contains("●"));
+        assert!(!out.starts_with('\n'));
     }
 
     #[test]
@@ -1419,6 +1430,78 @@ mod tests {
         );
         assert!(out.contains("●"));
         assert!(!out.starts_with('\n'));
+    }
+
+    #[test]
+    fn rich_reasoning_start_has_no_leading_blank_line() {
+        let style = CliStyle {
+            color: true,
+            width: 80,
+        };
+        let out = render_cli_block_rich(&OutputBlock::Reasoning(ReasoningBlock::start()), &style);
+        assert!(!out.starts_with('\n'));
+        assert!(out.contains("thinking"));
+    }
+
+    #[test]
+    fn rich_reasoning_end_leaves_a_block_boundary() {
+        let style = CliStyle {
+            color: true,
+            width: 80,
+        };
+        let out = render_cli_block_rich(&OutputBlock::Reasoning(ReasoningBlock::end()), &style);
+        assert_eq!(out, "\n");
+    }
+
+    #[test]
+    fn rich_tool_done_groups_summary_and_preview_without_blank_gaps() {
+        let style = CliStyle {
+            color: true,
+            width: 80,
+        };
+        let out = render_cli_block_rich(
+            &OutputBlock::Tool(ToolBlock {
+                name: "write".to_string(),
+                phase: ToolPhase::Done,
+                detail: None,
+                structured: Some(ToolStructuredDetail::FileWrite {
+                    file_path: "src/main.rs".to_string(),
+                    bytes: Some(42),
+                    lines: Some(3),
+                    diff_preview: Some("@@ -1 +1 @@\n-old\n+new".to_string()),
+                }),
+            }),
+            &style,
+        );
+        assert!(out.contains("wrote 3 lines, 42 bytes"));
+        assert!(out.contains("@@ -1 +1 @@"));
+        assert!(!out.contains("\n\n"));
+    }
+
+    #[test]
+    fn rich_session_event_has_no_leading_blank_line() {
+        let style = CliStyle {
+            color: true,
+            width: 80,
+        };
+        let out = render_cli_block_rich(
+            &OutputBlock::SessionEvent(SessionEventBlock {
+                title: "Web Search".to_string(),
+                event: "websearch".to_string(),
+                status: Some("completed".to_string()),
+                summary: Some("query finished".to_string()),
+                fields: vec![SessionEventField {
+                    label: "query".to_string(),
+                    value: "青岛小麦岛天气".to_string(),
+                    tone: None,
+                }],
+                body: None,
+            }),
+            &style,
+        );
+        assert!(!out.starts_with('\n'));
+        assert!(out.contains("Web Search"));
+        assert!(out.contains("⎿"));
     }
 
     #[test]

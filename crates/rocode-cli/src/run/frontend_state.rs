@@ -1323,6 +1323,8 @@ async fn build_cli_execution_runtime(
         related_session_ids: Arc::new(Mutex::new(BTreeSet::new())),
         root_session_transcript: Arc::new(Mutex::new(CliRetainedTranscript::default())),
         child_session_transcripts: Arc::new(Mutex::new(HashMap::new())),
+        stream_accumulators: Arc::new(Mutex::new(HashMap::new())),
+        render_states: Arc::new(Mutex::new(HashMap::new())),
         focused_session_id: Arc::new(Mutex::new(None)),
         permission_memory: Arc::new(AsyncMutex::new(PermissionMemory::new())),
         show_thinking: Arc::new(AtomicBool::new(selection.show_thinking)),
@@ -1564,4 +1566,3 @@ fn cli_render_startup_banner(style: &CliStyle, recent: Option<&CliRecentSessionI
     out.push_str("\r\n");
     out
 }
-

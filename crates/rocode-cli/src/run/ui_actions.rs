@@ -5,6 +5,17 @@ fn cli_resolve_registry_ui_action(
     registry.resolve_ui_slash_input(input)
 }
 
+fn cli_normalize_model_ref(model_ref: &str) -> String {
+    let trimmed = model_ref.trim();
+    let (provider, model_id) = parse_model_and_provider(Some(trimmed.to_string()));
+    match (provider, model_id) {
+        (Some(provider), Some(model_id)) if !provider.is_empty() && !model_id.is_empty() => {
+            format!("{provider}/{model_id}")
+        }
+        _ => trimmed.to_string(),
+    }
+}
+
 async fn cli_prompt_action_text(
     runtime: &CliExecutionRuntime,
     header: Option<&str>,
@@ -401,10 +412,11 @@ async fn cli_execute_ui_action(
         }
         UiActionId::OpenModelList => {
             if let Some(model_ref) = argument.map(str::trim).filter(|value| !value.is_empty()) {
+                let normalized_model_ref = cli_normalize_model_ref(model_ref);
                 let mut exists = false;
                 for provider in provider_registry.list() {
                     for model in provider.models() {
-                        if format!("{}/{}", provider.id(), model.id) == model_ref {
+                        if format!("{}/{}", provider.id(), model.id) == normalized_model_ref {
                             exists = true;
                             break;
                         }
@@ -414,12 +426,12 @@ async fn cli_execute_ui_action(
                     }
                 }
                 if exists {
-                    runtime.resolved_model_label = model_ref.to_string();
+                    runtime.resolved_model_label = normalized_model_ref.clone();
                     let _ = print_block(
                         Some(runtime),
                         OutputBlock::Status(StatusBlock::title(format!(
                             "Model set to {}",
-                            model_ref
+                            normalized_model_ref
                         ))),
                         repl_style,
                     );
@@ -439,7 +451,7 @@ async fn cli_execute_ui_action(
             let mut lines = Vec::new();
             for p in provider_registry.list() {
                 for m in p.models() {
-                    lines.push(format!("{}:{}", p.id(), m.id));
+                    lines.push(format!("{}/{}", p.id(), m.id));
                 }
             }
             let _ =

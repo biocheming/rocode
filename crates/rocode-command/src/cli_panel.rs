@@ -61,7 +61,6 @@ impl CliPanelFrame {
 
     pub fn render_lines(&self, lines: &[String]) -> String {
         let mut out = String::new();
-        out.push_str("\r\n");
         out.push_str(&self.header_line);
         out.push_str("\r\n");
 
@@ -247,5 +246,19 @@ mod tests {
     fn panel_wraps_fullwidth_rows() {
         let rows = wrap_display_text("你好 world", 6);
         assert_eq!(rows, vec!["你好 w", "orld"]);
+    }
+
+    #[test]
+    fn rendered_panel_does_not_leak_untracked_leading_blank_line() {
+        let style = CliStyle {
+            color: false,
+            width: 40,
+        };
+        let frame = CliPanelFrame::boxed("Question", Some("footer"), &style);
+        let lines = vec!["line one".to_string(), "line two".to_string()];
+        let rendered = frame.render_lines(&lines);
+
+        assert!(!rendered.starts_with("\r\n"));
+        assert_eq!(rendered.lines().count(), frame.rendered_line_count(&lines));
     }
 }

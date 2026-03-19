@@ -13,6 +13,13 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
     Frame,
 };
+use rocode_command::terminal_presentation::{
+    collect_assistant_tool_results, compose_assistant_segments, is_tool_result_carrier,
+    TerminalAssistantSegment, TerminalMessage, TerminalMessagePart, TerminalMessageRole,
+};
+use rocode_command::terminal_segment_display::{
+    render_file_segment_line, render_image_segment_line,
+};
 
 use super::message_palette;
 use super::sidebar::SidebarState;
@@ -551,6 +558,8 @@ impl SessionView {
             .get(&self.session_id)
             .map(|list| list.as_slice())
             .unwrap_or(&[]);
+        let terminal_messages: Vec<TerminalMessage> =
+            messages.iter().map(terminal_message_from_context).collect();
         let revert_info = session_ctx.revert.get(&self.session_id).cloned();
         let last_assistant_idx = messages
             .iter()
@@ -590,7 +599,10 @@ impl SessionView {
         }
 
         for (idx, msg) in messages.iter().enumerate() {
-            if is_tool_result_carrier(msg) {
+            if terminal_messages
+                .get(idx)
+                .is_some_and(is_tool_result_carrier)
+            {
                 continue;
             }
             // Smart spacing: role transitions always get a blank line;
@@ -648,7 +660,7 @@ impl SessionView {
                     let message_border = assistant_border;
                     let message_thinking_bg = thinking_bg;
                     let message_thinking_border = thinking_border;
-                    let tool_results = collect_assistant_tool_results(messages, idx);
+                    let tool_results = collect_assistant_tool_results(&terminal_messages, idx);
                     let is_active_assistant = last_assistant_idx == Some(idx)
                         && msg.finish.is_none()
                         && msg.error.is_none();
@@ -695,29 +707,32 @@ impl SessionView {
                                 content_width,
                             ),
                         );
-                    } else {
-                        let mut prev_was_text = false;
-                        let mut prev_was_tool = false;
-                        for (part_idx, part) in msg.parts.iter().enumerate() {
-                            match part {
-                                MessagePart::Text { text } => {
-                                    // Add margin when transitioning from tool back to text
-                                    if prev_was_tool {
-                                        append_message_lines(
-                                            &mut lines,
-                                            &mut line_to_message,
-                                            &msg.id,
-                                            vec![paint_block_line(
-                                                Line::from(""),
-                                                message_bg,
-                                                message_border,
-                                                content_width,
-                                            )],
-                                        );
-                                    }
+                    } else if let Some(terminal_message) = terminal_messages.get(idx) {
+                        let segments = compose_assistant_segments(
+                            terminal_message,
+                            &tool_results,
+                            running_tool_call,
+                            show_thinking,
+                        );
+                        for segment in segments {
+                            match segment {
+                                TerminalAssistantSegment::Spacer => {
+                                    append_message_lines(
+                                        &mut lines,
+                                        &mut line_to_message,
+                                        &msg.id,
+                                        vec![paint_block_line(
+                                            Line::from(""),
+                                            message_bg,
+                                            message_border,
+                                            content_width,
+                                        )],
+                                    );
+                                }
+                                TerminalAssistantSegment::Text { text, .. } => {
                                     let rendered = super::session_text::render_message_text_part(
                                         msg,
-                                        text,
+                                        &text,
                                         &theme,
                                         assistant_marker,
                                     );
@@ -741,112 +756,67 @@ impl SessionView {
                                             content_width,
                                         ),
                                     );
-                                    prev_was_text = true;
-                                    prev_was_tool = false;
                                 }
-                                MessagePart::Reasoning { text } => {
-                                    if show_thinking {
-                                        if prev_was_text || prev_was_tool {
-                                            append_message_lines(
-                                                &mut lines,
-                                                &mut line_to_message,
-                                                &msg.id,
-                                                vec![paint_block_line(
-                                                    Line::from(""),
-                                                    message_bg,
-                                                    message_border,
-                                                    content_width,
-                                                )],
-                                            );
-                                        }
-                                        let reasoning_id = format!("{}:{part_idx}", msg.id);
-                                        let collapsed =
-                                            !self.expanded_reasoning.contains(&reasoning_id);
-                                        let start_line = lines.len();
-                                        let rendered = super::session_text::render_reasoning_part(
-                                            text,
-                                            &theme,
-                                            collapsed,
-                                            THINKING_PREVIEW_LINES,
+                                TerminalAssistantSegment::Reasoning { part_index, text } => {
+                                    let reasoning_id = format!("{}:{part_index}", msg.id);
+                                    let collapsed =
+                                        !self.expanded_reasoning.contains(&reasoning_id);
+                                    let start_line = lines.len();
+                                    let rendered = super::session_text::render_reasoning_part(
+                                        &text,
+                                        &theme,
+                                        collapsed,
+                                        THINKING_PREVIEW_LINES,
+                                    );
+                                    if !rendered.lines.is_empty() {
+                                        let painted = paint_block_lines(
+                                            rendered.lines,
+                                            message_thinking_bg,
+                                            message_thinking_border,
+                                            content_width,
                                         );
-                                        if !rendered.lines.is_empty() {
-                                            let painted = paint_block_lines(
-                                                rendered.lines,
-                                                message_thinking_bg,
-                                                message_thinking_border,
-                                                content_width,
-                                            );
-                                            append_message_lines(
-                                                &mut lines,
-                                                &mut line_to_message,
-                                                &msg.id,
-                                                painted,
-                                            );
-                                            if rendered.collapsible {
-                                                let end_line = lines.len().saturating_sub(1);
-                                                visible_reasoning_ids.insert(reasoning_id.clone());
-                                                self.thinking_toggle_hits.push(ThinkingToggleHit {
-                                                    line_index: start_line,
-                                                    reasoning_id: reasoning_id.clone(),
-                                                });
-                                                if end_line > start_line {
-                                                    self.thinking_toggle_hits.push(
-                                                        ThinkingToggleHit {
-                                                            line_index: end_line,
-                                                            reasoning_id,
-                                                        },
-                                                    );
-                                                }
-                                            }
-                                        }
-                                        prev_was_text = false;
-                                        prev_was_tool = false;
-                                    }
-                                }
-                                MessagePart::ToolCall {
-                                    id,
-                                    name,
-                                    arguments,
-                                } => {
-                                    // Add margin when transitioning from text to tool
-                                    if prev_was_text {
                                         append_message_lines(
                                             &mut lines,
                                             &mut line_to_message,
                                             &msg.id,
-                                            vec![paint_block_line(
-                                                Line::from(""),
-                                                message_bg,
-                                                message_border,
-                                                content_width,
-                                            )],
+                                            painted,
                                         );
-                                    }
-                                    let state = if let Some(info) = tool_results.get(id) {
-                                        if info.is_error {
-                                            super::session_tool::ToolState::Failed
-                                        } else {
-                                            super::session_tool::ToolState::Completed
+                                        if rendered.collapsible {
+                                            let end_line = lines.len().saturating_sub(1);
+                                            visible_reasoning_ids.insert(reasoning_id.clone());
+                                            self.thinking_toggle_hits.push(ThinkingToggleHit {
+                                                line_index: start_line,
+                                                reasoning_id: reasoning_id.clone(),
+                                            });
+                                            if end_line > start_line {
+                                                self.thinking_toggle_hits.push(ThinkingToggleHit {
+                                                    line_index: end_line,
+                                                    reasoning_id,
+                                                });
+                                            }
                                         }
-                                    } else if running_tool_call == Some(id.as_str()) {
-                                        super::session_tool::ToolState::Running
-                                    } else {
-                                        super::session_tool::ToolState::Pending
-                                    };
+                                    }
+                                }
+                                TerminalAssistantSegment::ToolCall {
+                                    name,
+                                    arguments,
+                                    state,
+                                    result,
+                                    ..
+                                } => {
                                     let tool_lines = super::session_tool::render_tool_call(
-                                        id,
-                                        name,
-                                        arguments,
+                                        &name,
+                                        &arguments,
                                         state,
-                                        &tool_results,
+                                        result.as_ref(),
                                         show_tool_details,
                                         &theme,
                                     );
                                     let painted_tool: Vec<Line<'static>> = tool_lines
                                         .into_iter()
-                                        .map(|l| {
+                                        .map(|line| {
                                             paint_block_line(
-                                                l,
+                                                line,
                                                 message_bg,
                                                 message_border,
                                                 content_width,
@@ -859,22 +829,15 @@ impl SessionView {
                                         &msg.id,
                                         painted_tool,
                                     );
-                                    prev_was_text = false;
-                                    prev_was_tool = true;
                                 }
-                                MessagePart::ToolResult { .. } => {}
-                                MessagePart::File { path, mime } => {
+                                TerminalAssistantSegment::File { path, mime, .. } => {
+                                    let shared_line = render_file_segment_line(&path, &mime);
                                     let file_line = Line::from(vec![
                                         Span::styled(
                                             super::session_text::ASSISTANT_MARKER,
                                             Style::default().fg(assistant_marker),
                                         ),
-                                        Span::styled("[file] ", Style::default().fg(theme.info)),
-                                        Span::styled(path.clone(), Style::default().fg(theme.text)),
-                                        Span::styled(
-                                            format!(" ({})", mime),
-                                            Style::default().fg(theme.text_muted),
-                                        ),
+                                        Span::styled(shared_line.text, Style::default().fg(theme.info)),
                                     ]);
                                     append_message_lines(
                                         &mut lines,
@@ -888,17 +851,14 @@ impl SessionView {
                                         ),
                                     );
                                 }
-                                MessagePart::Image { url } => {
+                                TerminalAssistantSegment::Image { url, .. } => {
+                                    let shared_line = render_image_segment_line(&url);
                                     let image_line = Line::from(vec![
                                         Span::styled(
                                             super::session_text::ASSISTANT_MARKER,
                                             Style::default().fg(assistant_marker),
                                         ),
-                                        Span::styled("[image] ", Style::default().fg(theme.info)),
-                                        Span::styled(
-                                            url.clone(),
-                                            Style::default().fg(theme.text_muted),
-                                        ),
+                                        Span::styled(shared_line.text, Style::default().fg(theme.info)),
                                     ]);
                                     append_message_lines(
                                         &mut lines,
@@ -1420,58 +1380,57 @@ fn push_merged_span(line: &mut Vec<Span<'static>>, ch: char, style: Style) {
     line.push(Span::styled(ch.to_string(), style));
 }
 
-fn is_tool_result_carrier(message: &Message) -> bool {
-    if !matches!(message.role, MessageRole::Tool) {
-        return false;
-    }
+fn terminal_message_from_context(message: &Message) -> TerminalMessage {
+    let role = match message.role {
+        MessageRole::User => TerminalMessageRole::User,
+        MessageRole::Assistant => TerminalMessageRole::Assistant,
+        MessageRole::System => TerminalMessageRole::System,
+        MessageRole::Tool => TerminalMessageRole::Tool,
+    };
 
-    let mut has_tool_result = false;
-    for part in &message.parts {
-        match part {
-            MessagePart::ToolResult { .. } => has_tool_result = true,
-            MessagePart::Text { text } | MessagePart::Reasoning { text }
-                if text.trim().is_empty() => {}
-            _ => return false,
-        }
-    }
-
-    has_tool_result
-}
-
-fn collect_assistant_tool_results(
-    messages: &[Message],
-    assistant_idx: usize,
-) -> HashMap<String, super::session_tool::ToolResultInfo> {
-    let mut tool_results = HashMap::new();
-
-    for (idx, message) in messages.iter().enumerate().skip(assistant_idx) {
-        if idx > assistant_idx && matches!(message.role, MessageRole::Assistant) {
-            break;
-        }
-
-        for part in &message.parts {
-            if let MessagePart::ToolResult {
+    let parts = message
+        .parts
+        .iter()
+        .map(|part| match part {
+            MessagePart::Text { text } => TerminalMessagePart::Text { text: text.clone() },
+            MessagePart::Reasoning { text } => {
+                TerminalMessagePart::Reasoning { text: text.clone() }
+            }
+            MessagePart::File { path, mime } => TerminalMessagePart::File {
+                path: path.clone(),
+                mime: mime.clone(),
+            },
+            MessagePart::Image { url } => TerminalMessagePart::Image { url: url.clone() },
+            MessagePart::ToolCall {
+                id,
+                name,
+                arguments,
+            } => TerminalMessagePart::ToolCall {
+                id: id.clone(),
+                name: name.clone(),
+                arguments: arguments.clone(),
+            },
+            MessagePart::ToolResult {
                 id,
                 result,
                 is_error,
                 title,
                 metadata,
-            } = part
-            {
-                tool_results.insert(
-                    id.clone(),
-                    super::session_tool::ToolResultInfo {
-                        output: result.clone(),
-                        is_error: *is_error,
-                        title: title.clone(),
-                        metadata: metadata.clone(),
-                    },
-                );
-            }
-        }
-    }
+            } => TerminalMessagePart::ToolResult {
+                id: id.clone(),
+                result: result.clone(),
+                is_error: *is_error,
+                title: title.clone(),
+                metadata: metadata.clone(),
+            },
+        })
+        .collect();
 
-    tool_results
+    TerminalMessage {
+        id: message.id.clone(),
+        role,
+        parts,
+    }
 }
 
 fn assistant_footer(
@@ -1639,47 +1598,8 @@ fn format_number(value: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        collect_assistant_tool_results, is_tool_result_carrier, map_scrollbar_row_to_offset,
-    };
-    use crate::context::{Message, MessagePart, MessageRole, TokenUsage};
-    use chrono::Utc;
+    use super::map_scrollbar_row_to_offset;
     use ratatui::layout::Rect;
-
-    fn message(id: &str, role: MessageRole, parts: Vec<MessagePart>) -> Message {
-        Message {
-            id: id.to_string(),
-            role,
-            content: String::new(),
-            created_at: Utc::now(),
-            agent: None,
-            model: None,
-            mode: None,
-            finish: None,
-            error: None,
-            completed_at: None,
-            cost: 0.0,
-            tokens: TokenUsage::default(),
-            metadata: None,
-            parts,
-        }
-    }
-
-    #[test]
-    fn tool_result_carrier_is_detected() {
-        let msg = message(
-            "tool-msg",
-            MessageRole::Tool,
-            vec![MessagePart::ToolResult {
-                id: "call-1".to_string(),
-                result: "ok".to_string(),
-                is_error: false,
-                title: None,
-                metadata: None,
-            }],
-        );
-        assert!(is_tool_result_carrier(&msg));
-    }
 
     #[test]
     fn scrollbar_row_maps_to_expected_offsets() {
@@ -1692,56 +1612,5 @@ mod tests {
         assert_eq!(map_scrollbar_row_to_offset(area, 5, 100), 0);
         assert_eq!(map_scrollbar_row_to_offset(area, 10, 100), 50);
         assert_eq!(map_scrollbar_row_to_offset(area, 15, 100), 100);
-    }
-
-    #[test]
-    fn assistant_collects_tool_results_until_next_assistant() {
-        let messages = vec![
-            message("user-1", MessageRole::User, vec![]),
-            message(
-                "assistant-1",
-                MessageRole::Assistant,
-                vec![MessagePart::ToolCall {
-                    id: "call-1".to_string(),
-                    name: "ls".to_string(),
-                    arguments: r#"{"path":"."}"#.to_string(),
-                }],
-            ),
-            message(
-                "tool-1",
-                MessageRole::Tool,
-                vec![MessagePart::ToolResult {
-                    id: "call-1".to_string(),
-                    result: "file_a\nfile_b".to_string(),
-                    is_error: false,
-                    title: None,
-                    metadata: None,
-                }],
-            ),
-            message(
-                "assistant-2",
-                MessageRole::Assistant,
-                vec![MessagePart::ToolCall {
-                    id: "call-2".to_string(),
-                    name: "read".to_string(),
-                    arguments: r#"{"file_path":"README.md"}"#.to_string(),
-                }],
-            ),
-            message(
-                "tool-2",
-                MessageRole::Tool,
-                vec![MessagePart::ToolResult {
-                    id: "call-2".to_string(),
-                    result: "readme".to_string(),
-                    is_error: false,
-                    title: None,
-                    metadata: None,
-                }],
-            ),
-        ];
-
-        let first_results = collect_assistant_tool_results(&messages, 1);
-        assert!(first_results.contains_key("call-1"));
-        assert!(!first_results.contains_key("call-2"));
     }
 }
