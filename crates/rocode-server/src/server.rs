@@ -244,7 +244,7 @@ pub struct ServerState {
     pub(crate) message_repo: Option<MessageRepository>,
     pub(crate) part_repo: Option<PartRepository>,
     pub category_registry: Arc<rocode_config::CategoryRegistry>,
-    pub(crate) todo_manager: rocode_session::TodoManager,
+    pub(crate) todo_manager: crate::session_runtime::todo::TodoManager,
     pub(crate) runtime_state: Arc<crate::session_runtime::state::RuntimeStateStore>,
 }
 
@@ -334,7 +334,7 @@ impl ServerState {
             message_repo: None,
             part_repo: None,
             category_registry: Arc::new(rocode_config::CategoryRegistry::empty()),
-            todo_manager: rocode_session::TodoManager::new(),
+            todo_manager: crate::session_runtime::todo::TodoManager::new(),
             runtime_state: Arc::new(crate::session_runtime::state::RuntimeStateStore::new()),
         }
     }

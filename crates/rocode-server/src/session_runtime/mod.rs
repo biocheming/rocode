@@ -1,5 +1,6 @@
 pub(crate) mod events;
 pub(crate) mod state;
+pub(crate) mod todo;
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -2361,7 +2362,7 @@ fn collapse_text(input: &str, max_chars: usize) -> String {
 /// stored in the TodoManager (single authority for todo state — Art. 5).
 fn extract_todo_items_from_args(
     tool_args: &serde_json::Value,
-) -> Option<Vec<rocode_session::TodoInfo>> {
+) -> Option<Vec<rocode_types::TodoInfo>> {
     #[derive(Debug, Deserialize, Default)]
     struct TodoWriteArguments {
         #[serde(default)]
@@ -2393,7 +2394,7 @@ fn extract_todo_items_from_args(
             }
             let status = todo.status.unwrap_or_else(|| "pending".to_string());
             let priority = todo.priority.unwrap_or_else(|| "medium".to_string());
-            Some(rocode_session::TodoInfo {
+            Some(rocode_types::TodoInfo {
                 content,
                 status,
                 priority,

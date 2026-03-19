@@ -2,40 +2,36 @@ use rocode_core::bus::{Bus, BusEventDef};
 use rocode_core::contracts::events::BusEventName;
 use rocode_core::contracts::todo::keys as todo_keys;
 use rocode_core::contracts::wire::keys as wire_keys;
+use rocode_types::TodoInfo;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct TodoInfo {
-    pub content: String,
-    pub status: String,
-    pub priority: String,
-}
-
-pub struct TodoManager {
+pub(crate) struct TodoManager {
     state: Arc<RwLock<HashMap<String, Vec<TodoInfo>>>>,
     bus: Option<Arc<Bus>>,
 }
 
-pub static TODO_UPDATED_EVENT: BusEventDef = BusEventDef::new(BusEventName::TodoUpdated.as_str());
+pub(crate) static TODO_UPDATED_EVENT: BusEventDef =
+    BusEventDef::new(BusEventName::TodoUpdated.as_str());
 
 impl TodoManager {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             state: Arc::new(RwLock::new(HashMap::new())),
             bus: None,
         }
     }
 
-    pub fn with_bus(bus: Arc<Bus>) -> Self {
+    #[cfg(test)]
+    pub(crate) fn with_bus(bus: Arc<Bus>) -> Self {
         Self {
             state: Arc::new(RwLock::new(HashMap::new())),
             bus: Some(bus),
         }
     }
 
-    pub async fn update(&self, session_id: &str, todos: Vec<TodoInfo>) {
+    pub(crate) async fn update(&self, session_id: &str, todos: Vec<TodoInfo>) {
         let todos_payload = todos.clone();
 
         let mut state = self.state.write().await;
@@ -57,46 +53,9 @@ impl TodoManager {
         }
     }
 
-    pub async fn get(&self, session_id: &str) -> Vec<TodoInfo> {
+    pub(crate) async fn get(&self, session_id: &str) -> Vec<TodoInfo> {
         let state = self.state.read().await;
         state.get(session_id).cloned().unwrap_or_default()
-    }
-
-    pub async fn clear(&self, session_id: &str) {
-        let mut state = self.state.write().await;
-        state.remove(session_id);
-    }
-
-    pub async fn set_status(&self, session_id: &str, index: usize, status: &str) -> bool {
-        let mut state = self.state.write().await;
-        if let Some(todos) = state.get_mut(session_id) {
-            if index < todos.len() {
-                todos[index].status = status.to_string();
-
-                return true;
-            }
-        }
-        false
-    }
-
-    pub async fn add(&self, session_id: &str, todo: TodoInfo) {
-        let mut state = self.state.write().await;
-        state
-            .entry(session_id.to_string())
-            .or_insert_with(Vec::new)
-            .push(todo);
-    }
-
-    pub async fn remove(&self, session_id: &str, index: usize) -> bool {
-        let mut state = self.state.write().await;
-        if let Some(todos) = state.get_mut(session_id) {
-            if index < todos.len() {
-                todos.remove(index);
-
-                return true;
-            }
-        }
-        false
     }
 }
 
@@ -109,7 +68,8 @@ impl Default for TodoManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::time::{timeout, Duration};
+    use rocode_core::contracts::todo::{TodoPriority, TodoStatus};
+    use tokio::time::{Duration, timeout};
 
     #[tokio::test]
     async fn todo_updated_event_is_published() {
@@ -139,14 +99,4 @@ mod tests {
             "write tests"
         );
     }
-}
-
-pub use rocode_core::contracts::todo::{TodoPriority, TodoStatus};
-
-pub fn parse_status(status: &str) -> TodoStatus {
-    TodoStatus::parse(status).unwrap_or(TodoStatus::Pending)
-}
-
-pub fn parse_priority(priority: &str) -> TodoPriority {
-    TodoPriority::parse(priority).unwrap_or(TodoPriority::Medium)
 }

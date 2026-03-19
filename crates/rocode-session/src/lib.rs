@@ -1,7 +1,6 @@
 #![allow(ambiguous_glob_reexports)]
 
 pub mod compaction;
-pub mod mcp_bridge;
 pub mod message;
 pub mod message_v2;
 pub mod prompt;
@@ -10,9 +9,7 @@ pub mod revert;
 pub mod session;
 pub mod session_model;
 pub mod snapshot;
-pub mod status;
 pub mod summary;
-pub mod todo;
 
 pub use compaction::*;
 pub use message::*;
@@ -21,9 +18,7 @@ pub use prompt::*;
 pub use retry::*;
 pub use revert::*;
 pub use session::*;
-pub use status::*;
 pub use summary::*;
-pub use todo::*;
 
 pub use session::{
     BusyError, FileDiff, PermissionRuleset, RunStatus, Session, SessionError, SessionEvent,
