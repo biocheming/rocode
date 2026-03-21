@@ -17,9 +17,7 @@ use rocode_command::terminal_presentation::{
     collect_assistant_tool_results, compose_assistant_segments, is_tool_result_carrier,
     TerminalAssistantSegment, TerminalMessage, TerminalMessagePart, TerminalMessageRole,
 };
-use rocode_command::terminal_tool_block_display::{
-    build_file_items, build_image_items,
-};
+use rocode_command::terminal_tool_block_display::{build_file_items, build_image_items};
 
 use super::message_palette;
 use super::shared_block_items::render_shared_message_block_items;

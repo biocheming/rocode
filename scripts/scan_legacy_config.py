@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Scan legacy OpenCode/Claude directories and config files, then print a
+Scan legacy OpenCode / legacy CLI tool directories and config files, then print a
 rocode.jsonc-compatible fragment for initial migration.
 """
 
@@ -531,7 +531,7 @@ def build_fragment(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Scan OpenCode/Claude legacy directories and config files, then emit a "
+            "Scan OpenCode and other legacy CLI tool directories and config files, then emit a "
             "rocode.jsonc fragment for plugin_paths/skill_paths/model/mcp."
         )
     )
@@ -539,13 +539,14 @@ def parse_args() -> argparse.Namespace:
         "--cwd",
         type=Path,
         default=Path.cwd(),
-        help="Project directory used for local .opencode/.claude scanning (default: current directory).",
+        help="Project directory used for local .opencode/.claude scanning (default: current directory). "
+             "The .claude directory is scanned for legacy config migration.",
     )
     parser.add_argument(
         "--home",
         type=Path,
         default=Path.home(),
-        help="Home directory used for ~/.opencode and ~/.claude scanning (default: current user's home).",
+        help="Home directory used for ~/.opencode and other legacy CLI tool config scanning (default: current user's home).",
     )
     parser.add_argument(
         "--json-only",

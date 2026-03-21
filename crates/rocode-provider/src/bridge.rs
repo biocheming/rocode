@@ -10,7 +10,7 @@
 //!
 //! Additionally, [`DriverBasedProtocol`] implements `ProtocolImpl` by delegating
 //! to a `ProviderDriver`, providing a zero-boilerplate path for adding new
-//! OpenAI-compatible or Anthropic-compatible providers.
+//! closeai-compatible or ethnopic-compatible providers.
 
 use crate::driver::{
     ApiStyle, ContentBlock, DriverMessage, DriverMessageContent, DriverMessageRole, DriverResponse,
@@ -23,6 +23,10 @@ use crate::stream::{StreamEvent, StreamResult, StreamUsage};
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use std::pin::Pin;
+
+fn uses_x_api_key_auth(api_style: ApiStyle) -> bool {
+    matches!(api_style, ApiStyle::EthnopicMessages)
+}
 
 /// Convert a single `StreamingEvent` into zero or more rocode `StreamEvent`s.
 ///
@@ -50,7 +54,7 @@ pub fn streaming_event_to_stream_events(event: StreamingEvent) -> Vec<StreamEven
             index,
         } => {
             // Prefer index-based ID for consistency (same strategy as
-            // openai_tool_call_id / anthropic_tool_call_id in stream.rs).
+            // openai_tool_call_id / messages_tool_call_id in stream.rs).
             let id = index
                 .map(|i| format!("tool-call-{}", i))
                 .unwrap_or(tool_call_id);
@@ -276,8 +280,9 @@ impl ProtocolImpl for DriverBasedProtocol {
         let mut req_builder = client.post(&url).header("Content-Type", "application/json");
 
         if !config.api_key.is_empty() {
-            // Use x-api-key for Anthropic style, Bearer for others
-            if matches!(self.driver.api_style(), ApiStyle::AnthropicMessages) {
+            // Use x-api-key for ethnopic-compatible/messages-style APIs,
+            // Bearer auth for the other families.
+            if uses_x_api_key_auth(self.driver.api_style()) {
                 req_builder = req_builder.header("x-api-key", &config.api_key);
             } else {
                 req_builder =
@@ -353,7 +358,8 @@ impl ProtocolImpl for DriverBasedProtocol {
             .header("Accept", "text/event-stream");
 
         if !config.api_key.is_empty() {
-            if matches!(self.driver.api_style(), ApiStyle::AnthropicMessages) {
+            // Same auth split as the non-streaming path above.
+            if uses_x_api_key_auth(self.driver.api_style()) {
                 req_builder = req_builder.header("x-api-key", &config.api_key);
             } else {
                 req_builder =
@@ -383,10 +389,10 @@ impl ProtocolImpl for DriverBasedProtocol {
         // SSE decode → JSON values (Phase 1 infrastructure)
         let json_stream = crate::stream::decode_sse_stream(response.bytes_stream()).await?;
 
-        // Use driver to parse JSON → StreamingEvent, then bridge → StreamEvent
+        // Use driver to parse JSON → StreamingEvent, then bridge → StreamEvent.
         // NOTE: driver.parse_stream_event() takes &str, so we serialize the Value.
-        // This is acceptable for the generic path; specialized protocols (anthropic.rs,
-        // openai.rs) use their own more efficient Value-based parsers.
+        // This is acceptable for the generic path; specialized protocol-family
+        // implementations use their own more efficient Value-based parsers.
         let driver = self.driver.clone();
         let stream = json_stream.filter_map(move |result| {
             let driver = driver.clone();
@@ -673,7 +679,7 @@ mod tests {
     }
 
     #[test]
-    fn metadata_with_anthropic_usage() {
+    fn metadata_with_ethnopic_usage() {
         let event = StreamingEvent::Metadata {
             usage: Some(json!({
                 "input_tokens": 200,
@@ -716,7 +722,7 @@ mod tests {
     }
 
     #[test]
-    fn metadata_normalizes_anthropic_stop_reasons() {
+    fn metadata_normalizes_ethnopic_stop_reasons() {
         let event = StreamingEvent::Metadata {
             usage: None,
             finish_reason: None,
@@ -845,7 +851,7 @@ mod tests {
     }
 
     #[test]
-    fn driver_response_to_chat_response_anthropic_format() {
+    fn driver_response_to_chat_response_ethnopic_format() {
         let resp = DriverResponse {
             content: Some("Bonjour!".to_string()),
             finish_reason: Some("stop".to_string()),
@@ -857,7 +863,7 @@ mod tests {
             tool_calls: vec![],
             raw: json!({
                 "id": "msg_abc",
-                "model": "claude-sonnet-4-20250514",
+                "model": "ethnopic-compatible-model",
                 "content": [{"type": "text", "text": "Bonjour!"}],
                 "stop_reason": "end_turn",
                 "usage": {"input_tokens": 20, "output_tokens": 8}
@@ -866,7 +872,7 @@ mod tests {
 
         let chat_resp = driver_response_to_chat_response(resp);
         assert_eq!(chat_resp.id, "msg_abc");
-        assert_eq!(chat_resp.model, "claude-sonnet-4-20250514");
+        assert_eq!(chat_resp.model, "ethnopic-compatible-model");
         assert_eq!(chat_resp.choices.len(), 1);
         assert_eq!(chat_resp.choices[0].finish_reason.as_deref(), Some("stop"));
     }

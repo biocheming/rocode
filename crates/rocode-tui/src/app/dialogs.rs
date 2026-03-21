@@ -890,15 +890,57 @@ impl App {
         }
 
         if self.provider_dialog.is_open() {
-            if self.provider_dialog.is_input_mode() {
-                // API key input mode
+            // Check if we're in custom provider flow first
+            if self.provider_dialog.custom_state.is_some() {
+                // Custom provider multi-step flow
+                match key.code {
+                    KeyCode::Esc => {
+                        self.provider_dialog.exit_custom_flow();
+                    }
+                    KeyCode::Up => {
+                        if self.provider_dialog.is_protocol_step() {
+                            self.provider_dialog.protocol_index_dec();
+                        }
+                    }
+                    KeyCode::Down => {
+                        if self.provider_dialog.is_protocol_step() {
+                            self.provider_dialog.protocol_index_inc();
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        self.provider_dialog.pop_char();
+                    }
+                    KeyCode::Enter => {
+                        if self.provider_dialog.is_final_step() {
+                            // Final step - try to submit
+                            if let Some(PendingSubmit::Custom { provider_id, base_url, protocol, api_key }) =
+                                self.provider_dialog.pending_submit()
+                            {
+                                self.submit_custom_provider_auth(&provider_id, &base_url, &protocol, &api_key);
+                            }
+                        } else {
+                            // Advance to next step
+                            self.provider_dialog.advance_custom_flow();
+                        }
+                    }
+                    KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.paste_clipboard_to_provider_dialog();
+                    }
+                    KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.provider_dialog.push_char(c);
+                    }
+                    _ => {}
+                }
+            } else if self.provider_dialog.is_input_mode() {
+                // Known provider API key input mode
                 match key.code {
                     KeyCode::Esc => self.provider_dialog.exit_input_mode(),
                     KeyCode::Backspace => {
                         self.provider_dialog.pop_char();
                     }
                     KeyCode::Enter => {
-                        if let Some((provider_id, api_key)) = self.provider_dialog.pending_submit()
+                        if let Some(PendingSubmit::Known { provider_id, api_key }) =
+                            self.provider_dialog.pending_submit()
                         {
                             self.submit_provider_auth(&provider_id, &api_key);
                         }

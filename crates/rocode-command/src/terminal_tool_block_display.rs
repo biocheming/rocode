@@ -30,7 +30,9 @@ pub enum TerminalBlockItem {
 
 pub type TerminalToolBlockItem = TerminalBlockItem;
 
-pub fn build_display_hint_items(info: &TerminalToolResultInfo) -> Option<Vec<TerminalToolBlockItem>> {
+pub fn build_display_hint_items(
+    info: &TerminalToolResultInfo,
+) -> Option<Vec<TerminalToolBlockItem>> {
     let metadata = info.metadata.as_ref()?;
     let has_fields = metadata.contains_key("display.fields");
     let has_summary = metadata.contains_key("display.summary");
@@ -41,20 +43,24 @@ pub fn build_display_hint_items(info: &TerminalToolResultInfo) -> Option<Vec<Ter
 
     let mut items = Vec::new();
     if let Some(summary) = metadata.get("display.summary").and_then(|v| v.as_str()) {
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format_preview_line(summary, 96),
-            TerminalSegmentTone::Muted,
-        )));
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                format_preview_line(summary, 96),
+                TerminalSegmentTone::Muted,
+            ),
+        ));
     }
 
     if let Some(fields) = metadata.get("display.fields").and_then(|v| v.as_array()) {
         for field in fields {
             let key = field.get("key").and_then(|v| v.as_str()).unwrap_or("?");
             let value = field.get("value").and_then(|v| v.as_str()).unwrap_or("");
-            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                format!("{}: {}", key, format_preview_line(value, 88 - key.len())),
-                TerminalSegmentTone::Primary,
-            )));
+            items.push(TerminalToolBlockItem::Line(
+                TerminalSegmentDisplayLine::new(
+                    format!("{}: {}", key, format_preview_line(value, 88 - key.len())),
+                    TerminalSegmentTone::Primary,
+                ),
+            ));
         }
     }
 
@@ -104,7 +110,8 @@ pub fn build_image_items(url: &str) -> Vec<TerminalBlockItem> {
 }
 
 pub fn summarize_block_items_inline(items: &[TerminalBlockItem]) -> String {
-    items.iter()
+    items
+        .iter()
         .filter_map(|item| match item {
             TerminalBlockItem::Line(line) => Some(line.text.trim().to_string()),
             TerminalBlockItem::Markdown { content } => content
@@ -139,8 +146,10 @@ pub fn build_tool_body_items(
 
     let Some(info) = result else {
         return if normalized == "task"
-            && matches!(state, TerminalToolState::Pending | TerminalToolState::Running)
-        {
+            && matches!(
+                state,
+                TerminalToolState::Pending | TerminalToolState::Running
+            ) {
             build_task_running_items(arguments)
         } else {
             Vec::new()
@@ -151,17 +160,21 @@ pub fn build_tool_body_items(
         let mut items = Vec::new();
         let mut iter = info.output.lines().filter(|line| !line.trim().is_empty());
         if let Some(first_line) = iter.next() {
-            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                format!("Error: {}", format_preview_line(first_line, 96)),
-                TerminalSegmentTone::Error,
-            )));
+            items.push(TerminalToolBlockItem::Line(
+                TerminalSegmentDisplayLine::new(
+                    format!("Error: {}", format_preview_line(first_line, 96)),
+                    TerminalSegmentTone::Error,
+                ),
+            ));
         }
         let extra_error_lines = if show_tool_details { 4 } else { 2 };
         for line in iter.take(extra_error_lines) {
-            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                format_preview_line(line, 96),
-                TerminalSegmentTone::Error,
-            )));
+            items.push(TerminalToolBlockItem::Line(
+                TerminalSegmentDisplayLine::new(
+                    format_preview_line(line, 96),
+                    TerminalSegmentTone::Error,
+                ),
+            ));
         }
         return items;
     }
@@ -171,18 +184,27 @@ pub fn build_tool_body_items(
     }
 
     match normalized.as_str() {
-        "task" => {
-            build_task_result_items(&info.output, arguments, info.metadata.as_ref(), show_tool_details)
-        }
+        "task" => build_task_result_items(
+            &info.output,
+            arguments,
+            info.metadata.as_ref(),
+            show_tool_details,
+        ),
         "todowrite" | "todo_write" => build_todowrite_result_items(&info.output, show_tool_details),
         "batch" => build_batch_result_items(&info.output, arguments, show_tool_details),
         "question" => build_question_result_items(&info.output, arguments),
-        value if is_write_tool(value) => {
-            build_write_result_items(&info.output, arguments, info.metadata.as_ref(), show_tool_details)
-        }
-        value if is_edit_tool(value) => {
-            build_edit_result_items(&info.output, arguments, info.metadata.as_ref(), show_tool_details)
-        }
+        value if is_write_tool(value) => build_write_result_items(
+            &info.output,
+            arguments,
+            info.metadata.as_ref(),
+            show_tool_details,
+        ),
+        value if is_edit_tool(value) => build_edit_result_items(
+            &info.output,
+            arguments,
+            info.metadata.as_ref(),
+            show_tool_details,
+        ),
         value if is_patch_tool(value) => {
             build_patch_result_items(&info.output, info.metadata.as_ref(), show_tool_details)
         }
@@ -220,18 +242,20 @@ pub fn build_batch_result_items(
             .filter(|r| r.get("success").and_then(|v| v.as_bool()).unwrap_or(true))
             .count();
         let fail_count = total - ok_count;
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            if fail_count == 0 {
-                format!("{} tools: all ok", total)
-            } else {
-                format!("{} tools: {} ok, {} failed", total, ok_count, fail_count)
-            },
-            if fail_count == 0 {
-                TerminalSegmentTone::Muted
-            } else {
-                TerminalSegmentTone::Warning
-            },
-        )));
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                if fail_count == 0 {
+                    format!("{} tools: all ok", total)
+                } else {
+                    format!("{} tools: {} ok, {} failed", total, ok_count, fail_count)
+                },
+                if fail_count == 0 {
+                    TerminalSegmentTone::Muted
+                } else {
+                    TerminalSegmentTone::Warning
+                },
+            ),
+        ));
 
         if !show_tool_details {
             return items;
@@ -285,14 +309,16 @@ pub fn build_batch_result_items(
             } else if line_count > 1 {
                 row.push_str(&format!("  (+{} lines)", line_count));
             }
-            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                row,
-                if is_ok {
-                    TerminalSegmentTone::Muted
-                } else {
-                    TerminalSegmentTone::Error
-                },
-            )));
+            items.push(TerminalToolBlockItem::Line(
+                TerminalSegmentDisplayLine::new(
+                    row,
+                    if is_ok {
+                        TerminalSegmentTone::Muted
+                    } else {
+                        TerminalSegmentTone::Error
+                    },
+                ),
+            ));
         }
 
         return items;
@@ -301,28 +327,37 @@ pub fn build_batch_result_items(
     if show_tool_details {
         let output_lines: Vec<&str> = result_text.lines().collect();
         let line_count = output_lines.len();
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!("({} lines of output)", line_count),
-            TerminalSegmentTone::Muted,
-        )));
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                format!("({} lines of output)", line_count),
+                TerminalSegmentTone::Muted,
+            ),
+        ));
         for line in output_lines.iter().take(8) {
-            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                format_preview_line(line, 96),
-                TerminalSegmentTone::Primary,
-            )));
+            items.push(TerminalToolBlockItem::Line(
+                TerminalSegmentDisplayLine::new(
+                    format_preview_line(line, 96),
+                    TerminalSegmentTone::Primary,
+                ),
+            ));
         }
         if line_count > 8 {
-            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                format!("… ({} more lines)", line_count - 8),
-                TerminalSegmentTone::Muted,
-            )));
+            items.push(TerminalToolBlockItem::Line(
+                TerminalSegmentDisplayLine::new(
+                    format!("… ({} more lines)", line_count - 8),
+                    TerminalSegmentTone::Muted,
+                ),
+            ));
         }
     }
 
     items
 }
 
-pub fn build_question_result_items(result_text: &str, arguments: &str) -> Vec<TerminalToolBlockItem> {
+pub fn build_question_result_items(
+    result_text: &str,
+    arguments: &str,
+) -> Vec<TerminalToolBlockItem> {
     let arg_parsed = serde_json::from_str::<Value>(arguments).ok();
     let questions = arg_parsed
         .as_ref()
@@ -338,31 +373,39 @@ pub fn build_question_result_items(result_text: &str, arguments: &str) -> Vec<Te
     if let Some(qs) = questions {
         for (i, q) in qs.iter().enumerate() {
             let q_text = q.get("question").and_then(|v| v.as_str()).unwrap_or("?");
-            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                format!("Q: {}", format_preview_line(q_text, 88)),
-                TerminalSegmentTone::Info,
-            )));
+            items.push(TerminalToolBlockItem::Line(
+                TerminalSegmentDisplayLine::new(
+                    format!("Q: {}", format_preview_line(q_text, 88)),
+                    TerminalSegmentTone::Info,
+                ),
+            ));
             if let Some(opts) = q.get("options").and_then(|v| v.as_array()) {
                 for opt in opts {
                     let label = opt.get("label").and_then(|v| v.as_str()).unwrap_or("?");
                     let desc = opt.get("description").and_then(|v| v.as_str());
-                    items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                        match desc {
-                            Some(d) => format!("  · {} — {}", label, format_preview_line(d, 64)),
-                            None => format!("  · {}", label),
-                        },
-                        TerminalSegmentTone::Muted,
-                    )));
+                    items.push(TerminalToolBlockItem::Line(
+                        TerminalSegmentDisplayLine::new(
+                            match desc {
+                                Some(d) => {
+                                    format!("  · {} — {}", label, format_preview_line(d, 64))
+                                }
+                                None => format!("  · {}", label),
+                            },
+                            TerminalSegmentTone::Muted,
+                        ),
+                    ));
                 }
             }
             let answer = answers
                 .and_then(|a| a.get(i))
                 .and_then(|v| v.as_str())
                 .unwrap_or("(no answer)");
-            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                format!("A: {}", format_preview_line(answer, 88)),
-                TerminalSegmentTone::Success,
-            )));
+            items.push(TerminalToolBlockItem::Line(
+                TerminalSegmentDisplayLine::new(
+                    format!("A: {}", format_preview_line(answer, 88)),
+                    TerminalSegmentTone::Success,
+                ),
+            ));
         }
         return items;
     }
@@ -371,75 +414,93 @@ pub fn build_question_result_items(result_text: &str, arguments: &str) -> Vec<Te
         .lines()
         .find(|l| !l.trim().is_empty())
         .unwrap_or(result_text);
-    items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-        format_preview_line(first_line, 88),
-        TerminalSegmentTone::Primary,
-    )));
+    items.push(TerminalToolBlockItem::Line(
+        TerminalSegmentDisplayLine::new(
+            format_preview_line(first_line, 88),
+            TerminalSegmentTone::Primary,
+        ),
+    ));
     items
 }
 
 pub fn build_task_running_items(arguments: &str) -> Vec<TerminalToolBlockItem> {
     let summary = parse_task_argument_summary(arguments);
-    let mut items = vec![TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-        "Delegating task to subagent…",
-        TerminalSegmentTone::Warning,
-    ))];
+    let mut items = vec![TerminalToolBlockItem::Line(
+        TerminalSegmentDisplayLine::new(
+            "Delegating task to subagent…",
+            TerminalSegmentTone::Warning,
+        ),
+    )];
 
     let subagent = summary
         .category
         .as_deref()
         .or(summary.subagent_type.as_deref());
     if let Some(name) = subagent {
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!("Subagent: {}", name),
-            TerminalSegmentTone::Info,
-        )));
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                format!("Subagent: {}", name),
+                TerminalSegmentTone::Info,
+            ),
+        ));
     }
 
     if let Some(prompt) = summary.prompt_preview.as_deref() {
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!("Task: {}", prompt),
-            TerminalSegmentTone::Muted,
-        )));
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                format!("Task: {}", prompt),
+                TerminalSegmentTone::Muted,
+            ),
+        ));
     } else if let Some(description) = summary.description.as_deref() {
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!("Task: {}", format_preview_line(description, 88)),
-            TerminalSegmentTone::Muted,
-        )));
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                format!("Task: {}", format_preview_line(description, 88)),
+                TerminalSegmentTone::Muted,
+            ),
+        ));
     }
 
     if let Some(skill_count) = summary.skill_count {
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!(
-                "Skills: {}",
-                if skill_count == 0 {
-                    "none".to_string()
-                } else {
-                    skill_count.to_string()
-                }
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                format!(
+                    "Skills: {}",
+                    if skill_count == 0 {
+                        "none".to_string()
+                    } else {
+                        skill_count.to_string()
+                    }
+                ),
+                TerminalSegmentTone::Muted,
             ),
-            TerminalSegmentTone::Muted,
-        )));
+        ));
     }
 
     if !summary.checklist.is_empty() {
         let total = summary.checklist.len();
         let preview_limit = total.min(4);
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!("Checklist ({} items):", total),
-            TerminalSegmentTone::Info,
-        )));
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                format!("Checklist ({} items):", total),
+                TerminalSegmentTone::Info,
+            ),
+        ));
         for item in summary.checklist.iter().take(preview_limit) {
-            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                format!("[ ] {}", format_preview_line(item, 88)),
-                TerminalSegmentTone::Muted,
-            )));
+            items.push(TerminalToolBlockItem::Line(
+                TerminalSegmentDisplayLine::new(
+                    format!("[ ] {}", format_preview_line(item, 88)),
+                    TerminalSegmentTone::Muted,
+                ),
+            ));
         }
         if total > preview_limit {
-            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                format!("… ({} more items)", total - preview_limit),
-                TerminalSegmentTone::Muted,
-            )));
+            items.push(TerminalToolBlockItem::Line(
+                TerminalSegmentDisplayLine::new(
+                    format!("… ({} more items)", total - preview_limit),
+                    TerminalSegmentTone::Muted,
+                ),
+            ));
         }
     }
 
@@ -460,58 +521,72 @@ pub fn build_task_result_items(
         .as_deref()
         .or(arg_summary.subagent_type.as_deref());
     if let Some(name) = subagent {
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!("Subagent: {}", name),
-            TerminalSegmentTone::Info,
-        )));
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                format!("Subagent: {}", name),
+                TerminalSegmentTone::Info,
+            ),
+        ));
     }
     if let Some(prompt) = arg_summary.prompt_preview.as_deref() {
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!("Task: {}", prompt),
-            TerminalSegmentTone::Muted,
-        )));
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                format!("Task: {}", prompt),
+                TerminalSegmentTone::Muted,
+            ),
+        ));
     }
 
     let summary = parse_task_result_summary(result_text);
     if let Some(task_id) = summary.task_id.as_deref() {
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!("Task ID: {}", task_id),
-            TerminalSegmentTone::Info,
-        )));
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                format!("Task ID: {}", task_id),
+                TerminalSegmentTone::Info,
+            ),
+        ));
     }
     if let Some(task_status) = summary.task_status.as_deref() {
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!("Status: {}", task_status),
-            if task_status.eq_ignore_ascii_case("completed") {
-                TerminalSegmentTone::Success
-            } else {
-                TerminalSegmentTone::Info
-            },
-        )));
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                format!("Status: {}", task_status),
+                if task_status.eq_ignore_ascii_case("completed") {
+                    TerminalSegmentTone::Success
+                } else {
+                    TerminalSegmentTone::Info
+                },
+            ),
+        ));
     }
     if let Some(meta) = metadata {
         if let Some(has_text_output) = meta.get("hasTextOutput").and_then(|v| v.as_bool()) {
-            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                format!(
-                    "Text Output: {}",
-                    if has_text_output { "yes" } else { "no" }
+            items.push(TerminalToolBlockItem::Line(
+                TerminalSegmentDisplayLine::new(
+                    format!(
+                        "Text Output: {}",
+                        if has_text_output { "yes" } else { "no" }
+                    ),
+                    TerminalSegmentTone::Muted,
                 ),
-                TerminalSegmentTone::Muted,
-            )));
+            ));
         }
         if let Some(model) = extract_task_model_label(meta) {
-            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                format!("Model: {}", model),
-                TerminalSegmentTone::Muted,
-            )));
+            items.push(TerminalToolBlockItem::Line(
+                TerminalSegmentDisplayLine::new(
+                    format!("Model: {}", model),
+                    TerminalSegmentTone::Muted,
+                ),
+            ));
         }
     }
 
     if summary.body.trim().is_empty() {
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            "Subagent finished with no textual output",
-            TerminalSegmentTone::Muted,
-        )));
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                "Subagent finished with no textual output",
+                TerminalSegmentTone::Muted,
+            ),
+        ));
         if !arg_summary.checklist.is_empty() {
             let completed = summary
                 .task_status
@@ -555,10 +630,12 @@ pub fn build_task_result_items(
     };
 
     if total > 1 {
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!("({} lines)", total),
-            TerminalSegmentTone::Muted,
-        )));
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                format!("({} lines)", total),
+                TerminalSegmentTone::Muted,
+            ),
+        ));
     }
     if preview_limit > 0 {
         let preview_content = body_lines[..preview_limit].join("\n");
@@ -569,13 +646,15 @@ pub fn build_task_result_items(
         }
     }
     if total > preview_limit {
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!(
-                "… ({} more lines, toggle Tool Details to expand)",
-                total - preview_limit
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                format!(
+                    "… ({} more lines, toggle Tool Details to expand)",
+                    total - preview_limit
+                ),
+                TerminalSegmentTone::Muted,
             ),
-            TerminalSegmentTone::Muted,
-        )));
+        ));
     }
 
     items
@@ -591,21 +670,27 @@ pub fn build_todowrite_result_items(
     if entries.is_empty() {
         let output_lines: Vec<&str> = result_text.lines().collect();
         let line_count = output_lines.len();
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!("({} lines of output)", line_count),
-            TerminalSegmentTone::Muted,
-        )));
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                format!("({} lines of output)", line_count),
+                TerminalSegmentTone::Muted,
+            ),
+        ));
         for line in output_lines.iter().take(8) {
-            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                format_preview_line(line, 96),
-                TerminalSegmentTone::Primary,
-            )));
+            items.push(TerminalToolBlockItem::Line(
+                TerminalSegmentDisplayLine::new(
+                    format_preview_line(line, 96),
+                    TerminalSegmentTone::Primary,
+                ),
+            ));
         }
         if line_count > 8 {
-            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                format!("… ({} more lines)", line_count - 8),
-                TerminalSegmentTone::Muted,
-            )));
+            items.push(TerminalToolBlockItem::Line(
+                TerminalSegmentDisplayLine::new(
+                    format!("… ({} more lines)", line_count - 8),
+                    TerminalSegmentTone::Muted,
+                ),
+            ));
         }
         return items;
     }
@@ -616,30 +701,37 @@ pub fn build_todowrite_result_items(
     } else {
         total.min(5)
     };
-    items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-        format!("Todo List ({} items)", total),
-        TerminalSegmentTone::Info,
-    )));
+    items.push(TerminalToolBlockItem::Line(
+        TerminalSegmentDisplayLine::new(
+            format!("Todo List ({} items)", total),
+            TerminalSegmentTone::Info,
+        ),
+    ));
 
     for entry in entries.iter().take(preview_limit) {
-        let mut row = format!("[{}] {}", entry.status, format_preview_line(&entry.text, 72));
+        let mut row = format!(
+            "[{}] {}",
+            entry.status,
+            format_preview_line(&entry.text, 72)
+        );
         if let Some(priority) = entry.priority.as_deref() {
             row.push_str(&format!("  [{}]", priority));
         }
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            row,
-            todo_status_tone(&entry.status),
-        )));
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(row, todo_status_tone(&entry.status)),
+        ));
     }
 
     if total > preview_limit {
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!(
-                "… ({} more todos, toggle Tool Details to expand)",
-                total - preview_limit
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                format!(
+                    "… ({} more todos, toggle Tool Details to expand)",
+                    total - preview_limit
+                ),
+                TerminalSegmentTone::Muted,
             ),
-            TerminalSegmentTone::Muted,
-        )));
+        ));
     }
 
     items
@@ -717,17 +809,19 @@ pub fn build_write_result_items(
         .as_ref()
         .and_then(crate::terminal_segment_display::extract_path)
         .or_else(|| crate::terminal_segment_display::extract_jsonish_path_from_raw(arguments))
-        .or_else(|| write_summary.as_ref().and_then(|summary| summary.path.clone()));
+        .or_else(|| {
+            write_summary
+                .as_ref()
+                .and_then(|summary| summary.path.clone())
+        });
 
-    let mut items = vec![TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-        "✦ Write Complete",
-        TerminalSegmentTone::Success,
-    ))];
+    let mut items = vec![TerminalToolBlockItem::Line(
+        TerminalSegmentDisplayLine::new("✦ Write Complete", TerminalSegmentTone::Success),
+    )];
     if let Some(path) = write_path {
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!("File: {}", path),
-            TerminalSegmentTone::Info,
-        )));
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(format!("File: {}", path), TerminalSegmentTone::Info),
+        ));
     }
     if let Some(summary) = write_summary.as_ref() {
         let mut stats = Vec::new();
@@ -738,10 +832,9 @@ pub fn build_write_result_items(
             stats.push(format!("Lines {}", total_lines));
         }
         if !stats.is_empty() {
-            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                stats.join("  ·  "),
-                TerminalSegmentTone::Muted,
-            )));
+            items.push(TerminalToolBlockItem::Line(
+                TerminalSegmentDisplayLine::new(stats.join("  ·  "), TerminalSegmentTone::Muted),
+            ));
         }
     }
     if show_tool_details {
@@ -755,10 +848,12 @@ pub fn build_write_result_items(
                 content: diff_str.to_string(),
             });
         } else if let Some(first_line) = result_text.lines().find(|line| !line.trim().is_empty()) {
-            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                format_preview_line(first_line, 96),
-                TerminalSegmentTone::Muted,
-            )));
+            items.push(TerminalToolBlockItem::Line(
+                TerminalSegmentDisplayLine::new(
+                    format_preview_line(first_line, 96),
+                    TerminalSegmentTone::Muted,
+                ),
+            ));
         }
     }
     items
@@ -776,34 +871,36 @@ pub fn build_edit_result_items(
         .and_then(crate::terminal_segment_display::extract_path)
         .or_else(|| crate::terminal_segment_display::extract_jsonish_path_from_raw(arguments));
 
-    let mut items = vec![TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-        "✦ Edit Complete",
-        TerminalSegmentTone::Success,
-    ))];
+    let mut items = vec![TerminalToolBlockItem::Line(
+        TerminalSegmentDisplayLine::new("✦ Edit Complete", TerminalSegmentTone::Success),
+    )];
     if let Some(path) = edit_path {
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!("File: {}", path),
-            TerminalSegmentTone::Info,
-        )));
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(format!("File: {}", path), TerminalSegmentTone::Info),
+        ));
     }
     if let Some(replacements) = metadata
         .and_then(|m| m.get("replacements"))
         .and_then(|v| v.as_u64())
     {
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!("{} replacement(s)", replacements),
-            TerminalSegmentTone::Muted,
-        )));
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                format!("{} replacement(s)", replacements),
+                TerminalSegmentTone::Muted,
+            ),
+        ));
     }
     if let Some(diags) = metadata
         .and_then(|m| m.get("diagnostics"))
         .and_then(|v| v.as_array())
     {
         if !diags.is_empty() {
-            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                format!("⚠ {} diagnostic(s)", diags.len()),
-                TerminalSegmentTone::Warning,
-            )));
+            items.push(TerminalToolBlockItem::Line(
+                TerminalSegmentDisplayLine::new(
+                    format!("⚠ {} diagnostic(s)", diags.len()),
+                    TerminalSegmentTone::Warning,
+                ),
+            ));
         }
     }
     if show_tool_details {
@@ -817,10 +914,12 @@ pub fn build_edit_result_items(
                 content: diff_str.to_string(),
             });
         } else if let Some(first_line) = result_text.lines().find(|line| !line.trim().is_empty()) {
-            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                format_preview_line(first_line, 96),
-                TerminalSegmentTone::Muted,
-            )));
+            items.push(TerminalToolBlockItem::Line(
+                TerminalSegmentDisplayLine::new(
+                    format_preview_line(first_line, 96),
+                    TerminalSegmentTone::Muted,
+                ),
+            ));
         }
     }
     items
@@ -845,31 +944,36 @@ pub fn build_patch_result_items(
         })
         .unwrap_or_default();
 
-    let mut items = vec![TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-        format!("✦ Patch Applied — {} file(s)", files.len().max(1)),
-        TerminalSegmentTone::Success,
-    ))];
+    let mut items = vec![TerminalToolBlockItem::Line(
+        TerminalSegmentDisplayLine::new(
+            format!("✦ Patch Applied — {} file(s)", files.len().max(1)),
+            TerminalSegmentTone::Success,
+        ),
+    )];
     for file in files.iter().take(8) {
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!("  {}", file),
-            TerminalSegmentTone::Info,
-        )));
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(format!("  {}", file), TerminalSegmentTone::Info),
+        ));
     }
     if files.len() > 8 {
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!("  … (+{} more files)", files.len() - 8),
-            TerminalSegmentTone::Muted,
-        )));
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                format!("  … (+{} more files)", files.len() - 8),
+                TerminalSegmentTone::Muted,
+            ),
+        ));
     }
     if let Some(diags) = metadata
         .and_then(|m| m.get("diagnostics"))
         .and_then(|v| v.as_array())
     {
         if !diags.is_empty() {
-            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                format!("⚠ {} diagnostic(s)", diags.len()),
-                TerminalSegmentTone::Warning,
-            )));
+            items.push(TerminalToolBlockItem::Line(
+                TerminalSegmentDisplayLine::new(
+                    format!("⚠ {} diagnostic(s)", diags.len()),
+                    TerminalSegmentTone::Warning,
+                ),
+            ));
         }
     }
     if show_tool_details {
@@ -910,7 +1014,10 @@ pub fn build_patch_result_items(
                     _ => format!("← Patched {}", path),
                 };
                 items.push(TerminalToolBlockItem::Diff {
-                    label: Some(TerminalSegmentDisplayLine::new(label, TerminalSegmentTone::Info)),
+                    label: Some(TerminalSegmentDisplayLine::new(
+                        label,
+                        TerminalSegmentTone::Info,
+                    )),
                     content: diff_str,
                 });
             }
@@ -924,10 +1031,12 @@ pub fn build_patch_result_items(
                 content: diff_str.to_string(),
             });
         } else if let Some(first_line) = result_text.lines().find(|line| !line.trim().is_empty()) {
-            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                format_preview_line(first_line, 96),
-                TerminalSegmentTone::Muted,
-            )));
+            items.push(TerminalToolBlockItem::Line(
+                TerminalSegmentDisplayLine::new(
+                    format_preview_line(first_line, 96),
+                    TerminalSegmentTone::Muted,
+                ),
+            ));
         }
     }
     items
@@ -965,16 +1074,20 @@ fn build_generic_result_items(
     if show_tool_details {
         let preview_limit = output_lines.len().min(5);
         for line in output_lines.iter().take(preview_limit) {
-            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                format_preview_line(line, 96),
-                TerminalSegmentTone::Muted,
-            )));
+            items.push(TerminalToolBlockItem::Line(
+                TerminalSegmentDisplayLine::new(
+                    format_preview_line(line, 96),
+                    TerminalSegmentTone::Muted,
+                ),
+            ));
         }
         if output_lines.len() > preview_limit {
-            items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-                format!("… ({} more lines)", output_lines.len() - preview_limit),
-                TerminalSegmentTone::Muted,
-            )));
+            items.push(TerminalToolBlockItem::Line(
+                TerminalSegmentDisplayLine::new(
+                    format!("… ({} more lines)", output_lines.len() - preview_limit),
+                    TerminalSegmentTone::Muted,
+                ),
+            ));
         }
     } else {
         let first_line = format_preview_line(output_lines[0], 96);
@@ -983,10 +1096,9 @@ fn build_generic_result_items(
         } else {
             first_line
         };
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            suffix,
-            TerminalSegmentTone::Muted,
-        )));
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(suffix, TerminalSegmentTone::Muted),
+        ));
     }
 
     items
@@ -1141,37 +1253,43 @@ fn append_checklist_items(
     show_tool_details: bool,
     completed: bool,
 ) {
-    items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-        format!("Checklist ({} items):", checklist.len()),
-        TerminalSegmentTone::Info,
-    )));
+    items.push(TerminalToolBlockItem::Line(
+        TerminalSegmentDisplayLine::new(
+            format!("Checklist ({} items):", checklist.len()),
+            TerminalSegmentTone::Info,
+        ),
+    ));
     let preview_limit = if show_tool_details {
         checklist.len()
     } else {
         checklist.len().min(5)
     };
     for item in checklist.iter().take(preview_limit) {
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!(
-                "{} {}",
-                if completed { "[x]" } else { "[ ]" },
-                format_preview_line(item, 88)
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                format!(
+                    "{} {}",
+                    if completed { "[x]" } else { "[ ]" },
+                    format_preview_line(item, 88)
+                ),
+                if completed {
+                    TerminalSegmentTone::Success
+                } else {
+                    TerminalSegmentTone::Muted
+                },
             ),
-            if completed {
-                TerminalSegmentTone::Success
-            } else {
-                TerminalSegmentTone::Muted
-            },
-        )));
+        ));
     }
     if checklist.len() > preview_limit {
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!(
-                "… ({} more items, toggle Tool Details to expand)",
-                checklist.len() - preview_limit
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                format!(
+                    "… ({} more items, toggle Tool Details to expand)",
+                    checklist.len() - preview_limit
+                ),
+                TerminalSegmentTone::Muted,
             ),
-            TerminalSegmentTone::Muted,
-        )));
+        ));
     }
 }
 
@@ -1181,33 +1299,43 @@ fn append_checklist_entries(
     show_tool_details: bool,
 ) {
     let total = checklist.len();
-    let preview_limit = if show_tool_details { total } else { total.min(5) };
-    items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-        format!("Checklist ({} items):", total),
-        TerminalSegmentTone::Info,
-    )));
+    let preview_limit = if show_tool_details {
+        total
+    } else {
+        total.min(5)
+    };
+    items.push(TerminalToolBlockItem::Line(
+        TerminalSegmentDisplayLine::new(
+            format!("Checklist ({} items):", total),
+            TerminalSegmentTone::Info,
+        ),
+    ));
     for item in checklist.iter().take(preview_limit) {
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!(
-                "{} {}",
-                if item.checked { "[x]" } else { "[ ]" },
-                format_preview_line(&item.text, 88)
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                format!(
+                    "{} {}",
+                    if item.checked { "[x]" } else { "[ ]" },
+                    format_preview_line(&item.text, 88)
+                ),
+                if item.checked {
+                    TerminalSegmentTone::Success
+                } else {
+                    TerminalSegmentTone::Muted
+                },
             ),
-            if item.checked {
-                TerminalSegmentTone::Success
-            } else {
-                TerminalSegmentTone::Muted
-            },
-        )));
+        ));
     }
     if total > preview_limit {
-        items.push(TerminalToolBlockItem::Line(TerminalSegmentDisplayLine::new(
-            format!(
-                "… ({} more items, toggle Tool Details to expand)",
-                total - preview_limit
+        items.push(TerminalToolBlockItem::Line(
+            TerminalSegmentDisplayLine::new(
+                format!(
+                    "… ({} more items, toggle Tool Details to expand)",
+                    total - preview_limit
+                ),
+                TerminalSegmentTone::Muted,
             ),
-            TerminalSegmentTone::Muted,
-        )));
+        ));
     }
 }
 
@@ -1429,10 +1557,9 @@ mod tests {
 
     #[test]
     fn parse_write_summary_from_success_message() {
-        let summary = parse_write_summary(
-            "Successfully wrote 30199 bytes (725 lines) to ./t2.html",
-        )
-        .expect("summary");
+        let summary =
+            parse_write_summary("Successfully wrote 30199 bytes (725 lines) to ./t2.html")
+                .expect("summary");
         assert_eq!(summary.size_bytes, Some(30199));
         assert_eq!(summary.total_lines, Some(725));
         assert_eq!(summary.path.as_deref(), Some("./t2.html"));
@@ -1442,33 +1569,37 @@ mod tests {
     #[test]
     fn write_items_include_diff_block() {
         let mut metadata = HashMap::new();
-        metadata.insert("diff".to_string(), serde_json::json!("@@ -1 +1 @@\n-old\n+new"));
+        metadata.insert(
+            "diff".to_string(),
+            serde_json::json!("@@ -1 +1 @@\n-old\n+new"),
+        );
         let items = build_write_result_items(
             "Successfully wrote 10 bytes (2 lines) to ./new_file.txt",
             r#"{"file_path":"./new_file.txt"}"#,
             Some(&metadata),
             true,
         );
-        assert!(items.iter().any(|item| matches!(
-            item,
-            TerminalToolBlockItem::Diff { .. }
-        )));
+        assert!(items
+            .iter()
+            .any(|item| matches!(item, TerminalToolBlockItem::Diff { .. })));
     }
 
     #[test]
     fn edit_items_include_diff_block() {
         let mut metadata = HashMap::new();
-        metadata.insert("diff".to_string(), serde_json::json!("@@ -1 +1 @@\n-old\n+new"));
+        metadata.insert(
+            "diff".to_string(),
+            serde_json::json!("@@ -1 +1 @@\n-old\n+new"),
+        );
         let items = build_edit_result_items(
             "Edit completed",
             r#"{"file_path":"test.rs"}"#,
             Some(&metadata),
             true,
         );
-        assert!(items.iter().any(|item| matches!(
-            item,
-            TerminalToolBlockItem::Diff { .. }
-        )));
+        assert!(items
+            .iter()
+            .any(|item| matches!(item, TerminalToolBlockItem::Diff { .. })));
     }
 
     #[test]
@@ -1606,7 +1737,11 @@ mod tests {
 
     #[test]
     fn inline_summary_flattens_inline_image_items() {
-        let summary = summarize_block_items_inline(&build_image_items("data:image/png;base64,QUJDRA=="));
-        assert_eq!(summary, "[image] inline image · type: image/png · size: 4 B");
+        let summary =
+            summarize_block_items_inline(&build_image_items("data:image/png;base64,QUJDRA=="));
+        assert_eq!(
+            summary,
+            "[image] inline image · type: image/png · size: 4 B"
+        );
     }
 }

@@ -919,7 +919,7 @@ mod tests {
             "task_explore_1".to_string(),
             PersistedSubsession {
                 agent: "explore".to_string(),
-                model: Some("anthropic:claude".to_string()),
+                model: Some("ethnopic:test-model".to_string()),
                 directory: Some("/tmp/project".to_string()),
                 disabled_tools: vec!["task".to_string()],
                 history: vec![PersistedSubsessionTurn {

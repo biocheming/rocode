@@ -1,4 +1,4 @@
-mod anthropic;
+mod messages;
 mod bedrock;
 mod copilot;
 mod gitlab;
@@ -8,7 +8,9 @@ mod vertex;
 
 use std::sync::Arc;
 
-pub use anthropic::AnthropicProtocol;
+pub use messages::MessagesProtocol;
+/// Neutral alias for the generic messages-family protocol implementation.
+pub use messages::MessagesProtocol as EthnopicProtocol;
 pub use bedrock::BedrockProtocol;
 pub use copilot::CopilotProtocol;
 pub use gitlab::GitLabProtocol;
@@ -21,7 +23,7 @@ use crate::{Protocol, ProtocolImpl};
 pub fn create_protocol_impl(protocol: Protocol) -> Arc<dyn ProtocolImpl> {
     match protocol {
         Protocol::OpenAI => Arc::new(OpenAIProtocol::new()),
-        Protocol::Anthropic => Arc::new(AnthropicProtocol::new()),
+        Protocol::Messages => Arc::new(EthnopicProtocol::new()),
         Protocol::Google => Arc::new(GoogleProtocol::new()),
         Protocol::Bedrock => Arc::new(BedrockProtocol::new()),
         Protocol::Vertex => Arc::new(VertexProtocol::new()),

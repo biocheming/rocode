@@ -530,9 +530,9 @@ pub enum MessageEvent {
 /// Callers construct this from whatever provider/model representation they have.
 #[derive(Debug, Clone)]
 pub struct ModelContext {
-    /// The provider identifier, e.g. `"anthropic"`.
+    /// The provider identifier, e.g. `"ethnopic"`.
     pub provider_id: String,
-    /// The model identifier, e.g. `"claude-sonnet-4-20250514"`.
+    /// The model identifier, e.g. `"test-model-large"`.
     pub model_id: String,
     /// The npm SDK package name used by the provider, e.g. `"@ai-sdk/anthropic"`.
     /// Used to decide whether media can be inlined in tool results.

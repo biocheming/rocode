@@ -166,7 +166,7 @@
     },
     "model": {
       "$ref": "https://models.dev/model-schema.json#/$defs/Model",
-      "description": "Model to use in the format of provider/model, eg anthropic/claude-2",
+      "description": "Model to use in the format of provider/model, eg provider/model-name",
       "type": "string"
     },
     "small_model": {

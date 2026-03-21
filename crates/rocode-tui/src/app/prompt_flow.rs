@@ -29,9 +29,7 @@ impl App {
     pub(super) fn paste_clipboard_to_provider_dialog(&mut self) {
         match Clipboard::read_text() {
             Ok(text) => {
-                for c in text.trim().chars() {
-                    self.provider_dialog.push_char(c);
-                }
+                self.provider_dialog.set_input(text.trim().to_string());
             }
             Err(err) => {
                 self.toast

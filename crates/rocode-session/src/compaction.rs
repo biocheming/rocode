@@ -1363,8 +1363,8 @@ mod tests {
             abort,
             auto: true,
             model: ModelRef {
-                model_id: "claude-3".to_string(),
-                provider_id: "anthropic".to_string(),
+                model_id: "test-model".to_string(),
+                provider_id: "ethnopic".to_string(),
             },
             custom_prompt: Some("custom".to_string()),
             plugin_context: None,
@@ -1467,8 +1467,8 @@ mod tests {
             session_id: "ses_123".to_string(),
             agent: "default".to_string(),
             model: ModelRef {
-                provider_id: "anthropic".to_string(),
-                model_id: "claude-3".to_string(),
+                provider_id: "ethnopic".to_string(),
+                model_id: "test-model".to_string(),
             },
             auto: true,
         };

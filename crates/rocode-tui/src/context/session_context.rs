@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
+use rocode_command::output_blocks::SchedulerStageBlock;
 use rocode_command::terminal_tool_block_display::{
     build_file_items, build_image_items, summarize_block_items_inline,
 };
-use rocode_command::output_blocks::SchedulerStageBlock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -780,9 +780,7 @@ impl SessionContext {
                 MessagePart::File { path, mime } => {
                     summarize_block_items_inline(&build_file_items(path, mime))
                 }
-                MessagePart::Image { url } => {
-                    summarize_block_items_inline(&build_image_items(url))
-                }
+                MessagePart::Image { url } => summarize_block_items_inline(&build_image_items(url)),
             })
             .filter(|value| !value.is_empty())
             .collect::<Vec<_>>()

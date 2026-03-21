@@ -240,14 +240,6 @@ pub fn get_model_context_limit(model_id: &str) -> u64 {
         return 8192;
     }
 
-    if lower.contains("claude-3") || lower.contains("claude-3") {
-        return 200000;
-    }
-
-    if lower.contains("claude-2") {
-        return 100000;
-    }
-
     if lower.contains("gemini") {
         if lower.contains("pro") || lower.contains("ultra") {
             return 1000000;
@@ -267,7 +259,6 @@ pub fn supports_vision(model_id: &str) -> bool {
 
     lower.contains("vision")
         || lower.contains("gpt-4")
-        || lower.contains("claude-3")
         || lower.contains("gemini")
         || lower.contains("qwen-vl")
 }

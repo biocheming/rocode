@@ -50,7 +50,7 @@
             "agent": {
               "name": "autonomous-executor",
               "maxSteps": 12,
-              "model": { "providerId": "anthropic", "modelId": "claude-sonnet-4-20250514" }
+              "model": { "providerId": "your-provider", "modelId": "your-model-id" }
             },
             "children": [
               {

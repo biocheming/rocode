@@ -6,8 +6,8 @@ use ratatui::{
 };
 use rocode_command::terminal_presentation::{TerminalToolResultInfo, TerminalToolState};
 use rocode_command::terminal_segment_display::{
-    format_preview_line, is_denied_result, normalize_tool_name, tool_argument_preview,
-    tool_glyph, TerminalSegmentTone,
+    format_preview_line, is_denied_result, normalize_tool_name, tool_argument_preview, tool_glyph,
+    TerminalSegmentTone,
 };
 use rocode_command::terminal_tool_block_display::{
     build_batch_result_items, build_display_hint_items, build_edit_result_items,
@@ -484,8 +484,7 @@ fn render_shared_block_items(
                 if let Some(label) = label {
                     lines.push(block_content_line(
                         label.text,
-                        style_for_segment_tone(label.tone, theme)
-                            .add_modifier(Modifier::BOLD),
+                        style_for_segment_tone(label.tone, theme).add_modifier(Modifier::BOLD),
                         theme,
                         bg,
                     ));

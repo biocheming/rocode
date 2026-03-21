@@ -420,7 +420,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_overflow_detection_anthropic() {
+    fn test_overflow_detection_ethnopic() {
         assert!(ProviderError::is_overflow("prompt is too long"));
         assert!(ProviderError::is_overflow(
             "The prompt is too long for this model"
@@ -457,7 +457,7 @@ mod tests {
     #[test]
     fn test_parse_api_call_error_overflow() {
         let error = ProviderError::ApiError("prompt is too long".to_string());
-        let parsed = parse_api_call_error("anthropic", &error);
+        let parsed = parse_api_call_error("ethnopic", &error);
         assert!(matches!(parsed, ParsedAPICallError::ContextOverflow { .. }));
     }
 

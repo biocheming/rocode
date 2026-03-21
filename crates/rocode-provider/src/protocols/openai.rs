@@ -64,7 +64,7 @@ fn legacy_base_url(config: &ProviderConfig) -> Result<Option<&str>, ProviderErro
     if base.is_empty() {
         if config.provider_id != "openai" {
             return Err(ProviderError::ConfigError(format!(
-                "provider `{}` requires `base_url` for OpenAI-compatible routing",
+                "provider `{}` requires `base_url` for closeai-compatible routing",
                 config.provider_id
             )));
         }
@@ -1277,7 +1277,7 @@ async fn chat_legacy(
         ProviderError::ApiError(msg)
     })?;
 
-    // Some OpenAI-compatible providers (e.g. ZhipuAI) return SSE-formatted
+    // Some closeai-compatible providers (e.g. ZhipuAI) return SSE-formatted
     // streaming data even for non-streaming requests. Detect and reassemble.
     let raw: RawChatResponse = if body.trim_start().starts_with("data:") {
         reassemble_sse_chunks(&body)?
@@ -1298,7 +1298,7 @@ async fn chat_legacy(
 }
 
 /// Reassemble SSE `data:` chunks (streaming format) into a single `RawChatResponse`.
-/// Some OpenAI-compatible providers return SSE even for non-streaming requests.
+/// Some closeai-compatible providers return SSE even for non-streaming requests.
 fn reassemble_sse_chunks(body: &str) -> Result<RawChatResponse, ProviderError> {
     let mut content = String::new();
     let mut reasoning = String::new();
@@ -1710,7 +1710,7 @@ mod tests {
         assert!(matches!(
             err,
             ProviderError::ConfigError(msg)
-                if msg.contains("requires `base_url` for OpenAI-compatible routing")
+                if msg.contains("requires `base_url` for closeai-compatible routing")
         ));
     }
 

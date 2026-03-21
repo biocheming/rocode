@@ -13,8 +13,8 @@
       // Optional: override the model used by the scheduler for this profile.
       // Coordination benefits from strong instruction-following.
       "model": {
-        "providerId": "anthropic",
-        "modelId": "claude-sonnet-4-20250514"
+        "providerId": "your-provider",
+        "modelId": "your-model-id"
       },
       "skillList": [
         "request-analysis",

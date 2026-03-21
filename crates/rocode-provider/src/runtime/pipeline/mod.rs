@@ -11,6 +11,11 @@ use crate::runtime::pipeline::decode::SseDecoder;
 use crate::runtime::pipeline::event_map::PathEventMapper;
 use crate::ProviderError;
 
+fn is_ethnopic_compatible_provider(provider_id: &str) -> bool {
+    let lower = provider_id.trim().to_ascii_lowercase();
+    lower.contains("anthropic") || lower.contains("ethnopic")
+}
+
 pub struct Pipeline {
     decoder: SseDecoder,
     mapper: PathEventMapper,
@@ -34,11 +39,16 @@ impl Pipeline {
         }
     }
 
-    pub fn anthropic_default() -> Self {
+    pub fn ethnopic_default() -> Self {
         Self {
             decoder: SseDecoder::default_sse(),
-            mapper: PathEventMapper::anthropic_defaults(),
+            mapper: PathEventMapper::ethnopic_defaults(),
         }
+    }
+
+    /// Compatibility shell for older internal call sites.
+    pub fn ethnopic_default_compat() -> Self {
+        Self::ethnopic_default()
     }
 
     pub fn google_default() -> Self {
@@ -57,8 +67,8 @@ impl Pipeline {
 
     pub fn for_provider(provider_id: &str) -> Self {
         let id = provider_id.to_ascii_lowercase();
-        if id.contains("anthropic") {
-            Self::anthropic_default()
+        if is_ethnopic_compatible_provider(&id) {
+            Self::ethnopic_default()
         } else if id.contains("google-vertex") || id.contains("vertex") {
             Self::vertex_default()
         } else if id.contains("google") || id.contains("gemini") {
@@ -85,5 +95,35 @@ impl Pipeline {
         });
 
         Box::pin(mapped)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_ethnopic_compatible_provider, Pipeline};
+    use crate::driver::StreamingEvent;
+    use futures::StreamExt;
+
+    #[test]
+    fn detects_ethnopic_compatible_provider_ids() {
+        assert!(is_ethnopic_compatible_provider("anthropic"));
+        assert!(is_ethnopic_compatible_provider("ethnopic-compatible"));
+        assert!(!is_ethnopic_compatible_provider("openai-compatible"));
+    }
+
+    #[test]
+    fn ethnopic_compatible_provider_uses_messages_pipeline() {
+        let pipeline = Pipeline::for_provider("ethnopic-compatible");
+        let stream = pipeline.process_stream(Box::pin(futures::stream::iter(vec![Ok(
+            bytes::Bytes::from_static(
+                b"data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"hello\"},\"message\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\n",
+            ),
+        )])));
+
+        let events = futures::executor::block_on(async { stream.collect::<Vec<_>>().await });
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Ok(StreamingEvent::PartialContentDelta { content, .. }) if content == "hello"
+        )));
     }
 }

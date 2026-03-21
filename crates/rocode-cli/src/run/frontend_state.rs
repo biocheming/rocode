@@ -1267,11 +1267,7 @@ async fn build_cli_execution_runtime(
 
     if let Some(ref model_id) = selection.model {
         let provider_id = selection.provider.clone().unwrap_or_else(|| {
-            if model_id.starts_with("claude") {
-                "anthropic".to_string()
-            } else {
-                "openai".to_string()
-            }
+            "openai".to_string()
         });
         agent_info = agent_info.with_model(model_id.clone(), provider_id);
     } else if let Some((provider_id, model_id)) = scheduler_resolution.profile_model.clone() {

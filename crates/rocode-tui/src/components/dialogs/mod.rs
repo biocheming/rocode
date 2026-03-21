@@ -76,7 +76,10 @@ pub use help::HelpDialog;
 pub use mcp::{McpDialog, McpItem};
 pub use model_select::{Model, ModelSelectDialog};
 pub use prompt_stash::{PromptStashDialog, StashItem};
-pub use provider::{Provider, ProviderDialog, ProviderStatus, SubmitResult};
+pub use provider::{
+    CustomProviderState, CustomProviderStep, PendingSubmit, Provider, ProviderDialog,
+    ProviderStatus, SubmitResult,
+};
 pub use recovery_action::{RecoveryActionDialog, RecoveryActionItem};
 pub use session_export::SessionExportDialog;
 pub use session_list::{DeleteState as SessionDeleteState, SessionItem, SessionListDialog};

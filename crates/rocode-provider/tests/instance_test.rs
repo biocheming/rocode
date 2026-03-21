@@ -65,7 +65,7 @@ fn test_openai_protocol_creation() {
 }
 
 #[test]
-fn test_anthropic_protocol_creation() {
-    let protocol = rocode_provider::protocols::AnthropicProtocol::new();
+fn test_ethnopic_protocol_creation() {
+    let protocol = rocode_provider::protocols::EthnopicProtocol::new();
     let _arc: Arc<dyn rocode_provider::ProtocolImpl> = Arc::new(protocol);
 }

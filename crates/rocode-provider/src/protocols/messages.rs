@@ -7,7 +7,11 @@ use crate::{
     StreamResult, Usage,
 };
 
-const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
+// Protocol-level default URL for the Messages API.
+// This is the technical endpoint for the messages protocol (analogous to
+// OPENAI_API_URL for the OpenAI chat-completions protocol).  Users override
+// this via `base_url` in their provider configuration.
+const MESSAGES_DEFAULT_URL: &str = "https://api.anthropic.com/v1/messages";
 
 fn runtime_pipeline_enabled(config: &ProviderConfig) -> bool {
     config
@@ -30,12 +34,13 @@ fn runtime_pipeline_enabled(config: &ProviderConfig) -> bool {
 }
 
 /// Build the messages endpoint URL from a user-supplied base URL.
-/// Mirrors the behavior of `@ai-sdk/anthropic` which automatically appends
-/// `/messages` to the configured `baseURL`.
+/// The generic messages-family transport appends `/messages` when the base URL
+/// points at the provider root. The built-in default still targets the
+/// public `/v1/messages` endpoint.
 fn messages_url(base_url: &str) -> String {
     let base = base_url.trim();
     if base.is_empty() {
-        return ANTHROPIC_API_URL.to_string();
+        return MESSAGES_DEFAULT_URL.to_string();
     }
     if base.ends_with("/messages") {
         return base.to_string();
@@ -44,20 +49,20 @@ fn messages_url(base_url: &str) -> String {
     format!("{base}/messages")
 }
 
-pub struct AnthropicProtocol;
+pub struct MessagesProtocol;
 
-impl Default for AnthropicProtocol {
+impl Default for MessagesProtocol {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl AnthropicProtocol {
+impl MessagesProtocol {
     pub fn new() -> Self {
         Self
     }
 
-    fn convert_request(request: ChatRequest) -> AnthropicRequest {
+    fn convert_request(request: ChatRequest) -> MessagesRequest {
         let max_tokens = request.max_tokens.unwrap_or(16_000);
         let mut messages = Vec::new();
         let mut system = request.system;
@@ -74,7 +79,7 @@ impl AnthropicProtocol {
                     match msg.content {
                         crate::Content::Text(text) => {
                             if !text.is_empty() {
-                                content.push(AnthropicContent::Text { text });
+                                content.push(MessagesContent::Text { text });
                             }
                         }
                         crate::Content::Parts(parts) => {
@@ -82,25 +87,25 @@ impl AnthropicProtocol {
                                 if part.content_type == "reasoning" {
                                     if let Some(text) = part.text {
                                         if !text.is_empty() {
-                                            content.push(AnthropicContent::Thinking {
+                                            content.push(MessagesContent::Thinking {
                                                 thinking: text,
                                             });
                                         }
                                     }
                                 } else if let Some(text) = part.text {
                                     if !text.is_empty() {
-                                        content.push(AnthropicContent::Text { text });
+                                        content.push(MessagesContent::Text { text });
                                     }
                                 }
                                 if let Some(tool_use) = part.tool_use {
-                                    content.push(AnthropicContent::ToolUse {
+                                    content.push(MessagesContent::ToolUse {
                                         id: tool_use.id,
                                         name: tool_use.name,
                                         input: tool_use.input,
                                     });
                                 }
                                 if let Some(tool_result) = part.tool_result {
-                                    content.push(AnthropicContent::ToolResult {
+                                    content.push(MessagesContent::ToolResult {
                                         tool_use_id: tool_result.tool_use_id,
                                         content: tool_result.content,
                                         is_error: tool_result.is_error,
@@ -114,7 +119,7 @@ impl AnthropicProtocol {
                         continue;
                     }
 
-                    messages.push(AnthropicMessage {
+                    messages.push(MessagesMessage {
                         role: match msg.role {
                             crate::Role::User => "user".to_string(),
                             crate::Role::Assistant => "assistant".to_string(),
@@ -134,7 +139,7 @@ impl AnthropicProtocol {
                 Some(
                     tools
                         .into_iter()
-                        .map(|tool| AnthropicTool {
+                        .map(|tool| MessagesTool {
                             name: tool.name,
                             description: tool.description,
                             input_schema: tool.parameters,
@@ -144,20 +149,20 @@ impl AnthropicProtocol {
             }
         });
 
-        AnthropicRequest {
+        MessagesRequest {
             model: request.model,
             max_tokens,
             messages,
             system,
             tools,
             stream: request.stream,
-            thinking: anthropic_thinking_config(request.variant.as_deref(), max_tokens),
+            thinking: messages_thinking_config(request.variant.as_deref(), max_tokens),
         }
     }
 }
 
 #[async_trait]
-impl ProtocolImpl for AnthropicProtocol {
+impl ProtocolImpl for MessagesProtocol {
     async fn chat(
         &self,
         client: &reqwest::Client,
@@ -165,15 +170,16 @@ impl ProtocolImpl for AnthropicProtocol {
         request: ChatRequest,
     ) -> Result<ChatResponse, ProviderError> {
         let url = messages_url(&config.base_url);
-        tracing::debug!(url = %url, model = %request.model, "anthropic chat request");
+        tracing::debug!(url = %url, model = %request.model, "messages protocol chat request");
 
-        let anthropic_request = Self::convert_request(request);
+        let messages_request = Self::convert_request(request);
 
         let mut req_builder = client
             .post(&url)
+            // Messages API protocol headers — required by the API specification,
+            // not brand-specific.  Analogous to OpenAI's "Authorization: Bearer".
             .header("x-api-key", &config.api_key)
             .header("anthropic-version", "2023-06-01")
-            .header("anthropic-beta", "claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14")
             .header("content-type", "application/json");
 
         for (key, value) in &config.headers {
@@ -181,7 +187,7 @@ impl ProtocolImpl for AnthropicProtocol {
         }
 
         let response = req_builder
-            .json(&anthropic_request)
+            .json(&messages_request)
             .send()
             .await
             .map_err(|e| ProviderError::NetworkError(e.to_string()))?;
@@ -189,16 +195,16 @@ impl ProtocolImpl for AnthropicProtocol {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            tracing::error!(url = %url, status = %status, "anthropic chat error");
+            tracing::error!(url = %url, status = %status, "messages protocol chat error");
             return Err(ProviderError::ApiError(format!("{}: {}", status, body)));
         }
 
-        let anthropic_response: AnthropicResponse = response
+        let messages_response: MessagesResponse = response
             .json()
             .await
             .map_err(|e| ProviderError::ApiError(e.to_string()))?;
 
-        Ok(convert_response(anthropic_response))
+        Ok(convert_response(messages_response))
     }
 
     async fn chat_stream(
@@ -209,22 +215,26 @@ impl ProtocolImpl for AnthropicProtocol {
     ) -> Result<StreamResult, ProviderError> {
         let use_pipeline = runtime_pipeline_enabled(config);
         let url = messages_url(&config.base_url);
-        tracing::debug!(url = %url, model = %request.model, "anthropic chat_stream request");
+        tracing::debug!(
+            url = %url,
+            model = %request.model,
+            "messages protocol chat_stream request"
+        );
 
-        let mut anthropic_request = Self::convert_request(request);
-        anthropic_request.stream = Some(true);
+        let mut messages_request = Self::convert_request(request);
+        messages_request.stream = Some(true);
 
         tracing::debug!(
-            model = %anthropic_request.model,
-            thinking_enabled = ?anthropic_request.thinking,
-            "anthropic chat_stream request"
+            model = %messages_request.model,
+            thinking_enabled = ?messages_request.thinking,
+            "messages protocol chat_stream request"
         );
 
         let mut req_builder = client
             .post(&url)
+            // Messages API protocol headers (see non-streaming chat() for rationale).
             .header("x-api-key", &config.api_key)
             .header("anthropic-version", "2023-06-01")
-            .header("anthropic-beta", "claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14")
             .header("content-type", "application/json")
             .header("accept", "text/event-stream");
 
@@ -233,7 +243,7 @@ impl ProtocolImpl for AnthropicProtocol {
         }
 
         let response = req_builder
-            .json(&anthropic_request)
+            .json(&messages_request)
             .send()
             .await
             .map_err(|e| ProviderError::NetworkError(e.to_string()))?;
@@ -241,12 +251,16 @@ impl ProtocolImpl for AnthropicProtocol {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            tracing::error!(url = %url, status = %status, "anthropic chat_stream error");
+            tracing::error!(
+                url = %url,
+                status = %status,
+                "messages protocol chat_stream error"
+            );
             return Err(ProviderError::ApiError(format!("{}: {}", status, body)));
         }
 
         if use_pipeline {
-            let pipeline = crate::runtime::pipeline::Pipeline::anthropic_default();
+            let pipeline = crate::runtime::pipeline::Pipeline::ethnopic_default();
             let streaming_events = pipeline.process_stream(Box::pin(response.bytes_stream()));
             return Ok(crate::stream::pipeline_to_stream_result(streaming_events));
         }
@@ -259,9 +273,9 @@ impl ProtocolImpl for AnthropicProtocol {
                 match json_stream.next().await {
                     Some(Ok(value)) => {
                         let event =
-                            crate::stream::parse_anthropic_value_stateful(value, &mut block_types);
+                            crate::stream::parse_ethnopic_value_stateful(value, &mut block_types);
                         if let Some(ref e) = event {
-                            tracing::trace!(event = ?e, "anthropic sse event");
+                            tracing::trace!(event = ?e, "messages protocol sse event");
                         }
                         Some((event.map(Ok), (json_stream, block_types)))
                     }
@@ -279,28 +293,28 @@ impl ProtocolImpl for AnthropicProtocol {
 // ---- Request/Response types ----
 
 #[derive(Debug, Serialize)]
-struct AnthropicRequest {
+struct MessagesRequest {
     model: String,
     max_tokens: u64,
-    messages: Vec<AnthropicMessage>,
+    messages: Vec<MessagesMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     system: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<AnthropicTool>>,
+    tools: Option<Vec<MessagesTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    thinking: Option<AnthropicThinking>,
+    thinking: Option<MessagesThinking>,
 }
 
 #[derive(Debug, Serialize)]
-struct AnthropicMessage {
+struct MessagesMessage {
     role: String,
-    content: Vec<AnthropicContent>,
+    content: Vec<MessagesContent>,
 }
 
 #[derive(Debug, Serialize)]
-struct AnthropicTool {
+struct MessagesTool {
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
@@ -310,7 +324,7 @@ struct AnthropicTool {
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
-enum AnthropicContent {
+enum MessagesContent {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "thinking")]
@@ -332,7 +346,7 @@ enum AnthropicContent {
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
-enum AnthropicThinking {
+enum MessagesThinking {
     #[serde(rename = "enabled")]
     Enabled {
         #[serde(rename = "budget_tokens")]
@@ -340,7 +354,7 @@ enum AnthropicThinking {
     },
 }
 
-fn anthropic_thinking_config(variant: Option<&str>, max_tokens: u64) -> Option<AnthropicThinking> {
+fn messages_thinking_config(variant: Option<&str>, max_tokens: u64) -> Option<MessagesThinking> {
     let target = if let Some(v) = variant {
         let v = v.trim().to_ascii_lowercase();
         match v.as_str() {
@@ -359,33 +373,33 @@ fn anthropic_thinking_config(variant: Option<&str>, max_tokens: u64) -> Option<A
     if budget_tokens == 0 {
         return None;
     }
-    Some(AnthropicThinking::Enabled { budget_tokens })
+    Some(MessagesThinking::Enabled { budget_tokens })
 }
 
 #[derive(Debug, Deserialize)]
-struct AnthropicResponse {
+struct MessagesResponse {
     id: String,
     model: String,
-    content: Vec<AnthropicResponseContent>,
-    usage: AnthropicResponseUsage,
+    content: Vec<MessagesResponseContent>,
+    usage: MessagesResponseUsage,
 }
 
 #[derive(Debug, Deserialize)]
-struct AnthropicResponseContent {
+struct MessagesResponseContent {
     #[serde(rename = "type")]
     _content_type: String,
     text: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-struct AnthropicResponseUsage {
+struct MessagesResponseUsage {
     input_tokens: u64,
     output_tokens: u64,
 }
 
 // ---- Helpers ----
 
-fn convert_response(response: AnthropicResponse) -> ChatResponse {
+fn convert_response(response: MessagesResponse) -> ChatResponse {
     let content = response
         .content
         .iter()
@@ -417,8 +431,8 @@ mod tests {
 
     #[test]
     fn messages_url_empty_falls_back_to_default() {
-        assert_eq!(messages_url(""), ANTHROPIC_API_URL);
-        assert_eq!(messages_url("  "), ANTHROPIC_API_URL);
+        assert_eq!(messages_url(""), MESSAGES_DEFAULT_URL);
+        assert_eq!(messages_url("  "), MESSAGES_DEFAULT_URL);
     }
 
     #[test]

@@ -516,7 +516,10 @@ pub fn extract_jsonish_path_from_raw(raw: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_preview_line, render_file_segment_line, render_image_segment_line, tool_argument_preview};
+    use super::{
+        format_preview_line, render_file_segment_line, render_image_segment_line,
+        tool_argument_preview,
+    };
 
     #[test]
     fn list_tool_preview_shows_path() {

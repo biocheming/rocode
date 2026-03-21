@@ -111,7 +111,7 @@ pub fn normalize(event: StreamEvent) -> Vec<LoopEvent> {
             prompt_tokens,
             completion_tokens,
         } => {
-            // Standalone usage event (e.g. Anthropic message_start).
+            // Standalone usage event (e.g. ethnopic message_start).
             // Emit as StepDone-like usage update without changing finish reason.
             // The loop accumulates usage; this is informational for the sink.
             vec![LoopEvent::StepDone {

@@ -182,7 +182,7 @@ mod tests {
                 "key": "CORP_TOKEN",
                 "token": "secret-123"
             },
-            "anthropic": {
+            "ethnopic": {
                 "type": "api",
                 "key": "sk-ant-xxx"
             }
@@ -206,11 +206,11 @@ mod tests {
 
     #[test]
     fn wellknown_response_parses_config_field() {
-        let json = r#"{"config": {"model": "claude-3-opus"}}"#;
+        let json = r#"{"config": {"model": "test-model-large"}}"#;
         let wk: WellKnownResponse = serde_json::from_str(json).unwrap();
         let config_val = wk.config.unwrap();
         let config: Config = serde_json::from_value(config_val).unwrap();
-        assert_eq!(config.model.as_deref(), Some("claude-3-opus"));
+        assert_eq!(config.model.as_deref(), Some("test-model-large"));
     }
 
     #[test]

@@ -12,11 +12,11 @@ use std::collections::HashMap;
 // ApiStyle
 // ---------------------------------------------------------------------------
 
-/// Identifies the API wire format a provider uses.
+/// Identifies the API wire format family a provider uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApiStyle {
     OpenAiCompatible,
-    AnthropicMessages,
+    EthnopicMessages,
     GeminiGenerate,
     Custom,
 }
@@ -24,8 +24,8 @@ pub enum ApiStyle {
 impl std::fmt::Display for ApiStyle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::OpenAiCompatible => write!(f, "openai"),
-            Self::AnthropicMessages => write!(f, "anthropic"),
+            Self::OpenAiCompatible => write!(f, "closeai-compatible"),
+            Self::EthnopicMessages => write!(f, "ethnopic-compatible"),
             Self::GeminiGenerate => write!(f, "gemini"),
             Self::Custom => write!(f, "custom"),
         }
@@ -341,7 +341,7 @@ pub enum DriverError {
 /// A protocol-agnostic provider driver.
 ///
 /// Implementations know how to build requests and parse responses for a
-/// specific API wire format (OpenAI, Anthropic, Gemini, etc.).
+/// specific API wire format family (closeai-compatible, ethnopic-compatible, Gemini, etc.).
 #[async_trait]
 pub trait ProviderDriver: Send + Sync + std::fmt::Debug {
     /// Unique identifier for this provider.
@@ -372,4 +372,18 @@ pub trait ProviderDriver: Send + Sync + std::fmt::Debug {
 
     /// Check whether an SSE data line signals stream completion.
     fn is_stream_done(&self, data: &str) -> bool;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ApiStyle;
+
+    #[test]
+    fn api_style_display_uses_neutral_protocol_family_labels() {
+        assert_eq!(ApiStyle::OpenAiCompatible.to_string(), "closeai-compatible");
+        assert_eq!(
+            ApiStyle::EthnopicMessages.to_string(),
+            "ethnopic-compatible"
+        );
+    }
 }

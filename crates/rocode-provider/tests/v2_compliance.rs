@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use futures::StreamExt;
 use rocode_provider::{
-    assemble_tool_calls, parse_anthropic_value, parse_openai_value, pipeline_to_stream_result,
+    assemble_tool_calls, parse_ethnopic_value, parse_openai_value, pipeline_to_stream_result,
     runtime::pipeline::Pipeline, ProviderError, StreamEvent, StreamResult,
 };
 
@@ -57,20 +57,20 @@ async fn pipeline_openai_events(frames: &[serde_json::Value]) -> Vec<StreamEvent
     collect_stream(pipeline_to_stream_result(driver_stream)).await
 }
 
-async fn legacy_anthropic_events(frames: &[serde_json::Value]) -> Vec<StreamEvent> {
+async fn legacy_ethnopic_events(frames: &[serde_json::Value]) -> Vec<StreamEvent> {
     let raw_events: Vec<StreamEvent> = frames
         .iter()
-        .filter_map(|frame| parse_anthropic_value(frame.clone()))
+        .filter_map(|frame| parse_ethnopic_value(frame.clone()))
         .collect();
     let stream = futures::stream::iter(raw_events.into_iter().map(Ok::<_, ProviderError>));
     collect_stream(assemble_tool_calls(Box::pin(stream))).await
 }
 
-async fn pipeline_anthropic_events(frames: &[serde_json::Value]) -> Vec<StreamEvent> {
+async fn pipeline_ethnopic_events(frames: &[serde_json::Value]) -> Vec<StreamEvent> {
     let payload = build_sse_payload(frames);
     let bytes_stream =
         futures::stream::iter(vec![Ok::<Bytes, reqwest::Error>(Bytes::from(payload))]);
-    let pipeline = Pipeline::anthropic_default();
+    let pipeline = Pipeline::ethnopic_default();
     let driver_stream = pipeline.process_stream(Box::pin(bytes_stream));
     collect_stream(pipeline_to_stream_result(driver_stream)).await
 }
@@ -145,7 +145,7 @@ async fn openai_tool_call_stream_compliance() {
 }
 
 #[tokio::test]
-async fn anthropic_mixed_stream_compliance() {
+async fn ethnopic_mixed_stream_compliance() {
     let frames = vec![
         serde_json::json!({
             "type": "content_block_start",
@@ -177,8 +177,8 @@ async fn anthropic_mixed_stream_compliance() {
         }),
     ];
 
-    let legacy = legacy_anthropic_events(&frames).await;
-    let pipeline = pipeline_anthropic_events(&frames).await;
+    let legacy = legacy_ethnopic_events(&frames).await;
+    let pipeline = pipeline_ethnopic_events(&frames).await;
 
     assert_eq!(
         json_events_signature(pipeline),
@@ -236,7 +236,7 @@ async fn dashscope_multiline_sse_frame_pipeline() {
 
     let bytes_stream =
         futures::stream::iter(vec![Ok::<Bytes, reqwest::Error>(Bytes::from(payload))]);
-    let pipeline = Pipeline::anthropic_default();
+    let pipeline = Pipeline::ethnopic_default();
     let driver_stream = pipeline.process_stream(Box::pin(bytes_stream));
     let events = collect_stream(pipeline_to_stream_result(driver_stream)).await;
 

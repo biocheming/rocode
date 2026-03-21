@@ -676,7 +676,7 @@ mod tests {
                     Ok(None)
                 }
             })
-            .with_get_last_model(|_session_id| async move { Ok(Some("anthropic:claude".into())) })
+            .with_get_last_model(|_session_id| async move { Ok(Some("ethnopic:test-model".into())) })
             .with_create_subsession({
                 let create_calls = create_calls.clone();
                 move |agent, title, model, disabled_tools| {
@@ -733,7 +733,7 @@ mod tests {
 
         let ctx = ToolContext::new("session-1".into(), "message-1".into(), ".".into())
             .with_get_agent_info(|_name| async move { Ok(None) })
-            .with_get_last_model(|_session_id| async move { Ok(Some("anthropic:claude".into())) })
+            .with_get_last_model(|_session_id| async move { Ok(Some("ethnopic:test-model".into())) })
             .with_create_subsession({
                 let create_calls = create_calls.clone();
                 move |agent, title, model, disabled_tools| {
@@ -763,14 +763,14 @@ mod tests {
         assert_eq!(
             result.metadata.get("model"),
             Some(&serde_json::json!({
-                "modelID": "claude",
-                "providerID": "anthropic"
+                "modelID": "test-model",
+                "providerID": "ethnopic"
             }))
         );
 
         let create_calls = create_calls.lock().await.clone();
         assert_eq!(create_calls.len(), 1);
-        assert_eq!(create_calls[0].2, Some("anthropic:claude".to_string()));
+        assert_eq!(create_calls[0].2, Some("ethnopic:test-model".to_string()));
         // Unknown agent → can_use_task defaults to false → "task" should be disabled
         assert!(create_calls[0].3.contains(&"task".to_string()));
     }
@@ -786,7 +786,7 @@ mod tests {
 
         // No with_get_agent_info — simulates paths where callback isn't injected
         let ctx = ToolContext::new("session-1".into(), "message-1".into(), ".".into())
-            .with_get_last_model(|_session_id| async move { Ok(Some("anthropic:claude".into())) })
+            .with_get_last_model(|_session_id| async move { Ok(Some("ethnopic:test-model".into())) })
             .with_create_subsession({
                 let create_calls = create_calls.clone();
                 move |agent, title, model, disabled_tools| {

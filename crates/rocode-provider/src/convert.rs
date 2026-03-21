@@ -1,9 +1,9 @@
 //! Message conversion functions for the OpenAI Responses API and
-//! OpenAI-compatible chat completions.
+//! closeai-compatible chat completions.
 //!
 //! Mirrors the TS files:
 //! - `convert-to-openai-responses-input.ts`
-//! - `convert-to-openai-compatible-chat-messages.ts`
+//! - `convert-to-closeai-compatible-chat-messages.ts`
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

@@ -1440,7 +1440,7 @@ impl SessionPrompt {
             .model
             .as_ref()
             .map(|m| m.provider_id.clone())
-            .unwrap_or_else(|| "anthropic".to_string());
+            .unwrap_or_else(|| "ethnopic".to_string());
 
         self.create_user_message(&input, session).await?;
         Self::annotate_latest_user_message(session, &input, system_prompt.as_deref());
@@ -1547,7 +1547,7 @@ impl SessionPrompt {
         let provider_id = model
             .as_ref()
             .map(|m| m.provider_id.clone())
-            .unwrap_or_else(|| "anthropic".to_string());
+            .unwrap_or_else(|| "ethnopic".to_string());
 
         let session_id = session_id.to_string();
         let resume_agent = session

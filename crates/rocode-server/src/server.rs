@@ -204,6 +204,13 @@ fn spawn_plugin_idle_monitor(loader: Arc<PluginLoader>) {
     });
 }
 
+/// Configuration for a custom provider added via /connect.
+#[derive(Clone, Debug)]
+pub struct CustomProviderConfig {
+    pub base_url: String,
+    pub protocol: String,
+}
+
 pub struct ServerState {
     pub sessions: Mutex<SessionManager>,
     pub providers: tokio::sync::RwLock<ProviderRegistry>,
@@ -221,6 +228,8 @@ pub struct ServerState {
     pub category_registry: Arc<rocode_config::CategoryRegistry>,
     pub(crate) todo_manager: rocode_session::TodoManager,
     pub(crate) runtime_state: Arc<crate::session_runtime::state::RuntimeStateStore>,
+    /// Custom providers added via /connect dialog (provider_id -> config)
+    pub custom_providers: tokio::sync::RwLock<std::collections::HashMap<String, CustomProviderConfig>>,
 }
 
 pub struct ApiPerfCounters {
@@ -305,6 +314,7 @@ impl ServerState {
             category_registry: Arc::new(rocode_config::CategoryRegistry::empty()),
             todo_manager: rocode_session::TodoManager::new(),
             runtime_state: Arc::new(crate::session_runtime::state::RuntimeStateStore::new()),
+            custom_providers: tokio::sync::RwLock::new(std::collections::HashMap::new()),
         }
     }
 
@@ -413,13 +423,51 @@ impl ServerState {
         let _ = self.event_bus.send(event.to_string());
     }
 
-    /// Rebuild the provider registry from the stored bootstrap config and
-    /// current auth store.  Call this after `auth_manager.set()` so that newly
-    /// connected providers become available immediately.
+    /// Rebuild the provider registry from the stored bootstrap config,
+    /// current auth store, and custom providers. Call this after `auth_manager.set()`
+    /// so that newly connected providers become available immediately.
     pub async fn rebuild_providers(&self) {
+        use rocode_provider::bootstrap::ConfigProvider;
+
         let auth_store = self.auth_manager.list().await;
+        let custom_providers = self.custom_providers.read().await.clone();
+
+        // Build extended bootstrap config including custom providers
+        let mut extended_config = self.bootstrap_config.clone();
+
+        for (provider_id, config) in custom_providers {
+            // Convert protocol string to npm-style identifier
+            let npm = match config.protocol.as_str() {
+                "anthropic" => "@ai-sdk/anthropic",
+                "google" => "@ai-sdk/google",
+                "bedrock" => "@ai-sdk/amazon-bedrock",
+                "vertex" => "@ai-sdk/google-vertex",
+                "github-copilot" => "@ai-sdk/github-copilot",
+                "gitlab" => "@ai-sdk/gitlab",
+                _ => "openai-compatible", // default
+            };
+
+            // Store base_url in options
+            let mut options = std::collections::HashMap::new();
+            options.insert("base_url".to_string(), serde_json::Value::String(config.base_url));
+
+            let config_provider = ConfigProvider {
+                name: Some(provider_id.clone()),
+                env: None,
+                npm: Some(npm.to_string()),
+                api: Some(format!("{}/{}", npm, provider_id)),
+                options: Some(options),
+                models: None,
+                blacklist: None,
+                whitelist: None,
+            };
+
+            extended_config.providers.insert(provider_id, config_provider);
+        }
+
         let new_registry =
-            create_registry_from_bootstrap_config(&self.bootstrap_config, &auth_store);
+            create_registry_from_bootstrap_config(&extended_config, &auth_store);
+
         *self.providers.write().await = new_registry;
     }
 

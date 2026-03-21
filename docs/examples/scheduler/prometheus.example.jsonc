@@ -13,8 +13,8 @@
       // Optional: override the model used by the scheduler for this profile.
       // Planning benefits from a high-reasoning model.
       "model": {
-        "providerId": "anthropic",
-        "modelId": "claude-opus-4-6"
+        "providerId": "your-provider",
+        "modelId": "your-reasoning-model"
       },
       "skillList": [
         "request-analysis",

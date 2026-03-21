@@ -52,13 +52,14 @@ use crate::app::state::AppState;
 use crate::app::terminal;
 use crate::components::{
     exit_logo_lines, Agent, AgentSelectDialog, AlertDialog, CommandPalette, ForkDialog, ForkEntry,
-    HelpDialog, HomeView, McpDialog, McpItem, ModeKind, Model, ModelSelectDialog, PermissionAction,
-    PermissionPrompt, Prompt, PromptStashDialog, ProviderDialog, QuestionOption, QuestionPrompt,
-    QuestionRequest, QuestionType, RecoveryActionDialog, RecoveryActionItem, SessionDeleteState,
-    SessionExportDialog, SessionItem, SessionListDialog, SessionRenameDialog, SessionView,
-    SkillListDialog, SlashCommandPopup, StashItem, StatusDialog, StatusLine, SubagentDialog,
-    TagDialog, TaskKind, ThemeListDialog, ThemeOption, TimelineDialog, TimelineEntry, Toast,
-    ToastVariant, ToolCallCancelDialog, ToolCallItem, OTHER_OPTION_ID, OTHER_OPTION_LABEL,
+    HelpDialog, HomeView, McpDialog, McpItem, ModeKind, Model, ModelSelectDialog, PendingSubmit,
+    PermissionAction, PermissionPrompt, Prompt, PromptStashDialog, ProviderDialog, QuestionOption,
+    QuestionPrompt, QuestionRequest, QuestionType, RecoveryActionDialog, RecoveryActionItem,
+    SessionDeleteState, SessionExportDialog, SessionItem, SessionListDialog, SessionRenameDialog,
+    SessionView, SkillListDialog, SlashCommandPopup, StashItem, StatusDialog, StatusLine,
+    SubagentDialog, TagDialog, TaskKind, ThemeListDialog, ThemeOption, TimelineDialog,
+    TimelineEntry, Toast, ToastVariant, ToolCallCancelDialog, ToolCallItem, OTHER_OPTION_ID,
+    OTHER_OPTION_LABEL,
 };
 use crate::context::keybind::{is_primary_key_event, normalize_key_event, LeaderKeyState};
 use crate::context::{

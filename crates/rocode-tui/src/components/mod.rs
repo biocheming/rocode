@@ -9,12 +9,12 @@ mod permission;
 mod prompt;
 mod question;
 mod revert_card;
-mod shared_block_items;
 pub mod semantic_highlight;
 mod session;
 mod session_message;
 mod session_text;
 mod session_tool;
+mod shared_block_items;
 mod sidebar;
 mod slash_command;
 mod spinner;
@@ -26,13 +26,14 @@ mod tool_views;
 
 pub use dialog::Dialog;
 pub use dialogs::{
-    Agent, AgentSelectDialog, AlertDialog, CommandPalette, ConfirmDialog, ForkDialog, ForkEntry,
-    HelpDialog, McpDialog, McpItem, ModeKind, Model, ModelSelectDialog, PromptStashDialog,
-    Provider, ProviderDialog, ProviderStatus, RecoveryActionDialog, RecoveryActionItem,
-    SessionDeleteState, SessionExportDialog, SessionItem, SessionListDialog, SessionRenameDialog,
-    SkillListDialog, StashItem, StatusDialog, StatusLine, SubagentDialog, SubagentInfo,
-    SubagentMessage, SubmitResult, Tag, TagDialog, ThemeListDialog, ThemeOption, TimelineDialog,
-    TimelineEntry, ToolCallCancelDialog, ToolCallItem, VisibilityLabels,
+    Agent, AgentSelectDialog, AlertDialog, CommandPalette, ConfirmDialog, CustomProviderState,
+    CustomProviderStep, ForkDialog, ForkEntry, HelpDialog, McpDialog, McpItem, ModeKind, Model,
+    ModelSelectDialog, PendingSubmit, PromptStashDialog, Provider, ProviderDialog, ProviderStatus,
+    RecoveryActionDialog, RecoveryActionItem, SessionDeleteState, SessionExportDialog,
+    SessionItem, SessionListDialog, SessionRenameDialog, SkillListDialog, StashItem, StatusDialog,
+    StatusLine, SubagentDialog, SubagentInfo, SubagentMessage, SubmitResult, Tag, TagDialog,
+    ThemeListDialog, ThemeOption, TimelineDialog, TimelineEntry, ToolCallCancelDialog,
+    ToolCallItem, VisibilityLabels,
 };
 pub use diff::{DiffLine, DiffLineType, DiffMode, DiffView};
 pub use home::HomeView;

@@ -1,7 +1,6 @@
 use chrono::Local;
 
 // Embed prompt templates at compile time (matching TS originals from session/prompt/*.txt)
-const PROMPT_ANTHROPIC: &str = include_str!("prompt_templates/anthropic.txt");
 const PROMPT_BEAST: &str = include_str!("prompt_templates/beast.txt");
 const PROMPT_GEMINI: &str = include_str!("prompt_templates/gemini.txt");
 const PROMPT_QWEN: &str = include_str!("prompt_templates/qwen.txt");
@@ -46,9 +45,7 @@ impl SystemPrompt {
     ///   - gpt-5       → PROMPT_CODEX
     ///   - gpt-* / o1 / o3 → PROMPT_BEAST
     ///   - gemini-*    → PROMPT_GEMINI
-    ///   - claude*     → PROMPT_ANTHROPIC
-    ///   - trinity     → PROMPT_TRINITY
-    ///   - fallback    → PROMPT_QWEN (anthropic without todo)
+    ///   - fallback    → PROMPT_QWEN (messages without todo)
     pub fn for_model(model_api_id: &str) -> &'static str {
         let id = model_api_id.to_lowercase();
 
@@ -61,13 +58,10 @@ impl SystemPrompt {
         if id.contains("gemini-") {
             return PROMPT_GEMINI;
         }
-        if id.contains("claude") {
-            return PROMPT_ANTHROPIC;
-        }
         if id.contains("trinity") {
             return PROMPT_TRINITY;
         }
-        // Default fallback — same as TS (qwen.txt = anthropic without todo)
+        // Default fallback — same as TS (qwen.txt = messages without todo)
         PROMPT_QWEN
     }
 
@@ -76,7 +70,7 @@ impl SystemPrompt {
     ///
     /// Produces a string like:
     /// ```text
-    /// You are powered by the model named claude-sonnet-4-20250514. The exact model ID is anthropic/claude-sonnet-4-20250514
+    /// You are powered by the model named test-model-large. The exact model ID is ethnopic/test-model-large
     /// Here is some useful information about the environment you are running in:
     /// <env>
     ///   Working directory: /home/user/project
@@ -160,9 +154,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_for_model_claude() {
-        let prompt = SystemPrompt::for_model("claude-sonnet-4-20250514");
-        assert!(prompt.contains("ROCode"));
+    fn test_for_model_fallback() {
+        // Models without a specific match get the default (PROMPT_QWEN)
+        let prompt = SystemPrompt::for_model("some-unknown-model");
+        assert!(prompt.contains("ROCode") || prompt.contains("rocode"));
     }
 
     #[test]
@@ -201,15 +196,15 @@ mod tests {
     #[test]
     fn test_environment_output() {
         let ctx = EnvironmentContext {
-            model_api_id: "claude-sonnet-4-20250514".to_string(),
-            provider_id: "anthropic".to_string(),
+            model_api_id: "test-model-large".to_string(),
+            provider_id: "ethnopic".to_string(),
             working_directory: "/tmp/test".to_string(),
             is_git_repo: true,
             platform: "linux".to_string(),
         };
         let env = SystemPrompt::environment(&ctx);
-        assert!(env.contains("claude-sonnet-4-20250514"));
-        assert!(env.contains("anthropic/claude-sonnet-4-20250514"));
+        assert!(env.contains("test-model-large"));
+        assert!(env.contains("ethnopic/test-model-large"));
         assert!(env.contains("/tmp/test"));
         assert!(env.contains("Is directory a git repo: yes"));
         assert!(env.contains("Platform: linux"));

@@ -160,7 +160,9 @@ mod tests {
     fn render_cli_image_lines_summarize_inline_data_url() {
         let style = CliStyle::plain();
         let lines = render_cli_image_lines("data:image/png;base64,QUJDRA==", &style);
-        assert!(lines.iter().any(|line| line.contains("[image] inline image")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("[image] inline image")));
         assert!(lines.iter().any(|line| line.contains("type: image/png")));
         assert!(lines.iter().any(|line| line.contains("size: 4 B")));
     }

@@ -197,7 +197,7 @@ fn openai_tool_call_id(tc: &OpenAIToolCall) -> String {
     format!("tool-call-{}", tc.index)
 }
 
-fn anthropic_tool_call_id(index: Option<u32>, explicit_id: Option<&str>) -> String {
+fn messages_tool_call_id(index: Option<u32>, explicit_id: Option<&str>) -> String {
     if let Some(index) = index {
         return format!("tool-call-{}", index);
     }
@@ -423,17 +423,17 @@ pub fn assemble_tool_calls(inner: StreamResult) -> StreamResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct AnthropicEvent {
+pub(crate) struct EthnopicEvent {
     #[serde(rename = "type")]
     pub event_type: String,
     pub index: Option<u32>,
-    pub delta: Option<AnthropicDelta>,
-    pub content_block: Option<AnthropicContentBlock>,
-    pub message: Option<AnthropicMessage>,
+    pub delta: Option<EthnopicDelta>,
+    pub content_block: Option<EthnopicContentBlock>,
+    pub message: Option<EthnopicMessage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct AnthropicDelta {
+pub(crate) struct EthnopicDelta {
     #[serde(rename = "type")]
     pub delta_type: Option<String>,
     pub text: Option<String>,
@@ -443,7 +443,7 @@ pub(crate) struct AnthropicDelta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct AnthropicContentBlock {
+pub(crate) struct EthnopicContentBlock {
     #[serde(rename = "type")]
     pub block_type: String,
     pub id: Option<String>,
@@ -452,12 +452,12 @@ pub(crate) struct AnthropicContentBlock {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct AnthropicMessage {
-    pub(crate) usage: Option<AnthropicUsage>,
+pub(crate) struct EthnopicMessage {
+    pub(crate) usage: Option<EthnopicUsage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct AnthropicUsage {
+pub(crate) struct EthnopicUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
 }
@@ -571,18 +571,18 @@ pub async fn decode_sse_stream(
     Ok(Box::pin(sse_stream))
 }
 
-/// Parse a pre-decoded JSON value as an Anthropic SSE event.
+/// Parse a pre-decoded JSON value as an ethnopic-compatible SSE event.
 ///
 /// Works on an already-parsed `serde_json::Value` from the SseDecoder pipeline.
-pub fn parse_anthropic_value(value: serde_json::Value) -> Option<StreamEvent> {
-    parse_anthropic_value_stateful(value, &mut std::collections::HashMap::new())
+pub fn parse_ethnopic_value(value: serde_json::Value) -> Option<StreamEvent> {
+    parse_ethnopic_value_stateful(value, &mut std::collections::HashMap::new())
 }
 
-pub fn parse_anthropic_value_stateful(
+pub fn parse_ethnopic_value_stateful(
     value: serde_json::Value,
     block_types: &mut std::collections::HashMap<u32, String>,
 ) -> Option<StreamEvent> {
-    let event: AnthropicEvent = serde_json::from_value(value).ok()?;
+    let event: EthnopicEvent = serde_json::from_value(value).ok()?;
 
     match event.event_type.as_str() {
         "content_block_delta" => {
@@ -596,7 +596,7 @@ pub fn parse_anthropic_value_stateful(
                 }
                 if let Some(json) = delta.partial_json {
                     return Some(StreamEvent::ToolCallDelta {
-                        id: anthropic_tool_call_id(event.index, None),
+                        id: messages_tool_call_id(event.index, None),
                         input: json,
                     });
                 }
@@ -613,7 +613,7 @@ pub fn parse_anthropic_value_stateful(
                 }
                 if block.block_type == "tool_use" {
                     return Some(StreamEvent::ToolCallStart {
-                        id: anthropic_tool_call_id(event.index, block.id.as_deref()),
+                        id: messages_tool_call_id(event.index, block.id.as_deref()),
                         name: block.name.unwrap_or_default(),
                     });
                 }
@@ -851,6 +851,20 @@ mod tests {
             }
             other => panic!("unexpected: {:?}", other),
         }
+    }
+
+    #[test]
+    fn ethnopic_parse_alias_matches_legacy_entrypoint() {
+        let frame = serde_json::json!({
+            "type": "content_block_delta",
+            "delta": { "text": "hello" }
+        });
+
+        let legacy = parse_ethnopic_value(frame.clone());
+        let neutral = parse_ethnopic_value(frame);
+
+        assert!(matches!(legacy, Some(StreamEvent::TextDelta(text)) if text == "hello"));
+        assert!(matches!(neutral, Some(StreamEvent::TextDelta(text)) if text == "hello"));
     }
 
     #[tokio::test]

@@ -51,11 +51,11 @@ pub enum BootstrapError {
 pub static BUNDLED_PROVIDERS: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
     let mut m = HashMap::new();
     m.insert("@ai-sdk/amazon-bedrock", "amazon-bedrock");
-    m.insert("@ai-sdk/anthropic", "anthropic");
+    m.insert("@ai-sdk/anthropic", "ethnopic");
     m.insert("@ai-sdk/azure", "azure");
     m.insert("@ai-sdk/google", "google");
     m.insert("@ai-sdk/google-vertex", "google-vertex");
-    m.insert("@ai-sdk/google-vertex/anthropic", "google-vertex-anthropic");
+    m.insert("@ai-sdk/google-vertex/anthropic", "google-vertex-ethnopic");
     m.insert("@ai-sdk/openai", "openai");
     m.insert("@ai-sdk/openai-compatible", "openai-compatible");
     m.insert("@openrouter/ai-sdk-provider", "openrouter");
@@ -240,24 +240,6 @@ pub trait CustomLoader: Send + Sync {
 // Custom loader implementations for all 14+ providers
 // ---------------------------------------------------------------------------
 
-/// Anthropic custom loader - adds correct beta headers.
-struct AnthropicLoader;
-
-impl CustomLoader for AnthropicLoader {
-    fn load(
-        &self,
-        _provider: &ModelsProviderInfo,
-        _provider_state: Option<&ProviderState>,
-    ) -> CustomLoaderResult {
-        let mut result = CustomLoaderResult::default();
-        result.headers.insert(
-            "anthropic-beta".to_string(),
-            "claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14".to_string(),
-        );
-        result
-    }
-}
-
 /// OpenCode custom loader - checks API keys, filters paid models if no key.
 struct OpenCodeLoader;
 
@@ -421,94 +403,6 @@ impl AmazonBedrockLoader {
             }
         }
         None
-    }
-
-    /// Apply cross-region model ID prefixing based on region.
-    /// Returns the (possibly prefixed) model ID.
-    // TODO: Wire for Bedrock cross-region routing
-    #[allow(dead_code)]
-    pub fn prefix_model_id(model_id: &str, region: &str) -> String {
-        // Skip if model already has a cross-region inference profile prefix
-        let cross_region_prefixes = ["global.", "us.", "eu.", "jp.", "apac.", "au."];
-        if cross_region_prefixes
-            .iter()
-            .any(|p| model_id.starts_with(p))
-        {
-            return model_id.to_string();
-        }
-
-        let region_prefix = region.split('-').next().unwrap_or("");
-        let mut result_id = model_id.to_string();
-
-        match region_prefix {
-            "us" => {
-                let model_requires_prefix = [
-                    "nova-micro",
-                    "nova-lite",
-                    "nova-pro",
-                    "nova-premier",
-                    "nova-2",
-                    "claude",
-                    "deepseek",
-                ]
-                .iter()
-                .any(|m| model_id.contains(m));
-                let is_gov_cloud = region.starts_with("us-gov");
-                if model_requires_prefix && !is_gov_cloud {
-                    result_id = format!("{}.{}", region_prefix, model_id);
-                }
-            }
-            "eu" => {
-                let region_requires_prefix = [
-                    "eu-west-1",
-                    "eu-west-2",
-                    "eu-west-3",
-                    "eu-north-1",
-                    "eu-central-1",
-                    "eu-south-1",
-                    "eu-south-2",
-                ]
-                .iter()
-                .any(|r| region.contains(r));
-                let model_requires_prefix =
-                    ["claude", "nova-lite", "nova-micro", "llama3", "pixtral"]
-                        .iter()
-                        .any(|m| model_id.contains(m));
-                if region_requires_prefix && model_requires_prefix {
-                    result_id = format!("{}.{}", region_prefix, model_id);
-                }
-            }
-            "ap" => {
-                let is_australia_region = region == "ap-southeast-2" || region == "ap-southeast-4";
-                let is_tokyo_region = region == "ap-northeast-1";
-
-                if is_australia_region
-                    && ["anthropic.claude-sonnet-4-5", "anthropic.claude-haiku"]
-                        .iter()
-                        .any(|m| model_id.contains(m))
-                {
-                    result_id = format!("au.{}", model_id);
-                } else if is_tokyo_region {
-                    let model_requires_prefix = ["claude", "nova-lite", "nova-micro", "nova-pro"]
-                        .iter()
-                        .any(|m| model_id.contains(m));
-                    if model_requires_prefix {
-                        result_id = format!("jp.{}", model_id);
-                    }
-                } else {
-                    // Other APAC regions use apac. prefix
-                    let model_requires_prefix = ["claude", "nova-lite", "nova-micro", "nova-pro"]
-                        .iter()
-                        .any(|m| model_id.contains(m));
-                    if model_requires_prefix {
-                        result_id = format!("apac.{}", model_id);
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        result_id
     }
 }
 
@@ -676,10 +570,10 @@ impl CustomLoader for GoogleVertexLoader {
     }
 }
 
-/// Google Vertex Anthropic custom loader - similar to google-vertex.
-struct GoogleVertexAnthropicLoader;
+/// Google Vertex Ethnopic custom loader - similar to google-vertex.
+struct GoogleVertexEthnopicLoader;
 
-impl CustomLoader for GoogleVertexAnthropicLoader {
+impl CustomLoader for GoogleVertexEthnopicLoader {
     fn load(
         &self,
         _provider: &ModelsProviderInfo,
@@ -918,7 +812,6 @@ impl CustomLoader for CerebrasLoader {
 /// Get the custom loader for a provider ID.
 fn get_custom_loader(provider_id: &str) -> Option<Box<dyn CustomLoader>> {
     match provider_id {
-        "anthropic" => Some(Box::new(AnthropicLoader)),
         "opencode" => Some(Box::new(OpenCodeLoader)),
         "openai" => Some(Box::new(OpenAILoader)),
         "github-copilot" => Some(Box::new(GitHubCopilotLoader)),
@@ -930,7 +823,7 @@ fn get_custom_loader(provider_id: &str) -> Option<Box<dyn CustomLoader>> {
         "zenmux" => Some(Box::new(ZenMuxLoader)),
         "vercel" => Some(Box::new(VercelLoader)),
         "google-vertex" => Some(Box::new(GoogleVertexLoader)),
-        "google-vertex-anthropic" => Some(Box::new(GoogleVertexAnthropicLoader)),
+        "google-vertex-ethnopic" => Some(Box::new(GoogleVertexEthnopicLoader)),
         "sap-ai-core" => Some(Box::new(SapAiCoreLoader)),
         "gitlab" => Some(Box::new(GitLabLoader)),
         "cloudflare-workers-ai" => Some(Box::new(CloudflareWorkersAiLoader)),
@@ -1181,7 +1074,7 @@ pub struct BootstrapConfig {
     pub enabled_providers: Option<HashSet<String>>,
     /// Whether to enable experimental/alpha models
     pub enable_experimental: bool,
-    /// The configured model string (e.g. "anthropic/claude-sonnet-4")
+    /// The configured model string (e.g. "ethnopic/test-model")
     pub model: Option<String>,
     /// The configured small model string
     pub small_model: Option<String>,
@@ -1550,10 +1443,6 @@ impl ProviderBootstrapState {
 
         if let Some(provider) = self.providers.get(provider_id) {
             let mut priority: Vec<&str> = vec![
-                "claude-haiku-4-5",
-                "claude-haiku-4.5",
-                "3-5-haiku",
-                "3.5-haiku",
                 "gemini-3-flash",
                 "gemini-2.5-flash",
                 "gpt-5-nano",
@@ -1563,11 +1452,8 @@ impl ProviderBootstrapState {
                 priority = vec!["gpt-5-nano"];
             }
             if provider_id.starts_with("github-copilot") {
-                priority = vec!["gpt-5-mini", "claude-haiku-4.5"];
+                priority = vec!["gpt-5-mini"];
                 priority.extend_from_slice(&[
-                    "claude-haiku-4-5",
-                    "3-5-haiku",
-                    "3.5-haiku",
                     "gemini-3-flash",
                     "gemini-2.5-flash",
                     "gpt-5-nano",
@@ -1632,7 +1518,7 @@ impl ProviderBootstrapState {
 
     /// Sort models by priority (matching TS sort function).
     pub fn sort_models(models: &mut [ProviderModel]) {
-        let priority_list = ["gpt-5", "claude-sonnet-4", "big-pickle", "gemini-3-pro"];
+        let priority_list = ["gpt-5", "big-pickle", "gemini-3-pro"];
 
         models.sort_by(|a, b| {
             let a_pri = priority_list
@@ -2168,9 +2054,9 @@ fn provider_base_url(provider: &ProviderState) -> Option<String> {
 
 fn default_npm_for_provider_id(provider_id: &str) -> &'static str {
     match provider_id {
-        "anthropic" => "@ai-sdk/anthropic",
+        "ethnopic" => "@ai-sdk/anthropic",
         "google" => "@ai-sdk/google",
-        "google-vertex" | "google-vertex-anthropic" => "@ai-sdk/google-vertex",
+        "google-vertex" | "google-vertex-ethnopic" => "@ai-sdk/google-vertex",
         "amazon-bedrock" => "@ai-sdk/amazon-bedrock",
         "github-copilot" | "github-copilot-enterprise" => "@ai-sdk/github-copilot",
         "gitlab" => "@gitlab/gitlab-ai-provider",
@@ -2197,7 +2083,7 @@ fn resolve_npm_for_provider(provider_id: &str, provider: &ProviderState) -> Stri
 
 fn default_secret_env_for_provider(provider_id: &str, protocol: Protocol) -> Vec<&'static str> {
     match protocol {
-        Protocol::Anthropic => vec!["ANTHROPIC_API_KEY"],
+        Protocol::Messages => vec!["ANTHROPIC_API_KEY"],
         Protocol::Google => vec!["GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"],
         Protocol::Bedrock => vec!["AWS_ACCESS_KEY_ID"],
         Protocol::Vertex => vec![
@@ -2226,6 +2112,7 @@ fn default_secret_env_for_provider(provider_id: &str, protocol: Protocol) -> Vec
         },
     }
 }
+
 
 fn collect_provider_headers(provider: &ProviderState) -> HashMap<String, String> {
     let mut headers = HashMap::new();
@@ -2872,7 +2759,7 @@ fn load_models_dev_cache() -> ModelsData {
 
 fn register_fallback_env_providers(registry: &mut ProviderRegistry) {
     let fallback: Vec<(&str, Vec<&str>)> = vec![
-        ("anthropic", vec!["ANTHROPIC_API_KEY"]),
+        ("ethnopic", vec!["ANTHROPIC_API_KEY"]),
         ("openai", vec!["OPENAI_API_KEY"]),
         (
             "google",
@@ -3284,7 +3171,7 @@ mod tests {
         );
 
         let result = loader.load(
-            &provider_info("amazon-bedrock", model_info("anthropic.claude-3-7-sonnet")),
+            &provider_info("amazon-bedrock", model_info("test-vendor.test-model-large")),
             Some(&state),
         );
         assert!(result.autoload);
@@ -3304,6 +3191,7 @@ mod tests {
         );
         assert!(result.has_custom_get_model);
     }
+
 
     #[test]
     fn from_models_dev_model_merges_transform_and_explicit_variants() {

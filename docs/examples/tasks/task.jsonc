@@ -39,19 +39,19 @@
 
     "quick": {
       "description": "Trivial tasks - single file changes, typo fixes, simple modifications",
-      "model": { "provider_id": "anthropic", "model_id": "claude-haiku-4-5" },
-      "prompt_suffix": "<Category_Context>\nYou are working on SMALL / QUICK tasks.\n\nEfficient execution mindset:\n- Fast, focused, minimal overhead\n- Get to the point immediately\n- No over-engineering\n- Simple solutions for simple problems\n\nApproach:\n- Minimal viable implementation\n- Skip unnecessary abstractions\n- Direct and concise\n</Category_Context>\n\n<Caller_Warning>\nTHIS CATEGORY USES A LESS CAPABLE MODEL (claude-haiku-4-5).\n\nThe model executing this task has LIMITED reasoning capacity. Your prompt MUST be:\n\n**EXHAUSTIVELY EXPLICIT** - Leave NOTHING to interpretation:\n1. MUST DO: List every required action as atomic, numbered steps\n2. MUST NOT DO: Explicitly forbid likely mistakes and deviations\n3. EXPECTED OUTPUT: Describe exact success criteria with concrete examples\n</Caller_Warning>"
+      "model": { "provider_id": "your-provider", "model_id": "your-fast-model" },
+      "prompt_suffix": "<Category_Context>\nYou are working on SMALL / QUICK tasks.\n\nEfficient execution mindset:\n- Fast, focused, minimal overhead\n- Get to the point immediately\n- No over-engineering\n- Simple solutions for simple problems\n\nApproach:\n- Minimal viable implementation\n- Skip unnecessary abstractions\n- Direct and concise\n</Category_Context>\n\n<Caller_Warning>\nTHIS CATEGORY USES A LESS CAPABLE MODEL.\n\nThe model executing this task has LIMITED reasoning capacity. Your prompt MUST be:\n\n**EXHAUSTIVELY EXPLICIT** - Leave NOTHING to interpretation:\n1. MUST DO: List every required action as atomic, numbered steps\n2. MUST NOT DO: Explicitly forbid likely mistakes and deviations\n3. EXPECTED OUTPUT: Describe exact success criteria with concrete examples\n</Caller_Warning>"
     },
 
     "unspecified-low": {
       "description": "Tasks that don't fit other categories, low effort required",
-      "model": { "provider_id": "anthropic", "model_id": "claude-sonnet-4-6" },
+      "model": { "provider_id": "your-provider", "model_id": "your-default-model" },
       "prompt_suffix": "<Category_Context>\nYou are working on tasks that don't fit specific categories but require moderate effort.\n\n<Selection_Gate>\nBEFORE selecting this category, VERIFY ALL conditions:\n1. Task does NOT fit: quick (trivial), visual-engineering (UI), ultrabrain (deep logic), artistry (creative), writing (docs)\n2. Task requires more than trivial effort but is NOT system-wide\n3. Scope is contained within a few files/modules\n\nIf task fits ANY other category, DO NOT select unspecified-low.\nThis is NOT a default choice - it's for genuinely unclassifiable moderate-effort work.\n</Selection_Gate>\n</Category_Context>"
     },
 
     "unspecified-high": {
       "description": "Tasks that don't fit other categories, high effort required",
-      "model": { "provider_id": "anthropic", "model_id": "claude-opus-4-6" },
+      "model": { "provider_id": "your-provider", "model_id": "your-reasoning-model" },
       "variant": "max",
       "prompt_suffix": "<Category_Context>\nYou are working on tasks that don't fit specific categories but require substantial effort.\n\n<Selection_Gate>\nBEFORE selecting this category, VERIFY ALL conditions:\n1. Task does NOT fit: quick (trivial), visual-engineering (UI), ultrabrain (deep logic), artistry (creative), writing (docs)\n2. Task requires substantial effort across multiple systems/modules\n3. Changes have broad impact or require careful coordination\n4. NOT just \"complex\" - must be genuinely unclassifiable AND high-effort\n\nIf task fits ANY other category, DO NOT select unspecified-high.\nIf task is unclassifiable but moderate-effort, use unspecified-low instead.\n</Selection_Gate>\n</Category_Context>"
     },

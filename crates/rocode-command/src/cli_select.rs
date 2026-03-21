@@ -1,6 +1,6 @@
 //! Interactive terminal selector for CLI question prompts.
 //!
-//! Provides a Claude Code–style interactive selection UI with:
+//! Provides an interactive selection UI with:
 //! - Arrow key / j/k navigation
 //! - Visual cursor indicator (`❯`)
 //! - "Other" option for free text input

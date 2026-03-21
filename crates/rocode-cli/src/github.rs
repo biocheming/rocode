@@ -76,7 +76,7 @@ pub(crate) fn parse_github_remote(url: &str) -> Option<(String, String)> {
 
 pub(crate) fn provider_secret_keys(provider: &str) -> Vec<&'static str> {
     match provider {
-        "anthropic" => vec!["ANTHROPIC_API_KEY"],
+        "ethnopic" => vec!["ANTHROPIC_API_KEY"],
         "openai" => vec!["OPENAI_API_KEY"],
         "openrouter" => vec!["OPENROUTER_API_KEY"],
         "google" => vec!["GOOGLE_API_KEY"],
@@ -1150,11 +1150,7 @@ pub(crate) async fn generate_agent_response(
     let (provider, model_id) = parse_model_and_provider(model);
     if let Some(model_id) = model_id {
         let provider_id = provider.unwrap_or_else(|| {
-            if model_id.starts_with("claude") {
-                "anthropic".to_string()
-            } else {
-                "openai".to_string()
-            }
+            "openai".to_string()
         });
         agent_info = agent_info.with_model(model_id, provider_id);
     }
@@ -1173,8 +1169,8 @@ pub(crate) async fn generate_agent_response(
         let (model_api_id, provider_id) = match &agent_info.model {
             Some(m) => (m.model_id.clone(), m.provider_id.clone()),
             None => (
-                "claude-sonnet-4-20250514".to_string(),
-                "anthropic".to_string(),
+                "unknown-model".to_string(),
+                "unknown".to_string(),
             ),
         };
         let cwd = std::env::current_dir().unwrap_or_default();

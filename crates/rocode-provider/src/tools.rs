@@ -1,9 +1,9 @@
 //! Tool definitions and preparation for the OpenAI Responses API and
-//! OpenAI-compatible chat completions.
+//! closeai-compatible chat completions.
 //!
 //! Mirrors the TS files:
 //! - `openai-responses-prepare-tools.ts`
-//! - `openai-compatible-prepare-tools.ts`
+//! - `closeai-compatible-prepare-tools.ts`
 //! - `tool/web-search.ts`, `tool/code-interpreter.ts`, `tool/file-search.ts`,
 //!   `tool/image-generation.ts`, `tool/local-shell.ts`, `tool/web-search-preview.ts`
 
@@ -337,7 +337,7 @@ pub struct ResponsesToolChoiceSpecific {
     pub name: Option<String>,
 }
 
-/// Tool choice for OpenAI-compatible chat completions.
+/// Tool choice for closeai-compatible chat completions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ChatToolChoice {
@@ -570,7 +570,7 @@ pub fn prepare_responses_tools(
 // OpenAI-Compatible Chat Tool (wire format)
 // ---------------------------------------------------------------------------
 
-/// Tool definition for OpenAI-compatible chat completions.
+/// Tool definition for closeai-compatible chat completions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatTool {
     #[serde(rename = "type")]
@@ -586,14 +586,14 @@ pub struct ChatToolFunction {
     pub parameters: serde_json::Value,
 }
 
-/// Result of preparing tools for OpenAI-compatible chat.
+/// Result of preparing tools for closeai-compatible chat.
 pub struct PreparedChatTools {
     pub tools: Option<Vec<ChatTool>>,
     pub tool_choice: Option<ChatToolChoice>,
     pub tool_warnings: Vec<CallWarning>,
 }
 
-/// Prepare tools for OpenAI-compatible chat completions.
+/// Prepare tools for closeai-compatible chat completions.
 /// Mirrors TS `prepareTools()`.
 pub fn prepare_tools(
     tools: Option<&[InputTool]>,

@@ -4,9 +4,14 @@ use crate::protocol_loader::{ProtocolManifest, StreamingConfig};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MapperKind {
     OpenAi,
-    Anthropic,
+    Ethnopic,
     Google,
     Vertex,
+}
+
+fn is_ethnopic_compatible_id(id: &str) -> bool {
+    let lower = id.trim().to_ascii_lowercase();
+    lower.contains("anthropic") || lower.contains("ethnopic")
 }
 
 /// Path-driven event mapper for runtime pipeline output.
@@ -28,13 +33,17 @@ impl PathEventMapper {
         }
     }
 
-    pub fn anthropic_defaults() -> Self {
+    pub fn ethnopic_defaults() -> Self {
         Self {
-            kind: MapperKind::Anthropic,
+            kind: MapperKind::Ethnopic,
             content_path: "$.delta.text".to_string(),
             tool_call_path: "$.delta.partial_json".to_string(),
             usage_path: "$.message.usage".to_string(),
         }
+    }
+
+    pub fn ethnopic_defaults_compat() -> Self {
+        Self::ethnopic_defaults()
     }
 
     pub fn google_defaults() -> Self {
@@ -57,8 +66,8 @@ impl PathEventMapper {
 
     pub fn from_manifest(manifest: &ProtocolManifest) -> Self {
         let id = manifest.id.to_ascii_lowercase();
-        let mut mapper = if id.contains("anthropic") {
-            Self::anthropic_defaults()
+        let mut mapper = if is_ethnopic_compatible_id(&id) {
+            Self::ethnopic_defaults()
         } else if id.contains("google-vertex") || id.contains("vertex") {
             Self::vertex_defaults()
         } else if id.contains("google") || id.contains("gemini") {
@@ -76,7 +85,7 @@ impl PathEventMapper {
 
     pub fn from_streaming_config(kind: &str, streaming: &StreamingConfig) -> Self {
         let mut mapper = match kind {
-            "anthropic" => Self::anthropic_defaults(),
+            "anthropic" | "ethnopic-compatible" => Self::ethnopic_defaults(),
             "google" => Self::google_defaults(),
             "vertex" => Self::vertex_defaults(),
             _ => Self::openai_defaults(),
@@ -100,7 +109,7 @@ impl PathEventMapper {
     pub fn map_frame(&self, frame: &serde_json::Value) -> Vec<StreamingEvent> {
         match self.kind {
             MapperKind::OpenAi => self.map_openai(frame),
-            MapperKind::Anthropic => self.map_anthropic(frame),
+            MapperKind::Ethnopic => self.map_ethnopic_messages(frame),
             MapperKind::Google | MapperKind::Vertex => self.map_gemini_like(frame),
         }
     }
@@ -108,7 +117,7 @@ impl PathEventMapper {
     fn map_openai(&self, frame: &serde_json::Value) -> Vec<StreamingEvent> {
         let mut events = Vec::new();
 
-        // OpenAI-compatible reasoning: reasoning_content or reasoning_text in delta
+        // closeai-compatible reasoning: reasoning_content or reasoning_text in delta
         let delta = frame
             .get("choices")
             .and_then(|v| v.get(0))
@@ -204,7 +213,7 @@ impl PathEventMapper {
         events
     }
 
-    fn map_anthropic(&self, frame: &serde_json::Value) -> Vec<StreamingEvent> {
+    fn map_ethnopic_messages(&self, frame: &serde_json::Value) -> Vec<StreamingEvent> {
         let mut events = Vec::new();
         let event_type = frame
             .get("type")
@@ -379,6 +388,56 @@ impl PathEventMapper {
         }
 
         events
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_ethnopic_compatible_id, PathEventMapper};
+    use crate::driver::StreamingEvent;
+    use crate::protocol_loader::{
+        DecoderConfig, EndpointConfig, ProtocolManifest, StreamingConfig,
+    };
+    use std::collections::HashMap;
+
+    #[test]
+    fn detects_ethnopic_compatible_manifest_ids() {
+        assert!(is_ethnopic_compatible_id("anthropic"));
+        assert!(is_ethnopic_compatible_id("ethnopic-compatible"));
+        assert!(!is_ethnopic_compatible_id("openai-compatible"));
+    }
+
+    #[test]
+    fn manifest_with_ethnopic_id_uses_messages_defaults() {
+        let manifest = ProtocolManifest {
+            id: "ethnopic-compatible".to_string(),
+            protocol_version: "v1".to_string(),
+            endpoint: EndpointConfig {
+                base_url: "https://example.invalid".to_string(),
+            },
+            streaming: Some(StreamingConfig {
+                content_path: None,
+                tool_call_path: None,
+                usage_path: None,
+                decoder: DecoderConfig::default(),
+            }),
+            capabilities: HashMap::new(),
+            retry_policy: None,
+            rate_limit_headers: None,
+        };
+
+        let mapper = PathEventMapper::from_manifest(&manifest);
+        let frame = serde_json::json!({
+            "type": "content_block_delta",
+            "delta": { "text": "hello" },
+            "message": { "usage": { "input_tokens": 1, "output_tokens": 2 } }
+        });
+
+        let events = mapper.map_frame(&frame);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            StreamingEvent::PartialContentDelta { content, .. } if content == "hello"
+        )));
     }
 }
 

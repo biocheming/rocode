@@ -8,7 +8,7 @@ use crate::{Content, ContentPart, Message, Role};
 fn test_provider_type_detection() {
     assert!(matches!(
         ProviderType::from_provider_id("anthropic"),
-        ProviderType::Anthropic
+        ProviderType::Ethnopic
     ));
     assert!(matches!(
         ProviderType::from_provider_id("openrouter"),
@@ -30,29 +30,29 @@ fn test_provider_type_detection() {
 
 #[test]
 fn test_caching_support() {
-    assert!(ProviderType::Anthropic.supports_caching());
+    assert!(ProviderType::Ethnopic.supports_caching());
     assert!(ProviderType::OpenRouter.supports_caching());
     assert!(!ProviderType::Other.supports_caching());
 }
 
 #[test]
 fn test_interleaved_thinking_support() {
-    assert!(ProviderType::Anthropic.supports_interleaved_thinking());
+    assert!(ProviderType::Ethnopic.supports_interleaved_thinking());
     assert!(ProviderType::OpenRouter.supports_interleaved_thinking());
     assert!(!ProviderType::OpenAI.supports_interleaved_thinking());
 }
 
 #[test]
-fn test_apply_caching_anthropic() {
+fn test_apply_caching_ethnopic_family() {
     let mut messages = vec![
         Message::system("System prompt"),
         Message::user("Hello"),
         Message::assistant("Hi there"),
     ];
 
-    apply_caching(&mut messages, ProviderType::Anthropic);
+    apply_caching(&mut messages, ProviderType::Ethnopic);
 
-    // Anthropic uses message-level providerOptions
+    // Messages-family providers use message-level providerOptions here.
     assert!(messages[0].provider_options.is_some());
     assert!(messages[2].provider_options.is_some());
 }
@@ -133,13 +133,46 @@ fn test_variants_non_reasoning() {
 
 #[test]
 fn test_sdk_key_mapping() {
-    assert_eq!(sdk_key("@ai-sdk/anthropic"), Some("anthropic"));
+    assert_eq!(sdk_key("@ai-sdk/anthropic"), Some("ethnopic"));
+    assert_eq!(sdk_key("ethnopic-compatible"), Some("ethnopic"));
     assert_eq!(sdk_key("@ai-sdk/openai"), Some("openai"));
+    assert_eq!(sdk_key("closeai-compatible"), Some("openai"));
+    assert_eq!(sdk_key("openai-compatible"), Some("openai"));
     assert_eq!(sdk_key("@ai-sdk/google"), Some("google"));
     assert_eq!(sdk_key("@ai-sdk/google-vertex"), Some("google"));
     assert_eq!(sdk_key("@ai-sdk/amazon-bedrock"), Some("bedrock"));
     assert_eq!(sdk_key("@openrouter/ai-sdk-provider"), Some("openrouter"));
     assert_eq!(sdk_key("unknown-package"), None);
+}
+
+#[test]
+fn test_ethnopic_compatible_npm_detection() {
+    assert!(super::normalize::is_ethnopic_compatible_npm(
+        "@ai-sdk/anthropic"
+    ));
+    assert!(super::normalize::is_ethnopic_compatible_npm(
+        "@ai-sdk/google-vertex/anthropic"
+    ));
+    assert!(super::normalize::is_ethnopic_compatible_npm(
+        "ethnopic-compatible"
+    ));
+    assert!(!super::normalize::is_ethnopic_compatible_npm(
+        "@ai-sdk/openai-compatible"
+    ));
+}
+
+#[test]
+fn test_ethnopic_compatible_hint_detection() {
+    assert!(super::normalize::is_ethnopic_compatible_hint("anthropic"));
+    assert!(super::normalize::is_ethnopic_compatible_hint(
+        "ethnopic-compatible"
+    ));
+    assert!(super::normalize::is_ethnopic_compatible_hint(
+        "ethnopic-model"
+    ));
+    assert!(!super::normalize::is_ethnopic_compatible_hint(
+        "openai-compatible"
+    ));
 }
 
 #[test]
@@ -213,7 +246,7 @@ fn test_normalize_interleaved_thinking_supports_interleaved() {
         provider_options: None,
     }];
 
-    normalize_interleaved_thinking(&mut messages, &ProviderType::Anthropic, true);
+    normalize_interleaved_thinking(&mut messages, &ProviderType::Ethnopic, true);
 
     // Nothing stripped when interleaved is supported
     if let Content::Parts(ref parts) = messages[0].content {
@@ -225,7 +258,7 @@ fn test_normalize_interleaved_thinking_supports_interleaved() {
 }
 
 #[test]
-fn test_apply_caching_per_part_anthropic() {
+fn test_apply_caching_per_part_ethnopic_family() {
     let mut messages = vec![
         Message::system("system prompt"),
         Message::user("hello"),
@@ -238,7 +271,7 @@ fn test_apply_caching_per_part_anthropic() {
         Message::user("follow up"),
     ];
 
-    apply_caching_per_part(&mut messages, &ProviderType::Anthropic);
+    apply_caching_per_part(&mut messages, &ProviderType::Ethnopic);
 
     // System message should have cache control
     assert!(messages[0].cache_control.is_some());
@@ -248,6 +281,27 @@ fn test_apply_caching_per_part_anthropic() {
 
     // First user message should NOT have cache control
     assert!(messages[1].cache_control.is_none());
+}
+
+#[test]
+fn test_transform_messages_applies_caching_for_vertex_ethnopic_family() {
+    let mut messages = vec![
+        Message::system("System prompt"),
+        Message::user("Hello"),
+        Message::assistant("Hi there"),
+    ];
+
+    transform_messages(
+        &mut messages,
+        ProviderType::Ethnopic,
+        "kimi-k2p5",
+        &[],
+        "@ai-sdk/google-vertex/anthropic",
+        "dashscope-compatible",
+    );
+
+    assert!(messages[0].provider_options.is_some());
+    assert!(messages[2].provider_options.is_some());
 }
 
 #[test]
@@ -311,13 +365,13 @@ fn test_schema_gemini_array_items() {
 }
 
 #[test]
-fn test_variants_sap_anthropic() {
+fn test_variants_sap_ethnopic_family() {
     let model = models::ModelInfo {
         id: "sap-model".to_string(),
         reasoning: true,
         provider: Some(models::ModelProvider {
             npm: Some("@mymediset/sap-ai-provider".to_string()),
-            api: Some("anthropic/claude-3.5-sonnet".to_string()),
+            api: Some("ethnopic/test-model-large".to_string()),
         }),
         ..default_model_info()
     };
@@ -330,7 +384,30 @@ fn test_variants_sap_anthropic() {
 }
 
 #[test]
-fn test_variants_sap_non_anthropic() {
+fn test_variants_ethnopic_compatible_alias() {
+    let model = models::ModelInfo {
+        id: "ethnopic-compatible/sonnet".to_string(),
+        reasoning: true,
+        provider: Some(models::ModelProvider {
+            npm: Some("ethnopic-compatible".to_string()),
+            api: Some("ethnopic-compatible/sonnet".to_string()),
+        }),
+        limit: models::ModelLimit {
+            context: 200_000,
+            input: None,
+            output: 64_000,
+        },
+        ..default_model_info()
+    };
+
+    let v = variants(&model);
+    assert!(v.contains_key("high"));
+    assert!(v.contains_key("max"));
+    assert!(v["high"].contains_key("thinking"));
+}
+
+#[test]
+fn test_variants_sap_non_ethnopic_family() {
     let model = models::ModelInfo {
         id: "sap-model".to_string(),
         reasoning: true,
@@ -373,7 +450,7 @@ fn test_provider_options_map_gateway() {
         id: "gateway-model".to_string(),
         provider: Some(models::ModelProvider {
             npm: Some("@ai-sdk/gateway".to_string()),
-            api: Some("anthropic/claude-3.5-sonnet".to_string()),
+            api: Some("ethnopic/test-model-large".to_string()),
         }),
         ..default_model_info()
     };
@@ -384,7 +461,7 @@ fn test_provider_options_map_gateway() {
 
     let result = provider_options_map(&model, opts);
     assert!(result.contains_key("gateway"));
-    assert!(result.contains_key("anthropic"));
+    assert!(result.contains_key("ethnopic"));
 }
 
 #[test]
@@ -408,7 +485,47 @@ fn test_provider_options_map_gateway_amazon() {
 }
 
 #[test]
-fn test_normalize_tool_call_id_claude_ascii_only() {
+fn test_provider_options_map_gateway_ethnopic_alias() {
+    use serde_json::json;
+    let model = models::ModelInfo {
+        id: "gateway-model".to_string(),
+        provider: Some(models::ModelProvider {
+            npm: Some("@ai-sdk/gateway".to_string()),
+            api: Some("ethnopic-compatible/sonnet".to_string()),
+        }),
+        ..default_model_info()
+    };
+
+    let mut opts = HashMap::new();
+    opts.insert("gateway".to_string(), json!({"caching": "auto"}));
+    opts.insert("thinking".to_string(), json!({"type": "enabled"}));
+
+    let result = provider_options_map(&model, opts);
+    assert!(result.contains_key("gateway"));
+    assert!(result.contains_key("ethnopic"));
+}
+
+#[test]
+fn test_provider_options_map_gateway_closeai_alias() {
+    use serde_json::json;
+    let model = models::ModelInfo {
+        id: "gateway-model".to_string(),
+        provider: Some(models::ModelProvider {
+            npm: Some("@ai-sdk/gateway".to_string()),
+            api: Some("closeai-compatible/gpt-5".to_string()),
+        }),
+        ..default_model_info()
+    };
+
+    let mut opts = HashMap::new();
+    opts.insert("reasoningEffort".to_string(), json!("high"));
+
+    let result = provider_options_map(&model, opts);
+    assert!(result.contains_key("openai"));
+}
+
+#[test]
+fn test_normalize_tool_call_id_messages_family_ascii_only() {
     let normalized = normalize_tool_call_id("call:中文/id-1", true);
     assert_eq!(normalized, "call____id-1");
 }

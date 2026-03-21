@@ -161,7 +161,7 @@ fn plugin_map_merge_and_instruction_arrays_append_unique() {
 #[test]
 fn provider_lists_follow_replace_semantics_instead_of_union() {
     let mut base = Config {
-        disabled_providers: vec!["anthropic".to_string()],
+        disabled_providers: vec!["ethnopic".to_string()],
         enabled_providers: vec!["openai".to_string()],
         ..Default::default()
     };

@@ -53,7 +53,7 @@ fn default_content() -> Content {
     Content::Text(String::new())
 }
 
-/// Deserialize content that may be null (some OpenAI-compatible APIs return
+/// Deserialize content that may be null (some closeai-compatible APIs return
 /// `"content": null` for tool-call-only responses).
 fn deserialize_content<'de, D>(deserializer: D) -> Result<Content, D::Error>
 where

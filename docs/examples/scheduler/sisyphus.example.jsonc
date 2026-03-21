@@ -14,8 +14,8 @@
       // Per-agent model (agentTree agent.model) takes precedence over this.
       // If omitted, the session's current model is used as fallback.
       "model": {
-        "providerId": "anthropic",
-        "modelId": "claude-sonnet-4-20250514"
+        "providerId": "your-provider",
+        "modelId": "your-model-id"
       },
       "skillList": [
         "request-analysis",

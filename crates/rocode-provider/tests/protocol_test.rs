@@ -2,15 +2,27 @@ use rocode_provider::{create_protocol_impl, ChatRequest, Protocol, ProtocolImpl,
 use std::collections::HashMap;
 
 #[test]
-fn test_protocol_from_npm_anthropic() {
+fn test_protocol_from_npm_messages_family() {
     let protocol = Protocol::from_npm("@ai-sdk/anthropic");
-    assert_eq!(protocol, Protocol::Anthropic);
+    assert_eq!(protocol, Protocol::Messages);
+}
+
+#[test]
+fn test_protocol_from_npm_ethnopic_alias() {
+    let protocol = Protocol::from_npm("ethnopic-compatible");
+    assert_eq!(protocol, Protocol::Messages);
 }
 
 #[test]
 fn test_protocol_from_npm_openai() {
     let protocol = Protocol::from_npm("@ai-sdk/openai");
     assert_eq!(protocol, Protocol::OpenAI);
+}
+
+#[test]
+fn test_protocol_from_npm_closeai_and_openai_aliases() {
+    assert_eq!(Protocol::from_npm("closeai-compatible"), Protocol::OpenAI);
+    assert_eq!(Protocol::from_npm("openai-compatible"), Protocol::OpenAI);
 }
 
 #[test]
@@ -51,8 +63,14 @@ fn test_protocol_from_npm_gitlab() {
 
 #[test]
 fn test_protocol_case_insensitive() {
-    assert_eq!(Protocol::from_npm("@AI-SDK/ANTHROPIC"), Protocol::Anthropic);
+    assert_eq!(Protocol::from_npm("@AI-SDK/ANTHROPIC"), Protocol::Messages);
     assert_eq!(Protocol::from_npm("@Ai-Sdk/Openai"), Protocol::OpenAI);
+}
+
+#[test]
+fn test_protocol_alias_labels() {
+    assert_eq!(Protocol::Messages.to_string(), "Anthropic");
+    assert_eq!(Protocol::OpenAI.to_string(), "OpenAI");
 }
 
 #[test]
@@ -147,7 +165,7 @@ fn test_create_protocol_impl_openai() {
 }
 
 #[test]
-fn test_create_protocol_impl_anthropic() {
-    let protocol = create_protocol_impl(Protocol::Anthropic);
+fn test_create_protocol_impl_ethnopic_family() {
+    let protocol = create_protocol_impl(Protocol::Messages);
     let _arc: std::sync::Arc<dyn ProtocolImpl> = protocol;
 }

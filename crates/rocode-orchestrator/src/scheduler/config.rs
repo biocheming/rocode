@@ -364,8 +364,8 @@ mod tests {
             "prometheus-default": {
               "orchestrator": "prometheus",
               "model": {
-                "providerId": "anthropic",
-                "modelId": "claude-opus-4-6"
+                "providerId": "ethnopic",
+                "modelId": "test-model-reasoning"
               },
               "skillList": ["request-analysis", "plan", "delegation"],
               "stages": ["request-analysis", "plan", "delegation", "review", "synthesis"],
@@ -397,11 +397,11 @@ mod tests {
                 .model
                 .as_ref()
                 .map(|model| model.provider_id.as_str()),
-            Some("anthropic")
+            Some("ethnopic")
         );
         assert_eq!(
             profile.model.as_ref().map(|model| model.model_id.as_str()),
-            Some("claude-opus-4-6")
+            Some("test-model-reasoning")
         );
         assert_eq!(profile.skill_list.len(), 3);
         assert_eq!(profile.stages.len(), 5);

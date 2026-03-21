@@ -17,6 +17,7 @@ pub(crate) fn provider_routes() -> Router<Arc<ServerState>> {
     Router::new()
         .route("/", get(list_providers))
         .route("/known", get(list_known_providers))
+        .route("/register", post(register_custom_provider))
         .route("/auth", get(get_provider_auth))
         .route("/{id}/oauth/authorize", post(oauth_authorize))
         .route("/{id}/oauth/callback", post(oauth_callback))
@@ -91,17 +92,29 @@ fn build_model_variant_lookup(data: ModelsData) -> HashMap<String, HashMap<Strin
         .collect()
 }
 
+/// Detect whether a provider+model pair uses the ethnopic/messages protocol family.
+///
+/// This is a **protocol compatibility check**, not a brand reference.  When users
+/// configure an Anthropic-compatible provider (directly or via Bedrock/Vertex),
+/// the thinking variant surface is `["high", "max"]` rather than the OpenAI-style
+/// `["low", "medium", "high"]`.
+fn is_ethnopic_protocol_family(provider_id: &str, _model_id: &str) -> bool {
+    let provider = provider_id.to_ascii_lowercase();
+    provider.contains("anthropic")
+        || provider.contains("ethnopic")
+}
+
 fn synthetic_variant_names(provider_id: &str, model: &ModelsDevInfo) -> Vec<String> {
     if !model.reasoning {
         return Vec::new();
     }
 
-    let provider = provider_id.to_ascii_lowercase();
-    let model_id = model.id.to_ascii_lowercase();
-    let is_anthropic = provider.contains("anthropic") || model_id.contains("claude");
-    if is_anthropic {
+    if is_ethnopic_protocol_family(provider_id, &model.id) {
         return vec!["high".to_string(), "max".to_string()];
     }
+
+    let provider = provider_id.to_ascii_lowercase();
+    let model_id = model.id.to_ascii_lowercase();
 
     let is_google =
         provider.contains("google") || provider.contains("vertex") || model_id.contains("gemini");
@@ -421,6 +434,42 @@ async fn oauth_callback(
             }
         }
     }
+
+    Ok(Json(true))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RegisterCustomProviderRequest {
+    pub provider_id: String,
+    pub base_url: String,
+    pub protocol: String,
+    pub api_key: String,
+}
+
+async fn register_custom_provider(
+    State(state): State<Arc<ServerState>>,
+    Json(req): Json<RegisterCustomProviderRequest>,
+) -> Result<Json<bool>> {
+    // Validate protocol
+    let valid_protocols = ["openai", "anthropic", "google", "bedrock", "vertex", "github-copilot", "gitlab"];
+    if !valid_protocols.contains(&req.protocol.as_str()) {
+        return Err(ApiError::BadRequest(format!("Invalid protocol: {}", req.protocol)));
+    }
+
+    // Store auth
+    state.auth_manager.set(&req.provider_id, rocode_provider::AuthInfo::Api { key: req.api_key }).await;
+
+    // Store custom provider config
+    {
+        let mut custom = state.custom_providers.write().await;
+        custom.insert(req.provider_id.clone(), crate::server::CustomProviderConfig {
+            base_url: req.base_url,
+            protocol: req.protocol,
+        });
+    }
+
+    // Rebuild providers to include the new custom provider
+    state.rebuild_providers().await;
 
     Ok(Json(true))
 }

@@ -181,6 +181,47 @@ impl App {
         }
     }
 
+    /// Submit a custom provider registration and update the dialog state.
+    pub(super) fn submit_custom_provider_auth(
+        &mut self,
+        provider_id: &str,
+        base_url: &str,
+        protocol: &str,
+        api_key: &str,
+    ) {
+        use crate::components::SubmitResult;
+        let Some(client) = self.context.get_api_client() else {
+            self.provider_dialog
+                .set_submit_result(SubmitResult::Failed("No API connection".to_string()));
+            return;
+        };
+        match client.register_custom_provider(provider_id, base_url, protocol, api_key) {
+            Ok(()) => {
+                self.provider_dialog.exit_custom_flow();
+                self.provider_dialog
+                    .set_submit_result(SubmitResult::Success);
+                self.toast.show(
+                    crate::components::ToastVariant::Success,
+                    &format!("Connected to {}", provider_id),
+                    3000,
+                );
+                // Refresh the provider list to update connected status
+                let connected: std::collections::HashSet<String> = match client.get_all_providers()
+                {
+                    Ok(resp) => resp.connected.into_iter().collect(),
+                    Err(_) => std::collections::HashSet::new(),
+                };
+                self.provider_dialog.populate(&connected);
+                // Also refresh the model list so the new provider's models appear
+                self.refresh_model_dialog();
+            }
+            Err(e) => {
+                self.provider_dialog
+                    .set_submit_result(SubmitResult::Failed(e.to_string()));
+            }
+        }
+    }
+
     pub(super) fn sync_prompt_spinner_style(&mut self) {
         let theme = self.context.theme.read().clone();
         let mode_name = current_mode_label(&self.context).unwrap_or_default();

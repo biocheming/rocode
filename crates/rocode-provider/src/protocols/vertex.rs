@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
+use serde_json;
 use std::collections::VecDeque;
 
 use crate::{
@@ -386,8 +387,8 @@ struct VertexCandidate {
     content: VertexContent,
     #[serde(default)]
     finish_reason: Option<String>,
-    #[serde(default)]
-    _safety_ratings: Option<Vec<VertexSafetyRating>>,
+    #[serde(default, rename = "safetyRatings")]
+    _safety_ratings: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -395,13 +396,6 @@ struct VertexUsage {
     prompt_token_count: u64,
     candidates_token_count: u64,
     total_token_count: u64,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct VertexSafetyRating {
-    category: String,
-    probability: String,
 }
 
 // ---- Helpers ----

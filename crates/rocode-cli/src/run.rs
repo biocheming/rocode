@@ -1521,10 +1521,9 @@ mod tests {
         cli_prompt_assist_view, cli_prompt_screen_lines, cli_recent_session_info_for_directory,
         cli_render_retained_layout, cli_render_startup_banner, cli_resolve_registry_ui_action,
         cli_resolve_show_thinking, cli_session_update_requires_refresh,
-        cli_set_root_server_session, cli_should_emit_scheduler_stage_block,
-        CliExecutionRuntime, CliFrontendPhase, CliFrontendProjection,
-        CliObservedExecutionTopology, CliPromptCatalog, CliPromptSelectionState,
-        CliRecentSessionInfo, CliRetainedTranscript, CliSessionTokenStats,
+        cli_set_root_server_session, cli_should_emit_scheduler_stage_block, CliExecutionRuntime,
+        CliFrontendPhase, CliFrontendProjection, CliObservedExecutionTopology, CliPromptCatalog,
+        CliPromptSelectionState, CliRecentSessionInfo, CliRetainedTranscript, CliSessionTokenStats,
         PermissionMemory, TerminalStreamAccumulator,
     };
     use crate::api_client::SessionInfo;
@@ -1958,7 +1957,7 @@ mod tests {
     fn prompt_assist_filters_model_candidates() {
         let catalog = CliPromptCatalog {
             models: vec![
-                "anthropic/claude-3.7-sonnet".to_string(),
+                "ethnopic/test-model-large".to_string(),
                 "dashscope/qwen-max".to_string(),
                 "dashscope/qwen-plus".to_string(),
             ],
@@ -2258,5 +2257,4 @@ mod tests {
         assert!(!cli_session_update_requires_refresh(Some("prompt.stream")));
         assert!(!cli_session_update_requires_refresh(None));
     }
-
 }

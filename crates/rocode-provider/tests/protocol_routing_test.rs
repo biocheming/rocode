@@ -7,9 +7,9 @@ fn test_deepseek_uses_openai_protocol() {
 }
 
 #[test]
-fn test_custom_anthropic_endpoint() {
+fn test_custom_messages_endpoint() {
     let protocol = Protocol::from_npm("@ai-sdk/anthropic");
-    assert_eq!(protocol, Protocol::Anthropic);
+    assert_eq!(protocol, Protocol::Messages);
 
     let config = ProviderConfig::new(
         "bailian",
@@ -21,6 +21,20 @@ fn test_custom_anthropic_endpoint() {
         config.base_url,
         "https://coding.dashscope.aliyuncs.com/api/v1/messages"
     );
+}
+
+#[test]
+fn test_custom_ethnopic_endpoint_alias() {
+    let protocol = Protocol::from_npm("ethnopic-compatible");
+    assert_eq!(protocol, Protocol::Messages);
+
+    let config = ProviderConfig::new(
+        "compatible-messages",
+        "https://example.com/provider/messages",
+        "sk-test",
+    );
+
+    assert_eq!(config.base_url, "https://example.com/provider/messages");
 }
 
 #[test]

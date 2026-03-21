@@ -95,7 +95,7 @@ pub fn normalize_interleaved_thinking(
 
 /// Apply cache control markers at the part level.
 pub fn apply_caching_per_part(messages: &mut [Message], provider_type: &ProviderType) {
-    if let ProviderType::Anthropic = provider_type {
+    if let ProviderType::Ethnopic = provider_type {
         if let Some(last_user) = messages
             .iter_mut()
             .rev()
@@ -182,14 +182,23 @@ pub fn max_output_tokens(model: &models::ModelInfo) -> u64 {
 pub fn sdk_key(npm: &str) -> Option<&'static str> {
     match npm {
         "@ai-sdk/github-copilot" => Some("copilot"),
-        "@ai-sdk/openai" | "@ai-sdk/azure" => Some("openai"),
+        "@ai-sdk/openai" | "@ai-sdk/azure" | "closeai-compatible" | "openai-compatible" => {
+            Some("openai")
+        }
         "@ai-sdk/amazon-bedrock" => Some("bedrock"),
-        "@ai-sdk/anthropic" | "@ai-sdk/google-vertex/anthropic" => Some("anthropic"),
+        "@ai-sdk/anthropic" | "@ai-sdk/google-vertex/anthropic" | "ethnopic-compatible" => {
+            Some("ethnopic")
+        }
         "@ai-sdk/google-vertex" | "@ai-sdk/google" => Some("google"),
         "@ai-sdk/gateway" => Some("gateway"),
         "@openrouter/ai-sdk-provider" => Some("openrouter"),
         _ => None,
     }
+}
+
+fn is_ethnopic_family_reference(value: &str) -> bool {
+    let lower = value.trim().to_ascii_lowercase();
+    lower.contains("anthropic") || lower.contains("ethnopic")
 }
 
 // ---------------------------------------------------------------------------
@@ -261,7 +270,8 @@ pub fn variants(model: &models::ModelInfo) -> HashMap<String, HashMap<String, se
         "@openrouter/ai-sdk-provider" => {
             if !model.id.contains("gpt")
                 && !model.id.contains("gemini-3")
-                && !model.id.contains("claude")
+                && !is_ethnopic_family_reference(&model.id)
+                && !is_ethnopic_family_reference(api_id)
             {
                 return HashMap::new();
             }
@@ -277,7 +287,7 @@ pub fn variants(model: &models::ModelInfo) -> HashMap<String, HashMap<String, se
         }
 
         "@ai-sdk/gateway" => {
-            if model.id.contains("anthropic") {
+            if is_ethnopic_family_reference(&model.id) {
                 return [
                     (
                         "high".into(),
@@ -329,7 +339,9 @@ pub fn variants(model: &models::ModelInfo) -> HashMap<String, HashMap<String, se
             if model.id.contains("gemini") {
                 return HashMap::new();
             }
-            if model.id.contains("claude") {
+            if is_ethnopic_family_reference(&model.id)
+                || is_ethnopic_family_reference(api_id)
+            {
                 return [(
                     "thinking".into(),
                     hashmap! {"thinking_budget" => json!(4000)},
@@ -431,7 +443,7 @@ pub fn variants(model: &models::ModelInfo) -> HashMap<String, HashMap<String, se
                 .collect()
         }
 
-        "@ai-sdk/anthropic" | "@ai-sdk/google-vertex/anthropic" => {
+        "@ai-sdk/anthropic" | "@ai-sdk/google-vertex/anthropic" | "ethnopic-compatible" => {
             if api_id.contains("opus-4-6") || api_id.contains("opus-4.6") {
                 return ["low", "medium", "high", "max"]
                     .iter()
@@ -476,7 +488,7 @@ pub fn variants(model: &models::ModelInfo) -> HashMap<String, HashMap<String, se
                     })
                     .collect();
             }
-            if api_id.contains("anthropic") {
+            if is_ethnopic_family_reference(api_id) {
                 return [
                     (
                         "high".into(),
@@ -549,7 +561,7 @@ pub fn variants(model: &models::ModelInfo) -> HashMap<String, HashMap<String, se
         "@ai-sdk/mistral" | "@ai-sdk/cohere" | "@ai-sdk/perplexity" => HashMap::new(),
 
         "@mymediset/sap-ai-provider" | "@jerome-benoit/sap-ai-provider-v2" => {
-            if api_id.contains("anthropic") {
+            if is_ethnopic_family_reference(api_id) {
                 return [
                     (
                         "high".into(),

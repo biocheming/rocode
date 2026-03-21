@@ -129,8 +129,8 @@ mod tests {
     fn scheduler_model_inputs_prefer_agent_override() {
         let profile = SchedulerProfileConfig {
             model: Some(OrchestratorModelRef {
-                provider_id: "anthropic".to_string(),
-                model_id: "claude-opus-4-6".to_string(),
+                provider_id: "ethnopic".to_string(),
+                model_id: "test-model-reasoning".to_string(),
             }),
             ..Default::default()
         };
@@ -139,8 +139,8 @@ mod tests {
             true,
             Some("openai/gpt-5"),
             Some(&profile),
-            Some("anthropic/claude-sonnet-4-6"),
-            Some("anthropic/claude-haiku-4-5-20251001"),
+            Some("ethnopic/test-model-large"),
+            Some("ethnopic/test-model-fast"),
         );
 
         assert_eq!(request_model, None);
@@ -152,8 +152,8 @@ mod tests {
     fn scheduler_model_inputs_prefer_profile_override_over_request_model() {
         let profile = SchedulerProfileConfig {
             model: Some(OrchestratorModelRef {
-                provider_id: "anthropic".to_string(),
-                model_id: "claude-opus-4-6".to_string(),
+                provider_id: "ethnopic".to_string(),
+                model_id: "test-model-reasoning".to_string(),
             }),
             ..Default::default()
         };
@@ -163,12 +163,12 @@ mod tests {
             None,
             Some(&profile),
             Some("openai/gpt-5"),
-            Some("anthropic/claude-haiku-4-5-20251001"),
+            Some("ethnopic/test-model-fast"),
         );
 
         assert_eq!(request_model, None);
-        assert_eq!(config_model.as_deref(), Some("claude-opus-4-6"));
-        assert_eq!(config_provider.as_deref(), Some("anthropic"));
+        assert_eq!(config_model.as_deref(), Some("test-model-reasoning"));
+        assert_eq!(config_provider.as_deref(), Some("ethnopic"));
     }
 
     #[test]
@@ -178,13 +178,13 @@ mod tests {
             None,
             None,
             Some("openai/gpt-5"),
-            Some("anthropic/claude-haiku-4-5-20251001"),
+            Some("ethnopic/test-model-fast"),
         );
 
         assert_eq!(request_model.as_deref(), Some("openai/gpt-5"));
         assert_eq!(
             config_model.as_deref(),
-            Some("anthropic/claude-haiku-4-5-20251001")
+            Some("ethnopic/test-model-fast")
         );
         assert_eq!(config_provider, None);
     }
@@ -193,14 +193,14 @@ mod tests {
     fn non_scheduler_model_inputs_keep_request_then_agent_precedence() {
         let (request_model, config_model, config_provider) = resolve_request_model_inputs(
             false,
-            Some("anthropic/claude-opus-4-6"),
+            Some("ethnopic/test-model-reasoning"),
             None,
             Some("openai/gpt-5"),
-            Some("anthropic/claude-haiku-4-5-20251001"),
+            Some("ethnopic/test-model-fast"),
         );
 
         assert_eq!(request_model.as_deref(), Some("openai/gpt-5"));
-        assert_eq!(config_model.as_deref(), Some("anthropic/claude-opus-4-6"));
+        assert_eq!(config_model.as_deref(), Some("ethnopic/test-model-reasoning"));
         assert_eq!(config_provider, None);
     }
 

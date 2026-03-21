@@ -237,7 +237,7 @@ impl PluginLoader {
     ///
     /// Each spec is either:
     /// - `file:///path/to/plugin.ts` — loaded directly
-    /// - An npm package name (e.g. `opencode-anthropic-auth@0.0.13`)
+    /// - An npm package name (e.g. `provider-auth-plugin@0.0.13`)
     pub async fn load_all(
         &self,
         specs: &[String],

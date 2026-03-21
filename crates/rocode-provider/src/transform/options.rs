@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::models;
 
 use super::model_config::sdk_key;
-use super::normalize::slug_override;
+use super::normalize::{is_ethnopic_compatible_npm, slug_override};
 
 pub fn options(
     provider_id: &str,
@@ -51,7 +51,12 @@ pub fn options(
     }
 
     // zai/zhipuai thinking config
-    if (provider_id == "zai" || provider_id == "zhipuai") && npm == "@ai-sdk/openai-compatible" {
+    if (provider_id == "zai" || provider_id == "zhipuai")
+        && matches!(
+            npm,
+            "@ai-sdk/openai-compatible" | "openai-compatible" | "closeai-compatible"
+        )
+    {
         result.insert(
             "thinking".to_string(),
             json!({"type": "enabled", "clear_thinking": false}),
@@ -77,9 +82,9 @@ pub fn options(
         result.insert("thinkingConfig".to_string(), thinking);
     }
 
-    // Anthropic thinking for kimi-k2.5/k2p5 models
+    // ethnopic-compatible thinking for kimi-k2.5/k2p5 models
     let api_id_lower = api_id.to_lowercase();
-    if (npm == "@ai-sdk/anthropic" || npm == "@ai-sdk/google-vertex/anthropic")
+    if is_ethnopic_compatible_npm(npm)
         && (api_id_lower.contains("k2p5")
             || api_id_lower.contains("kimi-k2.5")
             || api_id_lower.contains("kimi-k2p5"))

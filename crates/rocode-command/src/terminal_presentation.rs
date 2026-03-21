@@ -402,7 +402,9 @@ pub fn render_terminal_stream_block_with_state(
         OutputBlock::Message(message) if message.role == OutputMessageRole::Assistant => {
             render_terminal_assistant_block(state, message, style)
         }
-        OutputBlock::Reasoning(reasoning) => render_terminal_reasoning_block(state, reasoning, style),
+        OutputBlock::Reasoning(reasoning) => {
+            render_terminal_reasoning_block(state, reasoning, style)
+        }
         _ => {
             let mut out = render_terminal_stream_boundary_prefix(state);
             out.push_str(&render_cli_block_rich(block, style));
@@ -433,9 +435,7 @@ fn render_terminal_assistant_block(
             }
             if !state.assistant_visible {
                 out.push_str(&render_cli_block_rich(
-                    &OutputBlock::Message(OutputMessageBlock::start(
-                        OutputMessageRole::Assistant,
-                    )),
+                    &OutputBlock::Message(OutputMessageBlock::start(OutputMessageRole::Assistant)),
                     style,
                 ));
                 state.assistant_visible = true;
@@ -454,9 +454,7 @@ fn render_terminal_assistant_block(
             }
             if state.assistant_visible {
                 out.push_str(&render_cli_block_rich(
-                    &OutputBlock::Message(OutputMessageBlock::end(
-                        OutputMessageRole::Assistant,
-                    )),
+                    &OutputBlock::Message(OutputMessageBlock::end(OutputMessageRole::Assistant)),
                     style,
                 ));
             }
@@ -551,7 +549,10 @@ fn render_semantic_reasoning_start(
     state: &mut TerminalSemanticStreamRenderState,
     style: &CliStyle,
 ) -> String {
-    let rendered = render_cli_block_rich(&OutputBlock::Reasoning(OutputReasoningBlock::start()), style);
+    let rendered = render_cli_block_rich(
+        &OutputBlock::Reasoning(OutputReasoningBlock::start()),
+        style,
+    );
     let mut out = String::new();
     if state.boundary.assistant_open
         && state.boundary.assistant_visible
@@ -565,7 +566,10 @@ fn render_semantic_reasoning_start(
     out
 }
 
-fn render_semantic_text_lines(boundary: &mut TerminalStreamRenderState, lines: &[String]) -> String {
+fn render_semantic_text_lines(
+    boundary: &mut TerminalStreamRenderState,
+    lines: &[String],
+) -> String {
     if lines.is_empty() {
         return String::new();
     }
@@ -646,13 +650,12 @@ pub fn render_terminal_stream_block_semantic(
             }
             TerminalAssistantSegment::Reasoning { part_index, text } => {
                 let mut emit_start = false;
-                let entry = state
-                    .part_states
-                    .entry(part_index)
-                    .or_insert(TerminalSemanticPartState::Reasoning {
+                let entry = state.part_states.entry(part_index).or_insert(
+                    TerminalSemanticPartState::Reasoning {
                         started: false,
                         emitted_len: 0,
-                    });
+                    },
+                );
                 let TerminalSemanticPartState::Reasoning {
                     started,
                     emitted_len,
@@ -667,13 +670,12 @@ pub fn render_terminal_stream_block_semantic(
                 if emit_start {
                     out.push_str(&render_semantic_reasoning_start(state, style));
                 }
-                let entry = state
-                    .part_states
-                    .entry(part_index)
-                    .or_insert(TerminalSemanticPartState::Reasoning {
+                let entry = state.part_states.entry(part_index).or_insert(
+                    TerminalSemanticPartState::Reasoning {
                         started: false,
                         emitted_len: 0,
-                    });
+                    },
+                );
                 let TerminalSemanticPartState::Reasoning {
                     started,
                     emitted_len,
@@ -702,25 +704,18 @@ pub fn render_terminal_stream_block_semantic(
                 result,
                 ..
             } => {
-                let entry = state
-                    .part_states
-                    .entry(part_index)
-                    .or_insert(TerminalSemanticPartState::ToolCall {
+                let entry = state.part_states.entry(part_index).or_insert(
+                    TerminalSemanticPartState::ToolCall {
                         started: false,
                         completed: false,
-                    });
+                    },
+                );
                 let TerminalSemanticPartState::ToolCall { started, completed } = entry else {
                     continue;
                 };
                 if !*started {
-                    let lines = render_cli_tool_lines(
-                        &name,
-                        &arguments,
-                        tool_state,
-                        None,
-                        false,
-                        style,
-                    );
+                    let lines =
+                        render_cli_tool_lines(&name, &arguments, tool_state, None, false, style);
                     out.push_str(&render_semantic_text_lines(&mut state.boundary, &lines));
                     *started = true;
                 }
@@ -736,8 +731,10 @@ pub fn render_terminal_stream_block_semantic(
                         );
                         out.push_str(&render_semantic_text_lines(&mut state.boundary, &lines));
                         *completed = true;
-                    } else if matches!(tool_state, TerminalToolState::Failed | TerminalToolState::Completed)
-                    {
+                    } else if matches!(
+                        tool_state,
+                        TerminalToolState::Failed | TerminalToolState::Completed
+                    ) {
                         *completed = true;
                     }
                 }
@@ -1155,9 +1152,7 @@ mod tests {
 
         let assistant_start = render_terminal_stream_block_with_state(
             &mut state,
-            &OutputBlock::Message(OutputMessageBlock::start(
-                OutputMessageRole::Assistant,
-            )),
+            &OutputBlock::Message(OutputMessageBlock::start(OutputMessageRole::Assistant)),
             &style,
         );
         let reasoning_start = render_terminal_stream_block_with_state(
@@ -1192,9 +1187,7 @@ mod tests {
 
         let assistant_start = render_terminal_stream_block_with_state(
             &mut state,
-            &OutputBlock::Message(OutputMessageBlock::start(
-                OutputMessageRole::Assistant,
-            )),
+            &OutputBlock::Message(OutputMessageBlock::start(OutputMessageRole::Assistant)),
             &style,
         );
         let assistant_delta = render_terminal_stream_block_with_state(

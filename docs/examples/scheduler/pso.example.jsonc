@@ -25,8 +25,8 @@
       "orchestrator": "atlas",
       "description": "Particle Swarm Optimization topology: 3 specialized particles (Architect, Empiricist, Adversary) explore independently, converge through iterative synthesis rounds. 3 iterations.",
       "model": {
-        "providerId": "anthropic",
-        "modelId": "claude-sonnet-4-20250514"
+        "providerId": "your-provider",
+        "modelId": "your-model-id"
       },
       "stages": [
         // ── Phase 0: Understand the task ──

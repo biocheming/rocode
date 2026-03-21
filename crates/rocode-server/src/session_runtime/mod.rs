@@ -3236,7 +3236,7 @@ mod tests {
             agent_name: "prometheus".to_string(),
             metadata: HashMap::new(),
         };
-        // Anthropic Sonnet-like pricing: input $3/M, output $15/M,
+        // Sonnet-like pricing: input $3/M, output $15/M,
         // cache_read $0.30/M, cache_write $3.75/M.
         let pricing = ModelPricing::new(3.0, 15.0, Some(0.30), Some(3.75));
         let hook = SessionSchedulerLifecycleHook::new(

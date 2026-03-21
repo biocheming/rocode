@@ -1039,6 +1039,35 @@ impl ApiClient {
         Ok(())
     }
 
+    /// Register a custom provider via `POST /provider/register`.
+    pub fn register_custom_provider(
+        &self,
+        provider_id: &str,
+        base_url: &str,
+        protocol: &str,
+        api_key: &str,
+    ) -> anyhow::Result<()> {
+        let url = format!("{}/provider/register", self.base_url);
+        let body = serde_json::json!({
+            "provider_id": provider_id,
+            "base_url": base_url,
+            "protocol": protocol,
+            "api_key": api_key,
+        });
+        let response = self.client.post(&url).json(&body).send()?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to register provider `{}`: {} - {}",
+                provider_id,
+                status,
+                text
+            );
+        }
+        Ok(())
+    }
+
     pub fn list_agents(&self) -> anyhow::Result<Vec<AgentInfo>> {
         let url = format!("{}/agent", self.base_url);
 

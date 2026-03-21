@@ -164,9 +164,7 @@ fn message_part_text(part: &ContextMessagePart) -> String {
         ContextMessagePart::File { path, mime } => {
             summarize_block_items_inline(&build_file_items(path, mime))
         }
-        ContextMessagePart::Image { url } => {
-            summarize_block_items_inline(&build_image_items(url))
-        }
+        ContextMessagePart::Image { url } => summarize_block_items_inline(&build_image_items(url)),
     }
 }
 

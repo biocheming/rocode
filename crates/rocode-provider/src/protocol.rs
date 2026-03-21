@@ -7,10 +7,10 @@ use std::fmt;
 /// Determines how requests are formatted and responses are parsed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Protocol {
-    /// OpenAI Chat Completions API (default for unknown npm)
+    /// closeai-compatible chat completions family (default for unknown npm)
     OpenAI,
-    /// Anthropic Messages API
-    Anthropic,
+    /// ethnopic-compatible messages family
+    Messages,
     /// Google Gemini generateContent API
     Google,
     /// AWS Bedrock converse API (SigV4 auth)
@@ -25,12 +25,13 @@ pub enum Protocol {
 
 impl Protocol {
     /// Derive protocol from npm package name.
-    /// Unknown packages default to OpenAI (OpenAI-compatible assumption).
+    /// Unknown packages default to OpenAI (closeai-compatible assumption).
     pub fn from_npm(npm: &str) -> Self {
         let lower = npm.to_ascii_lowercase();
 
-        if lower.contains("anthropic") && !lower.contains("vertex") {
-            Protocol::Anthropic
+        if (lower.contains("anthropic") || lower.contains("ethnopic")) && !lower.contains("vertex")
+        {
+            Protocol::Messages
         } else if lower.contains("google-vertex") || lower.contains("vertex") {
             Protocol::Vertex
         } else if lower.contains("google") {
@@ -42,7 +43,7 @@ impl Protocol {
         } else if lower.contains("gitlab") {
             Protocol::GitLab
         } else {
-            // Default: treat as OpenAI-compatible.
+            // Default: treat as closeai-compatible.
             Protocol::OpenAI
         }
     }
@@ -51,8 +52,8 @@ impl Protocol {
 impl fmt::Display for Protocol {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Protocol::OpenAI => write!(f, "openai"),
-            Protocol::Anthropic => write!(f, "anthropic"),
+            Protocol::OpenAI => write!(f, "OpenAI"),
+            Protocol::Messages => write!(f, "Anthropic"),
             Protocol::Google => write!(f, "google"),
             Protocol::Bedrock => write!(f, "bedrock"),
             Protocol::Vertex => write!(f, "vertex"),

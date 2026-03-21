@@ -682,8 +682,8 @@ mod tests {
         config.merge(Config {
             ui_preferences: Some(UiPreferencesConfig {
                 recent_models: vec![UiRecentModelConfig {
-                    provider: "anthropic".to_string(),
-                    model: "claude-sonnet-4".to_string(),
+                    provider: "ethnopic".to_string(),
+                    model: "test-model-large".to_string(),
                 }],
                 ..Default::default()
             }),
@@ -694,8 +694,8 @@ mod tests {
         assert_eq!(
             ui.recent_models,
             vec![UiRecentModelConfig {
-                provider: "anthropic".to_string(),
-                model: "claude-sonnet-4".to_string(),
+                provider: "ethnopic".to_string(),
+                model: "test-model-large".to_string(),
             }]
         );
     }

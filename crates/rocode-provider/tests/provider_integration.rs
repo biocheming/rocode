@@ -6,12 +6,12 @@ use std::collections::HashMap;
 fn create_test_registry() -> ProviderRegistry {
     let mut registry = ProviderRegistry::new();
 
-    // Anthropic via protocol
-    let anthropic_models: HashMap<String, ModelInfo> = vec![
+    // Ethnopic via protocol
+    let ethnopic_models: HashMap<String, ModelInfo> = vec![
         ModelInfo {
-            id: "claude-sonnet-4-20250514".to_string(),
-            name: "Claude Sonnet 4".to_string(),
-            provider: "anthropic".to_string(),
+            id: "test-model-large".to_string(),
+            name: "Test Model Large".to_string(),
+            provider: "ethnopic".to_string(),
             context_window: 200000,
             max_input_tokens: None,
             max_output_tokens: 16000,
@@ -21,9 +21,9 @@ fn create_test_registry() -> ProviderRegistry {
             cost_per_million_output: 15.0,
         },
         ModelInfo {
-            id: "claude-3-5-sonnet-20241022".to_string(),
-            name: "Claude 3.5 Sonnet".to_string(),
-            provider: "anthropic".to_string(),
+            id: "test-model-v2".to_string(),
+            name: "Test Model V2".to_string(),
+            provider: "ethnopic".to_string(),
             context_window: 200000,
             max_input_tokens: None,
             max_output_tokens: 8192,
@@ -38,11 +38,11 @@ fn create_test_registry() -> ProviderRegistry {
     .collect();
 
     registry.register(ProviderInstance::new(
-        "anthropic".to_string(),
-        "Anthropic".to_string(),
-        ProviderConfig::new("anthropic", "", "test-key"),
-        rocode_provider::create_protocol_impl(Protocol::Anthropic),
-        anthropic_models,
+        "ethnopic".to_string(),
+        "Ethnopic".to_string(),
+        ProviderConfig::new("ethnopic", "", "test-key"),
+        rocode_provider::create_protocol_impl(Protocol::Messages),
+        ethnopic_models,
     ));
 
     // OpenAI via protocol
@@ -107,8 +107,8 @@ fn test_registry_lists_providers() {
 
     let provider_ids: Vec<&str> = providers.iter().map(|p| p.id.as_str()).collect();
     assert!(
-        provider_ids.contains(&"anthropic"),
-        "Should have anthropic provider"
+        provider_ids.contains(&"ethnopic"),
+        "Should have ethnopic provider"
     );
     assert!(
         provider_ids.contains(&"openai"),
@@ -129,8 +129,8 @@ fn test_registry_lists_models() {
 
     let model_ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
     assert!(
-        model_ids.iter().any(|id| id.contains("claude")),
-        "Should have Claude models"
+        model_ids.iter().any(|id| id.contains("test-model")),
+        "Should have test models"
     );
     assert!(
         model_ids.iter().any(|id| id.contains("gpt")),
@@ -142,11 +142,11 @@ fn test_registry_lists_models() {
 fn test_find_model_by_id() {
     let registry = create_test_registry();
 
-    let result = registry.find_model("claude-3-5-sonnet-20241022");
-    assert!(result.is_some(), "Should find claude-3-5-sonnet model");
+    let result = registry.find_model("test-model-v2");
+    assert!(result.is_some(), "Should find test-model-v2 model");
 
     let (provider_id, model) = result.unwrap();
-    assert_eq!(provider_id, "anthropic");
+    assert_eq!(provider_id, "ethnopic");
     assert!(model.supports_vision);
     assert!(model.supports_tools);
 }
@@ -155,18 +155,18 @@ fn test_find_model_by_id() {
 fn test_provider_metadata() {
     let registry = create_test_registry();
 
-    let anthropic = registry.get("anthropic");
-    assert!(anthropic.is_some());
-    let provider = anthropic.unwrap();
+    let ethnopic = registry.get("ethnopic");
+    assert!(ethnopic.is_some());
+    let provider = ethnopic.unwrap();
 
-    assert_eq!(provider.id(), "anthropic");
-    assert_eq!(provider.name(), "Anthropic");
+    assert_eq!(provider.id(), "ethnopic");
+    assert_eq!(provider.name(), "Ethnopic");
 
     let models = provider.models();
     assert!(!models.is_empty());
 
-    let claude = provider.get_model("claude-3-5-sonnet-20241022");
-    assert!(claude.is_some());
+    let model = provider.get_model("test-model-v2");
+    assert!(model.is_some());
 }
 
 #[test]

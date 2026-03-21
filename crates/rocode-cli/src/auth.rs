@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use crate::cli::AuthCommands;
 
 pub(crate) const AUTH_ENV_PROVIDERS: &[(&str, &str)] = &[
-    ("anthropic", "ANTHROPIC_API_KEY"),
+    ("ethnopic", "ANTHROPIC_API_KEY"),
     ("openai", "OPENAI_API_KEY"),
     ("openrouter", "OPENROUTER_API_KEY"),
     ("google", "GOOGLE_API_KEY"),

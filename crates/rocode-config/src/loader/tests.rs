@@ -38,33 +38,33 @@ impl Drop for TestDir {
 
 #[test]
 fn test_parse_jsonc_simple() {
-    let content = r#"{"model": "claude-3-opus"}"#;
+    let content = r#"{"model": "test-model-large"}"#;
     let config: Config = parse_jsonc(content).unwrap();
-    assert_eq!(config.model, Some("claude-3-opus".to_string()));
+    assert_eq!(config.model, Some("test-model-large".to_string()));
 }
 
 #[test]
 fn test_parse_jsonc_with_comments() {
     let content = r#"{
         // This is a comment
-        "model": "claude-3-opus",
+        "model": "test-model-large",
         /* Multi-line
             comment */
         "theme": "dark"
     }"#;
     let config: Config = parse_jsonc(content).unwrap();
-    assert_eq!(config.model, Some("claude-3-opus".to_string()));
+    assert_eq!(config.model, Some("test-model-large".to_string()));
     assert_eq!(config.theme, Some("dark".to_string()));
 }
 
 #[test]
 fn test_parse_jsonc_allows_trailing_comma_in_object() {
     let content = r#"{
-        "model": "claude-3-opus",
+        "model": "test-model-large",
         "theme": "dark",
     }"#;
     let config: Config = parse_jsonc(content).unwrap();
-    assert_eq!(config.model, Some("claude-3-opus".to_string()));
+    assert_eq!(config.model, Some("test-model-large".to_string()));
     assert_eq!(config.theme, Some("dark".to_string()));
 }
 
@@ -419,7 +419,7 @@ fn test_resolve_file_references_skips_comments() {
     let temp = TestDir::new("rocode_file_ref_comment");
     let input = r#"{
         // "api_key": "{file:secret.txt}"
-        "model": "claude"
+        "model": "test-model"
     }"#;
     let result = resolve_file_references(input, &temp.path).unwrap();
     assert!(result.contains("{file:secret.txt}"));
@@ -441,7 +441,7 @@ fn test_update_config() {
     let temp = TestDir::new("rocode_update_config");
 
     let patch = Config {
-        model: Some("claude-3-opus".to_string()),
+        model: Some("test-model-large".to_string()),
         ..Default::default()
     };
 
@@ -449,7 +449,7 @@ fn test_update_config() {
 
     let content = fs::read_to_string(temp.path.join(".rocode/rocode.json")).unwrap();
     let config: Config = serde_json::from_str(&content).unwrap();
-    assert_eq!(config.model, Some("claude-3-opus".to_string()));
+    assert_eq!(config.model, Some("test-model-large".to_string()));
 }
 
 #[test]
@@ -499,11 +499,11 @@ fn test_split_frontmatter_no_frontmatter() {
 
 #[test]
 fn test_yaml_frontmatter_flat_key_values() {
-    let yaml = "name: reviewer\ndescription: Review code\nmodel: claude-3-opus";
+    let yaml = "name: reviewer\ndescription: Review code\nmodel: test-model-large";
     let json = serde_yaml_frontmatter_to_json(yaml);
     assert_eq!(json["name"], "reviewer");
     assert_eq!(json["description"], "Review code");
-    assert_eq!(json["model"], "claude-3-opus");
+    assert_eq!(json["model"], "test-model-large");
 }
 
 #[test]
@@ -583,10 +583,10 @@ fn test_yaml_frontmatter_quoted_values() {
 
 #[test]
 fn test_fallback_sanitize_yaml_colon_in_value() {
-    let yaml = "description: Use model: claude-3 for tasks\nname: test";
+    let yaml = "description: Use model: test-model for tasks\nname: test";
     let sanitized = fallback_sanitize_yaml(yaml);
     assert!(sanitized.contains("description: |-"));
-    assert!(sanitized.contains("  Use model: claude-3 for tasks"));
+    assert!(sanitized.contains("  Use model: test-model for tasks"));
     assert!(sanitized.contains("name: test"));
 }
 
@@ -609,12 +609,12 @@ fn test_fallback_sanitize_yaml_preserves_block_scalar() {
 fn test_yaml_frontmatter_value_with_colon_via_fallback() {
     // This YAML has a value with a colon, which would confuse naive parsers.
     // The fallback sanitization should handle it.
-    let yaml = "description: Use model: claude-3 for tasks\nname: test";
+    let yaml = "description: Use model: test-model for tasks\nname: test";
     let json = serde_yaml_frontmatter_to_json(yaml);
     // After fallback, description should be preserved
     assert_eq!(json["name"], "test");
     let desc = json["description"].as_str().unwrap();
-    assert!(desc.contains("model: claude-3"));
+    assert!(desc.contains("model: test-model"));
 }
 
 #[test]
@@ -641,7 +641,7 @@ fn test_parse_markdown_agent_with_frontmatter() {
     fs::create_dir_all(&agent_dir).unwrap();
     fs::write(
         agent_dir.join("reviewer.md"),
-        "---\ndescription: Reviews code changes\nmode: subagent\nmodel: claude-3-opus\n---\n\nYou are a code reviewer.\n",
+        "---\ndescription: Reviews code changes\nmode: subagent\nmodel: test-model-large\n---\n\nYou are a code reviewer.\n",
     )
     .unwrap();
 
@@ -650,7 +650,7 @@ fn test_parse_markdown_agent_with_frontmatter() {
     let (name, config) = result.unwrap();
     assert_eq!(name, "reviewer");
     assert_eq!(config.description.as_deref(), Some("Reviews code changes"));
-    assert_eq!(config.model.as_deref(), Some("claude-3-opus"));
+    assert_eq!(config.model.as_deref(), Some("test-model-large"));
     assert!(config.prompt.unwrap().contains("You are a code reviewer."));
 }
 
@@ -705,7 +705,7 @@ fn test_parse_markdown_agent_colon_in_description_fallback() {
     // Description contains a colon -- this is the case the fallback handles
     fs::write(
         agent_dir.join("tricky.md"),
-        "---\ndescription: Use model: claude for tasks\nmode: primary\n---\n\nTricky prompt.\n",
+        "---\ndescription: Use model: test-model for tasks\nmode: primary\n---\n\nTricky prompt.\n",
     )
     .unwrap();
 
@@ -713,7 +713,7 @@ fn test_parse_markdown_agent_colon_in_description_fallback() {
     assert!(result.is_some());
     let (_name, config) = result.unwrap();
     let desc = config.description.unwrap();
-    assert!(desc.contains("model: claude"));
+    assert!(desc.contains("model: test-model"));
 }
 
 #[test]
@@ -724,8 +724,8 @@ fn legacy_toml_config_migrates_to_rocode_json() {
     fs::write(
         config_dir.join("config"),
         r#"
-provider = "anthropic"
-model = "claude-3-5-sonnet"
+provider = "ethnopic"
+model = "test-model-v2"
 theme = "dark"
 "#,
     )
@@ -734,7 +734,7 @@ theme = "dark"
     let mut config = Config::default();
     let migrated = migrate_legacy_toml_config(&config_dir, &mut config);
     assert!(migrated.is_some());
-    assert_eq!(config.model.as_deref(), Some("anthropic/claude-3-5-sonnet"));
+    assert_eq!(config.model.as_deref(), Some("ethnopic/test-model-v2"));
     assert_eq!(config.theme.as_deref(), Some("dark"));
     assert_eq!(
         config.schema.as_deref(),
@@ -749,7 +749,7 @@ theme = "dark"
     let written: Config = serde_json::from_str(&content).unwrap();
     assert_eq!(
         written.model.as_deref(),
-        Some("anthropic/claude-3-5-sonnet")
+        Some("ethnopic/test-model-v2")
     );
     assert_eq!(written.theme.as_deref(), Some("dark"));
 }

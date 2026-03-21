@@ -12,7 +12,7 @@ use crate::theme::Theme;
 
 /// Popular providers shown first (matches TS opencode ordering).
 const POPULAR_PROVIDERS: &[&str] = &[
-    "anthropic",
+    "ethnopic",
     "github-copilot",
     "openai",
     "google",
