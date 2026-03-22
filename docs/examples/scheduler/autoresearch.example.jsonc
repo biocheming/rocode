@@ -1,0 +1,323 @@
+{
+  "$schema": "https://rocode.dev/schemas/scheduler-profile.schema.json",
+  "version": "2026-03-22",
+
+  "defaults": {
+    "profile": "autoresearch-run"
+  },
+
+  "profiles": {
+    "autoresearch-run": {
+      "orchestrator": "hephaestus",
+      "description": "Autoresearch main loop draft. Favor deep autonomous execution, repeated verification, and evidence-backed continuation decisions.",
+      // This file stays valid against the CURRENT scheduler schema.
+      // Full autoresearch parity still needs dedicated objective, verifier,
+      // keep/discard, and artifact fields. See AUTORESEARCH_DESIGN.md.
+      // Note: current docs/schema expose childSession, but the config loader
+      // does not yet materialize that field from JSON overrides.
+      "model": {
+        "providerId": "openai",
+        "modelId": "gpt-5.2"
+      },
+      "skillList": [
+        "request-analysis",
+        "execution-orchestration",
+        "synthesis"
+      ],
+      "stages": [
+        "request-analysis",
+        {
+          "kind": "execution-orchestration",
+          "loopBudget": "step-limit:25",
+          "childSession": true,
+          "agentTree": {
+            "agent": {
+              "name": "autonomous-researcher",
+              "maxSteps": 20
+            },
+            "children": [
+              {
+                "agent": {
+                  "name": "code-explorer"
+                },
+                "prompt": "Map the current codebase state before implementation changes and keep surfacing evidence for what changed."
+              },
+              {
+                "agent": {
+                  "name": "docs-researcher"
+                },
+                "prompt": "Bring in external constraints only when they materially change verification, safety, or implementation strategy."
+              },
+              {
+                "agent": {
+                  "name": "oracle",
+                  "allowedTools": ["read", "glob", "grep", "bash", "task", "task_flow"]
+                },
+                "prompt": "Act as the verifier: challenge claimed progress, request concrete evidence, and force re-checks before the loop settles."
+              }
+            ]
+          }
+        },
+        "synthesis"
+      ],
+      "skillTree": {
+        "contextMarkdown": "Intended protocol: establish a baseline, make one coherent change-set, verify mechanically, compare against the baseline, keep or discard the result, then continue until the objective is met or progress stalls. Never claim improvement without evidence."
+      }
+    },
+
+    "autoresearch-plan": {
+      "orchestrator": "prometheus",
+      "description": "Goal to config planner draft for autoresearch. Clarify objective, scope, metric, direction, verify command, and guardrails before execution starts.",
+      "model": {
+        "providerId": "openai",
+        "modelId": "gpt-5.2"
+      },
+      "skillList": [
+        "request-analysis",
+        "route",
+        "interview",
+        "plan",
+        "review",
+        "handoff"
+      ],
+      "stages": [
+        "request-analysis",
+        "route",
+        {
+          "kind": "interview",
+          "loopBudget": "step-limit:5"
+        },
+        {
+          "kind": "plan",
+          "toolPolicy": "allow-all",
+          "agentTree": {
+            "agent": {
+              "name": "objective-planner",
+              "maxSteps": 12
+            },
+            "children": [
+              {
+                "agent": {
+                  "name": "code-explorer"
+                },
+                "prompt": "Inspect the repository and validate that proposed scope globs and verify commands match the real project."
+              },
+              {
+                "agent": {
+                  "name": "docs-researcher"
+                },
+                "prompt": "Check framework or tool documentation only when it changes how the metric or verify command should be built."
+              }
+            ]
+          }
+        },
+        "review",
+        "handoff"
+      ],
+      "skillTree": {
+        "contextMarkdown": "The plan is not complete until it names the objective, scope boundaries, mechanical metric, direction of improvement, verify command, failure guard, and operator-facing launch instructions."
+      }
+    },
+
+    "autoresearch-debug": {
+      "orchestrator": "hephaestus",
+      "description": "Scientific-method debugging draft. Iterate through hypothesis, experiment, evidence, and classification before moving to the next suspected cause.",
+      "stages": [
+        "request-analysis",
+        {
+          "kind": "execution-orchestration",
+          "loopBudget": "step-limit:20",
+          "childSession": true,
+          "agentTree": {
+            "agent": {
+              "name": "bug-hunter",
+              "maxSteps": 18
+            },
+            "children": [
+              {
+                "agent": {
+                  "name": "code-explorer"
+                },
+                "prompt": "Map the error surface, relevant execution paths, and candidate fault boundaries."
+              },
+              {
+                "agent": {
+                  "name": "momus",
+                  "allowedTools": ["read", "glob", "grep", "bash", "task", "task_flow"]
+                },
+                "prompt": "Play the skeptic. Reject weak hypotheses, push for reproduction steps, and require evidence when a cause is claimed."
+              }
+            ]
+          }
+        },
+        "synthesis"
+      ],
+      "skillTree": {
+        "contextMarkdown": "Follow the scientific method: capture symptoms, generate falsifiable hypotheses, run one focused experiment at a time, classify the result, and preserve both confirmed and disproven evidence."
+      }
+    },
+
+    "autoresearch-fix": {
+      "orchestrator": "hephaestus",
+      "description": "Error-crushing draft. Reduce the broken-state count one fix at a time, verify after every attempt, and avoid accepting regressions.",
+      "stages": [
+        "request-analysis",
+        {
+          "kind": "execution-orchestration",
+          "loopBudget": "step-limit:30",
+          "childSession": true,
+          "agentTree": {
+            "agent": {
+              "name": "error-crusher",
+              "maxSteps": 24
+            },
+            "children": [
+              {
+                "agent": {
+                  "name": "code-explorer"
+                },
+                "prompt": "Identify the highest-value broken state and isolate its owning files before patching."
+              },
+              {
+                "agent": {
+                  "name": "test-writer",
+                  "allowedTools": ["read", "glob", "grep", "bash"]
+                },
+                "prompt": "Add or tighten tests when the fix needs a regression proof before the main loop keeps the change."
+              }
+            ]
+          }
+        },
+        "synthesis"
+      ],
+      "skillTree": {
+        "contextMarkdown": "Operate as an iterative repair loop: prioritize blockers, fix one class of failure at a time, re-run verification after every attempt, and only keep changes when total brokenness decreases without violating guards."
+      }
+    },
+
+    "autoresearch-security": {
+      "orchestrator": "atlas",
+      "description": "Security audit draft. Coordinate recon, threat modeling, attack-surface coverage, adversarial review, and evidence synthesis.",
+      "stages": [
+        "request-analysis",
+        {
+          "kind": "execution-orchestration",
+          "loopBudget": "step-limit:15",
+          "childSession": true,
+          "agentTree": {
+            "agent": {
+              "name": "security-coordinator"
+            },
+            "children": [
+              {
+                "agent": {
+                  "name": "security-adversary",
+                  "allowedTools": ["read", "glob", "grep", "bash", "task", "task_flow"]
+                },
+                "prompt": "Probe the codebase as an external attacker. Prioritize abuse paths, auth flaws, trust-boundary breaks, and data-exfiltration vectors."
+              },
+              {
+                "agent": {
+                  "name": "supply-chain-auditor",
+                  "allowedTools": ["read", "glob", "grep", "bash"]
+                },
+                "prompt": "Own dependency, configuration, and operational exposure analysis."
+              },
+              {
+                "agent": {
+                  "name": "architecture-advisor"
+                },
+                "prompt": "Keep the threat model coherent across assets, trust boundaries, and mitigations."
+              }
+            ]
+          }
+        },
+        {
+          "kind": "review",
+          "toolPolicy": "allow-read-only",
+          "agentTree": {
+            "agent": {
+              "name": "security-reviewer"
+            },
+            "children": [
+              {
+                "agent": {
+                  "name": "oracle"
+                },
+                "prompt": "Reject findings that lack file-level evidence, attack scenario clarity, or severity justification."
+              }
+            ]
+          }
+        },
+        "synthesis"
+      ],
+      "skillTree": {
+        "contextMarkdown": "Target full security workflow coverage: codebase recon, asset inventory, trust boundaries, STRIDE modeling, attack-surface mapping, adversarial testing, severity ranking, and evidence-backed reporting."
+      }
+    },
+
+    "autoresearch-ship": {
+      "orchestrator": "atlas",
+      "description": "Shipping workflow draft. Coordinate readiness inventory, checklist generation, preparation work, dry-run validation, shipment, and post-ship verification.",
+      "stages": [
+        "request-analysis",
+        {
+          "kind": "plan",
+          "toolPolicy": "allow-all",
+          "agentTree": {
+            "agent": {
+              "name": "shipping-planner"
+            },
+            "children": [
+              {
+                "agent": {
+                  "name": "code-explorer"
+                },
+                "prompt": "Inspect the repo or target artifact to infer what is being shipped and what hard preconditions exist."
+              }
+            ]
+          }
+        },
+        {
+          "kind": "execution-orchestration",
+          "loopBudget": "step-limit:12",
+          "childSession": true,
+          "agentTree": {
+            "agent": {
+              "name": "shipping-coordinator"
+            },
+            "children": [
+              {
+                "agent": {
+                  "name": "checklist-owner",
+                  "allowedTools": ["read", "glob", "grep", "bash", "task", "task_flow"]
+                },
+                "prompt": "Generate and track mechanically verifiable checklist items."
+              },
+              {
+                "agent": {
+                  "name": "dry-run-operator",
+                  "allowedTools": ["read", "glob", "grep", "bash"]
+                },
+                "prompt": "Own dry-run validation and gather evidence before any irreversible ship action is considered."
+              }
+            ]
+          }
+        },
+        {
+          "kind": "review",
+          "toolPolicy": "allow-read-only",
+          "agentTree": {
+            "agent": {
+              "name": "release-reviewer"
+            }
+          }
+        },
+        "synthesis"
+      ],
+      "skillTree": {
+        "contextMarkdown": "Model the shipping lifecycle explicitly: identify the artifact, inventory readiness, produce a checklist, prepare missing pieces, dry-run, ship, verify, monitor, and log everything needed for traceability."
+      }
+    }
+  }
+}

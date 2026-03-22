@@ -24,6 +24,16 @@ This directory contains formal external scheduler profile examples for ROCode.
   - Public OMO-aligned coordination example
 - `hephaestus.example.jsonc`
   - Public OMO-aligned autonomous execution example
+- `autoresearch.example.jsonc`
+  - Draft mapping of autoresearch workflows onto the current scheduler kernel
+- `AUTORESEARCH_DESIGN.md`
+  - Full-parity design notes describing the schema and runtime work still needed
+- `workflow-autoresearch.schema.json`
+  - First-class workflow schema for objective, iteration, decision, workspace, artifacts, and mode-specific config
+- `AUTORESEARCH_STATE_MODEL.md`
+  - Runtime ownership and persistence contract for autoresearch run state
+- `AUTORESEARCH_RUNTIME.md`
+  - Runtime services, lifecycle, and scheduler integration contract for autoresearch
 
 ### Agent tree files
 
