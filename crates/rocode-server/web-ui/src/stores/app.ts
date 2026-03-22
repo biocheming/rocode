@@ -4,7 +4,7 @@
 
 import { createSignal, createMemo, batch } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import { api, apiJson } from "~/api/client";
+import { ApiError, api, apiJson } from "~/api/client";
 import { parseSSE } from "~/api/sse";
 import { baseName } from "~/utils/format";
 import type {
@@ -78,6 +78,25 @@ function sortSessions(items: NormalizedSession[]): NormalizedSession[] {
   return [...items].sort((a, b) => Number(b.updated) - Number(a.updated));
 }
 
+function formatApiError(error: unknown): string {
+  if (error instanceof ApiError) {
+    try {
+      const parsed = JSON.parse(error.body) as {
+        error?: { message?: string };
+      };
+      const message = parsed.error?.message?.trim();
+      if (message) return message;
+    } catch {
+      // Fall back to the raw body below.
+    }
+    return error.body || error.message;
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return "Unknown error";
+}
+
 function normalizeSessions(items: (Session & Record<string, unknown>)[]): NormalizedSession[] {
   return sortSessions(
     (items || []).filter((s) => !s.parent_id).map(normalizeSession),
@@ -100,6 +119,7 @@ export interface AppState {
   uiCommands: UiCommand[];
   selectedModel: string | null;
   selectedModeKey: string | null;
+  modeLoadError: string | null;
 
   // Theme
   selectedTheme: ThemeId;
@@ -149,6 +169,7 @@ const [state, setState] = createStore<AppState>({
   uiCommands: [],
   selectedModel: null,
   selectedModeKey: null,
+  modeLoadError: null,
   selectedTheme: "daylight",
   showThinking: false,
   streaming: false,
@@ -380,20 +401,32 @@ export async function loadProviders(): Promise<void> {
 }
 
 export async function loadModes(): Promise<void> {
-  const response = await api("/mode");
-  const data: ExecutionMode[] = await response.json();
-  const modes = (data || [])
-    .filter((mode) => mode.hidden !== true)
-    .filter((mode) => mode.kind !== "agent" || mode.mode !== "subagent")
-    .map((mode) => ({
-      ...mode,
-      kind: mode.kind || "agent",
-    }));
-  setState("modes", modes);
+  try {
+    const response = await api("/mode");
+    const data: ExecutionMode[] = await response.json();
+    const modes = (data || [])
+      .filter((mode) => mode.hidden !== true)
+      .filter((mode) => mode.kind !== "agent" || mode.mode !== "subagent")
+      .map((mode) => ({
+        ...mode,
+        kind: mode.kind || "agent",
+      }));
+    setState("modes", modes);
+    setState("modeLoadError", null);
 
-  if (state.selectedModeKey) {
-    const found = modes.some((m) => `${m.kind}:${m.id}` === state.selectedModeKey);
-    if (!found) setSelectedMode(null, { persist: false });
+    if (state.selectedModeKey) {
+      const missingModeKey = state.selectedModeKey;
+      const found = modes.some((m) => `${m.kind}:${m.id}` === missingModeKey);
+      if (!found) {
+        setSelectedMode(null, { persist: false });
+        setState(
+          "modeLoadError",
+          `Selected execution mode is no longer available: ${missingModeKey}. Check the scheduler config and reload modes.`,
+        );
+      }
+    }
+  } catch (error) {
+    setState("modeLoadError", formatApiError(error));
   }
 }
 
@@ -534,7 +567,11 @@ export async function sendPrompt(content: string): Promise<void> {
       handleSSEEvent(_name, payload);
     });
   } catch (error) {
-    throw error;
+    _outputBlockListener?.({
+      kind: "status",
+      tone: "error",
+      text: formatApiError(error),
+    }, undefined);
   } finally {
     batch(() => {
       setState("streaming", false);

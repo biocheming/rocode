@@ -1144,7 +1144,7 @@ struct CliSchedulerResolution {
 fn resolve_scheduler_profile_config(
     config: &Config,
     requested_scheduler_profile: Option<&str>,
-) -> Option<(String, SchedulerProfileConfig)> {
+) -> anyhow::Result<Option<(String, SchedulerProfileConfig)>> {
     let requested = requested_scheduler_profile
         .map(str::trim)
         .filter(|value| !value.is_empty());
@@ -1155,83 +1155,101 @@ fn resolve_scheduler_profile_config(
         .map(str::trim)
         .filter(|value| !value.is_empty());
 
+    if let Some(name) = requested {
+        if let Ok(preset) = SchedulerPresetKind::from_str(name) {
+            return Ok(Some((
+                name.to_string(),
+                SchedulerProfileConfig {
+                    orchestrator: Some(preset.as_str().to_string()),
+                    ..Default::default()
+                },
+            )));
+        }
+
+        let path = scheduler_path.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Scheduler profile could not be resolved: `{}`. No scheduler config is configured.",
+                name
+            )
+        })?;
+        let scheduler_config = SchedulerConfig::load_from_file(path).map_err(|error| {
+            anyhow::anyhow!(
+                "Scheduler profile could not be resolved: `{}`. Failed to load scheduler config: {}",
+                name,
+                error
+            )
+        })?;
+        let profile = scheduler_config.profile(name).map_err(|error| {
+            anyhow::anyhow!(
+                "Scheduler profile could not be resolved: `{}`. {}",
+                name,
+                error
+            )
+        })?;
+        return Ok(Some((name.to_string(), profile.clone())));
+    }
+
     if let Some(path) = scheduler_path {
         let scheduler_config = match SchedulerConfig::load_from_file(path) {
             Ok(config) => config,
             Err(error) => {
                 tracing::warn!(path = %path, %error, "failed to load scheduler config");
-                return requested.and_then(|name| {
-                    SchedulerPresetKind::from_str(name).ok().map(|_| {
-                        (
-                            name.to_string(),
-                            SchedulerProfileConfig {
-                                orchestrator: Some(name.to_string()),
-                                ..Default::default()
-                            },
-                        )
-                    })
-                });
+                return Ok(None);
             }
         };
 
-        if let Some(name) = requested {
-            if let Ok(profile) = scheduler_config.profile(name) {
-                return Some((name.to_string(), profile.clone()));
-            }
-            return SchedulerPresetKind::from_str(name).ok().map(|_| {
-                (
-                    name.to_string(),
-                    SchedulerProfileConfig {
-                        orchestrator: Some(name.to_string()),
-                        ..Default::default()
-                    },
-                )
-            });
-        }
-
         if let Some(name) = scheduler_config.default_profile_key() {
             if let Ok(profile) = scheduler_config.profile(name) {
-                return Some((name.to_string(), profile.clone()));
+                return Ok(Some((name.to_string(), profile.clone())));
             }
         }
-        return None;
+        return Ok(None);
     }
 
-    requested.and_then(|name| {
-        SchedulerPresetKind::from_str(name).ok().map(|_| {
-            (
-                name.to_string(),
-                SchedulerProfileConfig {
-                    orchestrator: Some(name.to_string()),
-                    ..Default::default()
-                },
-            )
-        })
-    })
+    Ok(None)
 }
 
 fn resolve_scheduler_runtime(
     config: &Config,
     requested_scheduler_profile: Option<&str>,
-) -> CliSchedulerResolution {
+) -> anyhow::Result<CliSchedulerResolution> {
     let Some((profile_name, profile)) =
-        resolve_scheduler_profile_config(config, requested_scheduler_profile)
+        resolve_scheduler_profile_config(config, requested_scheduler_profile)?
     else {
-        return CliSchedulerResolution::default();
+        return Ok(CliSchedulerResolution::default());
     };
 
-    let defaults = scheduler_plan_from_profile(Some(profile_name.clone()), &profile)
-        .ok()
-        .map(|plan| scheduler_request_defaults_from_plan(&plan));
+    let defaults = match scheduler_plan_from_profile(Some(profile_name.clone()), &profile) {
+        Ok(plan) => Some(scheduler_request_defaults_from_plan(&plan)),
+        Err(error) => {
+            if requested_scheduler_profile
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_some()
+            {
+                return Err(anyhow::anyhow!(
+                    "Scheduler profile could not be resolved: `{}`. Failed to build profile plan: {}",
+                    profile_name,
+                    error
+                ));
+            }
+            tracing::warn!(
+                profile = %profile_name,
+                %error,
+                "failed to build default scheduler profile plan"
+            );
+            None
+        }
+    };
     let profile_model = profile
         .model
         .as_ref()
         .map(|model| (model.provider_id.clone(), model.model_id.clone()));
 
-    CliSchedulerResolution {
+    Ok(CliSchedulerResolution {
         defaults,
         profile_model,
-    }
+    })
 }
 
 async fn build_cli_execution_runtime(
@@ -1246,7 +1264,7 @@ async fn build_cli_execution_runtime(
     let frontend_projection = Arc::new(Mutex::new(CliFrontendProjection::default()));
     let scheduler_stage_snapshots = Arc::new(Mutex::new(HashMap::new()));
     let scheduler_resolution =
-        resolve_scheduler_runtime(config, selection.requested_scheduler_profile.as_deref());
+        resolve_scheduler_runtime(config, selection.requested_scheduler_profile.as_deref())?;
     let scheduler_defaults = scheduler_resolution.defaults.clone();
     let scheduler_profile_name = scheduler_defaults
         .as_ref()
@@ -1561,4 +1579,29 @@ fn cli_render_startup_banner(style: &CliStyle, recent: Option<&CliRecentSessionI
 
     out.push_str("\r\n");
     out
+}
+
+#[cfg(test)]
+mod frontend_state_tests {
+    use super::resolve_scheduler_runtime;
+    use rocode_config::Config;
+
+    #[test]
+    fn explicit_unknown_scheduler_profile_fails_instead_of_silent_fallback() {
+        let error = resolve_scheduler_runtime(&Config::default(), Some("missing"))
+            .expect_err("explicitly requested unknown scheduler profile should fail");
+        let message = error.to_string();
+
+        assert!(message.contains("Scheduler profile could not be resolved"));
+        assert!(message.contains("missing"));
+    }
+
+    #[test]
+    fn no_requested_scheduler_profile_keeps_default_cli_behavior() {
+        let resolution = resolve_scheduler_runtime(&Config::default(), None)
+            .expect("missing scheduler config without explicit request should not fail");
+
+        assert!(resolution.defaults.is_none());
+        assert!(resolution.profile_model.is_none());
+    }
 }

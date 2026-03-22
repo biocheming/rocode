@@ -33,6 +33,12 @@
   color: var(--color-text-secondary);
 }
 
+.errorPill {
+  max-width: min(48ch, 42vw);
+  background: color-mix(in srgb, var(--color-error) 12%, var(--color-bg-elevated));
+  color: var(--color-error);
+}
+
 .pillLabel {
   font-weight: 600;
   color: var(--color-text-tertiary);

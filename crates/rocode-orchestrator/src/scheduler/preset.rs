@@ -6,6 +6,7 @@ use super::{
     SchedulerProfileConfig, SchedulerProfileOrchestrator, SchedulerProfilePlan, SchedulerStageKind,
     SchedulerStageObservability,
 };
+use crate::iterative_workflow::WorkflowBasePreset;
 use crate::skill_tree::SkillTreeRequestPlan;
 use crate::tool_runner::ToolRunner;
 
@@ -101,11 +102,19 @@ impl SchedulerPresetKind {
     pub fn from_profile_config(
         profile: &SchedulerProfileConfig,
     ) -> Result<Self, SchedulerConfigError> {
-        profile
-            .orchestrator
-            .as_deref()
-            .unwrap_or("sisyphus")
-            .parse()
+        if let Some(orchestrator) = profile.orchestrator.as_deref() {
+            return orchestrator.parse();
+        }
+
+        if let Some(workflow) = profile.workflow() {
+            return Ok(match workflow.base_preset_hint() {
+                WorkflowBasePreset::Prometheus => Self::Prometheus,
+                WorkflowBasePreset::Atlas => Self::Atlas,
+                WorkflowBasePreset::Hephaestus => Self::Hephaestus,
+            });
+        }
+
+        Ok(Self::Sisyphus)
     }
 
     pub fn plan_from_profile(
@@ -120,6 +129,9 @@ impl SchedulerPresetKind {
             profile,
         );
         plan.stages = definition.resolved_stage_kinds(profile);
+        if plan.orchestrator.is_none() && profile.workflow().is_some() {
+            plan.orchestrator = Some(self.as_str().to_string());
+        }
         plan
     }
 
@@ -378,6 +390,68 @@ mod tests {
         };
         let plan = scheduler_plan_from_profile(Some("hephaestus".to_string()), &profile).unwrap();
         assert_eq!(plan.profile_name.as_deref(), Some("hephaestus"));
+        assert_eq!(
+            plan.stages,
+            vec![
+                SchedulerStageKind::RequestAnalysis,
+                SchedulerStageKind::ExecutionOrchestration,
+            ]
+        );
+    }
+
+    #[test]
+    fn scheduler_preset_infers_prometheus_from_plan_workflow() {
+        let profile = SchedulerProfileConfig {
+            workflow: Some(crate::IterativeWorkflowSource::Inline(
+                crate::IterativeWorkflowConfig::load_from_str(
+                    r#"{
+                      "workflow": { "kind": "autoresearch", "mode": "plan" }
+                    }"#,
+                )
+                .unwrap(),
+            )),
+            ..Default::default()
+        };
+        let plan = scheduler_plan_from_profile(Some("planner".to_string()), &profile).unwrap();
+        assert_eq!(plan.orchestrator.as_deref(), Some("prometheus"));
+        assert_eq!(
+            plan.stages,
+            vec![
+                SchedulerStageKind::RequestAnalysis,
+                SchedulerStageKind::Route,
+                SchedulerStageKind::Interview,
+                SchedulerStageKind::Plan,
+                SchedulerStageKind::Review,
+                SchedulerStageKind::Handoff,
+            ]
+        );
+    }
+
+    #[test]
+    fn scheduler_preset_infers_hephaestus_from_run_workflow() {
+        let profile = SchedulerProfileConfig {
+            workflow: Some(crate::IterativeWorkflowSource::Inline(
+                crate::IterativeWorkflowConfig::load_from_str(
+                    r#"{
+                      "workflow": { "kind": "autoresearch", "mode": "run" },
+                      "objective": {
+                        "goal": "Improve tests",
+                        "scope": { "include": ["src/**/*.rs"] },
+                        "direction": "higher-is-better",
+                        "metric": { "kind": "numeric-extract", "pattern": "([0-9]+)" },
+                        "verify": { "command": "cargo test" }
+                      },
+                      "iterationPolicy": { "mode": "bounded", "maxIterations": 3 },
+                      "decisionPolicy": {},
+                      "workspacePolicy": { "snapshotStrategy": "patch-file" }
+                    }"#,
+                )
+                .unwrap(),
+            )),
+            ..Default::default()
+        };
+        let plan = scheduler_plan_from_profile(Some("run".to_string()), &profile).unwrap();
+        assert_eq!(plan.orchestrator.as_deref(), Some("hephaestus"));
         assert_eq!(
             plan.stages,
             vec![

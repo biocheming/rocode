@@ -94,12 +94,23 @@ pub async fn execute_stage_agent(
     policy: StageToolPolicy,
     stage_context: Option<(String, u32)>,
 ) -> Result<OrchestratorOutput, OrchestratorError> {
+    execute_stage_agent_with_exec_ctx(input, ctx, agent, policy, stage_context, None).await
+}
+
+pub async fn execute_stage_agent_with_exec_ctx(
+    input: &str,
+    ctx: &OrchestratorContext,
+    agent: AgentDescriptor,
+    policy: StageToolPolicy,
+    stage_context: Option<(String, u32)>,
+    exec_ctx_override: Option<crate::ExecutionContext>,
+) -> Result<OrchestratorOutput, OrchestratorError> {
     let loop_policy = LoopPolicy {
         max_steps: agent.max_steps,
         tool_dedup: ToolDedupScope::PerStep,
         ..Default::default()
     };
-    let (stage_ctx, runner) = filtered_stage_context(ctx, policy);
+    let (stage_ctx, runner) = filtered_stage_context(ctx, policy, exec_ctx_override);
     let mut orchestrator = SkillListOrchestrator::new(agent, runner).with_loop_policy(loop_policy);
     if let Some((stage_name, stage_index)) = stage_context {
         orchestrator.set_stage_context(stage_name, stage_index);
@@ -107,20 +118,32 @@ pub async fn execute_stage_agent(
     orchestrator.execute(input, &stage_ctx).await
 }
 
+pub(crate) fn clone_context_with_exec_ctx(
+    ctx: &OrchestratorContext,
+    exec_ctx: crate::ExecutionContext,
+) -> OrchestratorContext {
+    OrchestratorContext {
+        agent_resolver: ctx.agent_resolver.clone(),
+        model_resolver: ctx.model_resolver.clone(),
+        tool_executor: ctx.tool_executor.clone(),
+        lifecycle_hook: ctx.lifecycle_hook.clone(),
+        cancel_token: ctx.cancel_token.clone(),
+        exec_ctx,
+    }
+}
+
 fn filtered_stage_context(
     ctx: &OrchestratorContext,
     policy: StageToolPolicy,
+    exec_ctx_override: Option<crate::ExecutionContext>,
 ) -> (OrchestratorContext, ToolRunner) {
     let filtered_executor: Arc<dyn ToolExecutor> =
         Arc::new(FilteredToolExecutor::new(ctx.tool_executor.clone(), policy));
-    let stage_ctx = OrchestratorContext {
-        agent_resolver: ctx.agent_resolver.clone(),
-        model_resolver: ctx.model_resolver.clone(),
-        tool_executor: filtered_executor.clone(),
-        lifecycle_hook: ctx.lifecycle_hook.clone(),
-        cancel_token: ctx.cancel_token.clone(),
-        exec_ctx: ctx.exec_ctx.clone(),
-    };
+    let mut stage_ctx = clone_context_with_exec_ctx(
+        ctx,
+        exec_ctx_override.unwrap_or_else(|| ctx.exec_ctx.clone()),
+    );
+    stage_ctx.tool_executor = filtered_executor.clone();
     (stage_ctx, ToolRunner::new(filtered_executor))
 }
 

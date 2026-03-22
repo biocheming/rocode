@@ -12,6 +12,8 @@ use crate::runtime_control::SessionRunStatus;
 use crate::session_runtime::events::broadcast_session_updated;
 use crate::{ApiError, Result, ServerState};
 
+use super::scheduler::resolve_scheduler_request_defaults_validated;
+
 // ─── Request / Response structs ───────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -432,6 +434,20 @@ pub(super) async fn create_session(
     State(state): State<Arc<ServerState>>,
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<Json<SessionInfo>> {
+    let requested_scheduler_profile = req
+        .scheduler_profile
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let resolved_scheduler_profile = if let Some(profile) = requested_scheduler_profile.as_deref() {
+        resolve_scheduler_request_defaults_validated(&state.config_store.config(), Some(profile))?
+            .and_then(|defaults| defaults.profile_name)
+            .or_else(|| Some(profile.to_string()))
+    } else {
+        None
+    };
+
     let mut sessions = state.sessions.lock().await;
     let mut session = if let Some(parent_id) = &req.parent_id {
         sessions
@@ -445,11 +461,9 @@ pub(super) async fn create_session(
         session.directory = normalized_directory;
         sessions.update(session.clone());
     }
-    if let Some(profile) = req
-        .scheduler_profile
+    if let Some(profile) = resolved_scheduler_profile
         .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .or(requested_scheduler_profile.as_deref())
     {
         session
             .metadata

@@ -1,3 +1,5 @@
+use crate::iterative_workflow_runtime::WorkflowController;
+use crate::ExecutionContext;
 use crate::{OrchestratorContext, OrchestratorError, OrchestratorOutput};
 use std::future::Future;
 
@@ -95,7 +97,7 @@ impl<'a> SchedulerExecutionService<'a> {
 
         for round in 1..=max_rounds {
             let execution_output = self
-                .execute_execution_round(&execution_input, workflow.child_mode, true)
+                .execute_execution_round(&execution_input, workflow.child_mode, true, None)
                 .await?;
             SchedulerProfileOrchestrator::record_output(self.state, &execution_output);
             if self.state.is_cancelled {
@@ -218,6 +220,17 @@ impl<'a> SchedulerExecutionService<'a> {
             OrchestratorError::Other(self.plan.autonomous_semantics_error().to_string())
         })?;
         let max_rounds = workflow.max_rounds.max(1) as usize;
+        let mut workflow_controller = match self.plan.workflow.clone() {
+            Some(workflow_config) => WorkflowController::from_config(
+                workflow_config,
+                self.orchestrator.tool_runner(),
+                self.ctx.exec_ctx.clone(),
+            )?,
+            None => None,
+        };
+        if let Some(controller) = workflow_controller.as_mut() {
+            controller.capture_baseline().await?;
+        }
         let mut execution_input = self.orchestrator.compose_execution_orchestration_input(
             self.original_input,
             self.state,
@@ -225,27 +238,139 @@ impl<'a> SchedulerExecutionService<'a> {
         );
 
         for round in 1..=max_rounds {
-            let execution_output = self
+            let previous_output_for_retry = self
+                .state
+                .execution
+                .delegated
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(OrchestratorOutput::empty);
+            if let Some(controller) = workflow_controller.as_mut() {
+                controller.begin_iteration(round as u32)?;
+            }
+            let workflow_exec_ctx = workflow_controller
+                .as_ref()
+                .and_then(|controller| controller.execution_context_override(&self.ctx.exec_ctx));
+            let execution_output = match self
                 .execute_execution_round(
                     &execution_input,
                     workflow.child_mode,
                     workflow.allow_execution_fallback,
+                    workflow_exec_ctx.as_ref(),
                 )
-                .await?;
+                .await
+            {
+                Ok(output) => output,
+                Err(err) => {
+                    if let Some(controller) = workflow_controller.as_mut() {
+                        let result = controller.handle_execution_error(round as u32, &err);
+                        let gate_output = result.output;
+                        let decision = result.gate_decision;
+                        SchedulerProfileOrchestrator::record_output(self.state, &gate_output);
+                        if self.state.is_cancelled {
+                            controller.orphan_active_checkpoint()?;
+                            break;
+                        }
+
+                        match decision.status {
+                            SchedulerExecutionGateStatus::Done => {
+                                if let Some(output) =
+                                    SchedulerProfileOrchestrator::gate_terminal_output(
+                                        self.plan,
+                                        SchedulerExecutionGateStatus::Done,
+                                        &decision,
+                                        &previous_output_for_retry,
+                                    )
+                                {
+                                    self.state.place_execution_output(
+                                        self.plan.autonomous_terminal_placement(),
+                                        output,
+                                    );
+                                }
+                                break;
+                            }
+                            SchedulerExecutionGateStatus::Blocked => {
+                                if let Some(output) =
+                                    SchedulerProfileOrchestrator::gate_terminal_output(
+                                        self.plan,
+                                        SchedulerExecutionGateStatus::Blocked,
+                                        &decision,
+                                        &previous_output_for_retry,
+                                    )
+                                {
+                                    self.state.place_execution_output(
+                                        self.plan.autonomous_terminal_placement(),
+                                        output,
+                                    );
+                                }
+                                break;
+                            }
+                            SchedulerExecutionGateStatus::Continue if round < max_rounds => {
+                                self.emit_retry_stage(
+                                    self.plan.autonomous_retry_event(),
+                                    round,
+                                    max_rounds,
+                                    &decision,
+                                    None,
+                                )
+                                .await;
+                                execution_input = self.orchestrator.compose_retry_input(
+                                    super::profile::RetryComposeRequest {
+                                        original_input: self.original_input,
+                                        state: self.state,
+                                        plan: self.plan,
+                                        round,
+                                        decision: &decision,
+                                        previous_output: &previous_output_for_retry,
+                                        review_output: None,
+                                    },
+                                );
+                                continue;
+                            }
+                            SchedulerExecutionGateStatus::Continue => {
+                                self.state.place_execution_output(
+                                    self.plan.retry_exhausted_placement(),
+                                    SchedulerProfileOrchestrator::retry_budget_exhausted_output(
+                                        self.plan,
+                                        round,
+                                        max_rounds,
+                                        &decision,
+                                        &previous_output_for_retry,
+                                        None,
+                                    ),
+                                );
+                                break;
+                            }
+                        }
+                    }
+                    return Err(err);
+                }
+            };
             SchedulerProfileOrchestrator::record_output(self.state, &execution_output);
             if self.state.is_cancelled {
+                if let Some(controller) = workflow_controller.as_mut() {
+                    controller.orphan_active_checkpoint()?;
+                }
                 self.state.execution.delegated = Some(execution_output);
                 break;
             }
             self.state.execution.delegated = Some(execution_output.clone());
 
             let verification_result = self
-                .execute_autonomous_verification(round, max_rounds, &execution_output)
+                .execute_autonomous_verification(
+                    round,
+                    max_rounds,
+                    &execution_output,
+                    workflow_exec_ctx.as_ref(),
+                )
                 .await;
             let verification_output = match verification_result {
                 Ok(output) => {
                     SchedulerProfileOrchestrator::record_output(self.state, &output);
                     if self.state.is_cancelled {
+                        if let Some(controller) = workflow_controller.as_mut() {
+                            controller.orphan_active_checkpoint()?;
+                        }
                         break;
                     }
                     self.state.place_execution_output(
@@ -271,19 +396,29 @@ impl<'a> SchedulerExecutionService<'a> {
                 }
             };
 
-            let gate_input = self.orchestrator.compose_autonomous_gate_input(
-                self.original_input,
-                self.state,
-                self.plan,
-                round,
-                &execution_output,
-                verification_output.as_ref(),
-            );
-            let (gate_output, decision) = self
-                .execute_autonomous_gate(round, max_rounds, &gate_input)
-                .await?;
+            let (gate_output, decision) = match workflow_controller.as_mut() {
+                Some(controller) => {
+                    self.execute_autonomous_workflow_gate(round, max_rounds, controller)
+                        .await?
+                }
+                None => {
+                    let gate_input = self.orchestrator.compose_autonomous_gate_input(
+                        self.original_input,
+                        self.state,
+                        self.plan,
+                        round,
+                        &execution_output,
+                        verification_output.as_ref(),
+                    );
+                    self.execute_autonomous_gate(round, max_rounds, &gate_input)
+                        .await?
+                }
+            };
             SchedulerProfileOrchestrator::record_output(self.state, &gate_output);
             if self.state.is_cancelled {
+                if let Some(controller) = workflow_controller.as_mut() {
+                    controller.orphan_active_checkpoint()?;
+                }
                 break;
             }
 
@@ -370,8 +505,15 @@ impl<'a> SchedulerExecutionService<'a> {
         execution_input: &str,
         child_mode: super::SchedulerExecutionChildMode,
         allow_execution_fallback: bool,
+        exec_ctx_override: Option<&ExecutionContext>,
     ) -> Result<OrchestratorOutput, OrchestratorError> {
-        SchedulerExecutionCapabilityAdapter::new(self.orchestrator, self.plan, self.ctx)
+        let adapter = if let Some(exec_ctx) = exec_ctx_override.cloned() {
+            SchedulerExecutionCapabilityAdapter::new(self.orchestrator, self.plan, self.ctx)
+                .with_exec_ctx(exec_ctx)
+        } else {
+            SchedulerExecutionCapabilityAdapter::new(self.orchestrator, self.plan, self.ctx)
+        };
+        adapter
             .execute_execution_path(
                 execution_input,
                 child_mode,
@@ -493,6 +635,7 @@ impl<'a> SchedulerExecutionService<'a> {
         round: usize,
         total_rounds: usize,
         execution_output: &OrchestratorOutput,
+        exec_ctx_override: Option<&ExecutionContext>,
     ) -> Result<OrchestratorOutput, OrchestratorError> {
         let stage = self.plan.autonomous_verification_stage();
         let stage_name = stage.event_name;
@@ -508,12 +651,13 @@ impl<'a> SchedulerExecutionService<'a> {
             stage_name,
             round,
             total_rounds,
-            super::execute_stage_agent(
+            super::execute_stage_agent_with_exec_ctx(
                 &verification_input,
                 self.ctx,
                 super::stage_agent_unbounded(stage.agent_name, prompt),
                 stage.tool_policy,
                 Some(Self::stage_context(stage_name, round)),
+                exec_ctx_override.cloned(),
             ),
         )
         .await
@@ -545,6 +689,40 @@ impl<'a> SchedulerExecutionService<'a> {
             .await?;
         let decision = super::parse_execution_gate_decision(&output.content);
         Ok((output, decision))
+    }
+
+    async fn execute_autonomous_workflow_gate(
+        &self,
+        round: usize,
+        total_rounds: usize,
+        controller: &mut WorkflowController,
+    ) -> Result<(OrchestratorOutput, Option<SchedulerExecutionGateDecision>), OrchestratorError>
+    {
+        let stage = self.plan.autonomous_gate_stage();
+        let stage_name = stage.event_name;
+        self.emit_internal_stage_start(stage_name, round).await;
+        match controller.evaluate_round(round as u32).await {
+            Ok(result) => {
+                self.emit_internal_stage_end(
+                    stage_name,
+                    round,
+                    total_rounds,
+                    &result.output.content,
+                )
+                .await;
+                Ok((result.output, Some(result.gate_decision)))
+            }
+            Err(err) => {
+                self.emit_internal_stage_end(
+                    stage_name,
+                    round,
+                    total_rounds,
+                    &format!("Stage error: {err}"),
+                )
+                .await;
+                Err(err)
+            }
+        }
     }
 
     fn verification_required(plan: &SchedulerProfilePlan) -> bool {

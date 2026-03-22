@@ -124,8 +124,16 @@ impl App {
             return;
         };
 
-        let Ok(agents) = client.list_execution_modes() else {
-            return;
+        let agents = match client.list_execution_modes() {
+            Ok(agents) => agents,
+            Err(error) => {
+                self.toast.show(
+                    ToastVariant::Error,
+                    &format!("Failed to load modes: {}", error),
+                    3000,
+                );
+                return;
+            }
         };
 
         if agents.is_empty() {

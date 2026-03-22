@@ -1,17 +1,19 @@
 use crate::agent_tree::{AgentTreeNode, AgentTreeOrchestrator, ChildExecutionMode};
 use crate::skill_graph::{SkillGraphDefinition, SkillGraphOrchestrator};
 use crate::traits::Orchestrator;
+use crate::ExecutionContext;
 use crate::{OrchestratorContext, OrchestratorError, OrchestratorOutput};
 
 use super::{
-    execute_stage_agent, SchedulerExecutionChildMode, SchedulerProfileOrchestrator,
-    SchedulerProfilePlan, SchedulerStageKind,
+    clone_context_with_exec_ctx, execute_stage_agent_with_exec_ctx, SchedulerExecutionChildMode,
+    SchedulerProfileOrchestrator, SchedulerProfilePlan, SchedulerStageKind,
 };
 
 pub(super) struct SchedulerExecutionCapabilityAdapter<'a> {
     orchestrator: &'a SchedulerProfileOrchestrator,
     plan: &'a SchedulerProfilePlan,
     ctx: &'a OrchestratorContext,
+    exec_ctx_override: Option<ExecutionContext>,
 }
 
 impl<'a> SchedulerExecutionCapabilityAdapter<'a> {
@@ -24,7 +26,13 @@ impl<'a> SchedulerExecutionCapabilityAdapter<'a> {
             orchestrator,
             plan,
             ctx,
+            exec_ctx_override: None,
         }
+    }
+
+    pub(super) fn with_exec_ctx(mut self, exec_ctx: ExecutionContext) -> Self {
+        self.exec_ctx_override = Some(exec_ctx);
+        self
     }
 
     pub(super) async fn execute_agent_tree(
@@ -40,7 +48,8 @@ impl<'a> SchedulerExecutionCapabilityAdapter<'a> {
         if let Some((stage_name, stage_index)) = stage_context {
             tree.set_stage_context(stage_name, stage_index);
         }
-        tree.execute(execution_input, self.ctx).await
+        let ctx = self.effective_context();
+        tree.execute(execution_input, &ctx).await
     }
 
     pub(super) async fn execute_skill_graph(
@@ -54,7 +63,8 @@ impl<'a> SchedulerExecutionCapabilityAdapter<'a> {
         if let Some((stage_name, stage_index)) = stage_context {
             graph.set_stage_context(stage_name, stage_index);
         }
-        graph.execute(execution_input, self.ctx).await
+        let ctx = self.effective_context();
+        graph.execute(execution_input, &ctx).await
     }
 
     pub(super) async fn execute_review_stage(
@@ -74,7 +84,7 @@ impl<'a> SchedulerExecutionCapabilityAdapter<'a> {
                 )
             });
         let stage_policy = self.plan.stage_policy(SchedulerStageKind::Review);
-        execute_stage_agent(
+        execute_stage_agent_with_exec_ctx(
             input,
             self.ctx,
             SchedulerProfileOrchestrator::stage_agent_from_policy(
@@ -84,6 +94,7 @@ impl<'a> SchedulerExecutionCapabilityAdapter<'a> {
             ),
             stage_policy.tool_policy,
             stage_context,
+            self.exec_ctx_override.clone(),
         )
         .await
     }
@@ -110,7 +121,7 @@ impl<'a> SchedulerExecutionCapabilityAdapter<'a> {
         let stage_policy = self
             .plan
             .stage_policy(SchedulerStageKind::ExecutionOrchestration);
-        execute_stage_agent(
+        execute_stage_agent_with_exec_ctx(
             input,
             self.ctx,
             SchedulerProfileOrchestrator::stage_agent_from_policy(
@@ -120,6 +131,7 @@ impl<'a> SchedulerExecutionCapabilityAdapter<'a> {
             ),
             stage_policy.tool_policy,
             stage_context,
+            self.exec_ctx_override.clone(),
         )
         .await
     }
@@ -153,6 +165,15 @@ impl<'a> SchedulerExecutionCapabilityAdapter<'a> {
             SchedulerExecutionChildMode::Parallel => ChildExecutionMode::Parallel,
             SchedulerExecutionChildMode::Sequential => ChildExecutionMode::Sequential,
         }
+    }
+
+    fn effective_context(&self) -> OrchestratorContext {
+        clone_context_with_exec_ctx(
+            self.ctx,
+            self.exec_ctx_override
+                .clone()
+                .unwrap_or_else(|| self.ctx.exec_ctx.clone()),
+        )
     }
 
     fn execution_unavailable_error(plan: &SchedulerProfilePlan) -> OrchestratorError {

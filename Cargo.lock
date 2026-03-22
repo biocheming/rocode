@@ -3092,8 +3092,10 @@ version = "2026.3.16"
 dependencies = [
  "async-trait",
  "futures",
+ "glob",
  "jsonc-parser",
  "petgraph",
+ "regex",
  "rocode-config",
  "rocode-core",
  "rocode-provider",
@@ -3102,6 +3104,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "walkdir",
 ]
 
 [[package]]

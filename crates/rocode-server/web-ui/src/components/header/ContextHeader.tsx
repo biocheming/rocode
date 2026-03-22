@@ -35,6 +35,12 @@ export const ContextHeader: Component = () => {
             </span>
           )}
         </For>
+        <Show when={state.modeLoadError}>
+          <span class={`${styles.pill} ${styles.errorPill}`} title={state.modeLoadError ?? ""}>
+            <span class={styles.pillLabel}>mode error</span>
+            <span>{state.modeLoadError}</span>
+          </span>
+        </Show>
       </div>
     </div>
   );

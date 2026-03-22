@@ -28,7 +28,7 @@ use crate::session_runtime::{
     finalize_active_scheduler_stage_cancelled, first_user_message_text, ModelPricing,
     SessionSchedulerLifecycleHook,
 };
-use crate::{Result, ServerState};
+use crate::{ApiError, Result, ServerState};
 use rocode_session::prompt::{OutputBlockEvent, OutputBlockHook};
 
 use super::super::permission::request_permission;
@@ -64,6 +64,14 @@ fn resolve_builtin_scheduler_request_defaults(
     };
     let plan = scheduler_plan_from_profile(Some(profile_name.to_string()), &profile).ok()?;
     Some(scheduler_request_defaults_from_plan(&plan))
+}
+
+fn normalized_requested_scheduler_profile<'a>(
+    requested_profile: Option<&'a str>,
+) -> Option<&'a str> {
+    requested_profile
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 pub(crate) fn resolve_scheduler_request_defaults(
@@ -115,6 +123,73 @@ pub(crate) fn resolve_scheduler_request_defaults(
             None
         }
     }
+}
+
+pub(crate) fn resolve_scheduler_request_defaults_validated(
+    config: &AppConfig,
+    requested_profile: Option<&str>,
+) -> Result<Option<SchedulerRequestDefaults>> {
+    let Some(profile_name) = normalized_requested_scheduler_profile(requested_profile) else {
+        return Ok(resolve_scheduler_request_defaults(config, None));
+    };
+
+    if let Some(defaults) = resolve_builtin_scheduler_request_defaults(Some(profile_name)) {
+        return Ok(Some(defaults));
+    }
+
+    let scheduler_path = config
+        .scheduler_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ApiError::BadRequest(format!(
+                "Scheduler profile could not be resolved: `{}`. No scheduler config is configured.",
+                profile_name
+            ))
+        })?;
+
+    let scheduler_config = SchedulerConfig::load_from_file(scheduler_path).map_err(|error| {
+        tracing::warn!(
+            path = %scheduler_path,
+            profile = %profile_name,
+            %error,
+            "failed to load scheduler config for requested scheduler profile"
+        );
+        ApiError::BadRequest(format!(
+            "Scheduler profile could not be resolved: `{}`. Failed to load scheduler config: {}",
+            profile_name, error
+        ))
+    })?;
+
+    let profile = scheduler_config.profile(profile_name).map_err(|error| {
+        tracing::warn!(
+            path = %scheduler_path,
+            profile = %profile_name,
+            %error,
+            "failed to resolve requested scheduler profile"
+        );
+        ApiError::BadRequest(format!(
+            "Scheduler profile could not be resolved: `{}`. {}",
+            profile_name, error
+        ))
+    })?;
+
+    let plan =
+        scheduler_plan_from_profile(Some(profile_name.to_string()), profile).map_err(|error| {
+            tracing::warn!(
+                path = %scheduler_path,
+                profile = %profile_name,
+                %error,
+                "failed to build requested scheduler profile plan"
+            );
+            ApiError::BadRequest(format!(
+                "Scheduler profile could not be resolved: `{}`. Failed to build profile plan: {}",
+                profile_name, error
+            ))
+        })?;
+
+    Ok(Some(scheduler_request_defaults_from_plan(&plan)))
 }
 
 pub(super) fn scheduler_system_prompt_preview(
@@ -667,7 +742,7 @@ pub(crate) async fn resolve_prompt_request_config(
     } = input;
 
     let scheduler_defaults =
-        resolve_scheduler_request_defaults(config, requested_scheduler_profile);
+        resolve_scheduler_request_defaults_validated(config, requested_scheduler_profile)?;
     let scheduler_applied = scheduler_defaults.is_some();
     let scheduler_profile_name = scheduler_defaults
         .as_ref()

@@ -707,9 +707,9 @@ fn build_builtin_preset_mode_list() -> Vec<ExecutionModeInfo> {
 
 fn build_external_scheduler_profile_mode_list(
     config: Option<&AppConfig>,
-) -> Vec<ExecutionModeInfo> {
+) -> Result<Vec<ExecutionModeInfo>> {
     let Some(config) = config else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
 
     let Some(scheduler_path) = config
@@ -718,14 +718,17 @@ fn build_external_scheduler_profile_mode_list(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
 
     let scheduler_config = match SchedulerConfig::load_from_file(scheduler_path) {
         Ok(config) => config,
         Err(error) => {
             tracing::warn!(path = %scheduler_path, %error, "failed to load external scheduler profiles for execution modes");
-            return Vec::new();
+            return Err(ApiError::InternalError(format!(
+                "Failed to load scheduler config for execution modes: {}",
+                error
+            )));
         }
     };
 
@@ -744,10 +747,10 @@ fn build_external_scheduler_profile_mode_list(
         })
         .collect::<Vec<_>>();
     profiles.sort_by(|a, b| a.name.cmp(&b.name));
-    profiles
+    Ok(profiles)
 }
 
-fn build_execution_mode_list(config: Option<&AppConfig>) -> Vec<ExecutionModeInfo> {
+fn build_execution_mode_list(config: Option<&AppConfig>) -> Result<Vec<ExecutionModeInfo>> {
     let mut items = build_agent_list(config)
         .into_iter()
         .map(|agent| ExecutionModeInfo {
@@ -766,8 +769,8 @@ fn build_execution_mode_list(config: Option<&AppConfig>) -> Vec<ExecutionModeInf
         })
         .collect::<Vec<_>>();
     items.extend(build_builtin_preset_mode_list());
-    items.extend(build_external_scheduler_profile_mode_list(config));
-    items
+    items.extend(build_external_scheduler_profile_mode_list(config)?);
+    Ok(items)
 }
 
 async fn list_execution_modes(
@@ -779,7 +782,7 @@ async fn list_execution_modes(
             return Ok(Json(cached));
         }
         let config = state.config_store.config();
-        return Ok(Json(build_execution_mode_list(Some(&config))));
+        return Ok(Json(build_execution_mode_list(Some(&config))?));
     }
 
     let _ = ensure_plugin_loader_active(&state).await?;
@@ -790,7 +793,7 @@ async fn list_execution_modes(
     }
 
     state.config_store.set_plugin_applied(config.clone()).await;
-    let modes = build_execution_mode_list(Some(&config));
+    let modes = build_execution_mode_list(Some(&config))?;
     *MODE_LIST_CACHE.write().await = Some(modes.clone());
     Ok(Json(modes))
 }
@@ -805,8 +808,14 @@ pub async fn refresh_agent_cache(config_store: &rocode_config::ConfigStore) {
     config_store.set_plugin_applied(config.clone()).await;
     let agents = build_agent_list(Some(&config));
     *AGENT_LIST_CACHE.write().await = Some(agents);
-    let modes = build_execution_mode_list(Some(&config));
-    *MODE_LIST_CACHE.write().await = Some(modes);
+    match build_execution_mode_list(Some(&config)) {
+        Ok(modes) => {
+            *MODE_LIST_CACHE.write().await = Some(modes);
+        }
+        Err(error) => {
+            tracing::warn!(%error, "failed to refresh execution mode cache");
+        }
+    }
 }
 
 async fn apply_plugin_config_hooks(loader: &Arc<PluginLoader>, config: &mut AppConfig) {
@@ -958,7 +967,8 @@ mod tests {
 
     #[test]
     fn execution_modes_include_builtin_public_presets_without_scheduler_path() {
-        let modes = build_execution_mode_list(Some(&AppConfig::default()));
+        let modes = build_execution_mode_list(Some(&AppConfig::default()))
+            .expect("builtin mode list should resolve without external scheduler config");
         let preset_names = modes
             .into_iter()
             .filter(|mode| mode.kind == "preset")
@@ -969,6 +979,24 @@ mod tests {
             preset_names,
             vec!["sisyphus", "prometheus", "atlas", "hephaestus",]
         );
+    }
+
+    #[test]
+    fn execution_modes_fail_explicitly_when_scheduler_config_cannot_be_loaded() {
+        let config = AppConfig {
+            scheduler_path: Some("/definitely/missing/rocode.scheduler.jsonc".to_string()),
+            ..Default::default()
+        };
+
+        let error = build_execution_mode_list(Some(&config))
+            .expect_err("broken scheduler config should fail mode listing explicitly");
+
+        match error {
+            ApiError::InternalError(message) => {
+                assert!(message.contains("Failed to load scheduler config for execution modes"));
+            }
+            other => panic!("expected internal error, got {other:?}"),
+        }
     }
 
     #[test]

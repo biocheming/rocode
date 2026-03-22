@@ -1,5 +1,6 @@
 use super::SchedulerStageKind;
 use crate::agent_tree::AgentTreeNode;
+use crate::iterative_workflow::{IterativeWorkflowConfig, IterativeWorkflowSource};
 use crate::scheduler::{AvailableAgentMeta, AvailableCategoryMeta};
 use crate::skill_graph::SkillGraphDefinition;
 use crate::skill_tree::SkillTreeRequestPlan;
@@ -184,7 +185,9 @@ impl SchedulerConfig {
             .map_err(|err| SchedulerConfigError::Parse(err.to_string()))?
             .ok_or_else(|| SchedulerConfigError::Parse("empty scheduler config".to_string()))?;
 
-        Ok(serde_json::from_value(value)?)
+        let config: Self = serde_json::from_value(value)?;
+        config.validate_inline_workflows()?;
+        Ok(config)
     }
 
     pub fn load_from_file(path: impl AsRef<Path>) -> Result<Self, SchedulerConfigError> {
@@ -194,6 +197,7 @@ impl SchedulerConfig {
         // Resolve any `agentTree` file paths relative to the config file's directory.
         let base_dir = path.parent().unwrap_or(Path::new("."));
         config.resolve_agent_tree_paths(base_dir)?;
+        config.resolve_workflow_paths(base_dir)?;
         Ok(config)
     }
 
@@ -215,6 +219,28 @@ impl SchedulerConfig {
                         o.agent_tree = Some(Self::resolve_agent_tree_source(source, base_dir)?);
                     }
                 }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_inline_workflows(&self) -> Result<(), SchedulerConfigError> {
+        for profile in self.profiles.values() {
+            if let Some(source) = profile.workflow.as_ref() {
+                if let Some(config) = source.as_inline() {
+                    config
+                        .validate()
+                        .map_err(|err| SchedulerConfigError::Parse(err.to_string()))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn resolve_workflow_paths(&mut self, base_dir: &Path) -> Result<(), SchedulerConfigError> {
+        for profile in self.profiles.values_mut() {
+            if let Some(source) = profile.workflow.take() {
+                profile.workflow = Some(Self::resolve_workflow_source(source, base_dir)?);
             }
         }
         Ok(())
@@ -263,6 +289,31 @@ impl SchedulerConfig {
                     ))
                 })?;
                 Ok(AgentTreeSource::Inline(tree))
+            }
+        }
+    }
+
+    fn resolve_workflow_source(
+        source: IterativeWorkflowSource,
+        base_dir: &Path,
+    ) -> Result<IterativeWorkflowSource, SchedulerConfigError> {
+        match source {
+            IterativeWorkflowSource::Inline(config) => {
+                config
+                    .validate()
+                    .map_err(|err| SchedulerConfigError::Parse(err.to_string()))?;
+                Ok(IterativeWorkflowSource::Inline(config))
+            }
+            IterativeWorkflowSource::Path(rel_path) => {
+                let abs_path = base_dir.join(&rel_path);
+                let config = IterativeWorkflowConfig::load_from_file(&abs_path).map_err(|err| {
+                    SchedulerConfigError::Parse(format!(
+                        "failed to load workflow from {}: {}",
+                        abs_path.display(),
+                        err
+                    ))
+                })?;
+                Ok(IterativeWorkflowSource::Inline(config))
             }
         }
     }
@@ -321,6 +372,14 @@ pub struct SchedulerProfileConfig {
 
     #[serde(
         default,
+        alias = "workflowPath",
+        alias = "iterativeWorkflow",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub workflow: Option<IterativeWorkflowSource>,
+
+    #[serde(
+        default,
         alias = "availableAgents",
         skip_serializing_if = "Vec::is_empty"
     )]
@@ -346,6 +405,10 @@ impl SchedulerProfileConfig {
             .iter()
             .filter_map(|entry| entry.as_override().map(|o| (o.kind, o)))
             .collect()
+    }
+
+    pub fn workflow(&self) -> Option<&IterativeWorkflowConfig> {
+        self.workflow.as_ref()?.as_inline()
     }
 }
 
@@ -798,6 +861,67 @@ mod tests {
         let profile = config.profile("test").unwrap();
         let tree = profile.agent_tree.as_ref().unwrap().as_inline().unwrap();
         assert_eq!(tree.agent.name, "jsonc-agent");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scheduler_config_parses_inline_workflow() {
+        let content = r#"
+        {
+          "profiles": {
+            "test": {
+              "workflow": {
+                "workflow": { "kind": "autoresearch", "mode": "plan" }
+              }
+            }
+          }
+        }
+        "#;
+
+        let config = SchedulerConfig::load_from_str(content).unwrap();
+        let profile = config.profile("test").unwrap();
+        let workflow = profile.workflow().unwrap();
+        assert_eq!(workflow.workflow.mode.as_str(), "plan");
+    }
+
+    #[test]
+    fn resolve_workflow_paths_loads_external_file() {
+        let dir = std::env::temp_dir().join("rocode_test_workflow_resolve");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let workflow_path = dir.join("workflow.jsonc");
+        let workflow_json = r#"{
+            "workflow": { "kind": "autoresearch", "mode": "run" },
+            "objective": {
+                "goal": "Improve coverage",
+                "scope": { "include": ["src/**/*.rs"] },
+                "direction": "higher-is-better",
+                "metric": { "kind": "numeric-extract", "pattern": "([0-9]+)" },
+                "verify": { "command": "cargo test" }
+            },
+            "iterationPolicy": { "mode": "bounded", "maxIterations": 3 },
+            "decisionPolicy": {},
+            "workspacePolicy": { "snapshotStrategy": "patch-file" }
+        }"#;
+        std::fs::write(&workflow_path, workflow_json).unwrap();
+
+        let config_path = dir.join("scheduler.jsonc");
+        let config_json = r#"{
+            "profiles": {
+                "test": {
+                    "workflowPath": "./workflow.jsonc"
+                }
+            }
+        }"#;
+        std::fs::write(&config_path, config_json).unwrap();
+
+        let config = SchedulerConfig::load_from_file(&config_path).unwrap();
+        let profile = config.profile("test").unwrap();
+        let source = profile.workflow.as_ref().unwrap();
+        assert!(source.is_inline());
+        assert_eq!(profile.workflow().unwrap().workflow.mode.as_str(), "run");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -109,6 +109,7 @@ pub(crate) fn session_routes() -> Router<Arc<ServerState>> {
 
 #[cfg(test)]
 mod tests {
+    use crate::ApiError;
     use rocode_config::Config as AppConfig;
     use rocode_core::agent_task_registry::{global_task_registry, AgentTaskStatus};
     use rocode_orchestrator::{ModelRef as OrchestratorModelRef, SchedulerProfileConfig};
@@ -120,7 +121,8 @@ mod tests {
     };
 
     use super::scheduler::{
-        resolve_request_model_inputs, resolve_scheduler_request_defaults, scheduler_mode_kind,
+        resolve_request_model_inputs, resolve_scheduler_request_defaults,
+        resolve_scheduler_request_defaults_validated, scheduler_mode_kind,
         scheduler_system_prompt_preview,
     };
     use super::*;
@@ -219,6 +221,21 @@ mod tests {
 
         assert_eq!(defaults.profile_name.as_deref(), Some("sisyphus"));
         assert_eq!(scheduler_mode_kind("sisyphus"), "preset");
+    }
+
+    #[test]
+    fn explicit_unknown_scheduler_profile_returns_bad_request_instead_of_falling_back() {
+        let error =
+            resolve_scheduler_request_defaults_validated(&AppConfig::default(), Some("missing"))
+                .expect_err("explicitly requested unknown scheduler profile should fail");
+
+        match error {
+            ApiError::BadRequest(message) => {
+                assert!(message.contains("Scheduler profile could not be resolved"));
+                assert!(message.contains("missing"));
+            }
+            other => panic!("expected bad request, got {other:?}"),
+        }
     }
 
     #[test]

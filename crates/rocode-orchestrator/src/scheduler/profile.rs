@@ -3,6 +3,7 @@ mod finalization;
 mod inputs;
 
 use crate::agent_tree::{AgentTreeNode, AgentTreeOrchestrator};
+use crate::iterative_workflow::IterativeWorkflowConfig;
 use crate::output_metadata::{
     append_output_usage, continuation_targets, merge_output_metadata, output_usage,
     ContinuationTarget,
@@ -140,6 +141,7 @@ pub struct SchedulerProfilePlan {
     pub agent_tree: Option<AgentTreeNode>,
     pub skill_graph: Option<SkillGraphDefinition>,
     pub skill_tree: Option<SkillTreeRequestPlan>,
+    pub workflow: Option<IterativeWorkflowConfig>,
     pub available_agents: Vec<AvailableAgentMeta>,
     pub available_categories: Vec<AvailableCategoryMeta>,
     /// Per-stage policy overrides from JSON config.
@@ -158,6 +160,7 @@ impl SchedulerProfilePlan {
             agent_tree: None,
             skill_graph: None,
             skill_tree: None,
+            workflow: None,
             available_agents: Vec::new(),
             available_categories: Vec::new(),
             stage_overrides: HashMap::new(),
@@ -195,6 +198,7 @@ impl SchedulerProfilePlan {
                 .cloned(),
             skill_graph: profile.skill_graph.clone(),
             skill_tree: profile.skill_tree.clone(),
+            workflow: profile.workflow().cloned(),
             available_agents: profile.available_agents.clone(),
             available_categories: profile.available_categories.clone(),
             stage_overrides,
@@ -228,6 +232,11 @@ impl SchedulerProfilePlan {
 
     pub fn with_skill_tree(mut self, skill_tree: SkillTreeRequestPlan) -> Self {
         self.skill_tree = Some(skill_tree);
+        self
+    }
+
+    pub fn with_workflow(mut self, workflow: IterativeWorkflowConfig) -> Self {
+        self.workflow = Some(workflow);
         self
     }
 

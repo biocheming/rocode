@@ -15,7 +15,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use futures::stream;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -37,6 +37,79 @@ fn planner_only_plan() -> SchedulerProfilePlan {
 fn runtime_execution_plan(orchestrator: &str) -> SchedulerProfilePlan {
     SchedulerProfilePlan::new(vec![SchedulerStageKind::ExecutionOrchestration])
         .with_orchestrator(orchestrator)
+}
+
+fn autoresearch_run_workflow() -> IterativeWorkflowConfig {
+    IterativeWorkflowConfig {
+        workflow: crate::iterative_workflow::WorkflowDescriptor {
+            kind: crate::iterative_workflow::IterativeWorkflowKind::Autoresearch,
+            mode: crate::iterative_workflow::IterativeWorkflowMode::Run,
+        },
+        objective: Some(crate::iterative_workflow::ObjectiveDefinition {
+            goal: "Improve the score".to_string(),
+            scope: crate::iterative_workflow::ScopeDefinition {
+                include: vec!["src/**".to_string()],
+                exclude: Vec::new(),
+            },
+            direction: crate::iterative_workflow::ObjectiveDirection::HigherIsBetter,
+            metric: crate::iterative_workflow::MetricDefinition {
+                kind: crate::iterative_workflow::MetricKind::NumericExtract,
+                pattern: Some("score=(\\d+)".to_string()),
+                count_pattern: None,
+                json_path: None,
+                unit: None,
+            },
+            verify: crate::iterative_workflow::CommandDefinition {
+                command: "cargo test".to_string(),
+                timeout_ms: Some(5_000),
+                env: HashMap::new(),
+                working_directory: None,
+            },
+            guard: None,
+            satisfied_when: Some(crate::iterative_workflow::SatisfiedWhenDefinition {
+                metric_at_least: Some(12.0),
+                metric_at_most: None,
+                metric_equals: None,
+            }),
+        }),
+        iteration_policy: Some(crate::iterative_workflow::IterationPolicyDefinition {
+            mode: crate::iterative_workflow::IterationMode::Bounded,
+            max_iterations: Some(5),
+            stop_conditions: Vec::new(),
+            stuck_threshold: Some(2),
+            progress_report_every: None,
+        }),
+        decision_policy: Some(crate::iterative_workflow::DecisionPolicyDefinition {
+            baseline_strategy: Some(
+                crate::iterative_workflow::BaselineStrategy::CaptureBeforeFirstIteration,
+            ),
+            baseline_value: None,
+            keep_conditions: vec![
+                crate::iterative_workflow::KeepCondition::MetricImproved,
+                crate::iterative_workflow::KeepCondition::VerifyPassed,
+            ],
+            discard_conditions: vec![
+                crate::iterative_workflow::DiscardCondition::MetricRegressed,
+                crate::iterative_workflow::DiscardCondition::MetricUnchanged,
+                crate::iterative_workflow::DiscardCondition::VerifyFailed,
+            ],
+            rework_policy: None,
+            crash_retry_policy: None,
+            simplicity_override: None,
+        }),
+        workspace_policy: Some(crate::iterative_workflow::WorkspacePolicyDefinition {
+            mutation_mode: None,
+            protected_paths: Vec::new(),
+            snapshot_strategy: crate::iterative_workflow::SnapshotStrategy::PatchFile,
+            commit_policy: None,
+        }),
+        artifacts: None,
+        approval_policy: None,
+        security: None,
+        debug: None,
+        fix: None,
+        ship: None,
+    }
 }
 
 #[test]
@@ -231,6 +304,99 @@ fn finalize_output_normalizes_hephaestus_delivery_shape() {
     assert!(output.content.contains("**Completion Status**"));
     assert!(output.content.contains("**What Changed**"));
     assert!(output.content.contains("**Verification**"));
+}
+
+#[derive(Default)]
+struct ScriptedBashToolExecutor {
+    calls: Mutex<Vec<String>>,
+    responses: Mutex<VecDeque<Result<ToolOutput, ToolExecError>>>,
+}
+
+#[async_trait]
+impl ToolExecutor for ScriptedBashToolExecutor {
+    async fn execute(
+        &self,
+        tool_name: &str,
+        arguments: serde_json::Value,
+        _exec_ctx: &crate::ExecutionContext,
+    ) -> Result<ToolOutput, ToolExecError> {
+        if tool_name != "bash" {
+            return Err(ToolExecError::ExecutionError(format!(
+                "unexpected tool call: {tool_name}"
+            )));
+        }
+        if let Some(command) = arguments.get("command").and_then(serde_json::Value::as_str) {
+            self.calls.lock().await.push(command.to_string());
+        }
+        self.responses
+            .lock()
+            .await
+            .pop_front()
+            .expect("scripted bash response should exist")
+    }
+
+    async fn list_ids(&self) -> Vec<String> {
+        vec!["bash".to_string()]
+    }
+
+    async fn list_definitions(
+        &self,
+        _exec_ctx: &crate::ExecutionContext,
+    ) -> Vec<rocode_provider::ToolDefinition> {
+        Vec::new()
+    }
+}
+
+#[tokio::test]
+async fn hephaestus_workflow_uses_mechanical_gate_without_consuming_gate_model_stream() {
+    let workdir = new_temp_workdir();
+    let tool_executor = Arc::new(ScriptedBashToolExecutor {
+        calls: Mutex::new(Vec::new()),
+        responses: Mutex::new(VecDeque::from(vec![
+            Ok(ToolOutput {
+                output: "score=10".to_string(),
+                is_error: false,
+                title: None,
+                metadata: Some(serde_json::json!({"exit_code": 0})),
+            }),
+            Ok(ToolOutput {
+                output: "score=12".to_string(),
+                is_error: false,
+                title: None,
+                metadata: Some(serde_json::json!({"exit_code": 0})),
+            }),
+        ])),
+    });
+    let context = test_context_with_executor(
+        &workdir,
+        "workflow-gate-session",
+        vec![
+            stream_from_text("## Verification\n- Mechanical score improved."),
+            stream_from_text("Implemented the bounded change and ran the targeted check."),
+        ],
+        tool_executor.clone(),
+    );
+    let runner = ToolRunner::new(tool_executor.clone());
+    let mut orchestrator = SchedulerProfileOrchestrator::new(
+        runtime_execution_plan("hephaestus").with_workflow(autoresearch_run_workflow()),
+        runner,
+    );
+
+    let output = orchestrator
+        .execute("Improve the score", &context)
+        .await
+        .expect("workflow-backed hephaestus execution should succeed without a gate model stream");
+
+    let calls = tool_executor.calls.lock().await.clone();
+    assert_eq!(
+        calls,
+        vec!["cargo test".to_string(), "cargo test".to_string()]
+    );
+    assert!(output.content.contains("## Delivery Summary"));
+    assert!(output.content.contains("**Completion Status**"));
+    assert!(output.content.contains("Objective satisfied"));
+
+    std::fs::remove_dir_all(&workdir).expect("temp workdir should clean up");
 }
 
 #[test]
