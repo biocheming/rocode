@@ -52,6 +52,7 @@ async fn patch_config(
         .config_store
         .patch(patch)
         .map_err(|e| crate::ApiError::BadRequest(e.to_string()))?;
+    state.rebuild_providers().await;
     state.config_store.invalidate_plugin_cache().await;
     broadcast_config_updated(state.as_ref());
     // Invalidate mode caches so next request rebuilds with new config
@@ -64,6 +65,7 @@ async fn finalize_config_change(
     state: &ServerState,
     updated: Arc<AppConfig>,
 ) -> Result<Json<AppConfig>> {
+    state.rebuild_providers().await;
     state.config_store.invalidate_plugin_cache().await;
     broadcast_config_updated(state);
     *crate::routes::AGENT_LIST_CACHE.write().await = None;

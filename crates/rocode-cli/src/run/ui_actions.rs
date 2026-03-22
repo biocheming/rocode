@@ -16,6 +16,62 @@ fn cli_normalize_model_ref(model_ref: &str) -> String {
     }
 }
 
+async fn cli_prompt_action_select(
+    runtime: &CliExecutionRuntime,
+    header: Option<&str>,
+    question: &str,
+    options: Vec<SelectOption>,
+) -> anyhow::Result<Option<String>> {
+    let prompt_session = runtime
+        .prompt_session_slot
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().cloned());
+    let already_suspended = runtime
+        .terminal_surface
+        .as_ref()
+        .map_or(false, |s| s.prompt_suspended.load(Ordering::Relaxed));
+    if !already_suspended {
+        if let Some(prompt_session) = prompt_session.as_ref() {
+            let _ = prompt_session.suspend();
+        }
+    }
+
+    {
+        let _ = crossterm::terminal::disable_raw_mode();
+        let mut stdout = io::stdout();
+        let _ = crossterm::execute!(
+            stdout,
+            crossterm::cursor::Show,
+            crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
+        );
+        let _ = stdout.flush();
+    }
+
+    let header = header.map(str::to_string);
+    let question = question.to_string();
+    let style = CliStyle::detect();
+    let result = tokio::task::spawn_blocking(move || {
+        interactive_select(&question, header.as_deref(), &options, &style)
+    })
+    .await
+    .map_err(|error| anyhow::anyhow!("select task failed: {}", error))?;
+
+    if let Some(prompt_session) = prompt_session.as_ref() {
+        let _ = prompt_session.resume();
+    }
+    if let Some(surface) = runtime.terminal_surface.as_ref() {
+        surface.prompt_suspended.store(false, Ordering::Relaxed);
+    }
+
+    match result {
+        Ok(SelectResult::Selected(choices)) => Ok(choices.into_iter().next()),
+        Ok(SelectResult::Other(text)) => Ok(Some(text)),
+        Ok(SelectResult::Cancelled) => Ok(None),
+        Err(error) => Err(anyhow::anyhow!("selection failed: {}", error)),
+    }
+}
+
 async fn cli_prompt_action_text(
     runtime: &CliExecutionRuntime,
     header: Option<&str>,
@@ -549,24 +605,215 @@ async fn cli_execute_ui_action(
             Ok(CliUiActionOutcome::Continue)
         }
         UiActionId::ConnectProvider => {
-            let style = CliStyle::detect();
-            let mut lines = Vec::new();
-            for p in provider_registry.list() {
-                let model_count = p.models().len();
-                lines.push(format!(
-                    "{} ({} model{})",
-                    p.id(),
-                    model_count,
-                    if model_count != 1 { "s" } else { "" }
-                ));
+            let schema = match api_client.get_provider_connect_schema().await {
+                Ok(schema) => schema,
+                Err(error) => {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::error(format!(
+                            "Failed to load provider connect schema: {}",
+                            error
+                        ))),
+                        repl_style,
+                    );
+                    return Ok(CliUiActionOutcome::Continue);
+                }
+            };
+
+            let mut options = schema
+                .providers
+                .iter()
+                .map(|provider| {
+                    let mut detail = provider.name.clone();
+                    if provider.connected {
+                        detail.push_str(" · connected");
+                    }
+                    if !provider.env.is_empty() {
+                        detail.push_str(&format!(" · {}", provider.env.join(", ")));
+                    }
+                    SelectOption {
+                        label: provider.id.clone(),
+                        description: Some(detail),
+                    }
+                })
+                .collect::<Vec<_>>();
+            options.sort_by(|a, b| a.label.cmp(&b.label));
+
+            let selected_provider = if let Some(raw) =
+                argument.map(str::trim).filter(|value| !value.is_empty())
+            {
+                raw.to_string()
+            } else {
+                let Some(selected) = cli_prompt_action_select(
+                    runtime,
+                    Some("connect provider"),
+                    "Select a provider to connect, or choose Other for a custom provider:",
+                    options,
+                )
+                .await?
+                else {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::warning(
+                            "Provider connect cancelled.",
+                        )),
+                        repl_style,
+                    );
+                    return Ok(CliUiActionOutcome::Continue);
+                };
+                selected
+            };
+
+            let known_provider = schema
+                .providers
+                .iter()
+                .find(|provider| provider.id == selected_provider);
+
+            if let Some(provider) = known_provider {
+                let Some(api_key) = cli_prompt_action_text(
+                    runtime,
+                    Some("connect provider"),
+                    &format!(
+                        "Enter API key for {}{}:",
+                        provider.id,
+                        if provider.env.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" ({})", provider.env.join(", "))
+                        }
+                    ),
+                )
+                .await?
+                else {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::warning(
+                            "Provider connect cancelled.",
+                        )),
+                        repl_style,
+                    );
+                    return Ok(CliUiActionOutcome::Continue);
+                };
+
+                match api_client.set_auth(&provider.id, api_key.trim()).await {
+                    Ok(()) => {
+                        let _ = print_block(
+                            Some(runtime),
+                            OutputBlock::Status(StatusBlock::title(format!(
+                                "Connected to {}",
+                                provider.id
+                            ))),
+                            repl_style,
+                        );
+                    }
+                    Err(error) => {
+                        let _ = print_block(
+                            Some(runtime),
+                            OutputBlock::Status(StatusBlock::error(format!(
+                                "Failed to connect provider `{}`: {}",
+                                provider.id, error
+                            ))),
+                            repl_style,
+                        );
+                    }
+                }
+                return Ok(CliUiActionOutcome::Continue);
             }
-            let _ = print_cli_list_on_surface(
-                Some(runtime),
-                "Configured Providers",
-                None,
-                &lines,
-                &style,
-            );
+
+            let provider_id = selected_provider.trim().to_string();
+            if provider_id.is_empty() {
+                let _ = print_block(
+                    Some(runtime),
+                    OutputBlock::Status(StatusBlock::warning("Provider connect cancelled.")),
+                    repl_style,
+                );
+                return Ok(CliUiActionOutcome::Continue);
+            }
+
+            let Some(base_url) = cli_prompt_action_text(
+                runtime,
+                Some("connect provider"),
+                "Enter the provider base URL:",
+            )
+            .await?
+            else {
+                let _ = print_block(
+                    Some(runtime),
+                    OutputBlock::Status(StatusBlock::warning("Provider connect cancelled.")),
+                    repl_style,
+                );
+                return Ok(CliUiActionOutcome::Continue);
+            };
+
+            let protocol_options = schema
+                .protocols
+                .iter()
+                .map(|protocol| SelectOption {
+                    label: protocol.id.clone(),
+                    description: Some(protocol.name.clone()),
+                })
+                .collect::<Vec<_>>();
+            let Some(protocol) = cli_prompt_action_select(
+                runtime,
+                Some("connect provider"),
+                "Select the upstream protocol family:",
+                protocol_options,
+            )
+            .await?
+            else {
+                let _ = print_block(
+                    Some(runtime),
+                    OutputBlock::Status(StatusBlock::warning("Provider connect cancelled.")),
+                    repl_style,
+                );
+                return Ok(CliUiActionOutcome::Continue);
+            };
+
+            let Some(api_key) = cli_prompt_action_text(
+                runtime,
+                Some("connect provider"),
+                &format!("Enter API key for {}:", provider_id),
+            )
+            .await?
+            else {
+                let _ = print_block(
+                    Some(runtime),
+                    OutputBlock::Status(StatusBlock::warning("Provider connect cancelled.")),
+                    repl_style,
+                );
+                return Ok(CliUiActionOutcome::Continue);
+            };
+
+            match api_client
+                .register_custom_provider(
+                    &provider_id,
+                    base_url.trim(),
+                    protocol.trim(),
+                    api_key.trim(),
+                )
+                .await
+            {
+                Ok(()) => {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::title(format!(
+                            "Connected to {}",
+                            provider_id
+                        ))),
+                        repl_style,
+                    );
+                }
+                Err(error) => {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::error(format!(
+                            "Failed to connect provider `{}`: {}",
+                            provider_id, error
+                        ))),
+                        repl_style,
+                    );
+                }
+            }
             Ok(CliUiActionOutcome::Continue)
         }
         UiActionId::OpenThemeList => {

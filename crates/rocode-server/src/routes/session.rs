@@ -182,10 +182,7 @@ mod tests {
         );
 
         assert_eq!(request_model.as_deref(), Some("openai/gpt-5"));
-        assert_eq!(
-            config_model.as_deref(),
-            Some("ethnopic/test-model-fast")
-        );
+        assert_eq!(config_model.as_deref(), Some("ethnopic/test-model-fast"));
         assert_eq!(config_provider, None);
     }
 
@@ -200,7 +197,10 @@ mod tests {
         );
 
         assert_eq!(request_model.as_deref(), Some("openai/gpt-5"));
-        assert_eq!(config_model.as_deref(), Some("ethnopic/test-model-reasoning"));
+        assert_eq!(
+            config_model.as_deref(),
+            Some("ethnopic/test-model-reasoning")
+        );
         assert_eq!(config_provider, None);
     }
 

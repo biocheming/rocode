@@ -676,7 +676,9 @@ mod tests {
                     Ok(None)
                 }
             })
-            .with_get_last_model(|_session_id| async move { Ok(Some("ethnopic:test-model".into())) })
+            .with_get_last_model(
+                |_session_id| async move { Ok(Some("ethnopic:test-model".into())) },
+            )
             .with_create_subsession({
                 let create_calls = create_calls.clone();
                 move |agent, title, model, disabled_tools| {
@@ -733,7 +735,9 @@ mod tests {
 
         let ctx = ToolContext::new("session-1".into(), "message-1".into(), ".".into())
             .with_get_agent_info(|_name| async move { Ok(None) })
-            .with_get_last_model(|_session_id| async move { Ok(Some("ethnopic:test-model".into())) })
+            .with_get_last_model(
+                |_session_id| async move { Ok(Some("ethnopic:test-model".into())) },
+            )
             .with_create_subsession({
                 let create_calls = create_calls.clone();
                 move |agent, title, model, disabled_tools| {
@@ -786,7 +790,9 @@ mod tests {
 
         // No with_get_agent_info — simulates paths where callback isn't injected
         let ctx = ToolContext::new("session-1".into(), "message-1".into(), ".".into())
-            .with_get_last_model(|_session_id| async move { Ok(Some("ethnopic:test-model".into())) })
+            .with_get_last_model(
+                |_session_id| async move { Ok(Some("ethnopic:test-model".into())) },
+            )
             .with_create_subsession({
                 let create_calls = create_calls.clone();
                 move |agent, title, model, disabled_tools| {

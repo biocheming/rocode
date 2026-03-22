@@ -297,6 +297,7 @@ pub fn normalize_messages(
     messages: &mut Vec<Message>,
     provider_type: ProviderType,
     model_id: &str,
+    ethnopic_protocol: bool,
 ) {
     match provider_type {
         ProviderType::Ethnopic => {
@@ -304,6 +305,9 @@ pub fn normalize_messages(
             normalize_tool_call_ids_messages_family(messages);
         }
         ProviderType::OpenRouter => {
+            if ethnopic_protocol {
+                normalize_tool_call_ids_messages_family(messages);
+            }
             if model_id.to_lowercase().contains("mistral")
                 || model_id.to_lowercase().contains("devstral")
             {
@@ -311,7 +315,9 @@ pub fn normalize_messages(
             }
         }
         ProviderType::Other => {
-            if model_id.to_lowercase().contains("mistral")
+            if ethnopic_protocol {
+                normalize_tool_call_ids_messages_family(messages);
+            } else if model_id.to_lowercase().contains("mistral")
                 || model_id.to_lowercase().contains("devstral")
             {
                 normalize_for_mistral(messages);
@@ -649,15 +655,17 @@ pub fn transform_messages(
     provider_id: &str,
 ) {
     unsupported_parts(messages, supported_modalities);
-    normalize_messages(messages, provider_type, model_id);
 
-    // Apply caching for providers/models that follow the ethnopic-compatible
-    // family, plus the existing bedrock path, but not gateway.
     let id_lower = model_id.to_lowercase();
     let pid_lower = provider_id.to_lowercase();
     let is_ethnopic_like = is_ethnopic_compatible_hint(&pid_lower)
         || is_ethnopic_compatible_hint(&id_lower)
         || is_ethnopic_compatible_npm(npm);
+
+    normalize_messages(messages, provider_type, model_id, is_ethnopic_like);
+
+    // Apply caching for providers/models that follow the ethnopic-compatible
+    // family, plus the existing bedrock path, but not gateway.
     if is_ethnopic_like && npm != "@ai-sdk/gateway" {
         apply_caching(messages, provider_type);
     }

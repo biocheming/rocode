@@ -913,10 +913,19 @@ impl App {
                     KeyCode::Enter => {
                         if self.provider_dialog.is_final_step() {
                             // Final step - try to submit
-                            if let Some(PendingSubmit::Custom { provider_id, base_url, protocol, api_key }) =
-                                self.provider_dialog.pending_submit()
+                            if let Some(PendingSubmit::Custom {
+                                provider_id,
+                                base_url,
+                                protocol,
+                                api_key,
+                            }) = self.provider_dialog.pending_submit()
                             {
-                                self.submit_custom_provider_auth(&provider_id, &base_url, &protocol, &api_key);
+                                self.submit_custom_provider_auth(
+                                    &provider_id,
+                                    &base_url,
+                                    &protocol,
+                                    &api_key,
+                                );
                             }
                         } else {
                             // Advance to next step
@@ -939,8 +948,10 @@ impl App {
                         self.provider_dialog.pop_char();
                     }
                     KeyCode::Enter => {
-                        if let Some(PendingSubmit::Known { provider_id, api_key }) =
-                            self.provider_dialog.pending_submit()
+                        if let Some(PendingSubmit::Known {
+                            provider_id,
+                            api_key,
+                        }) = self.provider_dialog.pending_submit()
                         {
                             self.submit_provider_auth(&provider_id, &api_key);
                         }

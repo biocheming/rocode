@@ -8,34 +8,8 @@ use ratatui::{
 };
 use std::collections::HashSet;
 
+use crate::api::{ConnectProtocolOption, ProviderConnectSchemaResponse};
 use crate::theme::Theme;
-
-/// Known providers with their display name and primary env var.
-/// Sorted by popularity (matching OpenCode's ordering).
-const KNOWN_PROVIDERS: &[(&str, &str, &str)] = &[
-    ("openai", "OpenAI", "OPENAI_API_KEY"),
-    ("google", "Google AI", "GOOGLE_API_KEY"),
-    ("github-copilot", "GitHub Copilot", "GITHUB_COPILOT_TOKEN"),
-    ("openrouter", "OpenRouter", "OPENROUTER_API_KEY"),
-    ("vercel", "Vercel AI", "VERCEL_API_KEY"),
-    ("azure", "Azure OpenAI", "AZURE_API_KEY"),
-    ("amazon-bedrock", "Amazon Bedrock", "AWS_ACCESS_KEY_ID"),
-    ("deepseek", "DeepSeek", "DEEPSEEK_API_KEY"),
-    ("mistral", "Mistral AI", "MISTRAL_API_KEY"),
-    ("groq", "Groq", "GROQ_API_KEY"),
-    ("xai", "X.AI (Grok)", "XAI_API_KEY"),
-    ("cohere", "Cohere", "COHERE_API_KEY"),
-    ("together", "Together AI", "TOGETHER_API_KEY"),
-    ("deepinfra", "DeepInfra", "DEEPINFRA_API_KEY"),
-    ("cerebras", "Cerebras", "CEREBRAS_API_KEY"),
-    ("perplexity", "Perplexity", "PERPLEXITY_API_KEY"),
-    ("gitlab", "GitLab Duo", "GITLAB_TOKEN"),
-    (
-        "google-vertex",
-        "Google Vertex AI",
-        "GOOGLE_VERTEX_ACCESS_TOKEN",
-    ),
-];
 
 #[derive(Clone, Debug)]
 pub struct Provider {
@@ -81,7 +55,10 @@ pub struct CustomProviderState {
 /// Pending submit payload - either known provider or custom provider.
 #[derive(Clone, Debug)]
 pub enum PendingSubmit {
-    Known { provider_id: String, api_key: String },
+    Known {
+        provider_id: String,
+        api_key: String,
+    },
     Custom {
         provider_id: String,
         base_url: String,
@@ -90,24 +67,11 @@ pub enum PendingSubmit {
     },
 }
 
-const CUSTOM_PROVIDER_SENTINEL: &str = "+ Add custom provider...";
-
-/// Fixed list of protocol types for custom provider selection.
-const PROTOCOL_OPTIONS: &[(ProtocolId, ProtocolName)] = &[
-    ("openai", "OpenAI"),
-    ("anthropic", "Anthropic"),
-    ("google", "Google"),
-    ("bedrock", "Bedrock"),
-    ("vertex", "Vertex"),
-    ("github-copilot", "GitHub Copilot"),
-    ("gitlab", "GitLab"),
-];
-
-type ProtocolId = &'static str;
-type ProtocolName = &'static str;
+const CUSTOM_PROVIDER_SENTINEL: &str = "Add custom provider...";
 
 pub struct ProviderDialog {
     pub providers: Vec<Provider>,
+    pub protocol_options: Vec<ConnectProtocolOption>,
     pub state: ListState,
     pub open: bool,
     pub selected_provider: Option<Provider>,
@@ -126,6 +90,7 @@ impl ProviderDialog {
     pub fn new() -> Self {
         Self {
             providers: Vec::new(),
+            protocol_options: Vec::new(),
             state: ListState::default(),
             open: false,
             selected_provider: None,
@@ -141,19 +106,15 @@ impl ProviderDialog {
     /// Always shows all known providers; marks those in `connected` as Connected.
     /// This is the fallback when the `/provider/known` endpoint is unavailable.
     pub fn populate(&mut self, connected: &HashSet<String>) {
-        self.providers = KNOWN_PROVIDERS
-            .iter()
-            .map(|(id, name, env)| Provider {
-                id: id.to_string(),
-                name: name.to_string(),
-                env_hint: env.to_string(),
-                status: if connected.contains(*id) {
-                    ProviderStatus::Connected
-                } else {
-                    ProviderStatus::Disconnected
-                },
-            })
-            .collect();
+        self.providers
+            .retain(|provider| connected.contains(&provider.id));
+        for provider in &mut self.providers {
+            provider.status = if connected.contains(&provider.id) {
+                ProviderStatus::Connected
+            } else {
+                ProviderStatus::Disconnected
+            };
+        }
     }
 
     /// Build the provider list from the dynamic `models.dev` catalogue.
@@ -180,6 +141,14 @@ impl ProviderDialog {
                 .cmp(&a_connected)
                 .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         });
+    }
+
+    pub fn populate_from_connect_schema(&mut self, schema: ProviderConnectSchemaResponse) {
+        self.populate_from_known(schema.providers);
+        self.protocol_options = schema.protocols;
+        if self.protocol_index >= self.protocol_options.len() {
+            self.protocol_index = 0;
+        }
     }
 
     pub fn open(&mut self) {
@@ -309,11 +278,11 @@ impl ProviderDialog {
                 }
                 CustomProviderStep::Protocol => {
                     // Store selected protocol before advancing
-                    let protocol_id = PROTOCOL_OPTIONS
+                    let protocol_id = self
+                        .protocol_options
                         .get(self.protocol_index)
-                        .map(|(id, _)| *id)
-                        .unwrap_or("openai")
-                        .to_string();
+                        .map(|option| option.id.clone())
+                        .unwrap_or_else(|| "openai".to_string());
                     state.protocol = protocol_id;
                     state.step = CustomProviderStep::ApiKey;
                     false
@@ -329,12 +298,18 @@ impl ProviderDialog {
 
     /// Check if currently at the final step (API key entry).
     pub fn is_final_step(&self) -> bool {
-        matches!(self.custom_state.as_ref().map(|s| &s.step), Some(CustomProviderStep::ApiKey))
+        matches!(
+            self.custom_state.as_ref().map(|s| &s.step),
+            Some(CustomProviderStep::ApiKey)
+        )
     }
 
     /// Check if currently at protocol selection step.
     pub fn is_protocol_step(&self) -> bool {
-        matches!(self.custom_state.as_ref().map(|s| &s.step), Some(CustomProviderStep::Protocol))
+        matches!(
+            self.custom_state.as_ref().map(|s| &s.step),
+            Some(CustomProviderStep::Protocol)
+        )
     }
 
     /// Move protocol selection up.
@@ -344,7 +319,8 @@ impl ProviderDialog {
 
     /// Move protocol selection down.
     pub fn protocol_index_inc(&mut self) {
-        self.protocol_index = (self.protocol_index + 1).min(PROTOCOL_OPTIONS.len().saturating_sub(1));
+        self.protocol_index =
+            (self.protocol_index + 1).min(self.protocol_options.len().saturating_sub(1));
     }
 
     pub fn push_char(&mut self, c: char) {
@@ -352,7 +328,7 @@ impl ProviderDialog {
             match state.step {
                 CustomProviderStep::ProviderId => state.provider_id.push(c),
                 CustomProviderStep::BaseUrl => state.base_url.push(c),
-                CustomProviderStep::Protocol => state.protocol.push(c),
+                CustomProviderStep::Protocol => {}
                 CustomProviderStep::ApiKey => state.api_key.push(c),
             }
         } else {
@@ -364,10 +340,16 @@ impl ProviderDialog {
     pub fn pop_char(&mut self) {
         if let Some(ref mut state) = self.custom_state {
             match state.step {
-                CustomProviderStep::ProviderId => { state.provider_id.pop(); }
-                CustomProviderStep::BaseUrl => { state.base_url.pop(); }
-                CustomProviderStep::Protocol => { state.protocol.pop(); }
-                CustomProviderStep::ApiKey => { state.api_key.pop(); }
+                CustomProviderStep::ProviderId => {
+                    state.provider_id.pop();
+                }
+                CustomProviderStep::BaseUrl => {
+                    state.base_url.pop();
+                }
+                CustomProviderStep::Protocol => {}
+                CustomProviderStep::ApiKey => {
+                    state.api_key.pop();
+                }
             }
         } else {
             self.api_key_input.pop();
@@ -381,7 +363,7 @@ impl ProviderDialog {
             match state.step {
                 CustomProviderStep::ProviderId => state.provider_id = text,
                 CustomProviderStep::BaseUrl => state.base_url = text,
-                CustomProviderStep::Protocol => state.protocol = text,
+                CustomProviderStep::Protocol => {}
                 CustomProviderStep::ApiKey => state.api_key = text,
             }
         } else {
@@ -396,12 +378,13 @@ impl ProviderDialog {
     pub fn pending_submit(&self) -> Option<PendingSubmit> {
         // Custom provider flow
         if let Some(ref state) = self.custom_state {
-            if matches!(state.step, CustomProviderStep::ApiKey) && !state.api_key.trim().is_empty() {
+            if matches!(state.step, CustomProviderStep::ApiKey) && !state.api_key.trim().is_empty()
+            {
                 let protocol = if state.protocol.is_empty() {
                     // Use currently selected protocol
-                    PROTOCOL_OPTIONS
+                    self.protocol_options
                         .get(self.protocol_index)
-                        .map(|(id, _)| id.to_string())
+                        .map(|option| option.id.clone())
                         .unwrap_or_else(|| "openai".to_string())
                 } else {
                     state.protocol.clone()
@@ -420,12 +403,12 @@ impl ProviderDialog {
         if !self.input_mode || self.api_key_input.trim().is_empty() {
             return None;
         }
-        self.selected_provider.as_ref().map(|p| {
-            PendingSubmit::Known {
+        self.selected_provider
+            .as_ref()
+            .map(|p| PendingSubmit::Known {
                 provider_id: p.id.clone(),
                 api_key: self.api_key_input.trim().to_string(),
-            }
-        })
+            })
     }
 
     pub fn set_submit_result(&mut self, result: SubmitResult) {
@@ -629,7 +612,7 @@ impl ProviderDialog {
 
         let mut lines = vec![
             Line::from(Span::styled(
-                format!("Add Custom Provider (Step {}/{})" , step_num, total_steps),
+                format!("Add Custom Provider (Step {}/{})", step_num, total_steps),
                 Style::default().fg(theme.primary).bold(),
             )),
             Line::from(""),
@@ -656,7 +639,7 @@ impl ProviderDialog {
             CustomProviderStep::Protocol => {
                 // Render protocol list with selection
                 lines.push(Line::from(""));
-                for (i, (_, name)) in PROTOCOL_OPTIONS.iter().enumerate() {
+                for (i, option) in self.protocol_options.iter().enumerate() {
                     let is_selected = i == self.protocol_index;
                     let style = if is_selected {
                         Style::default()
@@ -667,7 +650,7 @@ impl ProviderDialog {
                     };
                     let prefix = if is_selected { "› " } else { "  " };
                     lines.push(Line::from(Span::styled(
-                        format!("{}{}", prefix, name),
+                        format!("{}{}", prefix, option.name),
                         style,
                     )));
                 }
@@ -726,7 +709,14 @@ impl ProviderDialog {
         } else {
             lines.push(Line::from(vec![
                 Span::styled("Enter", Style::default().fg(theme.text)),
-                Span::styled(if step_num == total_steps { " connect  " } else { " next  " }, Style::default().fg(theme.text_muted)),
+                Span::styled(
+                    if step_num == total_steps {
+                        " connect  "
+                    } else {
+                        " next  "
+                    },
+                    Style::default().fg(theme.text_muted),
+                ),
                 Span::styled("Esc", Style::default().fg(theme.text)),
                 Span::styled(" back", Style::default().fg(theme.text_muted)),
             ]));

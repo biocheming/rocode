@@ -18,9 +18,9 @@ pub use rocode_tui::api::{
     AgentInfo, CompactResponse, CreateSessionRequest, ExecuteRecoveryRequest, ExecuteShellRequest,
     ExecutionModeInfo, FullProviderListResponse, KnownProvidersResponse, McpAuthStartInfo,
     McpStatusInfo, MessageInfo, MessageTokensInfo, PermissionRequestInfo, PromptRequest,
-    ProviderListResponse, QuestionInfo, RecoveryActionKind, RevertRequest, RevertResponse,
-    SessionExecutionTopology, SessionInfo, SessionRecoveryProtocol, SessionRuntimeState,
-    SessionStatusInfo, ShareResponse, UpdateSessionRequest,
+    ProviderConnectSchemaResponse, ProviderListResponse, QuestionInfo, RecoveryActionKind,
+    RevertRequest, RevertResponse, SessionExecutionTopology, SessionInfo, SessionRecoveryProtocol,
+    SessionRuntimeState, SessionStatusInfo, ShareResponse, UpdateSessionRequest,
 };
 
 /// Async HTTP client for communicating with the ROCode server.
@@ -330,11 +330,51 @@ impl CliApiClient {
         Self::json_ok(resp, "get known providers").await
     }
 
+    pub async fn get_provider_connect_schema(
+        &self,
+    ) -> anyhow::Result<ProviderConnectSchemaResponse> {
+        let url = server_url(&self.base_url, "/provider/connect/schema");
+        let resp = self.client.get(&url).send().await?;
+        Self::json_ok(resp, "get provider connect schema").await
+    }
+
     pub async fn set_auth(&self, provider_id: &str, api_key: &str) -> anyhow::Result<()> {
-        let url = server_url(&self.base_url, &format!("/auth/{}", provider_id));
-        let body = serde_json::json!({ "key": api_key });
-        let resp = self.client.put(&url).json(&body).send().await?;
-        Self::expect_success(resp, &format!("set auth for `{}`", provider_id)).await?;
+        self.connect_provider(provider_id, api_key, None, None)
+            .await
+    }
+
+    pub async fn register_custom_provider(
+        &self,
+        provider_id: &str,
+        base_url: &str,
+        protocol: &str,
+        api_key: &str,
+    ) -> anyhow::Result<()> {
+        self.connect_provider(
+            provider_id,
+            api_key,
+            Some(base_url.to_string()),
+            Some(protocol.to_string()),
+        )
+        .await
+    }
+
+    pub async fn connect_provider(
+        &self,
+        provider_id: &str,
+        api_key: &str,
+        base_url: Option<String>,
+        protocol: Option<String>,
+    ) -> anyhow::Result<()> {
+        let url = server_url(&self.base_url, "/provider/connect");
+        let body = serde_json::json!({
+            "provider_id": provider_id,
+            "api_key": api_key,
+            "base_url": base_url,
+            "protocol": protocol,
+        });
+        let resp = self.client.post(&url).json(&body).send().await?;
+        Self::expect_success(resp, &format!("connect provider `{}`", provider_id)).await?;
         Ok(())
     }
 

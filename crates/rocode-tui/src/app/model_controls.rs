@@ -131,20 +131,13 @@ impl App {
         let Some(client) = self.context.get_api_client() else {
             return;
         };
-        // Try the dynamic models.dev catalogue first
-        if let Ok(resp) = client.get_known_providers() {
-            self.provider_dialog.populate_from_known(resp.providers);
+        if let Ok(schema) = client.get_provider_connect_schema() {
+            self.provider_dialog.populate_from_connect_schema(schema);
             return;
         }
-        // Fallback: use the connected-only list from /provider/
-        let connected: std::collections::HashSet<String> = match client.get_all_providers() {
-            Ok(resp) => resp.connected.into_iter().collect(),
-            Err(_) => match client.get_config_providers() {
-                Ok(resp) => resp.providers.iter().map(|p| p.id.clone()).collect(),
-                Err(_) => std::collections::HashSet::new(),
-            },
-        };
-        self.provider_dialog.populate(&connected);
+        if let Ok(resp) = client.get_known_providers() {
+            self.provider_dialog.populate_from_known(resp.providers);
+        }
     }
 
     /// Submit an API key for a provider and update the dialog state.
@@ -164,13 +157,7 @@ impl App {
                     &format!("Connected to {}", provider_id),
                     3000,
                 );
-                // Refresh the provider list to update connected status
-                let connected: std::collections::HashSet<String> = match client.get_all_providers()
-                {
-                    Ok(resp) => resp.connected.into_iter().collect(),
-                    Err(_) => std::collections::HashSet::new(),
-                };
-                self.provider_dialog.populate(&connected);
+                self.populate_provider_dialog();
                 // Also refresh the model list so the new provider's models appear
                 self.refresh_model_dialog();
             }
@@ -205,13 +192,7 @@ impl App {
                     &format!("Connected to {}", provider_id),
                     3000,
                 );
-                // Refresh the provider list to update connected status
-                let connected: std::collections::HashSet<String> = match client.get_all_providers()
-                {
-                    Ok(resp) => resp.connected.into_iter().collect(),
-                    Err(_) => std::collections::HashSet::new(),
-                };
-                self.provider_dialog.populate(&connected);
+                self.populate_provider_dialog();
                 // Also refresh the model list so the new provider's models appear
                 self.refresh_model_dialog();
             }

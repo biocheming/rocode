@@ -564,8 +564,24 @@ export async function loadSessionMessages(sessionId: string): Promise<OutputBloc
   const data = await response.json();
   const blocks: OutputBlock[] = [];
   for (const msg of data || []) {
-    // Each message has parts[]; collect text parts into a single block
+    // Each message has parts[]; collect text and reasoning parts into blocks
     const parts = (msg.parts ?? []) as { type?: string; text?: string; tool_call?: unknown; tool_result?: unknown }[];
+
+    // Collect reasoning parts (thinking) — emit before the assistant text
+    const reasoningParts = parts
+      .filter((p) => p.type === "reasoning" && p.text)
+      .map((p) => p.text!)
+      .join("\n");
+    if (reasoningParts) {
+      blocks.push({
+        kind: "reasoning",
+        phase: "full",
+        role: msg.role ?? "assistant",
+        text: reasoningParts,
+      });
+    }
+
+    // Collect text parts into a single message block
     const textParts = parts
       .filter((p) => p.type === "text" && p.text)
       .map((p) => p.text!)

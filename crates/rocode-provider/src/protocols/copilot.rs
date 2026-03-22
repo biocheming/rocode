@@ -774,10 +774,7 @@ mod tests {
     #[test]
     fn select_route_keeps_legacy_for_non_gpt5_models() {
         assert_eq!(select_copilot_route("gpt-4o"), CopilotRoute::Legacy);
-        assert_eq!(
-            select_copilot_route("test-model-v2"),
-            CopilotRoute::Legacy
-        );
+        assert_eq!(select_copilot_route("test-model-v2"), CopilotRoute::Legacy);
     }
 
     #[tokio::test]

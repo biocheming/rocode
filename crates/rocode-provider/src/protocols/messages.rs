@@ -87,9 +87,8 @@ impl MessagesProtocol {
                                 if part.content_type == "reasoning" {
                                     if let Some(text) = part.text {
                                         if !text.is_empty() {
-                                            content.push(MessagesContent::Thinking {
-                                                thinking: text,
-                                            });
+                                            content
+                                                .push(MessagesContent::Thinking { thinking: text });
                                         }
                                     }
                                 } else if let Some(text) = part.text {

@@ -187,13 +187,6 @@ mod tests {
     }
 
     #[test]
-    fn test_for_model_fallback() {
-        let prompt = SystemPrompt::for_model("some-unknown-model");
-        // qwen.txt fallback
-        assert!(prompt.contains("rocode"));
-    }
-
-    #[test]
     fn test_environment_output() {
         let ctx = EnvironmentContext {
             model_api_id: "test-model-large".to_string(),

@@ -450,6 +450,29 @@ pub struct KnownProvidersResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectProtocolOption {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderConnectSchemaResponse {
+    pub providers: Vec<KnownProviderEntry>,
+    #[serde(default)]
+    pub protocols: Vec<ConnectProtocolOption>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectProviderRequest {
+    pub provider_id: String,
+    pub api_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderInfo {
     pub id: String,
     pub name: String,
@@ -1021,22 +1044,29 @@ impl ApiClient {
         Ok(response.json()?)
     }
 
-    /// Set an API key for a provider via `PUT /auth/{id}`.
-    pub fn set_auth(&self, provider_id: &str, api_key: &str) -> anyhow::Result<()> {
-        let url = format!("{}/auth/{}", self.base_url, provider_id);
-        let body = serde_json::json!({ "key": api_key });
-        let response = self.client.put(&url).json(&body).send()?;
+    pub fn get_provider_connect_schema(&self) -> anyhow::Result<ProviderConnectSchemaResponse> {
+        let url = format!("{}/provider/connect/schema", self.base_url);
+        let response = self.client.get(&url).send()?;
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().unwrap_or_default();
             anyhow::bail!(
-                "Failed to set auth for `{}`: {} - {}",
-                provider_id,
+                "Failed to get provider connect schema: {} - {}",
                 status,
                 text
             );
         }
-        Ok(())
+        Ok(response.json()?)
+    }
+
+    /// Set an API key for a provider via `PUT /auth/{id}`.
+    pub fn set_auth(&self, provider_id: &str, api_key: &str) -> anyhow::Result<()> {
+        self.connect_provider(&ConnectProviderRequest {
+            provider_id: provider_id.to_string(),
+            api_key: api_key.to_string(),
+            base_url: None,
+            protocol: None,
+        })
     }
 
     /// Register a custom provider via `POST /provider/register`.
@@ -1047,20 +1077,23 @@ impl ApiClient {
         protocol: &str,
         api_key: &str,
     ) -> anyhow::Result<()> {
-        let url = format!("{}/provider/register", self.base_url);
-        let body = serde_json::json!({
-            "provider_id": provider_id,
-            "base_url": base_url,
-            "protocol": protocol,
-            "api_key": api_key,
-        });
-        let response = self.client.post(&url).json(&body).send()?;
+        self.connect_provider(&ConnectProviderRequest {
+            provider_id: provider_id.to_string(),
+            api_key: api_key.to_string(),
+            base_url: Some(base_url.to_string()),
+            protocol: Some(protocol.to_string()),
+        })
+    }
+
+    pub fn connect_provider(&self, request: &ConnectProviderRequest) -> anyhow::Result<()> {
+        let url = format!("{}/provider/connect", self.base_url);
+        let response = self.client.post(&url).json(request).send()?;
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().unwrap_or_default();
             anyhow::bail!(
-                "Failed to register provider `{}`: {} - {}",
-                provider_id,
+                "Failed to connect provider `{}`: {} - {}",
+                request.provider_id,
                 status,
                 text
             );

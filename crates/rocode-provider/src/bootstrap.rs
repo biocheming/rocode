@@ -1442,22 +1442,14 @@ impl ProviderBootstrapState {
         }
 
         if let Some(provider) = self.providers.get(provider_id) {
-            let mut priority: Vec<&str> = vec![
-                "gemini-3-flash",
-                "gemini-2.5-flash",
-                "gpt-5-nano",
-            ];
+            let mut priority: Vec<&str> = vec!["gemini-3-flash", "gemini-2.5-flash", "gpt-5-nano"];
 
             if provider_id.starts_with("opencode") {
                 priority = vec!["gpt-5-nano"];
             }
             if provider_id.starts_with("github-copilot") {
                 priority = vec!["gpt-5-mini"];
-                priority.extend_from_slice(&[
-                    "gemini-3-flash",
-                    "gemini-2.5-flash",
-                    "gpt-5-nano",
-                ]);
+                priority.extend_from_slice(&["gemini-3-flash", "gemini-2.5-flash", "gpt-5-nano"]);
             }
 
             for item in &priority {
@@ -2112,7 +2104,6 @@ fn default_secret_env_for_provider(provider_id: &str, protocol: Protocol) -> Vec
         },
     }
 }
-
 
 fn collect_provider_headers(provider: &ProviderState) -> HashMap<String, String> {
     let mut headers = HashMap::new();
@@ -3191,7 +3182,6 @@ mod tests {
         );
         assert!(result.has_custom_get_model);
     }
-
 
     #[test]
     fn from_models_dev_model_merges_transform_and_explicit_variants() {

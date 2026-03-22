@@ -339,9 +339,7 @@ pub fn variants(model: &models::ModelInfo) -> HashMap<String, HashMap<String, se
             if model.id.contains("gemini") {
                 return HashMap::new();
             }
-            if is_ethnopic_family_reference(&model.id)
-                || is_ethnopic_family_reference(api_id)
-            {
+            if is_ethnopic_family_reference(&model.id) || is_ethnopic_family_reference(api_id) {
                 return [(
                     "thinking".into(),
                     hashmap! {"thinking_budget" => json!(4000)},

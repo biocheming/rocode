@@ -747,9 +747,6 @@ theme = "dark"
 
     let content = fs::read_to_string(json_path).unwrap();
     let written: Config = serde_json::from_str(&content).unwrap();
-    assert_eq!(
-        written.model.as_deref(),
-        Some("ethnopic/test-model-v2")
-    );
+    assert_eq!(written.model.as_deref(), Some("ethnopic/test-model-v2"));
     assert_eq!(written.theme.as_deref(), Some("dark"));
 }

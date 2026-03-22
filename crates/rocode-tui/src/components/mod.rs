@@ -29,11 +29,11 @@ pub use dialogs::{
     Agent, AgentSelectDialog, AlertDialog, CommandPalette, ConfirmDialog, CustomProviderState,
     CustomProviderStep, ForkDialog, ForkEntry, HelpDialog, McpDialog, McpItem, ModeKind, Model,
     ModelSelectDialog, PendingSubmit, PromptStashDialog, Provider, ProviderDialog, ProviderStatus,
-    RecoveryActionDialog, RecoveryActionItem, SessionDeleteState, SessionExportDialog,
-    SessionItem, SessionListDialog, SessionRenameDialog, SkillListDialog, StashItem, StatusDialog,
-    StatusLine, SubagentDialog, SubagentInfo, SubagentMessage, SubmitResult, Tag, TagDialog,
-    ThemeListDialog, ThemeOption, TimelineDialog, TimelineEntry, ToolCallCancelDialog,
-    ToolCallItem, VisibilityLabels,
+    RecoveryActionDialog, RecoveryActionItem, SessionDeleteState, SessionExportDialog, SessionItem,
+    SessionListDialog, SessionRenameDialog, SkillListDialog, StashItem, StatusDialog, StatusLine,
+    SubagentDialog, SubagentInfo, SubagentMessage, SubmitResult, Tag, TagDialog, ThemeListDialog,
+    ThemeOption, TimelineDialog, TimelineEntry, ToolCallCancelDialog, ToolCallItem,
+    VisibilityLabels,
 };
 pub use diff::{DiffLine, DiffLineType, DiffMode, DiffView};
 pub use home::HomeView;

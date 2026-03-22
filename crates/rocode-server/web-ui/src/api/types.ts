@@ -18,10 +18,121 @@ export interface Provider {
   [key: string]: unknown;
 }
 
+export interface KnownProviderEntry {
+  id: string;
+  name: string;
+  env: string[];
+  model_count: number;
+  connected: boolean;
+}
+
+export interface ConnectProtocolOption {
+  id: string;
+  name: string;
+}
+
+export interface ProviderConnectSchemaResponse {
+  providers: KnownProviderEntry[];
+  protocols: ConnectProtocolOption[];
+}
+
+export interface ConnectProviderRequest {
+  provider_id: string;
+  api_key: string;
+  base_url?: string;
+  protocol?: string;
+}
+
+export interface ManagedProvider {
+  id: string;
+  name: string;
+  status: string;
+  connected: boolean;
+  has_auth: boolean;
+  auth_type?: string;
+  configured: boolean;
+  known: boolean;
+  env: string[];
+  known_model_count: number;
+  base_url?: string;
+  protocol?: string;
+  model_overrides: ManagedModelOverride[];
+  models: Model[];
+}
+
+export interface ManagedModelOverride {
+  key: string;
+  name?: string;
+  model?: string;
+  base_url?: string;
+  family?: string;
+  reasoning?: boolean;
+  tool_call?: boolean;
+  headers?: Record<string, string>;
+  options?: Record<string, unknown>;
+  variants?: Record<string, unknown>;
+  modalities?: Record<string, unknown>;
+  interleaved?: unknown;
+  cost?: Record<string, unknown>;
+  limit?: Record<string, unknown>;
+  attachment?: boolean;
+  temperature?: boolean;
+  status?: string;
+  release_date?: string;
+  experimental?: boolean;
+}
+
+export interface ManagedProvidersResponse {
+  providers: ManagedProvider[];
+}
+
+export interface UpdateProviderRequest {
+  name?: string;
+  base_url?: string;
+  protocol?: string;
+}
+
+export interface UpdateProviderModelRequest {
+  name?: string;
+  model?: string;
+  base_url?: string;
+  family?: string;
+  reasoning?: boolean;
+  tool_call?: boolean;
+  headers?: Record<string, string>;
+  options?: Record<string, unknown>;
+  variants?: Record<string, unknown>;
+  modalities?: Record<string, unknown>;
+  interleaved?: unknown;
+  cost?: Record<string, unknown>;
+  limit?: Record<string, unknown>;
+  attachment?: boolean;
+  temperature?: boolean;
+  status?: string;
+  release_date?: string;
+  experimental?: boolean;
+}
+
+export interface ProviderAuthMethod {
+  name: string;
+  description: string;
+}
+
+export interface ProviderAuthMethodsResponse {
+  [providerId: string]: ProviderAuthMethod[];
+}
+
+export interface OAuthAuthorizeResponse {
+  url: string;
+  method: string;
+  instructions: string;
+}
+
 export interface Model {
   id: string;
   name: string;
   provider_id: string;
+  provider?: string;
   family?: string;
   reasoning?: boolean;
   tool_call?: boolean;

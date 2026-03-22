@@ -1149,9 +1149,7 @@ pub(crate) async fn generate_agent_response(
 
     let (provider, model_id) = parse_model_and_provider(model);
     if let Some(model_id) = model_id {
-        let provider_id = provider.unwrap_or_else(|| {
-            "openai".to_string()
-        });
+        let provider_id = provider.unwrap_or_else(|| "openai".to_string());
         agent_info = agent_info.with_model(model_id, provider_id);
     }
 
@@ -1168,10 +1166,7 @@ pub(crate) async fn generate_agent_response(
     {
         let (model_api_id, provider_id) = match &agent_info.model {
             Some(m) => (m.model_id.clone(), m.provider_id.clone()),
-            None => (
-                "unknown-model".to_string(),
-                "unknown".to_string(),
-            ),
+            None => ("unknown-model".to_string(), "unknown".to_string()),
         };
         let cwd = std::env::current_dir().unwrap_or_default();
         let model_prompt = SystemPrompt::for_model(&model_api_id);

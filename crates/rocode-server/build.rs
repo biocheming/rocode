@@ -1,5 +1,24 @@
 use std::path::Path;
 use std::process::Command;
+use std::process::Stdio;
+
+fn find_npm() -> Option<&'static str> {
+    let candidates: &[&str] = if cfg!(windows) {
+        &["npm.cmd", "npm"]
+    } else {
+        &["npm", "npm.cmd"]
+    };
+
+    candidates.iter().copied().find(|candidate| {
+        Command::new(candidate)
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    })
+}
 
 fn main() {
     let web_ui_dir = Path::new("web-ui");
@@ -35,7 +54,19 @@ fn main() {
         panic!("web-ui/src directory not found");
     }
 
-    let status = Command::new("npm")
+    let Some(npm) = find_npm() else {
+        if dist_dir.exists()
+            && dist_dir.join("index.html").exists()
+            && dist_dir.join("app.js").exists()
+            && dist_dir.join("app.css").exists()
+        {
+            println!("cargo:warning=web-ui: using pre-built dist/ (npm executable not found)");
+            return;
+        }
+        panic!("failed to find npm executable (`npm` or `npm.cmd`) for web-ui build");
+    };
+
+    let status = Command::new(npm)
         .arg("run")
         .arg("build")
         .current_dir(web_ui_dir)
