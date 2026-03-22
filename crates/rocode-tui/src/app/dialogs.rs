@@ -981,6 +981,9 @@ impl App {
                 // Provider list selection mode
                 match key.code {
                     KeyCode::Esc => self.provider_dialog.close(),
+                    KeyCode::Left => self.provider_dialog.toggle_mode_prev(),
+                    KeyCode::Right => self.provider_dialog.toggle_mode_next(),
+                    KeyCode::Tab => self.provider_dialog.toggle_mode_next(),
                     KeyCode::Up => self.provider_dialog.move_up(),
                     KeyCode::Down => self.provider_dialog.move_down(),
                     KeyCode::Enter => {

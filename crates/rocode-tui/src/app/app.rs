@@ -1125,7 +1125,7 @@ impl App {
             }
             Event::Paste(text) => {
                 if !text.is_empty() {
-                    if self.provider_dialog.is_open() && self.provider_dialog.is_input_mode() {
+                    if self.provider_dialog.is_open() && self.provider_dialog.accepts_text_input() {
                         for c in text.chars() {
                             self.provider_dialog.push_char(c);
                         }

@@ -1,6 +1,6 @@
 use ratatui::prelude::Stylize;
 use ratatui::{
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Rect},
     style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
@@ -67,7 +67,11 @@ pub enum PendingSubmit {
     },
 }
 
-const CUSTOM_PROVIDER_SENTINEL: &str = "Add custom provider...";
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProviderConnectMode {
+    Known,
+    Custom,
+}
 
 pub struct ProviderDialog {
     pub providers: Vec<Provider>,
@@ -84,6 +88,7 @@ pub struct ProviderDialog {
     pub custom_state: Option<CustomProviderState>,
     /// Index into the fixed protocol list during Protocol step.
     pub protocol_index: usize,
+    pub connect_mode: ProviderConnectMode,
 }
 
 impl ProviderDialog {
@@ -99,6 +104,7 @@ impl ProviderDialog {
             submit_result: None,
             custom_state: None,
             protocol_index: 0,
+            connect_mode: ProviderConnectMode::Known,
         }
     }
 
@@ -159,7 +165,8 @@ impl ProviderDialog {
         self.custom_state = None;
         self.protocol_index = 0;
         self.submit_result = None;
-        self.state.select(Some(0));
+        self.connect_mode = ProviderConnectMode::Known;
+        self.state.select((!self.providers.is_empty()).then_some(0));
     }
 
     pub fn close(&mut self) {
@@ -170,6 +177,7 @@ impl ProviderDialog {
         self.custom_state = None;
         self.protocol_index = 0;
         self.submit_result = None;
+        self.connect_mode = ProviderConnectMode::Known;
     }
 
     pub fn is_open(&self) -> bool {
@@ -180,11 +188,26 @@ impl ProviderDialog {
         self.input_mode
     }
 
+    pub fn accepts_text_input(&self) -> bool {
+        self.input_mode || (self.custom_state.is_some() && !self.is_protocol_step())
+    }
+
     pub fn set_providers(&mut self, providers: Vec<Provider>) {
         self.providers = providers;
+        if self.providers.is_empty() {
+            self.state.select(None);
+        } else if self.state.selected().is_none() {
+            self.state.select(Some(0));
+        } else if let Some(selected) = self.state.selected() {
+            self.state
+                .select(Some(selected.min(self.providers.len().saturating_sub(1))));
+        }
     }
 
     pub fn move_up(&mut self) {
+        if self.connect_mode != ProviderConnectMode::Known {
+            return;
+        }
         if let Some(selected) = self.state.selected() {
             let new = selected.saturating_sub(1);
             self.state.select(Some(new));
@@ -192,9 +215,11 @@ impl ProviderDialog {
     }
 
     pub fn move_down(&mut self) {
+        if self.connect_mode != ProviderConnectMode::Known {
+            return;
+        }
         if let Some(selected) = self.state.selected() {
-            // Allow going one past providers.len() to select sentinel
-            let max = self.providers.len();
+            let max = self.providers.len().saturating_sub(1);
             let new = (selected + 1).min(max);
             self.state.select(Some(new));
         }
@@ -205,19 +230,9 @@ impl ProviderDialog {
     }
 
     /// Enter input mode for the currently highlighted provider.
-    /// If sentinel is selected, starts custom provider flow.
     pub fn enter_input_mode(&mut self) {
-        if self.state.selected() == Some(self.providers.len()) {
-            // Sentinel selected - start custom flow at step 1
-            self.custom_state = Some(CustomProviderState {
-                provider_id: String::new(),
-                base_url: String::new(),
-                protocol: String::new(),
-                api_key: String::new(),
-                step: CustomProviderStep::ProviderId,
-            });
-            self.protocol_index = 0;
-            self.submit_result = None;
+        if self.connect_mode == ProviderConnectMode::Custom {
+            self.start_custom_flow();
             return;
         }
         // Known provider flow
@@ -239,6 +254,40 @@ impl ProviderDialog {
     /// Exit custom flow and return to list.
     pub fn exit_custom_flow(&mut self) {
         self.custom_state = None;
+        self.protocol_index = 0;
+        self.submit_result = None;
+    }
+
+    pub fn toggle_mode_next(&mut self) {
+        match self.connect_mode {
+            ProviderConnectMode::Known => self.set_mode(ProviderConnectMode::Custom),
+            ProviderConnectMode::Custom => self.set_mode(ProviderConnectMode::Known),
+        }
+    }
+
+    pub fn toggle_mode_prev(&mut self) {
+        self.toggle_mode_next();
+    }
+
+    pub fn set_mode(&mut self, mode: ProviderConnectMode) {
+        if self.connect_mode == mode {
+            return;
+        }
+        self.connect_mode = mode;
+        self.submit_result = None;
+        if self.connect_mode == ProviderConnectMode::Known {
+            self.state.select((!self.providers.is_empty()).then_some(0));
+        }
+    }
+
+    fn start_custom_flow(&mut self) {
+        self.custom_state = Some(CustomProviderState {
+            provider_id: String::new(),
+            base_url: String::new(),
+            protocol: String::new(),
+            api_key: String::new(),
+            step: CustomProviderStep::ProviderId,
+        });
         self.protocol_index = 0;
         self.submit_result = None;
     }
@@ -535,59 +584,158 @@ impl ProviderDialog {
         block: Block,
         theme: &Theme,
     ) {
-        let mut items: Vec<ListItem> = self
-            .providers
-            .iter()
-            .enumerate()
-            .map(|(i, p)| {
-                let status_icon = match p.status {
-                    ProviderStatus::Connected => "●",
-                    ProviderStatus::Disconnected => "◯",
-                    ProviderStatus::Error => "✗",
-                };
-                let status_color = match p.status {
-                    ProviderStatus::Connected => theme.success,
-                    ProviderStatus::Disconnected => theme.text_muted,
-                    ProviderStatus::Error => theme.error,
-                };
-                let is_selected = self.state.selected() == Some(i);
-                let name_style = if is_selected {
-                    Style::default()
-                        .fg(theme.primary)
-                        .bg(theme.background_element)
-                } else {
-                    Style::default().fg(theme.text)
-                };
-                ListItem::new(Line::from(vec![
-                    Span::styled(status_icon, Style::default().fg(status_color)),
-                    Span::raw(" "),
-                    Span::styled(&p.name, name_style),
-                ]))
-            })
-            .collect();
-
-        // Append sentinel row for "Add custom provider..."
-        let sentinel_idx = self.providers.len();
-        let is_sentinel_selected = self.state.selected() == Some(sentinel_idx);
-        let sentinel_style = if is_sentinel_selected {
-            Style::default()
-                .fg(theme.primary)
-                .bg(theme.background_element)
-        } else {
-            Style::default().fg(theme.text_muted)
-        };
-        items.push(ListItem::new(Line::from(vec![
-            Span::styled("+", Style::default().fg(theme.success)),
-            Span::raw(" "),
-            Span::styled(CUSTOM_PROVIDER_SENTINEL, sentinel_style),
-        ])));
-
         frame.render_widget(
             block.style(Style::default().bg(theme.background_panel)),
             popup_area,
         );
-        let list = List::new(items).highlight_style(Style::default().fg(theme.primary));
-        frame.render_widget(list, content_area);
+
+        let sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(6),
+                Constraint::Length(2),
+            ])
+            .split(content_area);
+
+        let known_style = if self.connect_mode == ProviderConnectMode::Known {
+            Style::default()
+                .fg(theme.primary)
+                .bg(theme.background_element)
+                .bold()
+        } else {
+            Style::default().fg(theme.text_muted)
+        };
+        let custom_style = if self.connect_mode == ProviderConnectMode::Custom {
+            Style::default()
+                .fg(theme.primary)
+                .bg(theme.background_element)
+                .bold()
+        } else {
+            Style::default().fg(theme.text_muted)
+        };
+
+        let subtitle = match self.connect_mode {
+            ProviderConnectMode::Known => "Choose a known provider and add its API key.",
+            ProviderConnectMode::Custom => {
+                "Create a custom provider with provider id, base URL, protocol and API key."
+            }
+        };
+
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(vec![
+                    Span::styled("Known", known_style),
+                    Span::raw("  "),
+                    Span::styled("Custom", custom_style),
+                ]),
+                Line::from(Span::styled(
+                    subtitle,
+                    Style::default().fg(theme.text_muted),
+                )),
+            ])
+            .wrap(Wrap { trim: false })
+            .style(Style::default().bg(theme.background_panel)),
+            sections[0],
+        );
+
+        match self.connect_mode {
+            ProviderConnectMode::Known => {
+                if self.providers.is_empty() {
+                    frame.render_widget(
+                        Paragraph::new("No known providers available. Switch to Custom to enter an endpoint manually.")
+                            .wrap(Wrap { trim: false })
+                            .style(Style::default().fg(theme.text_muted).bg(theme.background_panel)),
+                        sections[1],
+                    );
+                } else {
+                    let items: Vec<ListItem> = self
+                        .providers
+                        .iter()
+                        .enumerate()
+                        .map(|(i, p)| {
+                            let status_icon = match p.status {
+                                ProviderStatus::Connected => "●",
+                                ProviderStatus::Disconnected => "◯",
+                                ProviderStatus::Error => "✗",
+                            };
+                            let status_color = match p.status {
+                                ProviderStatus::Connected => theme.success,
+                                ProviderStatus::Disconnected => theme.text_muted,
+                                ProviderStatus::Error => theme.error,
+                            };
+                            let is_selected = self.state.selected() == Some(i);
+                            let name_style = if is_selected {
+                                Style::default()
+                                    .fg(theme.primary)
+                                    .bg(theme.background_element)
+                            } else {
+                                Style::default().fg(theme.text)
+                            };
+                            ListItem::new(Line::from(vec![
+                                Span::styled(status_icon, Style::default().fg(status_color)),
+                                Span::raw(" "),
+                                Span::styled(&p.name, name_style),
+                            ]))
+                        })
+                        .collect();
+
+                    let list = List::new(items).highlight_style(Style::default().fg(theme.primary));
+                    frame.render_widget(list, sections[1]);
+                }
+            }
+            ProviderConnectMode::Custom => {
+                let mut lines = vec![
+                    Line::from(Span::styled(
+                        "Custom provider setup",
+                        Style::default().fg(theme.text).bold(),
+                    )),
+                    Line::from(""),
+                    Line::from("You will be prompted for:"),
+                    Line::from("  1. Provider ID"),
+                    Line::from("  2. Base URL"),
+                    Line::from("  3. Protocol"),
+                    Line::from("  4. API Key"),
+                ];
+                if let Some(result) = &self.submit_result {
+                    lines.push(Line::from(""));
+                    match result {
+                        SubmitResult::Success => lines.push(Line::from(Span::styled(
+                            "✓ Connected successfully!",
+                            Style::default().fg(theme.success),
+                        ))),
+                        SubmitResult::Failed(msg) => lines.push(Line::from(Span::styled(
+                            format!("✗ {}", msg),
+                            Style::default().fg(theme.error),
+                        ))),
+                    }
+                }
+
+                frame.render_widget(
+                    Paragraph::new(lines)
+                        .wrap(Wrap { trim: false })
+                        .style(Style::default().bg(theme.background_panel)),
+                    sections[1],
+                );
+            }
+        }
+
+        let footer = match self.connect_mode {
+            ProviderConnectMode::Known => {
+                "←/→ or Tab switch mode  ↑↓ select  Enter connect  Esc close"
+            }
+            ProviderConnectMode::Custom => {
+                "←/→ or Tab switch mode  Enter start custom setup  Esc close"
+            }
+        };
+        frame.render_widget(
+            Paragraph::new(footer).wrap(Wrap { trim: false }).style(
+                Style::default()
+                    .fg(theme.text_muted)
+                    .bg(theme.background_panel),
+            ),
+            sections[2],
+        );
     }
 
     fn render_custom_input_mode(
