@@ -26,6 +26,8 @@ This directory contains formal external scheduler profile examples for ROCode.
   - Public OMO-aligned autonomous execution example
 - `autoresearch.example.jsonc`
   - Draft mapping of autoresearch workflows onto the current scheduler kernel
+- `autoresearch.runnable.example.jsonc`
+  - Checked-in template for a real autoresearch run profile; copy it into local config and pair it with a repo-local verifier script
 - `AUTORESEARCH_DESIGN.md`
   - Full-parity design notes describing the schema and runtime work still needed
 - `workflow-autoresearch.schema.json`
