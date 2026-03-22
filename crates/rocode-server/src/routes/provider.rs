@@ -436,142 +436,140 @@ async fn list_managed_providers(
         provider_ids.extend(configured_providers.keys().cloned());
     }
 
-    let mut providers = provider_ids
-        .into_iter()
-        .map(|id| {
-            let known = models_data.get(&id);
-            let configured = config
-                .provider
-                .as_ref()
-                .and_then(|provider_map| provider_map.get(&id));
-            let mut model_map: HashMap<String, ModelInfo> = HashMap::new();
+    let mut providers =
+        provider_ids
+            .into_iter()
+            .map(|id| {
+                let known = models_data.get(&id);
+                let configured = config
+                    .provider
+                    .as_ref()
+                    .and_then(|provider_map| provider_map.get(&id));
+                let mut model_map: HashMap<String, ModelInfo> = HashMap::new();
 
-            if let Some(configured_models) =
-                configured.and_then(|provider| provider.models.as_ref())
-            {
-                for (configured_model_id, configured_model) in configured_models {
-                    let model_id = configured_model
-                        .model
-                        .clone()
-                        .unwrap_or_else(|| configured_model_id.clone());
-                    let mut variants = configured_model
-                        .variants
-                        .as_ref()
-                        .map(|items| items.keys().cloned().collect::<Vec<_>>())
-                        .unwrap_or_default();
-                    if variants.is_empty() {
-                        variants = variants_for_model(variant_lookup, &id, &model_id);
-                    } else {
-                        variants.sort();
+                if let Some(configured_models) =
+                    configured.and_then(|provider| provider.models.as_ref())
+                {
+                    for (configured_model_id, configured_model) in configured_models {
+                        let model_id = configured_model
+                            .model
+                            .clone()
+                            .unwrap_or_else(|| configured_model_id.clone());
+                        let mut variants = configured_model
+                            .variants
+                            .as_ref()
+                            .map(|items| items.keys().cloned().collect::<Vec<_>>())
+                            .unwrap_or_default();
+                        if variants.is_empty() {
+                            variants = variants_for_model(variant_lookup, &id, &model_id);
+                        } else {
+                            variants.sort();
+                        }
+                        model_map.insert(
+                            model_id.clone(),
+                            ModelInfo {
+                                id: model_id.clone(),
+                                name: configured_model
+                                    .name
+                                    .clone()
+                                    .unwrap_or_else(|| model_id.clone()),
+                                provider: id.clone(),
+                                variants,
+                            },
+                        );
                     }
+                }
+
+                for runtime_model in runtime_models.iter().filter(|model| model.provider == id) {
+                    let variants = variants_for_model(variant_lookup, &id, &runtime_model.id);
                     model_map.insert(
-                        model_id.clone(),
+                        runtime_model.id.clone(),
                         ModelInfo {
-                            id: model_id.clone(),
-                            name: configured_model
-                                .name
-                                .clone()
-                                .unwrap_or_else(|| model_id.clone()),
+                            id: runtime_model.id.clone(),
+                            name: runtime_model.name.clone(),
                             provider: id.clone(),
                             variants,
                         },
                     );
                 }
-            }
 
-            for runtime_model in runtime_models.iter().filter(|model| model.provider == id) {
-                let variants = variants_for_model(variant_lookup, &id, &runtime_model.id);
-                model_map.insert(
-                    runtime_model.id.clone(),
-                    ModelInfo {
-                        id: runtime_model.id.clone(),
-                        name: runtime_model.name.clone(),
-                        provider: id.clone(),
-                        variants,
-                    },
-                );
-            }
-
-            let mut models: Vec<ModelInfo> = model_map.into_values().collect();
-            models.sort_by(|a, b| a.id.cmp(&b.id));
-            let mut model_overrides = configured
-                .and_then(|provider| provider.models.as_ref())
-                .map(|configured_models| {
-                    configured_models
-                        .iter()
-                        .map(|(key, configured_model)| ManagedModelOverrideInfo {
-                            key: key.clone(),
-                            name: configured_model.name.clone(),
-                            model: configured_model.model.clone(),
-                            base_url: configured_model.base_url.clone(),
-                            family: configured_model.family.clone(),
-                            reasoning: configured_model.reasoning,
-                            tool_call: configured_model.tool_call,
-                            headers: configured_model.headers.clone(),
-                            options: configured_model
-                                .options
-                                .as_ref()
-                                .map(|value| serde_json::to_value(value).unwrap_or_default()),
-                            variants: configured_model
-                                .variants
-                                .as_ref()
-                                .map(|value| serde_json::to_value(value).unwrap_or_default()),
-                            modalities: configured_model
-                                .modalities
-                                .as_ref()
-                                .map(|value| serde_json::to_value(value).unwrap_or_default()),
-                            interleaved: configured_model.interleaved.clone(),
-                            cost: configured_model
-                                .cost
-                                .as_ref()
-                                .map(|value| serde_json::to_value(value).unwrap_or_default()),
-                            limit: configured_model
-                                .limit
-                                .as_ref()
-                                .map(|value| serde_json::to_value(value).unwrap_or_default()),
-                            attachment: configured_model.attachment,
-                            temperature: configured_model.temperature,
-                            status: configured_model.status.clone(),
-                            release_date: configured_model.release_date.clone(),
-                            experimental: configured_model.experimental,
+                let mut models: Vec<ModelInfo> = model_map.into_values().collect();
+                models.sort_by(|a, b| a.id.cmp(&b.id));
+                let mut model_overrides =
+                    configured
+                        .and_then(|provider| provider.models.as_ref())
+                        .map(|configured_models| {
+                            configured_models
+                                .iter()
+                                .map(|(key, configured_model)| ManagedModelOverrideInfo {
+                                    key: key.clone(),
+                                    name: configured_model.name.clone(),
+                                    model: configured_model.model.clone(),
+                                    base_url: configured_model.base_url.clone(),
+                                    family: configured_model.family.clone(),
+                                    reasoning: configured_model.reasoning,
+                                    tool_call: configured_model.tool_call,
+                                    headers: configured_model.headers.clone(),
+                                    options: configured_model.options.as_ref().map(|value| {
+                                        serde_json::to_value(value).unwrap_or_default()
+                                    }),
+                                    variants: configured_model.variants.as_ref().map(|value| {
+                                        serde_json::to_value(value).unwrap_or_default()
+                                    }),
+                                    modalities: configured_model.modalities.as_ref().map(|value| {
+                                        serde_json::to_value(value).unwrap_or_default()
+                                    }),
+                                    interleaved: configured_model.interleaved.clone(),
+                                    cost: configured_model.cost.as_ref().map(|value| {
+                                        serde_json::to_value(value).unwrap_or_default()
+                                    }),
+                                    limit: configured_model.limit.as_ref().map(|value| {
+                                        serde_json::to_value(value).unwrap_or_default()
+                                    }),
+                                    attachment: configured_model.attachment,
+                                    temperature: configured_model.temperature,
+                                    status: configured_model.status.clone(),
+                                    release_date: configured_model.release_date.clone(),
+                                    experimental: configured_model.experimental,
+                                })
+                                .collect::<Vec<_>>()
                         })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            model_overrides.sort_by(|a, b| a.key.cmp(&b.key));
+                        .unwrap_or_default();
+                model_overrides.sort_by(|a, b| a.key.cmp(&b.key));
 
-            let connected = runtime_provider_ids.contains(&id);
-            let auth = auth_store.get(&id);
-            let has_auth = auth.is_some();
-            let configured_flag = configured.is_some();
+                let connected = runtime_provider_ids.contains(&id);
+                let auth = auth_store.get(&id);
+                let has_auth = auth.is_some();
+                let configured_flag = configured.is_some();
 
-            ManagedProviderInfo {
-                id: id.clone(),
-                name: configured
-                    .and_then(|provider| provider.name.clone())
-                    .filter(|name| !name.trim().is_empty())
-                    .or_else(|| known.map(|provider| provider.name.clone()))
-                    .unwrap_or_else(|| id.clone()),
-                status: managed_provider_status(connected, configured_flag, has_auth).to_string(),
-                connected,
-                has_auth,
-                auth_type: managed_provider_auth_type(auth),
-                configured: configured_flag,
-                known: known.is_some(),
-                env: known
-                    .map(|provider| provider.env.clone())
-                    .unwrap_or_default(),
-                known_model_count: known.map(|provider| provider.models.len()).unwrap_or(0),
-                base_url: configured.and_then(|provider| provider.base_url.clone()),
-                protocol: configured
-                    .and_then(|provider| provider.npm.as_deref())
-                    .and_then(npm_to_protocol)
-                    .map(str::to_string),
-                model_overrides,
-                models,
-            }
-        })
-        .collect::<Vec<_>>();
+                ManagedProviderInfo {
+                    id: id.clone(),
+                    name: configured
+                        .and_then(|provider| provider.name.clone())
+                        .filter(|name| !name.trim().is_empty())
+                        .or_else(|| known.map(|provider| provider.name.clone()))
+                        .unwrap_or_else(|| id.clone()),
+                    status: managed_provider_status(connected, configured_flag, has_auth)
+                        .to_string(),
+                    connected,
+                    has_auth,
+                    auth_type: managed_provider_auth_type(auth),
+                    configured: configured_flag,
+                    known: known.is_some(),
+                    env: known
+                        .map(|provider| provider.env.clone())
+                        .unwrap_or_default(),
+                    known_model_count: known.map(|provider| provider.models.len()).unwrap_or(0),
+                    base_url: configured.and_then(|provider| provider.base_url.clone()),
+                    protocol: configured
+                        .and_then(|provider| provider.npm.as_deref())
+                        .and_then(npm_to_protocol)
+                        .map(str::to_string),
+                    model_overrides,
+                    models,
+                }
+            })
+            .collect::<Vec<_>>();
 
     providers.sort_by(|a, b| {
         b.connected
