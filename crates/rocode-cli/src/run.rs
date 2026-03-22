@@ -85,16 +85,15 @@ fn resolve_requested_agent_name(
     "build".to_string()
 }
 
-fn cli_resolve_show_thinking(
-    explicit_flag: bool,
-    _config: Option<&Config>,
-    fallback: bool,
-) -> bool {
+fn cli_resolve_show_thinking(explicit_flag: bool, config: Option<&Config>, fallback: bool) -> bool {
     if explicit_flag {
         return true;
     }
 
-    fallback
+    config
+        .and_then(|cfg| cfg.ui_preferences.as_ref())
+        .and_then(|ui| ui.show_thinking)
+        .unwrap_or(fallback)
 }
 pub(crate) async fn run_non_interactive(options: RunNonInteractiveOptions) -> anyhow::Result<()> {
     let RunNonInteractiveOptions {
@@ -150,7 +149,7 @@ pub(crate) async fn run_non_interactive(options: RunNonInteractiveOptions) -> an
     };
     let api_client = CliApiClient::new(base_url.clone());
     let remote_config = api_client.get_config().await.ok();
-    let show_thinking = cli_resolve_show_thinking(thinking, remote_config.as_ref(), true);
+    let show_thinking = cli_resolve_show_thinking(thinking, remote_config.as_ref(), false);
 
     run_non_interactive_attach(RemoteAttachOptions {
         base_url,
@@ -1552,9 +1551,9 @@ mod tests {
     }
 
     #[test]
-    fn cli_show_thinking_defaults_to_visible_in_cli() {
-        assert!(cli_resolve_show_thinking(false, None, true));
-        assert!(cli_resolve_show_thinking(
+    fn cli_show_thinking_defaults_to_hidden_in_cli() {
+        assert!(!cli_resolve_show_thinking(false, None, false));
+        assert!(!cli_resolve_show_thinking(
             false,
             Some(&Config {
                 ui_preferences: Some(UiPreferencesConfig {
@@ -1563,7 +1562,18 @@ mod tests {
                 }),
                 ..Default::default()
             }),
-            true,
+            false,
+        ));
+        assert!(cli_resolve_show_thinking(
+            false,
+            Some(&Config {
+                ui_preferences: Some(UiPreferencesConfig {
+                    show_thinking: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            false,
         ));
         assert!(cli_resolve_show_thinking(true, None, false));
     }

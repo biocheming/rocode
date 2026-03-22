@@ -158,7 +158,7 @@ impl AppContext {
             pending_permissions: RwLock::new(0),
             queued_prompts: RwLock::new(HashMap::new()),
             show_timestamps: RwLock::new(false),
-            show_thinking: RwLock::new(true),
+            show_thinking: RwLock::new(false),
             show_tool_details: RwLock::new(true),
             message_density: RwLock::new(MessageDensity::Compact),
             semantic_highlight: RwLock::new(false),
@@ -423,7 +423,7 @@ impl AppContext {
         *self.show_scrollbar.write() = ui.and_then(|prefs| prefs.show_scrollbar).unwrap_or(true);
         *self.tips_hidden.write() = ui.and_then(|prefs| prefs.tips_hidden).unwrap_or(false);
         *self.show_timestamps.write() = ui.and_then(|prefs| prefs.show_timestamps).unwrap_or(false);
-        *self.show_thinking.write() = ui.and_then(|prefs| prefs.show_thinking).unwrap_or(true);
+        *self.show_thinking.write() = ui.and_then(|prefs| prefs.show_thinking).unwrap_or(false);
         *self.show_tool_details.write() =
             ui.and_then(|prefs| prefs.show_tool_details).unwrap_or(true);
         *self.message_density.write() = MessageDensity::from_str_lossy(

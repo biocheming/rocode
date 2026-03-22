@@ -1,3 +1,4 @@
+use super::session_actions::TranscriptOptions;
 use super::*;
 
 impl App {
@@ -343,7 +344,14 @@ impl App {
                                 .set_message("Filename cannot be empty for export.");
                             self.alert_dialog.open();
                         } else {
-                            match self.export_session_to_file(session_id, filename) {
+                            let options = TranscriptOptions {
+                                include_thinking: self.session_export_dialog.include_thinking,
+                                include_tool_details: self
+                                    .session_export_dialog
+                                    .include_tool_details,
+                                include_metadata: self.session_export_dialog.include_metadata,
+                            };
+                            match self.export_session_to_file(session_id, filename, options) {
                                 Ok(path) => {
                                     self.alert_dialog.set_message(&format!(
                                         "Session exported to `{}`.",
@@ -365,7 +373,12 @@ impl App {
                 }
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     if let Some(session_id) = self.session_export_dialog.session_id() {
-                        match self.build_session_transcript(session_id) {
+                        let options = TranscriptOptions {
+                            include_thinking: self.session_export_dialog.include_thinking,
+                            include_tool_details: self.session_export_dialog.include_tool_details,
+                            include_metadata: self.session_export_dialog.include_metadata,
+                        };
+                        match self.build_session_transcript(session_id, options) {
                             Some(text) => {
                                 if let Err(err) = Clipboard::write_text(&text) {
                                     self.alert_dialog.set_message(&format!(

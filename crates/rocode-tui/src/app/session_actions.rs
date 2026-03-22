@@ -1,4 +1,15 @@
 use super::*;
+use crate::context::MessagePart;
+use rocode_command::terminal_tool_block_display::{
+    build_file_items, build_image_items, summarize_block_items_inline,
+};
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct TranscriptOptions {
+    pub include_thinking: bool,
+    pub include_tool_details: bool,
+    pub include_metadata: bool,
+}
 
 impl App {
     pub(super) fn current_session_id(&self) -> Option<String> {
@@ -296,7 +307,14 @@ impl App {
             self.alert_dialog.open();
             return;
         };
-        match self.build_session_transcript(&session_id) {
+        match self.build_session_transcript(
+            &session_id,
+            TranscriptOptions {
+                include_thinking: false,
+                include_tool_details: true,
+                include_metadata: false,
+            },
+        ) {
             Some(text) => {
                 if let Err(err) = Clipboard::write_text(&text) {
                     self.alert_dialog
@@ -395,7 +413,11 @@ impl App {
         self.fork_dialog.open(session_id, entries);
     }
 
-    pub(super) fn build_session_transcript(&self, session_id: &str) -> Option<String> {
+    pub(super) fn build_session_transcript(
+        &self,
+        session_id: &str,
+        options: TranscriptOptions,
+    ) -> Option<String> {
         let session_ctx = self.context.session.read();
         let session = session_ctx.sessions.get(session_id)?;
         let messages = session_ctx.messages.get(session_id)?;
@@ -419,10 +441,11 @@ impl App {
                 MessageRole::Tool => "Tool",
             };
             output.push_str(&format!("## {}\n\n", role));
-            if message.content.trim().is_empty() {
+            let rendered = render_transcript_message(message, options);
+            if rendered.trim().is_empty() {
                 output.push_str("_Empty message_\n\n");
             } else {
-                output.push_str(&message.content);
+                output.push_str(&rendered);
                 output.push_str("\n\n");
             }
         }
@@ -434,10 +457,13 @@ impl App {
         &self,
         session_id: &str,
         filename: &str,
+        options: TranscriptOptions,
     ) -> anyhow::Result<PathBuf> {
-        let transcript = self.build_session_transcript(session_id).ok_or_else(|| {
-            anyhow::anyhow!("No transcript available for session `{}`", session_id)
-        })?;
+        let transcript = self
+            .build_session_transcript(session_id, options)
+            .ok_or_else(|| {
+                anyhow::anyhow!("No transcript available for session `{}`", session_id)
+            })?;
 
         let mut path = PathBuf::from(filename.trim());
         if path.as_os_str().is_empty() {
@@ -454,4 +480,82 @@ impl App {
         std::fs::write(&path, transcript)?;
         Ok(path)
     }
+}
+
+fn render_transcript_message(message: &Message, options: TranscriptOptions) -> String {
+    let mut parts = Vec::new();
+
+    for part in &message.parts {
+        match part {
+            MessagePart::Text { text } => {
+                if !text.trim().is_empty() {
+                    parts.push(text.clone());
+                }
+            }
+            MessagePart::Reasoning { text } if options.include_thinking => {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    parts.push(format!("[reasoning]\n{trimmed}"));
+                }
+            }
+            MessagePart::ToolCall {
+                name, arguments, ..
+            } if options.include_tool_details => {
+                let trimmed = arguments.trim();
+                if trimmed.is_empty() {
+                    parts.push(format!("[tool:{name}]"));
+                } else {
+                    parts.push(format!("[tool:{name}] {trimmed}"));
+                }
+            }
+            MessagePart::ToolResult {
+                result, is_error, ..
+            } if options.include_tool_details => {
+                let trimmed = result.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let label = if *is_error {
+                    "[tool-error]"
+                } else {
+                    "[tool-result]"
+                };
+                parts.push(format!("{label} {trimmed}"));
+            }
+            MessagePart::File { path, mime } if options.include_tool_details => {
+                parts.push(summarize_block_items_inline(&build_file_items(path, mime)));
+            }
+            MessagePart::Image { url } if options.include_tool_details => {
+                parts.push(summarize_block_items_inline(&build_image_items(url)));
+            }
+            _ => {}
+        }
+    }
+
+    if options.include_metadata {
+        let mut metadata = Vec::new();
+        if message.tokens.input > 0 {
+            metadata.push(format!("input={}", message.tokens.input));
+        }
+        if message.tokens.output > 0 {
+            metadata.push(format!("output={}", message.tokens.output));
+        }
+        if message.tokens.reasoning > 0 {
+            metadata.push(format!("reasoning={}", message.tokens.reasoning));
+        }
+        if message.tokens.cache_read > 0 {
+            metadata.push(format!("cache_read={}", message.tokens.cache_read));
+        }
+        if message.tokens.cache_write > 0 {
+            metadata.push(format!("cache_write={}", message.tokens.cache_write));
+        }
+        if message.cost > 0.0 {
+            metadata.push(format!("cost=${:.6}", message.cost));
+        }
+        if !metadata.is_empty() {
+            parts.push(format!("[metadata] {}", metadata.join(" · ")));
+        }
+    }
+
+    parts.join("\n")
 }

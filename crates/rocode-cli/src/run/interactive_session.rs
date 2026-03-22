@@ -68,7 +68,7 @@ pub(super) async fn run_chat_session(
         provider: provider.or(carry_provider),
         requested_agent,
         requested_scheduler_profile: requested_scheduler_profile.or(carry_preset),
-        show_thinking: cli_resolve_show_thinking(thinking_requested, server_config.as_ref(), true),
+        show_thinking: cli_resolve_show_thinking(thinking_requested, server_config.as_ref(), false),
     };
 
     let mut runtime = build_cli_execution_runtime(CliRuntimeBuildInput {

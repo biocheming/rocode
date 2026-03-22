@@ -1,6 +1,7 @@
 import { type Component, For, Show, createSignal, onCleanup } from "solid-js";
 import { createStore } from "solid-js/store";
 import type { OutputBlock } from "~/api/types";
+import { state } from "~/stores/app";
 import { MessageBubble } from "./MessageBubble";
 import styles from "./MessageFeed.module.css";
 
@@ -60,6 +61,10 @@ function insertBeforeMessageId(id: string, msg: FeedMessage) {
 }
 
 export function applyOutputBlockToFeed(block: OutputBlock) {
+  if (block.kind === "reasoning" && !state.showThinking) {
+    return;
+  }
+
   if (block.kind === "status") {
     if (!block.silent) {
       appendFeedMessage(block);

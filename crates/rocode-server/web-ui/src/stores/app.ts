@@ -150,7 +150,7 @@ const [state, setState] = createStore<AppState>({
   selectedModel: null,
   selectedModeKey: null,
   selectedTheme: "daylight",
-  showThinking: true,
+  showThinking: false,
   streaming: false,
   abortRequested: false,
   busyAction: null,
@@ -563,6 +563,7 @@ export async function loadSessionMessages(sessionId: string): Promise<OutputBloc
   const response = await api(`/session/${sessionId}/message`);
   const data = await response.json();
   const blocks: OutputBlock[] = [];
+  const showThinking = state.showThinking;
   for (const msg of data || []) {
     // Each message has parts[]; collect text and reasoning parts into blocks
     const parts = (msg.parts ?? []) as { type?: string; text?: string; tool_call?: unknown; tool_result?: unknown }[];
@@ -572,7 +573,7 @@ export async function loadSessionMessages(sessionId: string): Promise<OutputBloc
       .filter((p) => p.type === "reasoning" && p.text)
       .map((p) => p.text!)
       .join("\n");
-    if (reasoningParts) {
+    if (showThinking && reasoningParts) {
       blocks.push({
         kind: "reasoning",
         phase: "full",
