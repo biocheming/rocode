@@ -120,7 +120,15 @@ pub(super) async fn execute_session_recovery(
     let stage_targets = collect_stage_recovery_targets(&session);
     let subtask_targets = collect_subtask_recovery_targets(&session);
     let (composed_message, target_kind, target_label) = match req.action {
-        RecoveryActionKind::AbortRun | RecoveryActionKind::AbortStage => unreachable!(),
+        RecoveryActionKind::AbortRun | RecoveryActionKind::AbortStage => {
+            debug_assert!(
+                false,
+                "abort recovery actions should be handled before composing a recovery prompt"
+            );
+            return Err(ApiError::BadRequest(
+                "Abort actions must be handled via the abort recovery path".to_string(),
+            ));
+        }
         RecoveryActionKind::Retry => (
             compose_retry_prompt(&base_prompt),
             None,
@@ -178,6 +186,7 @@ pub(super) async fn execute_session_recovery(
         Path(session_id.clone()),
         Json(SessionPromptRequest {
             message: Some(composed_message),
+            parts: None,
             model: session_model_override(&session),
             variant: session_variant_override(&session),
             agent: session_agent_override(&session),

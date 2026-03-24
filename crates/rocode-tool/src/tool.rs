@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use rocode_execution_types::{CompiledExecutionRequest, ExecutionRequestContext};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::Future;
@@ -217,7 +218,7 @@ pub struct TaskAgentInfo {
     pub model: Option<TaskAgentModel>,
     pub can_use_task: bool,
     pub steps: Option<u32>,
-    pub execution: Option<rocode_orchestrator::ExecutionRequestContext>,
+    pub execution: Option<ExecutionRequestContext>,
     pub max_tokens: Option<u64>,
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
@@ -242,13 +243,13 @@ impl TaskAgentInfo {
             .or_else(|| self.model.clone())
     }
 
-    pub fn compiled_request(&self) -> Option<rocode_orchestrator::CompiledExecutionRequest> {
+    pub fn compiled_request(&self) -> Option<CompiledExecutionRequest> {
         self.execution
             .as_ref()
             .and_then(|context| context.compile())
             .or_else(|| {
                 self.execution_model()
-                    .map(|model| rocode_orchestrator::CompiledExecutionRequest {
+                    .map(|model| CompiledExecutionRequest {
                         model_id: model.model_id,
                         max_tokens: self.max_tokens,
                         temperature: self.temperature,
@@ -424,6 +425,7 @@ pub struct ToolContext {
     pub create_synthetic_message: Option<CreateSyntheticMessageCallback>,
     pub project_root: String,
     pub runtime_config: ToolRuntimeConfig,
+    pub config_store: Option<Arc<rocode_config::ConfigStore>>,
     pub registry: Option<Arc<ToolRegistry>>,
     #[cfg(feature = "lsp")]
     pub lsp_registry: Option<Arc<LspClientRegistry>>,
@@ -459,6 +461,7 @@ impl ToolContext {
             create_synthetic_message: None,
             project_root: directory,
             runtime_config: ToolRuntimeConfig::default(),
+            config_store: None,
             registry: None,
             #[cfg(feature = "lsp")]
             lsp_registry: None,
@@ -477,6 +480,11 @@ impl ToolContext {
 
     pub fn with_tool_runtime_config(mut self, runtime_config: ToolRuntimeConfig) -> Self {
         self.runtime_config = runtime_config;
+        self
+    }
+
+    pub fn with_config_store(mut self, config_store: Arc<rocode_config::ConfigStore>) -> Self {
+        self.config_store = Some(config_store);
         self
     }
 
@@ -948,7 +956,7 @@ mod tests {
             }),
             can_use_task: true,
             steps: Some(7),
-            execution: Some(rocode_orchestrator::ExecutionRequestContext {
+            execution: Some(ExecutionRequestContext {
                 provider_id: Some("ctx-provider".to_string()),
                 model_id: Some("ctx-model".to_string()),
                 max_tokens: Some(4096),

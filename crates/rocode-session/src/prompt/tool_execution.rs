@@ -39,6 +39,7 @@ pub(super) struct PersistedSubsessionPromptOptions {
     pub(super) question_session_id: Option<String>,
     pub(super) abort: Option<CancellationToken>,
     pub(super) tool_runtime_config: rocode_tool::ToolRuntimeConfig,
+    pub(super) config_store: Option<Arc<rocode_config::ConfigStore>>,
 }
 
 impl SessionPrompt {
@@ -573,6 +574,7 @@ impl SessionPrompt {
 
         let abort_token = ctx.abort.clone();
         let tool_runtime_config = ctx.runtime_config.clone();
+        let config_store = ctx.config_store.clone();
 
         ctx.with_prompt_subsession(move |session_id, prompt| {
             let subsessions = subsessions.clone();
@@ -584,6 +586,7 @@ impl SessionPrompt {
             let agent_lookup = agent_lookup_for_subsessions.clone();
             let abort_token = abort_token.clone();
             let tool_runtime_config = tool_runtime_config.clone();
+            let config_store = config_store.clone();
 
             async move {
                 let current = {
@@ -613,6 +616,7 @@ impl SessionPrompt {
                         question_session_id: Some(session_id.clone()),
                         abort: Some(abort_token),
                         tool_runtime_config: tool_runtime_config.clone(),
+                        config_store,
                     },
                 )
                 .await
@@ -659,6 +663,9 @@ impl SessionPrompt {
         let mut executor = SubtaskExecutor::new(&subsession.agent, &composed_prompt)
             .with_model(model)
             .with_tool_runtime_config(options.tool_runtime_config.clone());
+        if let Some(config_store) = options.config_store.clone() {
+            executor = executor.with_config_store(config_store);
+        }
         if let Some(directory) = working_directory {
             executor = executor.with_working_directory(directory);
         }

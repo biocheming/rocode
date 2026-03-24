@@ -10,22 +10,56 @@ use super::types::{
     ResponsesStreamChunk, ResponsesUsage,
 };
 
-#[allow(clippy::too_many_arguments)]
+pub(super) struct StreamChunkState {
+    pub(super) finish_reason: FinishReason,
+    pub(super) usage: ResponsesUsage,
+    pub(super) logprobs: Vec<Vec<LogprobEntry>>,
+    pub(super) response_id: Option<String>,
+    pub(super) ongoing_tool_calls: HashMap<usize, OngoingToolCall>,
+    pub(super) has_function_call: bool,
+    pub(super) active_reasoning: HashMap<usize, ActiveReasoning>,
+    pub(super) current_reasoning_output_index: Option<usize>,
+    pub(super) reasoning_item_to_output_index: HashMap<String, usize>,
+    pub(super) current_text_id: Option<String>,
+    pub(super) text_open: bool,
+    pub(super) service_tier: Option<String>,
+}
+
+impl Default for StreamChunkState {
+    fn default() -> Self {
+        Self {
+            finish_reason: FinishReason::Unknown,
+            usage: ResponsesUsage::default(),
+            logprobs: Vec::new(),
+            response_id: None,
+            ongoing_tool_calls: HashMap::new(),
+            has_function_call: false,
+            active_reasoning: HashMap::new(),
+            current_reasoning_output_index: None,
+            reasoning_item_to_output_index: HashMap::new(),
+            current_text_id: None,
+            text_open: false,
+            service_tier: None,
+        }
+    }
+}
+
 pub(super) fn process_stream_chunk(
     chunk: ResponsesStreamChunk,
-    finish_reason: &mut FinishReason,
-    usage: &mut ResponsesUsage,
-    logprobs: &mut Vec<Vec<LogprobEntry>>,
-    response_id: &mut Option<String>,
-    ongoing_tool_calls: &mut HashMap<usize, OngoingToolCall>,
-    has_function_call: &mut bool,
-    active_reasoning: &mut HashMap<usize, ActiveReasoning>,
-    current_reasoning_output_index: &mut Option<usize>,
-    reasoning_item_to_output_index: &mut HashMap<String, usize>,
-    current_text_id: &mut Option<String>,
-    text_open: &mut bool,
-    service_tier: &mut Option<String>,
+    state: &mut StreamChunkState,
 ) -> Vec<StreamEvent> {
+    let finish_reason = &mut state.finish_reason;
+    let usage = &mut state.usage;
+    let logprobs = &mut state.logprobs;
+    let response_id = &mut state.response_id;
+    let ongoing_tool_calls = &mut state.ongoing_tool_calls;
+    let has_function_call = &mut state.has_function_call;
+    let active_reasoning = &mut state.active_reasoning;
+    let current_reasoning_output_index = &mut state.current_reasoning_output_index;
+    let reasoning_item_to_output_index = &mut state.reasoning_item_to_output_index;
+    let current_text_id = &mut state.current_text_id;
+    let text_open = &mut state.text_open;
+    let service_tier = &mut state.service_tier;
     let mut events = Vec::new();
 
     match chunk {

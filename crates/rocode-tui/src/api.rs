@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+pub type PromptPart = rocode_session::prompt::PartInput;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub id: String,
@@ -386,7 +388,10 @@ pub struct MessageTokensInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromptRequest {
-    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parts: Option<Vec<PromptPart>>,
     pub agent: Option<String>,
     pub scheduler_profile: Option<String>,
     pub model: Option<String>,
@@ -897,6 +902,7 @@ impl ApiClient {
         &self,
         session_id: &str,
         content: String,
+        parts: Option<Vec<PromptPart>>,
         agent: Option<String>,
         scheduler_profile: Option<String>,
         model: Option<String>,
@@ -904,7 +910,8 @@ impl ApiClient {
     ) -> anyhow::Result<serde_json::Value> {
         let url = format!("{}/session/{}/prompt", self.base_url, session_id);
         let request = PromptRequest {
-            message: content,
+            message: parts.as_ref().map(|_| None).unwrap_or_else(|| Some(content)),
+            parts,
             agent,
             scheduler_profile,
             model,

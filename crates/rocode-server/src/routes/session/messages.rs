@@ -17,12 +17,49 @@ use super::session_crud::persist_sessions_if_enabled;
 #[derive(Debug, Deserialize)]
 pub(crate) struct SendMessageRequest {
     pub content: String,
+    #[serde(default)]
+    pub parts: Option<Vec<rocode_session::prompt::PartInput>>,
     pub model: Option<String>,
     pub agent: Option<String>,
     pub scheduler_profile: Option<String>,
     pub variant: Option<String>,
     #[allow(dead_code)]
     pub stream: Option<bool>,
+}
+
+pub(crate) fn prompt_text_from_parts(parts: &[rocode_session::prompt::PartInput]) -> String {
+    parts
+        .iter()
+        .filter_map(|part| match part {
+            rocode_session::prompt::PartInput::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub(crate) fn prompt_display_text(parts: &[rocode_session::prompt::PartInput]) -> String {
+    let text = prompt_text_from_parts(parts);
+    if !text.trim().is_empty() {
+        return text;
+    }
+
+    let attachment_count = parts
+        .iter()
+        .filter(|part| {
+            !matches!(
+                part,
+                rocode_session::prompt::PartInput::Text { .. }
+            )
+        })
+        .count();
+    if attachment_count == 0 {
+        String::new()
+    } else if attachment_count == 1 {
+        "[1 attachment]".to_string()
+    } else {
+        format!("[{} attachments]", attachment_count)
+    }
 }
 
 #[derive(Debug, Serialize)]

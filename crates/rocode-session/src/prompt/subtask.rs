@@ -2,6 +2,10 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::anyhow;
+use rocode_execution_types::{
+    inline_subtask_request_defaults, session_runtime_request_defaults, CompiledExecutionRequest,
+    ExecutionRequestContext,
+};
 use rocode_provider::{
     Content, ContentPart, Message, Provider, Role, ToolDefinition, ToolResult as ProviderToolResult,
 };
@@ -9,10 +13,6 @@ use rocode_tool::{ToolContext, ToolError};
 use tokio_util::sync::CancellationToken;
 
 use super::{AgentParams, AskPermissionHook, AskQuestionHook, ModelRef};
-use rocode_orchestrator::{
-    inline_subtask_request_defaults, session_runtime_request_defaults, CompiledExecutionRequest,
-    ExecutionRequestContext,
-};
 
 const TASK_STATUS_COMPLETED: &str = "completed";
 const TASK_NO_TEXT_OUTPUT_MESSAGE: &str =
@@ -74,6 +74,7 @@ pub struct SubtaskExecutor {
     pub ask_permission_hook: Option<AskPermissionHook>,
     pub question_session_id: Option<String>,
     pub tool_runtime_config: rocode_tool::ToolRuntimeConfig,
+    pub config_store: Option<Arc<rocode_config::ConfigStore>>,
     /// Cancellation token — checked at the top of each loop iteration.
     pub abort: Option<CancellationToken>,
 }
@@ -94,6 +95,7 @@ impl SubtaskExecutor {
             ask_permission_hook: None,
             question_session_id: None,
             tool_runtime_config: rocode_tool::ToolRuntimeConfig::default(),
+            config_store: None,
             abort: None,
         }
     }
@@ -148,6 +150,11 @@ impl SubtaskExecutor {
         tool_runtime_config: rocode_tool::ToolRuntimeConfig,
     ) -> Self {
         self.tool_runtime_config = tool_runtime_config;
+        self
+    }
+
+    pub fn with_config_store(mut self, config_store: Arc<rocode_config::ConfigStore>) -> Self {
+        self.config_store = Some(config_store);
         self
     }
 
@@ -302,6 +309,9 @@ impl SubtaskExecutor {
                 )
                 .with_agent(self.agent_name.clone())
                 .with_tool_runtime_config(self.tool_runtime_config.clone());
+                if let Some(config_store) = self.config_store.clone() {
+                    ctx = ctx.with_config_store(config_store);
+                }
                 if let Some(question_hook) = self.ask_question_hook.clone() {
                     let question_session_id = self
                         .question_session_id

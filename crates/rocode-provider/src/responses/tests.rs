@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use futures::{stream, StreamExt};
 use serde_json::json;
 
-use super::helpers::{parse_output_items, process_stream_chunk};
+use super::helpers::{parse_output_items, process_stream_chunk, StreamChunkState};
 use super::*;
 use crate::custom_fetch::{
     register_custom_fetch_proxy, unregister_custom_fetch_proxy, CustomFetchProxy,
@@ -96,18 +96,7 @@ fn test_parse_output_items_function_call_and_text() {
 
 #[test]
 fn test_stream_state_machine_function_call_lifecycle() {
-    let mut finish_reason = FinishReason::Unknown;
-    let mut usage = ResponsesUsage::default();
-    let mut logprobs = Vec::new();
-    let mut response_id = None;
-    let mut ongoing_tool_calls = HashMap::new();
-    let mut has_function_call = false;
-    let mut active_reasoning = HashMap::new();
-    let mut current_reasoning_output_index = None;
-    let mut reasoning_item_to_output_index = HashMap::new();
-    let mut current_text_id = None;
-    let mut text_open = false;
-    let mut service_tier = None;
+    let mut stream_state = StreamChunkState::default();
 
     let added_events = process_stream_chunk(
         ResponsesStreamChunk::OutputItemAdded {
@@ -119,18 +108,7 @@ fn test_stream_state_machine_function_call_lifecycle() {
                 arguments: "{\"q\":\"x\"}".to_string(),
             },
         },
-        &mut finish_reason,
-        &mut usage,
-        &mut logprobs,
-        &mut response_id,
-        &mut ongoing_tool_calls,
-        &mut has_function_call,
-        &mut active_reasoning,
-        &mut current_reasoning_output_index,
-        &mut reasoning_item_to_output_index,
-        &mut current_text_id,
-        &mut text_open,
-        &mut service_tier,
+        &mut stream_state,
     );
     assert!(added_events
         .iter()
@@ -147,18 +125,7 @@ fn test_stream_state_machine_function_call_lifecycle() {
                 status: Some("completed".to_string()),
             },
         },
-        &mut finish_reason,
-        &mut usage,
-        &mut logprobs,
-        &mut response_id,
-        &mut ongoing_tool_calls,
-        &mut has_function_call,
-        &mut active_reasoning,
-        &mut current_reasoning_output_index,
-        &mut reasoning_item_to_output_index,
-        &mut current_text_id,
-        &mut text_open,
-        &mut service_tier,
+        &mut stream_state,
     );
     assert!(done_events
         .iter()
@@ -166,7 +133,7 @@ fn test_stream_state_machine_function_call_lifecycle() {
     assert!(done_events
         .iter()
         .any(|e| matches!(e, StreamEvent::ToolCallEnd { .. })));
-    assert!(has_function_call);
+    assert!(stream_state.has_function_call);
 }
 
 #[tokio::test]

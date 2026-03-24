@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use super::filter::FilterType;
+use super::search::SearchOptions;
 use super::Search;
 
 fn replace_tilde_with_home_dir(path: impl AsRef<Path>) -> PathBuf {
@@ -29,18 +30,18 @@ pub struct SearchBuilder {
 
 impl SearchBuilder {
     pub fn build(&self) -> Search {
-        Search::new(
-            &self.search_location,
-            self.more_locations.clone(),
-            self.search_input.as_deref(),
-            self.file_ext.as_deref(),
-            self.depth,
-            self.limit,
-            self.strict,
-            self.ignore_case,
-            self.hidden,
-            self.filters.clone(),
-        )
+        Search::new(SearchOptions {
+            search_location: self.search_location.clone(),
+            more_locations: self.more_locations.clone(),
+            search_input: self.search_input.clone(),
+            file_ext: self.file_ext.clone(),
+            depth: self.depth,
+            limit: self.limit,
+            strict: self.strict,
+            ignore_case: self.ignore_case,
+            with_hidden: self.hidden,
+            filters: self.filters.clone(),
+        })
     }
 
     pub fn location(mut self, location: impl AsRef<Path>) -> Self {

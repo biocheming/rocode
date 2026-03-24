@@ -1692,11 +1692,33 @@ impl SnapshotEngine {
             &format!("branch checkpoint '{}'", checkpoint_id),
         );
         if let Err(err) = result {
-            let _ = self.cleanup_git_worktree(&worktree_root, Some(&branch_name));
+            if let Err(cleanup_error) =
+                self.cleanup_git_worktree(&worktree_root, Some(&branch_name))
+            {
+                tracing::warn!(
+                    session_id = %self.session_id,
+                    checkpoint_id,
+                    worktree_root = %worktree_root.display(),
+                    branch_name,
+                    error = %cleanup_error,
+                    "Failed to cleanup git worktree after branch checkpoint creation error"
+                );
+            }
             return Err(err);
         }
         if let Err(err) = self.sync_scoped_state(&self.workdir, &execution_root) {
-            let _ = self.cleanup_git_worktree(&worktree_root, Some(&branch_name));
+            if let Err(cleanup_error) =
+                self.cleanup_git_worktree(&worktree_root, Some(&branch_name))
+            {
+                tracing::warn!(
+                    session_id = %self.session_id,
+                    checkpoint_id,
+                    worktree_root = %worktree_root.display(),
+                    branch_name,
+                    error = %cleanup_error,
+                    "Failed to cleanup git worktree after branch checkpoint sync error"
+                );
+            }
             return Err(err);
         }
 
@@ -1761,11 +1783,27 @@ impl SnapshotEngine {
             &format!("worktree checkpoint '{}'", checkpoint_id),
         );
         if let Err(err) = result {
-            let _ = self.cleanup_git_worktree(&worktree_root, None);
+            if let Err(cleanup_error) = self.cleanup_git_worktree(&worktree_root, None) {
+                tracing::warn!(
+                    session_id = %self.session_id,
+                    checkpoint_id,
+                    worktree_root = %worktree_root.display(),
+                    error = %cleanup_error,
+                    "Failed to cleanup git worktree after worktree checkpoint creation error"
+                );
+            }
             return Err(err);
         }
         if let Err(err) = self.sync_scoped_state(&self.workdir, &execution_root) {
-            let _ = self.cleanup_git_worktree(&worktree_root, None);
+            if let Err(cleanup_error) = self.cleanup_git_worktree(&worktree_root, None) {
+                tracing::warn!(
+                    session_id = %self.session_id,
+                    checkpoint_id,
+                    worktree_root = %worktree_root.display(),
+                    error = %cleanup_error,
+                    "Failed to cleanup git worktree after worktree checkpoint sync error"
+                );
+            }
             return Err(err);
         }
 
@@ -2058,7 +2096,14 @@ impl SnapshotEngine {
             })?;
         }
 
-        let _ = run_git(&self.workdir, ["worktree", "prune"]);
+        if let Err(error) = run_git(&self.workdir, ["worktree", "prune"]) {
+            tracing::debug!(
+                session_id = %self.session_id,
+                worktree_root = %worktree_root.display(),
+                error = %error,
+                "Failed to prune git worktrees during cleanup"
+            );
+        }
         Ok(())
     }
 

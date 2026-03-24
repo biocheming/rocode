@@ -9,6 +9,7 @@ members = [
     "crates/rocode-grep",
     "crates/rocode-permission",
     "crates/rocode-provider",
+    "crates/rocode-execution-types",
     "crates/rocode-session",
     "crates/rocode-storage",
     "crates/rocode-tool",

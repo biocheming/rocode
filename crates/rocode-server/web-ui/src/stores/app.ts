@@ -11,6 +11,7 @@ import type {
   Session,
   Provider,
   ExecutionMode,
+  PromptPart,
   UiCommand,
   OutputBlock,
   OutputBlockEvent,
@@ -95,6 +96,15 @@ function formatApiError(error: unknown): string {
     return error.message;
   }
   return "Unknown error";
+}
+
+function promptPreviewText(content: string, parts: readonly PromptPart[] = []): string {
+  const trimmed = content.trim();
+  if (trimmed) return trimmed;
+  const attachmentCount = parts.filter((part) => part.type !== "text").length;
+  if (attachmentCount === 0) return "";
+  if (attachmentCount === 1) return "[1 attachment]";
+  return `[${attachmentCount} attachments]`;
 }
 
 function normalizeSessions(items: (Session & Record<string, unknown>)[]): NormalizedSession[] {
@@ -519,15 +529,16 @@ export async function refreshExecutionTopology(sessionId?: string): Promise<void
 
 // ── Prompt sending ─────────────────────────────────────────────────────────
 
-export async function sendPrompt(content: string): Promise<void> {
-  if (!content || interactionLocked()) return;
+export async function sendPrompt(content: string, parts: PromptPart[] = []): Promise<void> {
+  if ((!content.trim() && parts.length === 0) || interactionLocked()) return;
+  const preview = promptPreviewText(content, parts);
 
   // Show user message immediately in the feed
   _outputBlockListener?.({
     kind: "message",
     phase: "full",
     role: "user",
-    text: content,
+    text: preview,
   }, undefined);
 
   batch(() => {
@@ -548,6 +559,9 @@ export async function sendPrompt(content: string): Promise<void> {
       stream: true,
       model: state.selectedModel,
     };
+    if (parts.length > 0) {
+      payload.parts = parts;
+    }
     if (mode) {
       if (mode.kind === "agent") {
         payload.agent = mode.id;

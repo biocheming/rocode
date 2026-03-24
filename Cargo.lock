@@ -2905,6 +2905,7 @@ dependencies = [
  "futures",
  "rocode-config",
  "rocode-core",
+ "rocode-execution-types",
  "rocode-orchestrator",
  "rocode-permission",
  "rocode-plugin",
@@ -3029,6 +3030,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocode-execution-types"
+version = "2026.3.16"
+dependencies = [
+ "rocode-core",
+ "rocode-provider",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "rocode-grep"
 version = "2026.3.16"
 dependencies = [
@@ -3098,6 +3109,7 @@ dependencies = [
  "regex",
  "rocode-config",
  "rocode-core",
+ "rocode-execution-types",
  "rocode-provider",
  "serde",
  "serde_json",
@@ -3189,6 +3201,7 @@ dependencies = [
  "rocode-command",
  "rocode-config",
  "rocode-core",
+ "rocode-execution-types",
  "rocode-mcp",
  "rocode-orchestrator",
  "rocode-permission",
@@ -3224,8 +3237,10 @@ dependencies = [
  "glob",
  "regex",
  "reqwest",
+ "rocode-config",
  "rocode-content",
  "rocode-core",
+ "rocode-execution-types",
  "rocode-lsp",
  "rocode-mcp",
  "rocode-orchestrator",
@@ -3292,9 +3307,9 @@ dependencies = [
  "reqwest",
  "rocode-config",
  "rocode-core",
+ "rocode-execution-types",
  "rocode-grep",
  "rocode-lsp",
- "rocode-orchestrator",
  "rocode-permission",
  "rocode-plugin",
  "rocode-util",

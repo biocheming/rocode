@@ -156,7 +156,12 @@ impl Spinner {
     pub async fn stop(mut self) {
         self.state.store(STATE_STOPPED, Ordering::Relaxed);
         if let Some(handle) = self.handle.take() {
-            let _ = handle.await;
+            if let Err(error) = handle.await {
+                tracing::debug!(
+                    error = %error,
+                    "Failed to join CLI spinner task during shutdown"
+                );
+            }
         }
     }
 

@@ -158,6 +158,28 @@ export interface UiCommand {
   argumentKind?: string;
 }
 
+export type PromptPart =
+  | {
+      type: "text";
+      text: string;
+    }
+  | {
+      type: "file";
+      url: string;
+      filename?: string;
+      mime?: string;
+    }
+  | {
+      type: "agent";
+      name: string;
+    }
+  | {
+      type: "subtask";
+      prompt: string;
+      description?: string;
+      agent: string;
+    };
+
 export interface OutputBlock {
   kind: string;
   phase?: string;

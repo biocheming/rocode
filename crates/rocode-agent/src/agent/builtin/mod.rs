@@ -12,8 +12,7 @@ use super::*;
 use std::collections::HashMap;
 
 use rocode_permission::{
-    build_agent_ruleset, evaluate_tool_permission, PermissionAction, PermissionRule,
-    PermissionRuleset,
+    build_agent_ruleset, PermissionAction, PermissionEngine, PermissionRule, PermissionRuleset,
 };
 
 pub use architecture_advisor::architecture_advisor;
@@ -409,7 +408,7 @@ impl AgentInfo {
     }
 
     pub fn tool_permission_decision(&self, tool_name: &str) -> PermissionAction {
-        evaluate_tool_permission(
+        PermissionEngine::evaluate_tool(
             tool_name,
             &self.allowed_tools,
             std::slice::from_ref(&self.permission),

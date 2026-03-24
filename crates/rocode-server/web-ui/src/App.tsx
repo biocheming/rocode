@@ -26,6 +26,7 @@ import { QuestionPanel } from "~/components/interaction/QuestionPanel";
 import { PermissionPanel } from "~/components/interaction/PermissionPanel";
 import { useSSE } from "~/hooks/useSSE";
 import { timeGreeting } from "~/utils/format";
+import type { PromptPart } from "~/api/types";
 import styles from "./App.module.css";
 
 const App: Component = () => {
@@ -63,8 +64,8 @@ const App: Component = () => {
     });
   });
 
-  const handleSend = async (content: string) => {
-    await sendPrompt(content);
+  const handleSend = async (content: string, parts: PromptPart[] = []) => {
+    await sendPrompt(content, parts);
   };
 
   const handleCommand = (command: string) => {

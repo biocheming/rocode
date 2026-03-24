@@ -156,6 +156,7 @@ impl App {
                                 .send_prompt(
                                     &session.id,
                                     input,
+                                    None,
                                     selected_mode.agent,
                                     selected_mode.scheduler_profile,
                                     model,
@@ -266,7 +267,15 @@ impl App {
         let session_id = session_id.to_string();
         thread::spawn(move || {
             let error = client
-                .send_prompt(&session_id, input, agent, scheduler_profile, model, variant)
+                .send_prompt(
+                    &session_id,
+                    input,
+                    None,
+                    agent,
+                    scheduler_profile,
+                    model,
+                    variant,
+                )
                 .err()
                 .map(|e| e.to_string());
             let _ = event_tx.send(Event::Custom(Box::new(

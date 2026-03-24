@@ -2,10 +2,11 @@ import { type Component, onMount, onCleanup, createEffect } from "solid-js";
 import { state, setOutputBlockListener, loadSessionMessages } from "~/stores/app";
 import { MessageFeed, clearFeed, appendFeedMessage, applyOutputBlockToFeed } from "./MessageFeed";
 import { Composer } from "./Composer";
+import type { PromptPart } from "~/api/types";
 import styles from "./ChatDomain.module.css";
 
 export interface ChatDomainProps {
-  onSend: (content: string) => void;
+  onSend: (content: string, parts?: PromptPart[]) => void;
 }
 
 export const ChatDomain: Component<ChatDomainProps> = (props) => {

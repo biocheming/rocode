@@ -106,14 +106,24 @@ pub async fn shell_exec(input: &ShellInput, session: &mut Session) -> anyhow::Re
     let stdout_task = child.stdout.take().map(|mut pipe| {
         tokio::spawn(async move {
             let mut buf = Vec::new();
-            let _ = pipe.read_to_end(&mut buf).await;
+            if let Err(error) = pipe.read_to_end(&mut buf).await {
+                tracing::debug!(
+                    error = %error,
+                    "Failed to read full stdout from shell child process"
+                );
+            }
             String::from_utf8_lossy(&buf).to_string()
         })
     });
     let stderr_task = child.stderr.take().map(|mut pipe| {
         tokio::spawn(async move {
             let mut buf = Vec::new();
-            let _ = pipe.read_to_end(&mut buf).await;
+            if let Err(error) = pipe.read_to_end(&mut buf).await {
+                tracing::debug!(
+                    error = %error,
+                    "Failed to read full stderr from shell child process"
+                );
+            }
             String::from_utf8_lossy(&buf).to_string()
         })
     });
@@ -123,8 +133,18 @@ pub async fn shell_exec(input: &ShellInput, session: &mut Session) -> anyhow::Re
         _ = child.wait() => {}
         _ = abort.cancelled() => {
             aborted = true;
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+            if let Err(error) = child.kill().await {
+                tracing::debug!(
+                    error = %error,
+                    "Failed to kill shell child process after cancellation"
+                );
+            }
+            if let Err(error) = child.wait().await {
+                tracing::debug!(
+                    error = %error,
+                    "Failed to wait for shell child process after cancellation"
+                );
+            }
         }
     }
 

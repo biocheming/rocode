@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use rocode_config::{Config, ConfigStore};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -6,7 +7,6 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 use crate::{PermissionRequest, Tool, ToolContext, ToolError, ToolResult};
-use rocode_config::load_config;
 
 pub struct SkillTool;
 
@@ -43,7 +43,26 @@ fn resolve_skill_path(base: &Path, raw: &str) -> PathBuf {
     }
 }
 
-fn collect_skill_roots(base: &Path) -> Vec<PathBuf> {
+fn configured_skill_roots(base: &Path, config: &Config) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(skills) = &config.skills {
+        for raw in &skills.paths {
+            roots.push(resolve_skill_path(base, raw));
+        }
+    }
+
+    let mut names: Vec<&String> = config.skill_paths.keys().collect();
+    names.sort();
+    for name in names {
+        if let Some(raw) = config.skill_paths.get(name) {
+            roots.push(resolve_skill_path(base, raw));
+        }
+    }
+
+    roots
+}
+
+fn collect_skill_roots(base: &Path, config: Option<&Config>) -> Vec<PathBuf> {
     // Scan from lower-precedence locations to higher-precedence ones so later
     // roots override earlier ones when names collide.
     let mut roots = Vec::new();
@@ -64,19 +83,8 @@ fn collect_skill_roots(base: &Path) -> Vec<PathBuf> {
     roots.push(base.join(".agents/skills"));
     roots.push(base.join(".claude/skills"));
 
-    if let Ok(config) = load_config(base) {
-        if let Some(skills) = config.skills {
-            for raw in skills.paths {
-                roots.push(resolve_skill_path(base, &raw));
-            }
-        }
-        let mut names: Vec<&String> = config.skill_paths.keys().collect();
-        names.sort();
-        for name in names {
-            if let Some(raw) = config.skill_paths.get(name) {
-                roots.push(resolve_skill_path(base, raw));
-            }
-        }
+    if let Some(config) = config {
+        roots.extend(configured_skill_roots(base, config));
     }
 
     let mut deduped = Vec::new();
@@ -86,6 +94,17 @@ fn collect_skill_roots(base: &Path) -> Vec<PathBuf> {
         }
     }
     deduped
+}
+
+fn config_for_skill_discovery(
+    base: &Path,
+    config_store: Option<&ConfigStore>,
+) -> Option<std::sync::Arc<Config>> {
+    config_store.map(ConfigStore::config).or_else(|| {
+        ConfigStore::from_project_dir(base)
+            .ok()
+            .map(|store| store.config())
+    })
 }
 
 fn parse_frontmatter_value(frontmatter: &str, key: &str) -> Option<String> {
@@ -169,9 +188,13 @@ fn scan_skill_root(root: &Path) -> Vec<SkillInfo> {
         .collect()
 }
 
-fn discover_skills(base: &Path) -> Vec<SkillInfo> {
+fn discover_skills_with_config_store(
+    base: &Path,
+    config_store: Option<&ConfigStore>,
+) -> Vec<SkillInfo> {
     let mut by_name: HashMap<String, SkillInfo> = HashMap::new();
-    for root in collect_skill_roots(base) {
+    let config = config_for_skill_discovery(base, config_store);
+    for root in collect_skill_roots(base, config.as_deref()) {
         for skill in scan_skill_root(&root) {
             by_name.insert(skill.name.clone(), skill);
         }
@@ -180,6 +203,11 @@ fn discover_skills(base: &Path) -> Vec<SkillInfo> {
     let mut skills: Vec<SkillInfo> = by_name.into_values().collect();
     skills.sort_by(|a, b| a.name.cmp(&b.name));
     skills
+}
+
+#[cfg(test)]
+fn discover_skills(base: &Path) -> Vec<SkillInfo> {
+    discover_skills_with_config_store(base, None)
 }
 
 fn normalize_requested_skill_names(raw_names: &[String]) -> Vec<String> {
@@ -208,12 +236,20 @@ pub fn render_loaded_skills_context(
     base: &Path,
     requested_names: &[String],
 ) -> Result<(String, Vec<String>), ToolError> {
+    render_loaded_skills_context_with_config_store(base, requested_names, None)
+}
+
+pub fn render_loaded_skills_context_with_config_store(
+    base: &Path,
+    requested_names: &[String],
+    config_store: Option<&ConfigStore>,
+) -> Result<(String, Vec<String>), ToolError> {
     let requested = normalize_requested_skill_names(requested_names);
     if requested.is_empty() {
         return Ok((String::new(), Vec::new()));
     }
 
-    let skills = discover_skills(base);
+    let skills = discover_skills_with_config_store(base, config_store);
     let mut selected: Vec<&SkillInfo> = Vec::new();
 
     for name in &requested {
@@ -287,7 +323,8 @@ impl Tool for SkillTool {
 
     fn parameters(&self) -> serde_json::Value {
         let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let skills = discover_skills(&base);
+        let config_store = ConfigStore::from_project_dir(&base).ok();
+        let skills = discover_skills_with_config_store(&base, config_store.as_ref());
         let skill_names: Vec<String> = skills.into_iter().map(|s| s.name).collect();
 
         serde_json::json!({
@@ -319,7 +356,10 @@ impl Tool for SkillTool {
         let input: SkillInput =
             serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
 
-        let skills = discover_skills(Path::new(&ctx.directory));
+        let skills = discover_skills_with_config_store(
+            Path::new(&ctx.directory),
+            ctx.config_store.as_deref(),
+        );
 
         let skill = skills
             .iter()
@@ -423,7 +463,8 @@ impl Default for SkillTool {
 
 pub fn list_available_skills() -> Vec<(String, String)> {
     let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    discover_skills(&base)
+    let config_store = ConfigStore::from_project_dir(&base).ok();
+    discover_skills_with_config_store(&base, config_store.as_ref())
         .into_iter()
         .map(|s| (s.name, s.description))
         .collect()

@@ -577,8 +577,12 @@ fn run_prompt_session(
                     && !key.modifiers.contains(KeyModifiers::CONTROL)
                     && !key.modifiers.contains(KeyModifiers::ALT) =>
             {
-                let KeyCode::Char(ch) = key.code else {
-                    unreachable!();
+                let ch = match key.code {
+                    KeyCode::Char(ch) => ch,
+                    _ => {
+                        debug_assert!(false, "character input branch received a non-char key");
+                        continue;
+                    }
                 };
                 insert_char_at_cursor(&mut line, cursor_pos, ch);
                 cursor_pos += 1;
@@ -840,8 +844,12 @@ fn read_raw_line(frame: &PromptFrame, history: &PromptHistory) -> io::Result<Pro
                     && !key.modifiers.contains(KeyModifiers::CONTROL)
                     && !key.modifiers.contains(KeyModifiers::ALT) =>
             {
-                let KeyCode::Char(ch) = key.code else {
-                    unreachable!();
+                let ch = match key.code {
+                    KeyCode::Char(ch) => ch,
+                    _ => {
+                        debug_assert!(false, "character input branch received a non-char key");
+                        continue;
+                    }
                 };
                 insert_char_at_cursor(&mut line, cursor_pos, ch);
                 cursor_pos += 1;
@@ -1000,8 +1008,12 @@ fn read_raw_inline_line(
                     && !key.modifiers.contains(KeyModifiers::CONTROL)
                     && !key.modifiers.contains(KeyModifiers::ALT) =>
             {
-                let KeyCode::Char(ch) = key.code else {
-                    unreachable!();
+                let ch = match key.code {
+                    KeyCode::Char(ch) => ch,
+                    _ => {
+                        debug_assert!(false, "character input branch received a non-char key");
+                        continue;
+                    }
                 };
                 insert_char_at_cursor(&mut line, cursor_pos, ch);
                 cursor_pos += 1;

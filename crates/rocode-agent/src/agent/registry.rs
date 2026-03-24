@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use super::*;
-use rocode_config::Config as LoadedConfig;
+use rocode_config::{Config as LoadedConfig, ConfigStore};
 
 pub struct AgentRegistry {
     pub(crate) agents: HashMap<String, AgentInfo>,
@@ -33,10 +33,10 @@ impl AgentRegistry {
     }
 
     pub fn from_project_dir(project_dir: impl AsRef<Path>) -> Self {
-        match rocode_config::load_config(project_dir) {
-            Ok(config) => Self::from_config(&config),
-            Err(_) => Self::new(),
-        }
+        ConfigStore::from_project_dir(project_dir.as_ref())
+            .ok()
+            .map(|store| Self::from_config(&store.config()))
+            .unwrap_or_else(Self::new)
     }
 
     pub fn get(&self, name: &str) -> Option<&AgentInfo> {

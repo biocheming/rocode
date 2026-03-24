@@ -128,6 +128,18 @@ pub(super) fn collect_active_tool_execution_records(
                 ToolCallStatus::Completed | ToolCallStatus::Error => continue,
             };
 
+            let (waiting_on, recent_event) = match status {
+                ToolCallStatus::Pending => ("dispatch".to_string(), format!("{name} queued")),
+                ToolCallStatus::Running => ("tool".to_string(), format!("{name} running")),
+                ToolCallStatus::Completed | ToolCallStatus::Error => {
+                    debug_assert!(
+                        false,
+                        "completed/error tool calls should have been filtered before record creation"
+                    );
+                    continue;
+                }
+            };
+
             records.push(crate::runtime_control::ExecutionRecord {
                 id: format!("tool_call:{id}"),
                 session_id: session.id.clone(),
@@ -136,16 +148,8 @@ pub(super) fn collect_active_tool_execution_records(
                 label: Some(format!("Tool: {name}")),
                 parent_id: parent_id.clone(),
                 stage_id: stage_id.clone(),
-                waiting_on: Some(match status {
-                    ToolCallStatus::Pending => "dispatch".to_string(),
-                    ToolCallStatus::Running => "tool".to_string(),
-                    ToolCallStatus::Completed | ToolCallStatus::Error => unreachable!(),
-                }),
-                recent_event: Some(match status {
-                    ToolCallStatus::Pending => format!("{name} queued"),
-                    ToolCallStatus::Running => format!("{name} running"),
-                    ToolCallStatus::Completed | ToolCallStatus::Error => unreachable!(),
-                }),
+                waiting_on: Some(waiting_on),
+                recent_event: Some(recent_event),
                 started_at: part.created_at.timestamp_millis(),
                 updated_at: part.created_at.timestamp_millis(),
                 metadata: Some(serde_json::json!({

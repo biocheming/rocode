@@ -5,6 +5,7 @@ use axum::{
 };
 use futures::stream::Stream;
 use std::convert::Infallible;
+use std::path::Path as FsPath;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
@@ -131,6 +132,11 @@ pub(crate) async fn stream_message(
     };
 
     let config = state.config_store.config();
+    let known_agents = AgentRegistry::from_config(&config)
+        .list_all()
+        .into_iter()
+        .map(|agent| agent.name.clone())
+        .collect::<Vec<_>>();
     let request_config = resolve_prompt_request_config(super::session::PromptRequestConfigInput {
         state: &state,
         config: &config,
@@ -226,7 +232,16 @@ pub(crate) async fn stream_message(
     let stream_session_id = session_id.clone();
     let stream_config = config.clone();
     let stream_session = stream_session.clone();
-    let stream_content = req.content.clone();
+    let stream_parts = if let Some(parts) = req.parts.clone().filter(|parts| !parts.is_empty()) {
+        parts
+    } else {
+        rocode_session::resolve_prompt_parts(
+            &req.content,
+            FsPath::new(&stream_session.directory),
+            &known_agents,
+        )
+        .await
+    };
     let stream_variant = selected_variant.clone();
     let stream_provider = provider.clone();
     let stream_provider_id = provider_id.clone();
@@ -255,6 +270,7 @@ pub(crate) async fn stream_message(
         let prompt_runner = rocode_session::SessionPrompt::new(Arc::new(RwLock::new(
             rocode_session::SessionStateManager::new(),
         )))
+        .with_config_store(stream_state.config_store.clone())
         .with_tool_runtime_config(rocode_tool::ToolRuntimeConfig::from_config(&stream_config));
         let mut session = stream_session;
         let input = rocode_session::PromptInput {
@@ -268,9 +284,7 @@ pub(crate) async fn stream_message(
             no_reply: false,
             system: None,
             variant: stream_variant.clone(),
-            parts: vec![rocode_session::PartInput::Text {
-                text: stream_content.clone(),
-            }],
+            parts: stream_parts.clone(),
             tools: None,
         };
 
@@ -295,7 +309,13 @@ pub(crate) async fn stream_message(
                         .to_string();
                     tokio::spawn(async move {
                         if let Ok(event) = Event::default().event(&event_name).json_data(payload) {
-                            let _ = sse_tx.send(Ok(event)).await;
+                            if let Err(error) = sse_tx.send(Ok(event)).await {
+                                tracing::debug!(
+                                    event_name,
+                                    error = %error,
+                                    "Failed to forward question SSE event to stream client"
+                                );
+                            }
                         }
                     });
                 });

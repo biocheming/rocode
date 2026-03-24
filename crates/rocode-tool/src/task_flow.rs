@@ -571,7 +571,7 @@ fn execute_list(input: &TaskFlowInput) -> Result<ToolResult, ToolError> {
 
 fn execute_cancel(input: &TaskFlowInput) -> Result<ToolResult, ToolError> {
     let task_id = input.task_id.as_deref().unwrap_or_default().trim();
-    rocode_orchestrator::global_lifecycle()
+    rocode_execution_types::global_lifecycle()
         .cancel_task(task_id)
         .map_err(ToolError::ExecutionError)?;
 

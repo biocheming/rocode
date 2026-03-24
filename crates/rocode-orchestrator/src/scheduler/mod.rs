@@ -21,6 +21,7 @@ pub use config::*;
 pub use framework::*;
 pub use preset::*;
 pub use presets::*;
+use profile::presentation::{profile_prompt_suffix, render_plan_snapshot, skill_tree_context};
 pub use profile::*;
 pub use prompt_context::*;
 pub use route::*;

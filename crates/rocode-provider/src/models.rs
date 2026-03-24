@@ -167,9 +167,21 @@ impl ModelsRegistry {
                 if let Ok(text) = response.text().await {
                     if let Ok(parsed) = serde_json::from_str::<ModelsData>(&text) {
                         if let Some(parent) = self.cache_path.parent() {
-                            let _ = tokio::fs::create_dir_all(parent).await;
+                            if let Err(error) = tokio::fs::create_dir_all(parent).await {
+                                tracing::debug!(
+                                    path = %parent.display(),
+                                    error = %error,
+                                    "Failed to create models cache directory"
+                                );
+                            }
                         }
-                        let _ = tokio::fs::write(&self.cache_path, &text).await;
+                        if let Err(error) = tokio::fs::write(&self.cache_path, &text).await {
+                            tracing::debug!(
+                                path = %self.cache_path.display(),
+                                error = %error,
+                                "Failed to write models cache file"
+                            );
+                        }
                         let mut data = self.data.write().await;
                         *data = Some(parsed.clone());
                         return parsed;

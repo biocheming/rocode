@@ -251,7 +251,10 @@ pub fn parse_inline(text: &str) -> Vec<InlineElement> {
                     chars.next();
                     break;
                 }
-                code.push(chars.next().unwrap());
+                let Some(next_char) = chars.next() else {
+                    break;
+                };
+                code.push(next_char);
             }
             elements.push(InlineElement::Code(code));
         } else if ch == '*' || ch == '_' {
@@ -273,7 +276,10 @@ pub fn parse_inline(text: &str) -> Vec<InlineElement> {
                         }
                         content.push(marker);
                     } else {
-                        content.push(chars.next().unwrap());
+                        let Some(next_char) = chars.next() else {
+                            break;
+                        };
+                        content.push(next_char);
                     }
                 }
 
@@ -298,7 +304,10 @@ pub fn parse_inline(text: &str) -> Vec<InlineElement> {
                         found_end = true;
                         break;
                     }
-                    content.push(chars.next().unwrap());
+                    let Some(next_char) = chars.next() else {
+                        break;
+                    };
+                    content.push(next_char);
                 }
 
                 if found_end && !content.is_empty() {
@@ -324,7 +333,10 @@ pub fn parse_inline(text: &str) -> Vec<InlineElement> {
                     chars.next();
                     break;
                 }
-                link_text.push(chars.next().unwrap());
+                let Some(next_char) = chars.next() else {
+                    break;
+                };
+                link_text.push(next_char);
             }
 
             if chars.peek() == Some(&'(') {
@@ -335,7 +347,10 @@ pub fn parse_inline(text: &str) -> Vec<InlineElement> {
                         chars.next();
                         break;
                     }
-                    url.push(chars.next().unwrap());
+                    let Some(next_char) = chars.next() else {
+                        break;
+                    };
+                    url.push(next_char);
                 }
                 elements.push(InlineElement::Link {
                     text: link_text,

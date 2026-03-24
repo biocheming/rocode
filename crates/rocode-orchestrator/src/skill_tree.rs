@@ -88,84 +88,76 @@ impl SkillTreeCompiler {
         let mut lineage = Vec::<String>::new();
         let mut inherited_paths = Vec::<String>::new();
         let mut inherited_segments = Vec::<String>::new();
-
-        self.compile_node(
-            root,
-            None,
-            0,
+        let mut traversal = SkillTreeTraversal {
             markdown_repo,
-            &mut visited,
-            &mut lineage,
-            &mut inherited_paths,
-            &mut inherited_segments,
-            &mut compiled_nodes,
-        )?;
+            visited: &mut visited,
+            lineage: &mut lineage,
+            inherited_paths: &mut inherited_paths,
+            inherited_segments: &mut inherited_segments,
+            out: &mut compiled_nodes,
+        };
+
+        self.compile_node(root, None, 0, &mut traversal)?;
 
         Ok(CompiledSkillTree {
             nodes: compiled_nodes,
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn compile_node(
         &self,
         node: &SkillTreeNode,
         parent_id: Option<&str>,
         depth: usize,
-        markdown_repo: &HashMap<String, String>,
-        visited: &mut HashSet<String>,
-        lineage: &mut Vec<String>,
-        inherited_paths: &mut Vec<String>,
-        inherited_segments: &mut Vec<String>,
-        out: &mut Vec<CompiledSkillNode>,
+        traversal: &mut SkillTreeTraversal<'_>,
     ) -> Result<(), SkillTreeCompileError> {
-        if !visited.insert(node.node_id.clone()) {
+        if !traversal.visited.insert(node.node_id.clone()) {
             return Err(SkillTreeCompileError::DuplicateNodeId {
                 node_id: node.node_id.clone(),
             });
         }
 
-        let markdown = markdown_repo
+        let markdown = traversal
+            .markdown_repo
             .get(&node.markdown_path)
             .ok_or_else(|| SkillTreeCompileError::MissingMarkdown {
                 path: node.markdown_path.clone(),
             })?
             .clone();
 
-        lineage.push(node.node_id.clone());
-        inherited_paths.push(node.markdown_path.clone());
-        inherited_segments.push(markdown);
+        traversal.lineage.push(node.node_id.clone());
+        traversal.inherited_paths.push(node.markdown_path.clone());
+        traversal.inherited_segments.push(markdown);
 
-        let context_markdown = inherited_segments.join(&self.context_separator);
-        out.push(CompiledSkillNode {
+        let context_markdown = traversal.inherited_segments.join(&self.context_separator);
+        traversal.out.push(CompiledSkillNode {
             node_id: node.node_id.clone(),
             parent_id: parent_id.map(str::to_string),
             depth,
-            lineage: lineage.clone(),
-            source_paths: inherited_paths.clone(),
+            lineage: traversal.lineage.clone(),
+            source_paths: traversal.inherited_paths.clone(),
             context_markdown,
         });
 
         for child in &node.children {
-            self.compile_node(
-                child,
-                Some(&node.node_id),
-                depth + 1,
-                markdown_repo,
-                visited,
-                lineage,
-                inherited_paths,
-                inherited_segments,
-                out,
-            )?;
+            self.compile_node(child, Some(&node.node_id), depth + 1, traversal)?;
         }
 
-        lineage.pop();
-        inherited_paths.pop();
-        inherited_segments.pop();
+        traversal.lineage.pop();
+        traversal.inherited_paths.pop();
+        traversal.inherited_segments.pop();
 
         Ok(())
     }
+}
+
+struct SkillTreeTraversal<'a> {
+    markdown_repo: &'a HashMap<String, String>,
+    visited: &'a mut HashSet<String>,
+    lineage: &'a mut Vec<String>,
+    inherited_paths: &'a mut Vec<String>,
+    inherited_segments: &'a mut Vec<String>,
+    out: &'a mut Vec<CompiledSkillNode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

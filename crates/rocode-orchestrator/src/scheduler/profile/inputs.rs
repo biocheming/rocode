@@ -1,5 +1,15 @@
 use super::*;
 
+pub(in crate::scheduler) struct RetryComposeRequest<'a> {
+    pub(in crate::scheduler) original_input: &'a str,
+    pub(in crate::scheduler) state: &'a SchedulerProfileState,
+    pub(in crate::scheduler) plan: &'a SchedulerProfilePlan,
+    pub(in crate::scheduler) round: usize,
+    pub(in crate::scheduler) decision: &'a SchedulerExecutionGateDecision,
+    pub(in crate::scheduler) previous_output: &'a OrchestratorOutput,
+    pub(in crate::scheduler) review_output: Option<&'a OrchestratorOutput>,
+}
+
 impl SchedulerProfileOrchestrator {
     pub(super) fn compose_request_analysis_input(&self, input: &str) -> String {
         let mut sections = Vec::new();

@@ -537,18 +537,8 @@ impl ToolRegistry {
     }
 }
 
-fn hook_payload_object(
-    payload: &serde_json::Value,
-) -> Option<&serde_json::Map<String, serde_json::Value>> {
-    payload
-        .get("output")
-        .and_then(|value| value.as_object())
-        .or_else(|| payload.as_object())
-        .or_else(|| payload.get("data").and_then(|value| value.as_object()))
-}
-
 fn apply_tool_definition_payload(schema: &mut ToolSchema, payload: &serde_json::Value) {
-    let Some(object) = hook_payload_object(payload) else {
+    let Some(object) = rocode_plugin::hook_payload_object(payload) else {
         return;
     };
     if let Some(description) = object.get("description").and_then(|value| value.as_str()) {
@@ -560,7 +550,7 @@ fn apply_tool_definition_payload(schema: &mut ToolSchema, payload: &serde_json::
 }
 
 fn apply_tool_before_payload(args: &mut serde_json::Value, payload: &serde_json::Value) {
-    let Some(object) = hook_payload_object(payload) else {
+    let Some(object) = rocode_plugin::hook_payload_object(payload) else {
         return;
     };
     if let Some(next_args) = object.get("args") {
@@ -569,7 +559,7 @@ fn apply_tool_before_payload(args: &mut serde_json::Value, payload: &serde_json:
 }
 
 fn apply_tool_after_payload(result: &mut ToolResult, payload: &serde_json::Value) {
-    let Some(object) = hook_payload_object(payload) else {
+    let Some(object) = rocode_plugin::hook_payload_object(payload) else {
         return;
     };
     if let Some(title) = object.get("title").and_then(|value| value.as_str()) {

@@ -515,7 +515,13 @@ When constructing the summary, try to stick to this template:
 
         // Persist the assistant message if session ops are available.
         if let Some(ops) = session_ops {
-            let _ = ops.update_message(assistant_info.clone()).await;
+            if let Err(error) = ops.update_message(assistant_info.clone()).await {
+                tracing::warn!(
+                    session_id = %input.session_id,
+                    error = %error,
+                    "Failed to persist compaction assistant placeholder message"
+                );
+            }
         }
 
         // TS: const compacting = await Plugin.trigger("experimental.session.compacting", ...)
@@ -601,15 +607,29 @@ When constructing the summary, try to stick to this template:
                 }),
                 metadata: Some(metadata),
             };
-            let _ = ops
+            if let Err(error) = ops
                 .update_part(&input.session_id, &assistant_id, summary_part)
-                .await;
+                .await
+            {
+                tracing::warn!(
+                    session_id = %input.session_id,
+                    message_id = %assistant_id,
+                    error = %error,
+                    "Failed to persist compaction summary part"
+                );
+            }
 
             let mut completed_info = assistant_info.clone();
             if let MessageInfo::Assistant { time, .. } = &mut completed_info {
                 time.completed = Some(now_part);
             }
-            let _ = ops.update_message(completed_info).await;
+            if let Err(error) = ops.update_message(completed_info).await {
+                tracing::warn!(
+                    session_id = %input.session_id,
+                    error = %error,
+                    "Failed to persist compaction assistant completion state"
+                );
+            }
         }
 
         // TS: if (result === "continue" && input.auto) { ... create continue message ... }
@@ -638,7 +658,14 @@ When constructing the summary, try to stick to this template:
                     tools: None,
                     variant: input.variant.clone(),
                 };
-                let _ = ops.update_message(continue_user).await;
+                if let Err(error) = ops.update_message(continue_user).await {
+                    tracing::warn!(
+                        session_id = %input.session_id,
+                        message_id = %continue_msg_id,
+                        error = %error,
+                        "Failed to persist auto-continue user message"
+                    );
+                }
 
                 // Create a synthetic text part with the continue prompt.
                 let continue_part_id =
@@ -657,9 +684,17 @@ When constructing the summary, try to stick to this template:
                     }),
                     metadata: None,
                 };
-                let _ = ops
+                if let Err(error) = ops
                     .update_part(&input.session_id, &continue_msg_id, continue_part)
-                    .await;
+                    .await
+                {
+                    tracing::warn!(
+                        session_id = %input.session_id,
+                        message_id = %continue_msg_id,
+                        error = %error,
+                        "Failed to persist auto-continue prompt part"
+                    );
+                }
             }
         }
 

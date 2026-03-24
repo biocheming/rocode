@@ -17,7 +17,8 @@ use rocode_config::Config;
 pub use rocode_tui::api::{
     AgentInfo, CompactResponse, CreateSessionRequest, ExecuteRecoveryRequest, ExecuteShellRequest,
     ExecutionModeInfo, FullProviderListResponse, KnownProvidersResponse, McpAuthStartInfo,
-    McpStatusInfo, MessageInfo, MessageTokensInfo, PermissionRequestInfo, PromptRequest,
+    McpStatusInfo, MessageInfo, MessageTokensInfo, PermissionRequestInfo, PromptPart,
+    PromptRequest,
     ProviderConnectSchemaResponse, ProviderListResponse, QuestionInfo, RecoveryActionKind,
     RevertRequest, RevertResponse, SessionExecutionTopology, SessionInfo, SessionRecoveryProtocol,
     SessionRuntimeState, SessionStatusInfo, ShareResponse, UpdateSessionRequest,
@@ -125,6 +126,7 @@ impl CliApiClient {
         &self,
         session_id: &str,
         content: String,
+        parts: Option<Vec<PromptPart>>,
         agent: Option<String>,
         scheduler_profile: Option<String>,
         model: Option<String>,
@@ -132,7 +134,8 @@ impl CliApiClient {
     ) -> anyhow::Result<serde_json::Value> {
         let url = server_url(&self.base_url, &format!("/session/{}/prompt", session_id));
         let req = PromptRequest {
-            message: content,
+            message: parts.as_ref().map(|_| None).unwrap_or_else(|| Some(content)),
+            parts,
             agent,
             scheduler_profile,
             model,

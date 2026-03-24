@@ -791,7 +791,13 @@ async fn collect_lsp_diagnostics_for_targets(
             };
 
             if let Ok(content) = tokio::fs::read_to_string(&path).await {
-                let _ = client.open_document(&path, &content, language).await;
+                if let Err(error) = client.open_document(&path, &content, language).await {
+                    tracing::debug!(
+                        path = %path.display(),
+                        error = %error,
+                        "Failed to sync patched file to LSP before diagnostics"
+                    );
+                }
             }
 
             tokio::time::sleep(Duration::from_millis(100)).await;

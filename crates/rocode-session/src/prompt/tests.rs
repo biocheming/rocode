@@ -2,7 +2,7 @@ use super::*;
 use crate::message::MessagePart;
 use async_trait::async_trait;
 use futures::stream;
-use rocode_orchestrator::CompiledExecutionRequest;
+use rocode_execution_types::CompiledExecutionRequest;
 use rocode_provider::{
     ChatRequest, ChatResponse, ModelInfo, ProviderError, StreamEvent, StreamResult, StreamUsage,
 };

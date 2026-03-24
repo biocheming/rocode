@@ -458,7 +458,13 @@ impl McpOAuthManager {
         self.managed_server(server_name).await?;
         self.log_event(server_name, "info", "Restart requested")
             .await;
-        let _ = self.disconnect(server_name).await;
+        if let Err(error) = self.disconnect(server_name).await {
+            tracing::warn!(
+                server_name,
+                error = %error,
+                "Failed to disconnect MCP server before restart"
+            );
+        }
         self.connect(server_name).await
     }
 

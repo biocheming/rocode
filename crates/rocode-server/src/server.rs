@@ -389,6 +389,7 @@ impl ServerState {
             SessionPrompt::new(Arc::new(tokio::sync::RwLock::new(
                 SessionStateManager::new(),
             )))
+            .with_config_store(config_store.clone())
             .with_tool_runtime_config(tool_runtime_config),
         );
         let db = Database::new().await?;

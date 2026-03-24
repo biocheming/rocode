@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use rocode_execution_types::ExecutionRequestContext;
 use rocode_orchestrator::ToolExecError as OrchestratorToolExecError;
 use rocode_provider::ProviderRegistry;
 use rocode_tool::{ToolContext, ToolError, ToolRegistry};
@@ -9,10 +10,8 @@ use rocode_tool::{ToolContext, ToolError, ToolRegistry};
 use super::{AgentExecutor, Conversation, SubsessionState};
 use crate::ToolCall;
 
-pub(super) fn agent_execution_context(
-    info: &crate::AgentInfo,
-) -> rocode_orchestrator::ExecutionRequestContext {
-    rocode_orchestrator::ExecutionRequestContext {
+pub(super) fn agent_execution_context(info: &crate::AgentInfo) -> ExecutionRequestContext {
+    ExecutionRequestContext {
         provider_id: info.model.as_ref().map(|m| m.provider_id.clone()),
         model_id: info.model.as_ref().map(|m| m.model_id.clone()),
         max_tokens: info.max_tokens,

@@ -247,7 +247,12 @@ impl Tool for BashTool {
                                 kill_process_tree(pid).await;
                             }
                         }
-                        let _ = child.kill().await;
+                        if let Err(error) = child.kill().await {
+                            tracing::debug!(
+                                error = %error,
+                                "Failed to kill bash child process after cancellation"
+                            );
+                        }
                         return Err(ToolError::Cancelled);
                     }
                     line = stdout_reader.next_line() => {
@@ -298,7 +303,12 @@ impl Tool for BashTool {
                         kill_process_tree(pid).await;
                     }
                 }
-                let _ = child.kill().await;
+                if let Err(error) = child.kill().await {
+                    tracing::debug!(
+                        error = %error,
+                        "Failed to kill bash child process after timeout"
+                    );
+                }
                 return Err(ToolError::Timeout(format!(
                     "Command timed out after {}ms",
                     timeout_ms

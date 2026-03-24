@@ -874,8 +874,18 @@ mod tests {
                         ),
                         _ => http_response(404, &["Content-Type: text/plain; charset=utf-8"], "not found"),
                     };
-                    let _ = socket.write_all(response.as_bytes()).await;
-                    let _ = socket.shutdown().await;
+                    if let Err(error) = socket.write_all(response.as_bytes()).await {
+                        tracing::debug!(
+                            error = %error,
+                            "Failed to write browser session local HTTP response"
+                        );
+                    }
+                    if let Err(error) = socket.shutdown().await {
+                        tracing::debug!(
+                            error = %error,
+                            "Failed to shutdown browser session local HTTP socket"
+                        );
+                    }
                 });
             }
         });

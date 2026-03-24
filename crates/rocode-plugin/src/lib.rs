@@ -43,6 +43,20 @@ impl From<serde_json::Value> for HookOutput {
     }
 }
 
+/// Resolve the canonical object view for a hook payload.
+///
+/// Hook outputs may return the object directly or nest it under wrapper keys
+/// such as `output` or `data`.
+pub fn hook_payload_object(
+    payload: &serde_json::Value,
+) -> Option<&serde_json::Map<String, serde_json::Value>> {
+    payload
+        .get("output")
+        .and_then(|value| value.as_object())
+        .or_else(|| payload.get("data").and_then(|value| value.as_object()))
+        .or_else(|| payload.as_object())
+}
+
 pub type HookResult = Result<HookOutput, HookError>;
 
 pub type HookHandler =
@@ -622,6 +636,38 @@ mod tests {
         assert_eq!(
             payload.get("prompt").and_then(|v| v.as_str()),
             Some("override")
+        );
+    }
+
+    #[test]
+    fn hook_payload_object_accepts_wrapped_and_plain_objects() {
+        let wrapped = serde_json::json!({
+            "output": { "status": "allow" }
+        });
+        let plain = serde_json::json!({
+            "status": "allow"
+        });
+        let data_wrapped = serde_json::json!({
+            "data": { "status": "allow" }
+        });
+
+        assert_eq!(
+            hook_payload_object(&wrapped)
+                .and_then(|object| object.get("status"))
+                .and_then(|value| value.as_str()),
+            Some("allow")
+        );
+        assert_eq!(
+            hook_payload_object(&plain)
+                .and_then(|object| object.get("status"))
+                .and_then(|value| value.as_str()),
+            Some("allow")
+        );
+        assert_eq!(
+            hook_payload_object(&data_wrapped)
+                .and_then(|object| object.get("status"))
+                .and_then(|value| value.as_str()),
+            Some("allow")
         );
     }
 

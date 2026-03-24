@@ -4,6 +4,33 @@
   align-items: flex-end;
 }
 
+.fileInput {
+  display: none;
+}
+
+.attachBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-default);
+  font-size: 1.1rem;
+}
+
+.attachBtn:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.attachBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .inputWrap {
   flex: 1;
   position: relative;
@@ -74,6 +101,34 @@
 
 .cancelBtn:hover {
   opacity: 0.9;
+}
+
+.attachmentList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.attachmentPill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0.35rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-default);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.attachmentPill:hover {
+  border-color: var(--color-accent);
+  color: var(--color-text-primary);
+}
+
+.attachmentRemove {
+  font-weight: 700;
 }
 
 .hint {

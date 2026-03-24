@@ -92,6 +92,34 @@ pub fn evaluate(permission: &str, pattern: &str, rulesets: &[PermissionRuleset])
     })
 }
 
+pub fn combine_actions(actions: impl IntoIterator<Item = PermissionAction>) -> PermissionAction {
+    let mut combined = PermissionAction::Allow;
+    for action in actions {
+        match action {
+            PermissionAction::Deny => return PermissionAction::Deny,
+            PermissionAction::Ask => combined = PermissionAction::Ask,
+            PermissionAction::Allow => {}
+        }
+    }
+    combined
+}
+
+pub fn evaluate_permission_patterns(
+    permission: &str,
+    patterns: &[String],
+    rulesets: &[PermissionRuleset],
+) -> PermissionAction {
+    if patterns.is_empty() {
+        return evaluate(permission, "*", rulesets).action;
+    }
+
+    combine_actions(
+        patterns
+            .iter()
+            .map(|pattern| evaluate(permission, pattern, rulesets).action),
+    )
+}
+
 /// Map a tool name to its permission type.
 /// Edit-family tools map to "edit", `ls` maps to "list", others pass through as-is.
 pub fn tool_to_permission(tool_name: &str) -> &str {
@@ -112,14 +140,21 @@ pub fn evaluate_tool_permission(
     allowed_tools: &[String],
     rulesets: &[PermissionRuleset],
 ) -> PermissionAction {
-    // Step 1: allowlist gate
-    if !allowed_tools.is_empty() && !allowed_tools.iter().any(|tool| tool == tool_name) {
-        return PermissionAction::Deny;
-    }
+    crate::PermissionEngine::evaluate_tool(tool_name, allowed_tools, rulesets)
+}
 
-    // Step 2-3: map tool name and evaluate against rulesets
-    let permission = tool_to_permission(tool_name);
-    evaluate(permission, "*", rulesets).action
+pub fn evaluate_tool_permission_with_patterns(
+    tool_name: &str,
+    patterns: &[String],
+    allowed_tools: &[String],
+    rulesets: &[PermissionRuleset],
+) -> PermissionAction {
+    crate::PermissionEngine::evaluate_tool_with_patterns(
+        tool_name,
+        patterns,
+        allowed_tools,
+        rulesets,
+    )
 }
 
 pub fn disabled(
@@ -410,6 +445,48 @@ mod tests {
     fn evaluate_tool_permission_defaults_to_ask() {
         // No matching rules → default Ask
         let result = evaluate_tool_permission("unknown_tool", &[], &[]);
+        assert_eq!(result, PermissionAction::Ask);
+    }
+
+    #[test]
+    fn combine_actions_uses_deny_over_ask_over_allow() {
+        assert_eq!(
+            combine_actions([PermissionAction::Allow, PermissionAction::Allow]),
+            PermissionAction::Allow
+        );
+        assert_eq!(
+            combine_actions([PermissionAction::Allow, PermissionAction::Ask]),
+            PermissionAction::Ask
+        );
+        assert_eq!(
+            combine_actions([PermissionAction::Ask, PermissionAction::Deny]),
+            PermissionAction::Deny
+        );
+    }
+
+    #[test]
+    fn evaluate_permission_patterns_folds_multiple_patterns() {
+        let ruleset = vec![
+            PermissionRule {
+                permission: "read".to_string(),
+                pattern: "allowed/*".to_string(),
+                action: PermissionAction::Allow,
+            },
+            PermissionRule {
+                permission: "read".to_string(),
+                pattern: "secret/*".to_string(),
+                action: PermissionAction::Ask,
+            },
+        ];
+
+        let result = evaluate_permission_patterns(
+            "read",
+            &[
+                "allowed/file.txt".to_string(),
+                "secret/file.txt".to_string(),
+            ],
+            &[ruleset],
+        );
         assert_eq!(result, PermissionAction::Ask);
     }
 }

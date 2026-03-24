@@ -324,7 +324,13 @@ impl SessionPrompt {
         for (_, client) in clients {
             if let Some(content) = content.as_deref() {
                 let language = rocode_lsp::detect_language(file_path);
-                let _ = client.open_document(file_path, content, language).await;
+                if let Err(error) = client.open_document(file_path, content, language).await {
+                    tracing::debug!(
+                        path = %file_path.display(),
+                        error = %error,
+                        "Failed to sync file to LSP before symbol lookup"
+                    );
+                }
             }
 
             let symbols = match client.document_symbol(file_path).await {

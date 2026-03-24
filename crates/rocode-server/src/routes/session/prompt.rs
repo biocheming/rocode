@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path as FsPath, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,6 +38,7 @@ use super::super::{
     should_apply_plugin_config_hooks,
 };
 use super::cancel::is_scheduler_cancellation_error;
+use super::messages::{prompt_display_text, prompt_text_from_parts};
 use super::scheduler::{
     resolve_prompt_request_config, resolve_scheduler_profile_config, scheduler_mode_kind,
     scheduler_system_prompt_preview, to_task_agent_info, SchedulerAgentResolver,
@@ -99,6 +100,8 @@ async fn resolve_prompt_payload(
 #[derive(Debug, Deserialize)]
 pub(super) struct SessionPromptRequest {
     pub message: Option<String>,
+    #[serde(default)]
+    pub parts: Option<Vec<rocode_session::prompt::PartInput>>,
     pub model: Option<String>,
     pub variant: Option<String>,
     pub agent: Option<String>,
@@ -107,6 +110,107 @@ pub(super) struct SessionPromptRequest {
     pub arguments: Option<String>,
     #[serde(default)]
     pub(super) recovery: Option<RecoveryExecutionContext>,
+}
+
+pub(super) struct SchedulerUserMessageContext<'a> {
+    pub(super) display_prompt_text: &'a str,
+    pub(super) resolved_user_prompt: &'a str,
+    pub(super) profile_name: &'a str,
+    pub(super) mode_kind: &'a str,
+    pub(super) resolved_system_prompt: &'a str,
+    pub(super) recovery: Option<&'a RecoveryExecutionContext>,
+}
+
+pub(super) async fn create_scheduler_user_message(
+    prompt_runner: &rocode_session::SessionPrompt,
+    session: &mut rocode_session::Session,
+    input: &rocode_session::PromptInput,
+    ctx: SchedulerUserMessageContext<'_>,
+) -> Result<String> {
+    prompt_runner
+        .create_user_message(input, session)
+        .await
+        .map_err(|error| {
+            ApiError::BadRequest(format!("Failed to create scheduler user message: {}", error))
+        })?;
+
+    let Some(user_message) = session
+        .messages
+        .iter_mut()
+        .rfind(|message| matches!(message.role, rocode_session::MessageRole::User))
+    else {
+        return Err(ApiError::InternalError(
+            "Scheduler prompt did not create a user message".to_string(),
+        ));
+    };
+
+    if prompt_text_from_parts(&input.parts).trim().is_empty()
+        && !ctx.display_prompt_text.trim().is_empty()
+    {
+        if let Some(rocode_session::PartType::Text { text, .. }) = user_message
+            .parts
+            .iter_mut()
+            .find_map(|part| match &mut part.part_type {
+                rocode_session::PartType::Text { .. } => Some(&mut part.part_type),
+                _ => None,
+            })
+        {
+            *text = ctx.display_prompt_text.to_string();
+        }
+    }
+
+    user_message.metadata.insert(
+        "resolved_scheduler_profile".to_string(),
+        serde_json::json!(ctx.profile_name),
+    );
+    user_message.metadata.insert(
+        "resolved_execution_mode_kind".to_string(),
+        serde_json::json!(ctx.mode_kind),
+    );
+    user_message.metadata.insert(
+        "resolved_system_prompt".to_string(),
+        serde_json::json!(ctx.resolved_system_prompt),
+    );
+    user_message.metadata.insert(
+        "resolved_system_prompt_preview".to_string(),
+        serde_json::json!(ctx.resolved_system_prompt),
+    );
+    user_message.metadata.insert(
+        "resolved_system_prompt_applied".to_string(),
+        serde_json::json!(true),
+    );
+    user_message.metadata.insert(
+        "resolved_user_prompt".to_string(),
+        serde_json::json!(ctx.resolved_user_prompt),
+    );
+
+    if let Some(recovery) = ctx.recovery {
+        if let Some(action) = recovery.action.as_ref() {
+            user_message
+                .metadata
+                .insert("recovery_action".to_string(), serde_json::json!(action));
+        }
+        if let Some(target_id) = recovery.target_id.as_deref() {
+            user_message.metadata.insert(
+                "recovery_target_id".to_string(),
+                serde_json::json!(target_id),
+            );
+        }
+        if let Some(target_kind) = recovery.target_kind.as_deref() {
+            user_message.metadata.insert(
+                "recovery_target_kind".to_string(),
+                serde_json::json!(target_kind),
+            );
+        }
+        if let Some(target_label) = recovery.target_label.as_deref() {
+            user_message.metadata.insert(
+                "recovery_target_label".to_string(),
+                serde_json::json!(target_label),
+            );
+        }
+    }
+
+    Ok(user_message.id.clone())
 }
 
 pub(super) async fn session_prompt(
@@ -120,8 +224,16 @@ pub(super) async fn session_prompt(
             "`agent` and `scheduler_profile` are mutually exclusive".to_string(),
         ));
     }
+    if req.command.is_some() && req.parts.is_some() {
+        return Err(ApiError::BadRequest(
+            "`command` and `parts` are mutually exclusive".to_string(),
+        ));
+    }
 
-    let display_prompt_text = if let Some(message) = req.message.as_deref() {
+    let request_parts = req.parts.clone().filter(|parts| !parts.is_empty());
+    let display_prompt_text = if let Some(parts) = request_parts.as_ref() {
+        prompt_display_text(parts)
+    } else if let Some(message) = req.message.as_deref() {
         message.to_string()
     } else if let Some(command) = req.command.as_deref() {
         req.arguments
@@ -130,7 +242,7 @@ pub(super) async fn session_prompt(
             .unwrap_or_else(|| format!("/{command}"))
     } else {
         return Err(ApiError::BadRequest(
-            "Either `message` or `command` must be provided".to_string(),
+            "Either `message`, `parts`, or `command` must be provided".to_string(),
         ));
     };
 
@@ -142,17 +254,6 @@ pub(super) async fn session_prompt(
         resolved_session_directory(&session.directory)
     };
     let _ = ensure_plugin_loader_active(&state).await?;
-
-    let resolved_prompt =
-        resolve_prompt_payload(&display_prompt_text, &id, &session_directory).await?;
-    let prompt_text = resolved_prompt.execution_text.clone();
-    let display_prompt_text = resolved_prompt.display_text.clone();
-    let effective_agent = resolved_prompt.agent.clone().or(req.agent.clone());
-    let effective_scheduler_profile = resolved_prompt
-        .scheduler_profile
-        .clone()
-        .or(req.scheduler_profile.clone());
-
     let config = if let Some(loader) = get_plugin_loader() {
         if should_apply_plugin_config_hooks(&headers) {
             let mut cfg = (*state.config_store.config()).clone();
@@ -171,6 +272,39 @@ pub(super) async fn session_prompt(
     } else {
         state.config_store.config()
     };
+    let known_agents = AgentRegistry::from_config(&config)
+        .list_all()
+        .into_iter()
+        .map(|agent| agent.name.clone())
+        .collect::<Vec<_>>();
+
+    let resolved_prompt = if let Some(parts) = request_parts.as_ref() {
+        ResolvedPromptPayload {
+            display_text: prompt_display_text(parts),
+            execution_text: prompt_text_from_parts(parts),
+            agent: None,
+            scheduler_profile: None,
+        }
+    } else {
+        resolve_prompt_payload(&display_prompt_text, &id, &session_directory).await?
+    };
+    let prompt_text = resolved_prompt.execution_text.clone();
+    let display_prompt_text = resolved_prompt.display_text.clone();
+    let prompt_parts = if let Some(parts) = request_parts.clone() {
+        parts
+    } else {
+        rocode_session::resolve_prompt_parts(
+            &prompt_text,
+            FsPath::new(&session_directory),
+            &known_agents,
+        )
+        .await
+    };
+    let effective_agent = resolved_prompt.agent.clone().or(req.agent.clone());
+    let effective_scheduler_profile = resolved_prompt
+        .scheduler_profile
+        .clone()
+        .or(req.scheduler_profile.clone());
 
     let request_config =
         resolve_prompt_request_config(super::scheduler::PromptRequestConfigInput {
@@ -209,6 +343,7 @@ pub(super) async fn session_prompt(
     let task_scheduler_skill_tree_applied = scheduler_skill_tree_applied;
     let task_config = config.clone();
     let task_recovery = req.recovery.clone();
+    let task_prompt_parts = prompt_parts.clone();
     let task_scheduler_profile_config = task_scheduler_profile_name
         .as_deref()
         .and_then(|profile_name| resolve_scheduler_profile_config(&task_config, Some(profile_name)))
@@ -319,58 +454,59 @@ pub(super) async fn session_prompt(
             let mode_kind = scheduler_mode_kind(&profile_name);
             let resolved_system_prompt =
                 scheduler_system_prompt_preview(&profile_name, &profile_config);
-            let user_message_id = {
-                let user_message = session.add_user_message(display_prompt_text.clone());
-                user_message.metadata.insert(
-                    "resolved_scheduler_profile".to_string(),
-                    serde_json::json!(profile_name.clone()),
-                );
-                user_message.metadata.insert(
-                    "resolved_execution_mode_kind".to_string(),
-                    serde_json::json!(mode_kind),
-                );
-                user_message.metadata.insert(
-                    "resolved_system_prompt".to_string(),
-                    serde_json::json!(resolved_system_prompt.clone()),
-                );
-                user_message.metadata.insert(
-                    "resolved_system_prompt_preview".to_string(),
-                    serde_json::json!(resolved_system_prompt.clone()),
-                );
-                user_message.metadata.insert(
-                    "resolved_system_prompt_applied".to_string(),
-                    serde_json::json!(true),
-                );
-                user_message.metadata.insert(
-                    "resolved_user_prompt".to_string(),
-                    serde_json::json!(prompt_text.clone()),
-                );
-                if let Some(recovery) = task_recovery.as_ref() {
-                    if let Some(action) = recovery.action.as_ref() {
-                        user_message
-                            .metadata
-                            .insert("recovery_action".to_string(), serde_json::json!(action));
+            let scheduler_input = rocode_session::PromptInput {
+                session_id: session_id.clone(),
+                message_id: None,
+                model: None,
+                agent: None,
+                no_reply: false,
+                system: None,
+                variant: task_variant.clone(),
+                parts: task_prompt_parts.clone(),
+                tools: None,
+            };
+            let user_message_id = match create_scheduler_user_message(
+                task_state.prompt_runner.as_ref(),
+                &mut session,
+                &scheduler_input,
+                SchedulerUserMessageContext {
+                    display_prompt_text: &display_prompt_text,
+                    resolved_user_prompt: &prompt_text,
+                    profile_name: &profile_name,
+                    mode_kind,
+                    resolved_system_prompt: &resolved_system_prompt,
+                    recovery: task_recovery.as_ref(),
+                },
+            )
+            .await
+            {
+                Ok(message_id) => message_id,
+                Err(error) => {
+                    tracing::warn!(
+                        session_id = %session_id,
+                        scheduler_profile = %profile_name,
+                        %error,
+                        "failed to create scheduler user message"
+                    );
+                    let assistant = session.add_assistant_message();
+                    assistant.finish = Some("error".to_string());
+                    assistant
+                        .metadata
+                        .insert("error".to_string(), serde_json::json!(error.to_string()));
+                    assistant.add_text(format!("Scheduler input error: {}", error));
+                    session.touch();
+                    {
+                        let mut sessions = task_state.sessions.lock().await;
+                        sessions.update(session.clone());
                     }
-                    if let Some(target_id) = recovery.target_id.as_deref() {
-                        user_message.metadata.insert(
-                            "recovery_target_id".to_string(),
-                            serde_json::json!(target_id),
-                        );
-                    }
-                    if let Some(target_kind) = recovery.target_kind.as_deref() {
-                        user_message.metadata.insert(
-                            "recovery_target_kind".to_string(),
-                            serde_json::json!(target_kind),
-                        );
-                    }
-                    if let Some(target_label) = recovery.target_label.as_deref() {
-                        user_message.metadata.insert(
-                            "recovery_target_label".to_string(),
-                            serde_json::json!(target_label),
-                        );
-                    }
+                    broadcast_session_updated(
+                        task_state.as_ref(),
+                        session_id.clone(),
+                        "prompt.scheduler.error",
+                    );
+                    persist_sessions_if_enabled(&task_state).await;
+                    return;
                 }
-                user_message.id.clone()
             };
             let assistant_message_id = session.add_assistant_message().id.clone();
 
@@ -745,7 +881,7 @@ pub(super) async fn session_prompt(
             no_reply: false,
             system: None,
             variant: task_variant.clone(),
-            parts: vec![rocode_session::PartInput::Text { text: prompt_text }],
+            parts: task_prompt_parts.clone(),
             tools: None,
         };
 
@@ -926,4 +1062,143 @@ pub(super) async fn session_prompt(
         "model": format!("{}/{}", provider_id, model_id),
         "variant": req.variant,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rocode_session::{PartType, Session, SessionStateManager};
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    fn test_prompt_runner() -> rocode_session::SessionPrompt {
+        rocode_session::SessionPrompt::new(Arc::new(RwLock::new(SessionStateManager::new())))
+    }
+
+    fn text_parts(message: &rocode_session::SessionMessage) -> Vec<&str> {
+        message
+            .parts
+            .iter()
+            .filter_map(|part| match &part.part_type {
+                PartType::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn scheduler_user_message_preserves_attachment_only_parts() {
+        let prompt_runner = test_prompt_runner();
+        let mut session = Session::new("project", "/tmp");
+        let input = rocode_session::PromptInput {
+            session_id: session.id.clone(),
+            message_id: None,
+            model: None,
+            agent: None,
+            no_reply: false,
+            system: None,
+            variant: None,
+            parts: vec![rocode_session::PartInput::File {
+                url: "data:text/plain;base64,SGVsbG8=".to_string(),
+                filename: Some("note.txt".to_string()),
+                mime: Some("text/plain".to_string()),
+            }],
+            tools: None,
+        };
+
+        let message_id = create_scheduler_user_message(
+            &prompt_runner,
+            &mut session,
+            &input,
+            SchedulerUserMessageContext {
+                display_prompt_text: "[1 attachment]",
+                resolved_user_prompt: "",
+                profile_name: "atlas",
+                mode_kind: "preset",
+                resolved_system_prompt: "You are Atlas.",
+                recovery: None,
+            },
+        )
+        .await
+        .expect("scheduler attachment-only user message should be created");
+
+        let message = session
+            .messages
+            .iter()
+            .find(|message| message.id == message_id)
+            .expect("user message should exist");
+        assert!(
+            text_parts(message).contains(&"[1 attachment]"),
+            "attachment-only scheduler prompt should retain a visible summary text part"
+        );
+        assert!(message.parts.iter().any(|part| matches!(
+            &part.part_type,
+            PartType::File { filename, mime, .. }
+            if filename == "note.txt" && mime == "text/plain"
+        )));
+        assert_eq!(
+            message.metadata.get("resolved_scheduler_profile"),
+            Some(&serde_json::json!("atlas"))
+        );
+    }
+
+    #[tokio::test]
+    async fn scheduler_user_message_keeps_text_and_file_parts_together() {
+        let prompt_runner = test_prompt_runner();
+        let mut session = Session::new("project", "/tmp");
+        let input = rocode_session::PromptInput {
+            session_id: session.id.clone(),
+            message_id: None,
+            model: None,
+            agent: None,
+            no_reply: false,
+            system: None,
+            variant: None,
+            parts: vec![
+                rocode_session::PartInput::Text {
+                    text: "Inspect @note.txt".to_string(),
+                },
+                rocode_session::PartInput::File {
+                    url: "data:text/plain;base64,SGVsbG8=".to_string(),
+                    filename: Some("note.txt".to_string()),
+                    mime: Some("text/plain".to_string()),
+                },
+            ],
+            tools: None,
+        };
+
+        let message_id = create_scheduler_user_message(
+            &prompt_runner,
+            &mut session,
+            &input,
+            SchedulerUserMessageContext {
+                display_prompt_text: "Inspect @note.txt",
+                resolved_user_prompt: "Inspect @note.txt",
+                profile_name: "atlas",
+                mode_kind: "preset",
+                resolved_system_prompt: "You are Atlas.",
+                recovery: None,
+            },
+        )
+        .await
+        .expect("scheduler text+attachment user message should be created");
+
+        let message = session
+            .messages
+            .iter()
+            .find(|message| message.id == message_id)
+            .expect("user message should exist");
+        assert!(
+            text_parts(message).contains(&"Inspect @note.txt"),
+            "scheduler prompt text should remain visible alongside attachment parts"
+        );
+        assert!(message.parts.iter().any(|part| matches!(
+            &part.part_type,
+            PartType::File { filename, .. } if filename == "note.txt"
+        )));
+        assert_eq!(
+            message.metadata.get("resolved_user_prompt"),
+            Some(&serde_json::json!("Inspect @note.txt"))
+        );
+    }
 }

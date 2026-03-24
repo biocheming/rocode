@@ -1,10 +1,12 @@
 use async_trait::async_trait;
+use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use rocode_agent::{AgentInfo, AgentMode, AgentRegistry};
 use rocode_command::output_blocks::{MessageBlock, MessageRole as OutputMessageRole, OutputBlock};
 use rocode_config::{Config as AppConfig, SkillTreeNodeConfig};
+use rocode_execution_types::{CompiledExecutionRequest, ExecutionRequestContext};
 use rocode_orchestrator::output_metadata::output_usage;
 use rocode_orchestrator::{
     resolve_skill_markdown_repo, scheduler_orchestrator_from_profile, scheduler_plan_from_profile,
@@ -35,6 +37,7 @@ use super::super::permission::request_permission;
 use super::super::tui::request_question_answers;
 use super::cancel::is_scheduler_cancellation_error;
 use super::messages::resolve_provider_and_model;
+use super::prompt::{create_scheduler_user_message, SchedulerUserMessageContext};
 use super::session_crud::{resolved_session_directory, set_session_run_status};
 
 use super::cancel::abort_session_execution;
@@ -307,7 +310,7 @@ pub(crate) fn to_task_agent_info(info: &AgentInfo) -> rocode_tool::TaskAgentInfo
         }),
         can_use_task: info.is_tool_allowed("task"),
         steps: info.max_steps,
-        execution: Some(rocode_orchestrator::ExecutionRequestContext {
+        execution: Some(ExecutionRequestContext {
             provider_id: info.model.as_ref().map(|m| m.provider_id.clone()),
             model_id: info.model.as_ref().map(|m| m.model_id.clone()),
             max_tokens: info.max_tokens,
@@ -328,7 +331,7 @@ pub(super) struct SessionSchedulerModelResolver {
     pub(super) state: Arc<ServerState>,
     pub(super) fallback_provider_id: String,
     pub(super) fallback_model_id: String,
-    pub(super) fallback_request: rocode_orchestrator::CompiledExecutionRequest,
+    pub(super) fallback_request: CompiledExecutionRequest,
 }
 
 #[async_trait]
@@ -402,6 +405,7 @@ impl SessionSchedulerToolExecutor {
         )
         .with_agent(exec_ctx.agent_name.clone())
         .with_abort(self.abort_token.clone())
+        .with_config_store(self.state.config_store.clone())
         .with_tool_runtime_config(self.tool_runtime_config.clone())
         .with_registry(self.state.tool_registry.clone())
         .with_get_last_model({
@@ -670,7 +674,7 @@ pub(crate) struct ResolvedPromptRequestConfig {
     pub provider_id: String,
     pub model_id: String,
     pub agent_system_prompt: Option<String>,
-    pub compiled_request: rocode_orchestrator::CompiledExecutionRequest,
+    pub compiled_request: CompiledExecutionRequest,
 }
 
 pub(super) fn resolve_request_model_inputs(
@@ -880,6 +884,19 @@ pub struct LocalSchedulerPromptRequest {
     pub variant: Option<String>,
 }
 
+async fn resolve_local_scheduler_prompt_parts(
+    prompt_text: &str,
+    directory: &str,
+    config: &AppConfig,
+) -> Vec<rocode_session::prompt::PartInput> {
+    let known_agents = AgentRegistry::from_config(config)
+        .list_all()
+        .into_iter()
+        .map(|agent| agent.name.clone())
+        .collect::<Vec<_>>();
+    rocode_session::resolve_prompt_parts(prompt_text, Path::new(directory), &known_agents).await
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct LocalSchedulerPromptOutcome {
     pub session_id: String,
@@ -994,34 +1011,34 @@ pub async fn run_local_scheduler_prompt(
 
     let mode_kind = scheduler_mode_kind(&profile_name);
     let resolved_system_prompt = scheduler_system_prompt_preview(&profile_name, &profile_config);
-    let user_message_id = {
-        let user_message = session.add_user_message(req.display_prompt_text.clone());
-        user_message.metadata.insert(
-            "resolved_scheduler_profile".to_string(),
-            serde_json::json!(profile_name.clone()),
-        );
-        user_message.metadata.insert(
-            "resolved_execution_mode_kind".to_string(),
-            serde_json::json!(mode_kind),
-        );
-        user_message.metadata.insert(
-            "resolved_system_prompt".to_string(),
-            serde_json::json!(resolved_system_prompt.clone()),
-        );
-        user_message.metadata.insert(
-            "resolved_system_prompt_preview".to_string(),
-            serde_json::json!(resolved_system_prompt.clone()),
-        );
-        user_message.metadata.insert(
-            "resolved_system_prompt_applied".to_string(),
-            serde_json::json!(true),
-        );
-        user_message.metadata.insert(
-            "resolved_user_prompt".to_string(),
-            serde_json::json!(req.prompt_text.clone()),
-        );
-        user_message.id.clone()
+    let prompt_parts =
+        resolve_local_scheduler_prompt_parts(&req.prompt_text, &session.directory, &config).await;
+    let scheduler_input = rocode_session::PromptInput {
+        session_id: session_id.clone(),
+        message_id: None,
+        model: None,
+        agent: None,
+        no_reply: false,
+        system: None,
+        variant: req.variant.clone(),
+        parts: prompt_parts,
+        tools: None,
     };
+    let user_message_id = create_scheduler_user_message(
+        state.prompt_runner.as_ref(),
+        &mut session,
+        &scheduler_input,
+        SchedulerUserMessageContext {
+            display_prompt_text: &req.display_prompt_text,
+            resolved_user_prompt: &req.prompt_text,
+            profile_name: &profile_name,
+            mode_kind,
+            resolved_system_prompt: &resolved_system_prompt,
+            recovery: None,
+        },
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let assistant_message_id = session.add_assistant_message().id.clone();
 
     if session.is_default_title() {
@@ -1305,4 +1322,38 @@ pub async fn abort_local_session_execution(
     scheduler_stage_only: bool,
 ) -> serde_json::Value {
     abort_session_execution(&state, session_id, scheduler_stage_only).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn local_scheduler_prompt_parts_resolve_file_references() {
+        let temp_dir = std::env::temp_dir().join(format!("rocode-local-scheduler-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+        let file_path = temp_dir.join("note.txt");
+        std::fs::write(&file_path, "hello").expect("temp file should be written");
+
+        let parts = resolve_local_scheduler_prompt_parts(
+            "Inspect @note.txt",
+            temp_dir.to_str().expect("temp path should be utf-8"),
+            &AppConfig::default(),
+        )
+        .await;
+
+        assert!(matches!(
+            &parts[0],
+            rocode_session::prompt::PartInput::Text { text } if text == "Inspect @note.txt"
+        ));
+        assert!(parts.iter().any(|part| matches!(
+            part,
+            rocode_session::prompt::PartInput::File { filename, mime, .. }
+            if filename.as_deref() == Some("note.txt")
+                && mime.as_deref() == Some("text/plain")
+        )));
+
+        let _ = std::fs::remove_file(&file_path);
+        let _ = std::fs::remove_dir(&temp_dir);
+    }
 }

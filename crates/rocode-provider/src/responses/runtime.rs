@@ -15,12 +15,11 @@ use crate::tools::{prepare_responses_tools, InputTool, ResponsesTool};
 use super::helpers::{
     drain_next_sse_frame, extract_sse_data, finish_reason_label, insert_opt_bool,
     insert_opt_string, insert_opt_u64, insert_opt_value, parse_output_items, process_stream_chunk,
-    push_include, usage_to_stream_usage,
+    push_include, usage_to_stream_usage, StreamChunkState,
 };
 use super::types::{
-    get_responses_model_config, map_openai_response_finish_reason, ActiveReasoning, FinishReason,
-    LogprobEntry, LogprobsSetting, OngoingToolCall, ResponseMetadata, ResponsesIncludeValue,
-    ResponsesStreamChunk, ResponsesUsage,
+    get_responses_model_config, map_openai_response_finish_reason, FinishReason, LogprobsSetting,
+    ResponseMetadata, ResponsesIncludeValue, ResponsesStreamChunk, ResponsesUsage,
 };
 use super::validation::{
     validate_responses_settings, GenerateOptions, OpenAIResponsesConfig,
@@ -455,32 +454,38 @@ impl OpenAIResponsesLanguageModel {
 
         let (tx, rx) = mpsc::channel::<Result<StreamEvent, ProviderError>>(256);
         tokio::spawn(async move {
-            let _ = tx.send(Ok(StreamEvent::Start)).await;
-            let _ = tx.send(Ok(StreamEvent::StartStep)).await;
+            if let Err(error) = tx.send(Ok(StreamEvent::Start)).await {
+                tracing::debug!(
+                    error = %error,
+                    "Failed to send start event for responses stream"
+                );
+                return;
+            }
+            if let Err(error) = tx.send(Ok(StreamEvent::StartStep)).await {
+                tracing::debug!(
+                    error = %error,
+                    "Failed to send start-step event for responses stream"
+                );
+                return;
+            }
 
             let tx = tx;
             let mut text_stream = text_stream;
             let mut stream_metadata_extractor = metadata_extractor;
 
             let mut buffer = String::new();
-            let mut finish_reason = FinishReason::Unknown;
-            let mut usage = ResponsesUsage::default();
-            let mut logprobs: Vec<Vec<LogprobEntry>> = Vec::new();
-            let mut response_id: Option<String> = None;
-            let mut ongoing_tool_calls: HashMap<usize, OngoingToolCall> = HashMap::new();
-            let mut has_function_call = false;
-            let mut active_reasoning: HashMap<usize, ActiveReasoning> = HashMap::new();
-            let mut current_reasoning_output_index: Option<usize> = None;
-            let mut reasoning_item_to_output_index: HashMap<String, usize> = HashMap::new();
-            let mut current_text_id: Option<String> = None;
-            let mut text_open = false;
-            let mut service_tier: Option<String> = None;
+            let mut stream_state = StreamChunkState::default();
 
             while let Some(chunk_result) = text_stream.next().await {
                 let chunk = match chunk_result {
                     Ok(text) => text,
                     Err(err) => {
-                        let _ = tx.send(Err(err)).await;
+                        if let Err(send_error) = tx.send(Err(err)).await {
+                            tracing::debug!(
+                                error = %send_error,
+                                "Failed to forward responses stream error to consumer"
+                            );
+                        }
                         return;
                     }
                 };
@@ -505,21 +510,7 @@ impl OpenAIResponsesLanguageModel {
                     let parsed_chunk: ResponsesStreamChunk = serde_json::from_value(parsed_value)
                         .unwrap_or(ResponsesStreamChunk::Unknown);
 
-                    for event in process_stream_chunk(
-                        parsed_chunk,
-                        &mut finish_reason,
-                        &mut usage,
-                        &mut logprobs,
-                        &mut response_id,
-                        &mut ongoing_tool_calls,
-                        &mut has_function_call,
-                        &mut active_reasoning,
-                        &mut current_reasoning_output_index,
-                        &mut reasoning_item_to_output_index,
-                        &mut current_text_id,
-                        &mut text_open,
-                        &mut service_tier,
-                    ) {
+                    for event in process_stream_chunk(parsed_chunk, &mut stream_state) {
                         if tx.send(Ok(event)).await.is_err() {
                             return;
                         }
@@ -527,10 +518,14 @@ impl OpenAIResponsesLanguageModel {
                 }
             }
 
-            if text_open && tx.send(Ok(StreamEvent::TextEnd)).await.is_err() {
+            if stream_state.text_open && tx.send(Ok(StreamEvent::TextEnd)).await.is_err() {
                 return;
             }
-            for ongoing in ongoing_tool_calls.into_values() {
+            for ongoing in stream_state
+                .ongoing_tool_calls
+                .drain()
+                .map(|(_, ongoing)| ongoing)
+            {
                 if tx
                     .send(Ok(StreamEvent::ToolInputEnd {
                         id: ongoing.tool_call_id,
@@ -541,7 +536,11 @@ impl OpenAIResponsesLanguageModel {
                     return;
                 }
             }
-            for reasoning in active_reasoning.into_values() {
+            for reasoning in stream_state
+                .active_reasoning
+                .drain()
+                .map(|(_, reasoning)| reasoning)
+            {
                 if tx
                     .send(Ok(StreamEvent::ReasoningEnd {
                         id: reasoning.canonical_id,
@@ -554,12 +553,12 @@ impl OpenAIResponsesLanguageModel {
             }
 
             let mut provider_metadata = json!({
-                "response_id": response_id,
-                "service_tier": service_tier,
+                "response_id": stream_state.response_id,
+                "service_tier": stream_state.service_tier,
             });
-            if !logprobs.is_empty() {
+            if !stream_state.logprobs.is_empty() {
                 provider_metadata["logprobs"] =
-                    serde_json::to_value(logprobs).unwrap_or(Value::Null);
+                    serde_json::to_value(&stream_state.logprobs).unwrap_or(Value::Null);
             }
             if let Some(extractor) = stream_metadata_extractor.as_ref() {
                 if let Some(extra) = extractor.build_metadata() {
@@ -568,16 +567,16 @@ impl OpenAIResponsesLanguageModel {
                 }
             }
 
-            let resolved_reason = if finish_reason == FinishReason::Unknown {
-                map_openai_response_finish_reason(None, has_function_call)
+            let resolved_reason = if stream_state.finish_reason == FinishReason::Unknown {
+                map_openai_response_finish_reason(None, stream_state.has_function_call)
             } else {
-                finish_reason
+                stream_state.finish_reason
             };
 
             if tx
                 .send(Ok(StreamEvent::FinishStep {
                     finish_reason: Some(finish_reason_label(resolved_reason).to_string()),
-                    usage: usage_to_stream_usage(&usage),
+                    usage: usage_to_stream_usage(&stream_state.usage),
                     provider_metadata: Some(provider_metadata),
                 }))
                 .await
@@ -588,7 +587,12 @@ impl OpenAIResponsesLanguageModel {
             if tx.send(Ok(StreamEvent::Finish)).await.is_err() {
                 return;
             }
-            let _ = tx.send(Ok(StreamEvent::Done)).await;
+            if let Err(error) = tx.send(Ok(StreamEvent::Done)).await {
+                tracing::debug!(
+                    error = %error,
+                    "Failed to send done event for responses stream"
+                );
+            }
         });
 
         Ok(Box::pin(ReceiverStream::new(rx)))

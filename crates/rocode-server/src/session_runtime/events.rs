@@ -256,7 +256,12 @@ pub(crate) async fn send_sse_server_event(
     event: &ServerEvent,
 ) {
     if let Some(sse_event) = event.to_sse_event() {
-        let _ = tx.send(Ok(sse_event)).await;
+        if let Err(error) = tx.send(Ok(sse_event)).await {
+            tracing::debug!(
+                error = %error,
+                "Failed to send SSE server event to runtime subscriber"
+            );
+        }
     }
 }
 

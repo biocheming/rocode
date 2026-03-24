@@ -10,9 +10,13 @@
 
 use std::collections::HashMap;
 
-use crate::types::ModelRef;
+pub use rocode_execution_types::{
+    agent_generation_request, compaction_request, inline_subtask_request_defaults,
+    message_title_request, session_runtime_request_defaults, session_title_request,
+    CompiledExecutionRequest, ExecutionModelRef, ExecutionRequestContext, ExecutionRequestDefaults,
+};
 use rocode_provider::models::{ModelLimit, ModelProvider};
-use rocode_provider::{ChatRequest, Message, ModelsDevInfo, ToolDefinition};
+use rocode_provider::ModelsDevInfo;
 
 #[derive(Debug, Clone, Default)]
 pub struct ExecutionCapabilities {
@@ -46,36 +50,6 @@ pub struct ResolvedExecutionSpec {
     pub model: ExecutionModelSpec,
     pub tuning: ExecutionTuningSpec,
     pub request_options: HashMap<String, serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct CompiledExecutionRequest {
-    pub model_id: String,
-    pub max_tokens: Option<u64>,
-    pub temperature: Option<f32>,
-    pub top_p: Option<f32>,
-    pub variant: Option<String>,
-    pub provider_options: Option<HashMap<String, serde_json::Value>>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct ExecutionRequestContext {
-    pub provider_id: Option<String>,
-    pub model_id: Option<String>,
-    pub max_tokens: Option<u64>,
-    pub temperature: Option<f32>,
-    pub top_p: Option<f32>,
-    pub variant: Option<String>,
-    pub provider_options: Option<HashMap<String, serde_json::Value>>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct ExecutionRequestDefaults {
-    pub max_tokens: Option<u64>,
-    pub temperature: Option<f32>,
-    pub top_p: Option<f32>,
-    pub variant: Option<String>,
-    pub provider_options: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl ResolvedExecutionSpec {
@@ -131,207 +105,6 @@ impl ResolvedExecutionSpec {
             variants: None,
         }
     }
-}
-
-impl CompiledExecutionRequest {
-    pub fn max_tokens_or(&self, default: u64) -> u64 {
-        self.max_tokens.unwrap_or(default)
-    }
-
-    pub fn with_model(&self, model_id: impl Into<String>) -> Self {
-        Self {
-            model_id: model_id.into(),
-            ..self.clone()
-        }
-    }
-
-    pub fn with_variant(&self, variant: Option<String>) -> Self {
-        Self {
-            variant,
-            ..self.clone()
-        }
-    }
-
-    pub fn with_default_max_tokens(&self, default: u64) -> Self {
-        Self {
-            max_tokens: Some(self.max_tokens_or(default)),
-            ..self.clone()
-        }
-    }
-
-    pub fn inherit_missing(&self, defaults: &ExecutionRequestDefaults) -> Self {
-        Self {
-            model_id: self.model_id.clone(),
-            max_tokens: self.max_tokens.or(defaults.max_tokens),
-            temperature: self.temperature.or(defaults.temperature),
-            top_p: self.top_p.or(defaults.top_p),
-            variant: self.variant.clone().or_else(|| defaults.variant.clone()),
-            provider_options: self
-                .provider_options
-                .clone()
-                .or_else(|| defaults.provider_options.clone()),
-        }
-    }
-
-    pub fn to_chat_request(
-        &self,
-        messages: Vec<Message>,
-        tools: Vec<ToolDefinition>,
-        stream: bool,
-    ) -> ChatRequest {
-        self.to_chat_request_with_system(messages, tools, Some(stream), None)
-    }
-
-    pub fn to_chat_request_with_system(
-        &self,
-        messages: Vec<Message>,
-        tools: Vec<ToolDefinition>,
-        stream: Option<bool>,
-        system: Option<String>,
-    ) -> ChatRequest {
-        ChatRequest {
-            model: self.model_id.clone(),
-            messages,
-            max_tokens: self.max_tokens,
-            temperature: self.temperature,
-            top_p: self.top_p,
-            system,
-            tools: (!tools.is_empty()).then_some(tools),
-            stream,
-            provider_options: self.provider_options.clone(),
-            variant: self.variant.clone(),
-        }
-    }
-}
-
-impl ExecutionRequestContext {
-    pub fn model_ref(&self) -> Option<ModelRef> {
-        Some(ModelRef {
-            provider_id: self.provider_id.clone()?,
-            model_id: self.model_id.clone()?,
-        })
-    }
-
-    pub fn compile(&self) -> Option<CompiledExecutionRequest> {
-        Some(CompiledExecutionRequest {
-            model_id: self.model_id.clone()?,
-            max_tokens: self.max_tokens,
-            temperature: self.temperature,
-            top_p: self.top_p,
-            variant: self.variant.clone(),
-            provider_options: self.provider_options.clone(),
-        })
-    }
-
-    pub fn compile_with_model(&self, model_id: impl Into<String>) -> CompiledExecutionRequest {
-        CompiledExecutionRequest {
-            model_id: model_id.into(),
-            max_tokens: self.max_tokens,
-            temperature: self.temperature,
-            top_p: self.top_p,
-            variant: self.variant.clone(),
-            provider_options: self.provider_options.clone(),
-        }
-    }
-
-    pub fn compile_with_model_and_defaults(
-        &self,
-        model_id: impl Into<String>,
-        defaults: &ExecutionRequestDefaults,
-    ) -> CompiledExecutionRequest {
-        self.compile_with_model(model_id).inherit_missing(defaults)
-    }
-}
-
-impl ExecutionRequestDefaults {
-    pub fn with_max_tokens(mut self, max_tokens: Option<u64>) -> Self {
-        self.max_tokens = max_tokens;
-        self
-    }
-
-    pub fn with_temperature(mut self, temperature: Option<f32>) -> Self {
-        self.temperature = temperature;
-        self
-    }
-
-    pub fn with_top_p(mut self, top_p: Option<f32>) -> Self {
-        self.top_p = top_p;
-        self
-    }
-
-    pub fn with_variant(mut self, variant: Option<String>) -> Self {
-        self.variant = variant;
-        self
-    }
-
-    pub fn with_provider_options(
-        mut self,
-        provider_options: Option<HashMap<String, serde_json::Value>>,
-    ) -> Self {
-        self.provider_options = provider_options;
-        self
-    }
-}
-
-pub fn session_runtime_request_defaults(variant: Option<String>) -> ExecutionRequestDefaults {
-    ExecutionRequestDefaults::default()
-        .with_max_tokens(Some(8192))
-        .with_variant(variant)
-}
-
-pub fn inline_subtask_request_defaults(variant: Option<String>) -> ExecutionRequestDefaults {
-    ExecutionRequestDefaults::default()
-        .with_max_tokens(Some(2048))
-        .with_temperature(Some(0.2))
-        .with_variant(variant)
-}
-
-pub fn compaction_request(
-    model_id: impl Into<String>,
-    variant: Option<String>,
-) -> CompiledExecutionRequest {
-    CompiledExecutionRequest {
-        model_id: model_id.into(),
-        ..Default::default()
-    }
-    .inherit_missing(
-        &ExecutionRequestDefaults::default()
-            .with_max_tokens(Some(4096))
-            .with_temperature(Some(0.0))
-            .with_variant(variant),
-    )
-}
-
-pub fn session_title_request(model_id: impl Into<String>) -> CompiledExecutionRequest {
-    CompiledExecutionRequest {
-        model_id: model_id.into(),
-        ..Default::default()
-    }
-    .inherit_missing(
-        &ExecutionRequestDefaults::default()
-            .with_max_tokens(Some(100))
-            .with_temperature(Some(0.0)),
-    )
-}
-
-pub fn message_title_request(model_id: impl Into<String>) -> CompiledExecutionRequest {
-    CompiledExecutionRequest {
-        model_id: model_id.into(),
-        ..Default::default()
-    }
-    .inherit_missing(
-        &ExecutionRequestDefaults::default()
-            .with_max_tokens(Some(64))
-            .with_temperature(Some(0.0)),
-    )
-}
-
-pub fn agent_generation_request(model_id: impl Into<String>) -> CompiledExecutionRequest {
-    CompiledExecutionRequest {
-        model_id: model_id.into(),
-        ..Default::default()
-    }
-    .inherit_missing(&ExecutionRequestDefaults::default().with_temperature(Some(0.3)))
 }
 
 fn thinking_flag_disabled_string(value: &str) -> bool {

@@ -47,7 +47,13 @@ impl TodoManager {
     pub async fn update(&self, session_id: &str, todos: Vec<TodoInfo>) {
         let todos_payload = todos.clone();
         if let Some(ref db) = self.db {
-            let _ = db.delete_for_session(session_id).await;
+            if let Err(error) = db.delete_for_session(session_id).await {
+                tracing::warn!(
+                    session_id,
+                    error = %error,
+                    "Failed to clear persisted todos before update"
+                );
+            }
             for (i, todo) in todos.iter().enumerate() {
                 let item = rocode_storage::TodoItem {
                     id: format!("{}_{}", session_id, i),
@@ -56,7 +62,14 @@ impl TodoManager {
                     priority: todo.priority.clone(),
                     position: i as i64,
                 };
-                let _ = db.upsert(session_id, &item).await;
+                if let Err(error) = db.upsert(session_id, &item).await {
+                    tracing::warn!(
+                        session_id,
+                        todo_id = %item.id,
+                        error = %error,
+                        "Failed to persist todo during update"
+                    );
+                }
             }
         }
 
@@ -99,7 +112,13 @@ impl TodoManager {
 
     pub async fn clear(&self, session_id: &str) {
         if let Some(ref db) = self.db {
-            let _ = db.delete_for_session(session_id).await;
+            if let Err(error) = db.delete_for_session(session_id).await {
+                tracing::warn!(
+                    session_id,
+                    error = %error,
+                    "Failed to clear persisted todos"
+                );
+            }
         }
 
         let mut state = self.state.write().await;
@@ -120,7 +139,14 @@ impl TodoManager {
                         priority: todos[index].priority.clone(),
                         position: index as i64,
                     };
-                    let _ = db.upsert(session_id, &item).await;
+                    if let Err(error) = db.upsert(session_id, &item).await {
+                        tracing::warn!(
+                            session_id,
+                            todo_id = %item.id,
+                            error = %error,
+                            "Failed to persist todo status update"
+                        );
+                    }
                 }
 
                 return true;
@@ -143,7 +169,14 @@ impl TodoManager {
                 priority: todo.priority,
                 position: position as i64,
             };
-            let _ = db.upsert(session_id, &item).await;
+            if let Err(error) = db.upsert(session_id, &item).await {
+                tracing::warn!(
+                    session_id,
+                    todo_id = %item.id,
+                    error = %error,
+                    "Failed to persist added todo"
+                );
+            }
         }
     }
 
@@ -155,7 +188,14 @@ impl TodoManager {
 
                 if let Some(ref db) = self.db {
                     let todo_id = format!("{}_{}", session_id, index);
-                    let _ = db.delete(session_id, &todo_id).await;
+                    if let Err(error) = db.delete(session_id, &todo_id).await {
+                        tracing::warn!(
+                            session_id,
+                            todo_id,
+                            error = %error,
+                            "Failed to delete persisted todo"
+                        );
+                    }
                 }
 
                 return true;

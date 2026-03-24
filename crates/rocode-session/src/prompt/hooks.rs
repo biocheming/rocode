@@ -1,15 +1,5 @@
 use crate::{MessageRole, SessionMessage};
 
-pub(crate) fn hook_payload_object(
-    payload: &serde_json::Value,
-) -> Option<&serde_json::Map<String, serde_json::Value>> {
-    payload
-        .get("output")
-        .and_then(|value| value.as_object())
-        .or_else(|| payload.as_object())
-        .or_else(|| payload.get("data").and_then(|value| value.as_object()))
-}
-
 pub(crate) fn session_message_hook_payload(message: &SessionMessage) -> serde_json::Value {
     let mut payload = serde_json::to_value(message).unwrap_or_else(|_| serde_json::json!({}));
     let Some(object) = payload.as_object_mut() else {
@@ -46,7 +36,7 @@ pub(crate) fn apply_chat_messages_hook_outputs(
         let Some(payload) = output.payload.as_ref() else {
             continue;
         };
-        let Some(object) = hook_payload_object(payload) else {
+        let Some(object) = rocode_plugin::hook_payload_object(payload) else {
             continue;
         };
         let Some(next_messages) = object.get("messages").and_then(|value| value.as_array()) else {
@@ -69,7 +59,7 @@ pub(crate) fn apply_chat_message_hook_outputs(
         let Some(payload) = output.payload.as_ref() else {
             continue;
         };
-        let Some(object) = hook_payload_object(payload) else {
+        let Some(object) = rocode_plugin::hook_payload_object(payload) else {
             continue;
         };
         if let Some(next_message) = object.get("message") {

@@ -4,6 +4,9 @@ use std::collections::HashMap;
 use rocode_plugin::{HookContext, HookEvent};
 
 use crate::matching::wildcard_match;
+use crate::{
+    evaluate_permission_patterns, tool_to_permission, PermissionAction, PermissionRuleset,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionInfo {
@@ -42,6 +45,12 @@ pub struct PendingPermission {
     pub info: PermissionInfo,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AskOutcome {
+    Granted,
+    Pending,
+}
+
 pub struct PermissionEngine {
     pending: HashMap<String, HashMap<String, PendingPermission>>,
     approved: HashMap<String, HashMap<String, bool>>,
@@ -70,9 +79,23 @@ impl PermissionEngine {
         result
     }
 
+    pub fn find(&self, permission_id: &str) -> Option<&PermissionInfo> {
+        self.pending
+            .values()
+            .find_map(|items| items.get(permission_id).map(|item| &item.info))
+    }
+
     fn to_keys(pattern: Option<&Pattern>, permission_type: &str) -> Vec<String> {
         match pattern {
             None => vec![permission_type.to_string()],
+            Some(Pattern::Single(s)) => vec![s.clone()],
+            Some(Pattern::Multiple(v)) => v.clone(),
+        }
+    }
+
+    fn patterns(pattern: Option<&Pattern>) -> Vec<String> {
+        match pattern {
+            None => Vec::new(),
             Some(Pattern::Single(s)) => vec![s.clone()],
             Some(Pattern::Multiple(v)) => v.clone(),
         }
@@ -96,12 +119,71 @@ impl PermissionEngine {
         Self::covered(&keys, approved_for_session)
     }
 
-    pub async fn ask(&mut self, info: PermissionInfo) -> Result<(), PermissionError> {
+    pub fn grant(&mut self, session_id: &str, permission_type: &str, pattern: Option<&Pattern>) {
+        let approved_session = self.approved.entry(session_id.to_string()).or_default();
+        for key in Self::to_keys(pattern, permission_type) {
+            approved_session.insert(key, true);
+        }
+    }
+
+    pub fn grant_patterns(&mut self, session_id: &str, permission_type: &str, patterns: &[String]) {
+        let pattern = match patterns {
+            [] => None,
+            [single] => Some(Pattern::Single(single.clone())),
+            _ => Some(Pattern::Multiple(patterns.to_vec())),
+        };
+        self.grant(session_id, permission_type, pattern.as_ref());
+    }
+
+    pub fn evaluate_tool(
+        tool_name: &str,
+        allowed_tools: &[String],
+        rulesets: &[PermissionRuleset],
+    ) -> PermissionAction {
+        Self::evaluate_tool_with_patterns(tool_name, &[], allowed_tools, rulesets)
+    }
+
+    pub fn evaluate_tool_with_patterns(
+        tool_name: &str,
+        patterns: &[String],
+        allowed_tools: &[String],
+        rulesets: &[PermissionRuleset],
+    ) -> PermissionAction {
+        if !allowed_tools.is_empty() && !allowed_tools.iter().any(|tool| tool == tool_name) {
+            return PermissionAction::Deny;
+        }
+
+        let permission = tool_to_permission(tool_name);
+        evaluate_permission_patterns(permission, patterns, rulesets)
+    }
+
+    pub async fn ask(&mut self, info: PermissionInfo) -> Result<AskOutcome, PermissionError> {
+        self.ask_with_rules(info, &[]).await
+    }
+
+    pub async fn ask_with_rules(
+        &mut self,
+        info: PermissionInfo,
+        rulesets: &[PermissionRuleset],
+    ) -> Result<AskOutcome, PermissionError> {
         let session_id = info.session_id.clone();
         let permission_id = info.id.clone();
+        let patterns = Self::patterns(info.pattern.as_ref());
 
         if self.is_approved(&session_id, info.pattern.as_ref(), &info.permission_type) {
-            return Ok(());
+            return Ok(AskOutcome::Granted);
+        }
+
+        match evaluate_permission_patterns(&info.permission_type, &patterns, rulesets) {
+            PermissionAction::Allow => return Ok(AskOutcome::Granted),
+            PermissionAction::Deny => {
+                return Err(PermissionError::Rejected {
+                    session_id: session_id.clone(),
+                    permission_id: permission_id.clone(),
+                    tool_call_id: info.call_id.clone(),
+                });
+            }
+            PermissionAction::Ask => {}
         }
 
         // Plugin hook: permission.ask — plugins may decide "ask" | "deny" | "allow".
@@ -127,7 +209,7 @@ impl PermissionEngine {
         }
 
         match status.as_str() {
-            "allow" => return Ok(()),
+            "allow" => return Ok(AskOutcome::Granted),
             "deny" => {
                 return Err(PermissionError::Rejected {
                     session_id: session_id.clone(),
@@ -143,7 +225,7 @@ impl PermissionEngine {
             .or_default()
             .insert(permission_id, PendingPermission { info });
 
-        Ok(())
+        Ok(AskOutcome::Pending)
     }
 
     pub fn respond(
@@ -169,17 +251,49 @@ impl PermissionEngine {
         }
 
         if response == Response::Always {
-            let approved_session = self.approved.entry(session_id.to_string()).or_default();
-            let approve_keys = Self::to_keys(
-                match_item.info.pattern.as_ref(),
+            self.grant(
+                session_id,
                 &match_item.info.permission_type,
+                match_item.info.pattern.as_ref(),
             );
-            for k in approve_keys {
-                approved_session.insert(k, true);
-            }
         }
 
         Ok(())
+    }
+
+    pub fn respond_by_id(
+        &mut self,
+        permission_id: &str,
+        response: Response,
+    ) -> Result<PermissionInfo, PermissionError> {
+        let session_id = self
+            .pending
+            .iter()
+            .find_map(|(session_id, items)| items.contains_key(permission_id).then_some(session_id))
+            .cloned()
+            .ok_or_else(|| PermissionError::NotFound("*".to_string(), permission_id.to_string()))?;
+
+        let info = self.find(permission_id).cloned().ok_or_else(|| {
+            PermissionError::NotFound(session_id.clone(), permission_id.to_string())
+        })?;
+
+        self.respond(&session_id, permission_id, response)?;
+        Ok(info)
+    }
+
+    pub fn remove_pending(&mut self, permission_id: &str) -> Option<PermissionInfo> {
+        let session_id = self
+            .pending
+            .iter()
+            .find_map(|(session_id, items)| items.contains_key(permission_id).then_some(session_id))
+            .cloned()?;
+
+        let items = self.pending.get_mut(&session_id)?;
+        let removed = items.remove(permission_id)?;
+        if items.is_empty() {
+            self.pending.remove(&session_id);
+        }
+        Some(removed.info)
     }
 
     pub fn clear_session(&mut self, session_id: &str) {
@@ -194,18 +308,8 @@ impl Default for PermissionEngine {
     }
 }
 
-fn hook_payload_object(
-    payload: &serde_json::Value,
-) -> Option<&serde_json::Map<String, serde_json::Value>> {
-    payload
-        .get("output")
-        .and_then(|value| value.as_object())
-        .or_else(|| payload.as_object())
-        .or_else(|| payload.get("data").and_then(|value| value.as_object()))
-}
-
 fn extract_permission_status(payload: &serde_json::Value) -> Option<String> {
-    hook_payload_object(payload)
+    rocode_plugin::hook_payload_object(payload)
         .and_then(|object| object.get("status"))
         .and_then(|value| value.as_str())
         .filter(|status| matches!(*status, "ask" | "deny" | "allow"))

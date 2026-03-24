@@ -315,9 +315,11 @@ impl Tool for TaskTool {
 
         let title = input.description.clone();
         let (skills_context, loaded_skill_names) = match input.load_skills.as_ref() {
-            Some(names) => {
-                crate::skill::render_loaded_skills_context(Path::new(&ctx.directory), names)?
-            }
+            Some(names) => crate::skill::render_loaded_skills_context_with_config_store(
+                Path::new(&ctx.directory),
+                names,
+                ctx.config_store.as_deref(),
+            )?,
             None => (String::new(), Vec::new()),
         };
         let subtask_prompt = if skills_context.is_empty() {

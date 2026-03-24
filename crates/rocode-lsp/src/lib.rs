@@ -223,7 +223,12 @@ impl LspClient {
                                 drop(stdin_ref.lock().await);
                                 // Kill the child process.
                                 if let Some(ref mut c) = *child_ref.lock().await {
-                                    let _ = c.kill().await;
+                                    if let Err(error) = c.kill().await {
+                                        tracing::debug!(
+                                            error = %error,
+                                            "Failed to kill LSP child process during registry cleanup"
+                                        );
+                                    }
                                 }
                             });
                         }
@@ -808,13 +813,28 @@ impl LspClient {
     /// ProcessGuard auto-unregisters from the global ProcessRegistry on drop (RAII).
     pub async fn shutdown(&self) {
         // Try LSP protocol shutdown
-        let _ = self.request("shutdown", serde_json::Value::Null).await;
-        let _ = self.notify("exit", serde_json::Value::Null).await;
+        if let Err(error) = self.request("shutdown", serde_json::Value::Null).await {
+            tracing::debug!(
+                error = %error,
+                "Failed to send LSP shutdown request during client shutdown"
+            );
+        }
+        if let Err(error) = self.notify("exit", serde_json::Value::Null).await {
+            tracing::debug!(
+                error = %error,
+                "Failed to send LSP exit notification during client shutdown"
+            );
+        }
 
         // Kill child — guard drop handles unregistration
         let mut child_guard = self.child.lock().await;
         if let Some(ref mut child) = *child_guard {
-            let _ = child.kill().await;
+            if let Err(error) = child.kill().await {
+                tracing::debug!(
+                    error = %error,
+                    "Failed to kill LSP child process during shutdown"
+                );
+            }
         }
         *child_guard = None;
     }

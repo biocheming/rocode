@@ -1,0 +1,710 @@
+async fn run_server_prompt(
+    runtime: &mut CliExecutionRuntime,
+    api_client: &Arc<CliApiClient>,
+    sse_rx: &mut mpsc::UnboundedReceiver<CliServerEvent>,
+    input: &str,
+    style: &CliStyle,
+    update_recovery_base: bool,
+) -> anyhow::Result<()> {
+    if update_recovery_base {
+        runtime.recovery_base_prompt = Some(input.to_string());
+    }
+    if let Ok(mut topology) = runtime.observed_topology.lock() {
+        topology.reset_for_run(
+            &runtime.resolved_agent_name,
+            runtime.resolved_scheduler_profile_name.as_deref(),
+        );
+    }
+    if let Ok(mut snapshots) = runtime.scheduler_stage_snapshots.lock() {
+        snapshots.clear();
+    }
+    cli_frontend_set_phase(
+        &runtime.frontend_projection,
+        CliFrontendPhase::Busy,
+        Some(
+            runtime
+                .resolved_scheduler_profile_name
+                .as_deref()
+                .map(|profile| format!("preset {}", profile))
+                .unwrap_or_else(|| "assistant response".to_string()),
+        ),
+    );
+    print_block(
+        Some(runtime),
+        OutputBlock::Message(MessageBlock::full(
+            OutputMessageRole::User,
+            input.to_string(),
+        )),
+        style,
+    )?;
+
+    let Some(session_id) = runtime.server_session_id.clone() else {
+        anyhow::bail!("CLI server session is not initialized");
+    };
+
+    {
+        let mut active_abort = runtime.active_abort.lock().await;
+        *active_abort = Some(CliActiveAbortHandle::Server {
+            api_client: api_client.clone(),
+            session_id: session_id.clone(),
+        });
+    }
+
+    let prompt_agent = cli_prompt_agent_override(
+        &runtime.resolved_agent_name,
+        runtime.resolved_scheduler_profile_name.as_deref(),
+    );
+
+    if let Err(error) = api_client
+        .send_prompt(
+            &session_id,
+            input.to_string(),
+            None,
+            prompt_agent,
+            runtime.resolved_scheduler_profile_name.clone(),
+            (runtime.resolved_model_label != "auto").then(|| runtime.resolved_model_label.clone()),
+            None,
+        )
+        .await
+    {
+        cli_frontend_set_phase(
+            &runtime.frontend_projection,
+            CliFrontendPhase::Failed,
+            Some("send prompt failed".to_string()),
+        );
+        let _ = print_block(
+            Some(runtime),
+            OutputBlock::Status(StatusBlock::error(format!(
+                "Failed to send prompt: {}",
+                error
+            ))),
+            style,
+        );
+        let mut active_abort = runtime.active_abort.lock().await;
+        *active_abort = None;
+        cli_frontend_clear(runtime);
+        return Ok(());
+    }
+
+    loop {
+        match sse_rx.recv().await {
+            Some(CliServerEvent::QuestionCreated {
+                request_id,
+                session_id,
+                questions_json,
+            }) => {
+                if cli_tracks_related_session(runtime, &session_id) {
+                    handle_question_from_sse(runtime, api_client, &request_id, &questions_json)
+                        .await;
+                }
+            }
+            Some(CliServerEvent::PermissionRequested {
+                session_id,
+                permission_id,
+                info_json,
+            }) => {
+                if cli_tracks_related_session(runtime, &session_id) {
+                    handle_permission_from_sse(runtime, api_client, &permission_id, &info_json)
+                        .await;
+                }
+            }
+            Some(CliServerEvent::ConfigUpdated) => {
+                cli_handle_config_updated_from_sse(runtime, api_client).await;
+            }
+            Some(CliServerEvent::SessionUpdated { session_id, source }) => {
+                handle_session_updated_from_sse(
+                    runtime,
+                    api_client,
+                    &session_id,
+                    source.as_deref(),
+                    style,
+                )
+                .await;
+            }
+            Some(CliServerEvent::SessionIdle {
+                session_id: idle_session_id,
+            }) => {
+                let is_current_session = runtime
+                    .server_session_id
+                    .as_deref()
+                    .is_some_and(|current| current == idle_session_id);
+                handle_sse_event(
+                    runtime,
+                    CliServerEvent::SessionIdle {
+                        session_id: idle_session_id,
+                    },
+                    style,
+                );
+                if !is_current_session {
+                    continue;
+                }
+                handle_session_updated_from_sse(
+                    runtime,
+                    api_client,
+                    &session_id,
+                    Some("prompt.done"),
+                    style,
+                )
+                .await;
+                if let Ok(mut topology) = runtime.observed_topology.lock() {
+                    topology.finish_run(Some("Completed".to_string()));
+                }
+                cli_frontend_clear(runtime);
+                let _ = print_block(
+                    Some(runtime),
+                    OutputBlock::Status(StatusBlock::success("Done.")),
+                    style,
+                );
+                break;
+            }
+            Some(other) => {
+                handle_sse_event(runtime, other, style);
+            }
+            None => break,
+        }
+    }
+
+    {
+        let mut active_abort = runtime.active_abort.lock().await;
+        *active_abort = None;
+    }
+    Ok(())
+}
+
+fn cli_prompt_agent_override(
+    resolved_agent_name: &str,
+    resolved_scheduler_profile_name: Option<&str>,
+) -> Option<String> {
+    if resolved_scheduler_profile_name.is_some() {
+        None
+    } else {
+        Some(resolved_agent_name.to_string())
+    }
+}
+
+async fn cli_handle_config_updated_from_sse(
+    runtime: &CliExecutionRuntime,
+    _api_client: &CliApiClient,
+) {
+    let _ = runtime;
+}
+
+/// Handle an incoming SSE event from the server — update topology,
+/// frontend projection, and render output blocks.
+fn handle_sse_event(runtime: &CliExecutionRuntime, event: CliServerEvent, style: &CliStyle) {
+    let root_session_id = runtime.server_session_id.as_deref();
+    let focused_session_id = cli_focused_session_id(runtime);
+    let is_root_session = |event_session_id: &str| {
+        root_session_id.is_none_or(|sid| event_session_id.is_empty() || sid == event_session_id)
+    };
+    let is_related_session =
+        |event_session_id: &str| cli_tracks_related_session(runtime, event_session_id);
+
+    match event {
+        CliServerEvent::ConfigUpdated => {
+            tracing::debug!("config.updated reached sync handler");
+        }
+        CliServerEvent::SessionUpdated { session_id, source } => {
+            if !is_root_session(&session_id) {
+                return;
+            }
+            tracing::debug!(session_id, ?source, "session updated");
+        }
+        CliServerEvent::SessionBusy { session_id } => {
+            if !is_root_session(&session_id) {
+                return;
+            }
+            cli_frontend_set_phase(
+                &runtime.frontend_projection,
+                CliFrontendPhase::Busy,
+                Some("server processing".to_string()),
+            );
+            cli_refresh_prompt(runtime);
+        }
+        CliServerEvent::SessionIdle { session_id } => {
+            if !is_root_session(&session_id) {
+                return;
+            }
+            cli_frontend_set_phase(&runtime.frontend_projection, CliFrontendPhase::Idle, None);
+            cli_refresh_prompt(runtime);
+        }
+        CliServerEvent::SessionRetrying { session_id } => {
+            if !is_root_session(&session_id) {
+                return;
+            }
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::warning("Retrying…")),
+                style,
+            );
+        }
+        CliServerEvent::QuestionCreated {
+            request_id,
+            session_id,
+            ..
+        } => {
+            tracing::warn!(
+                request_id,
+                session_id,
+                "question.created reached sync handler — skipping"
+            );
+        }
+        CliServerEvent::QuestionResolved { request_id } => {
+            tracing::debug!(request_id, "question resolved");
+        }
+        CliServerEvent::PermissionRequested {
+            session_id,
+            permission_id,
+            ..
+        } => {
+            tracing::warn!(
+                session_id,
+                permission_id,
+                "permission.requested reached sync handler — skipping"
+            );
+        }
+        CliServerEvent::PermissionResolved { permission_id } => {
+            tracing::debug!(permission_id, "permission resolved");
+        }
+        CliServerEvent::ToolCallStarted {
+            session_id,
+            tool_call_id,
+            tool_name,
+        } => {
+            if !is_related_session(&session_id) {
+                return;
+            }
+            if let Ok(mut topology) = runtime.observed_topology.lock() {
+                topology.active = true;
+            }
+            tracing::debug!(tool_call_id, tool_name, "tool call started");
+            if !is_root_session(&session_id) {
+                return;
+            }
+        }
+        CliServerEvent::ToolCallCompleted {
+            session_id,
+            tool_call_id,
+        } => {
+            if !is_related_session(&session_id) {
+                return;
+            }
+            tracing::debug!(tool_call_id, "tool call completed");
+        }
+        CliServerEvent::ChildSessionAttached {
+            parent_id,
+            child_id,
+        } => {
+            if cli_track_child_session(runtime, &parent_id, &child_id) {
+                tracing::debug!(parent_id, child_id, "tracked child session");
+            }
+        }
+        CliServerEvent::ChildSessionDetached {
+            parent_id,
+            child_id,
+        } => {
+            if cli_untrack_child_session(runtime, &parent_id, &child_id) {
+                tracing::debug!(parent_id, child_id, "untracked child session");
+            }
+        }
+        CliServerEvent::OutputBlock {
+            session_id,
+            id,
+            payload,
+        } => {
+            if !is_related_session(&session_id) {
+                return;
+            }
+            let block_payload = payload.get("block").unwrap_or(&payload);
+            let Some(block) = parse_output_block(block_payload) else {
+                tracing::debug!(?id, payload = %block_payload, "failed to parse output_block");
+                return;
+            };
+            cli_observe_terminal_stream_block(runtime, &session_id, id.as_deref(), &block);
+            if matches!(block, OutputBlock::Reasoning(_))
+                && !runtime.show_thinking.load(Ordering::SeqCst)
+            {
+                return;
+            }
+            if let Ok(mut topology) = runtime.observed_topology.lock() {
+                topology.observe_block(&block);
+            }
+            if let OutputBlock::SchedulerStage(stage) = &block {
+                if let Some(child_id) = stage.child_session_id.as_deref() {
+                    let _ = cli_track_child_session(runtime, &session_id, child_id);
+                }
+            }
+            cli_frontend_observe_block(&runtime.frontend_projection, &block);
+            if !is_root_session(&session_id) {
+                let rendered = cli_render_session_block(runtime, &session_id, &block, style);
+                cli_cache_child_session_rendered(runtime, &session_id, &rendered);
+                if focused_session_id.as_deref() == Some(session_id.as_str()) {
+                    let _ = print_rendered(runtime.terminal_surface.as_deref(), &rendered);
+                }
+                return;
+            }
+            match &block {
+                OutputBlock::SchedulerStage(stage)
+                    if !cli_should_emit_scheduler_stage_block(
+                        &runtime.scheduler_stage_snapshots,
+                        stage,
+                    ) => {}
+                OutputBlock::SchedulerStage(stage)
+                    if !cli_is_terminal_stage_status(stage.status.as_deref()) =>
+                {
+                    if let Ok(mut projection) = runtime.frontend_projection.lock() {
+                        projection.active_stage = Some(stage.as_ref().clone());
+                        projection.active_collapsed = false;
+                    }
+                    cli_refresh_prompt(runtime);
+                }
+                OutputBlock::SchedulerStage(_) => {
+                    if let Ok(mut projection) = runtime.frontend_projection.lock() {
+                        projection.active_stage = None;
+                        projection.active_collapsed = true;
+                    }
+                    cli_refresh_prompt(runtime);
+                    let rendered = cli_render_session_block(runtime, "", &block, style);
+                    cli_cache_root_session_rendered(runtime, &rendered);
+                    if cli_is_root_focused(runtime) {
+                        let _ = print_rendered(runtime.terminal_surface.as_deref(), &rendered);
+                    }
+                }
+                _ => {
+                    let rendered = cli_render_session_block(runtime, "", &block, style);
+                    cli_cache_root_session_rendered(runtime, &rendered);
+                    if cli_is_root_focused(runtime) {
+                        let _ = print_rendered(runtime.terminal_surface.as_deref(), &rendered);
+                    }
+                }
+            }
+        }
+        CliServerEvent::Error {
+            session_id,
+            error,
+            message_id,
+            done,
+        } => {
+            if !is_related_session(&session_id) {
+                return;
+            }
+            if !is_root_session(&session_id) {
+                tracing::error!(session_id, error, ?message_id, ?done, "child session error");
+                return;
+            }
+            tracing::error!(error, ?message_id, ?done, "server error");
+            let status = OutputBlock::Status(StatusBlock::error(error));
+            if cli_is_root_focused(runtime) {
+                let _ = print_block(Some(runtime), status, style);
+            } else {
+                cli_cache_root_session_block(runtime, &status, style);
+            }
+        }
+        CliServerEvent::Usage {
+            session_id,
+            prompt_tokens,
+            completion_tokens,
+            message_id,
+        } => {
+            if !is_related_session(&session_id) {
+                return;
+            }
+            tracing::debug!(prompt_tokens, completion_tokens, ?message_id, "token usage");
+            if let Ok(mut projection) = runtime.frontend_projection.lock() {
+                projection.token_stats.input_tokens = projection
+                    .token_stats
+                    .input_tokens
+                    .saturating_add(prompt_tokens);
+                projection.token_stats.output_tokens = projection
+                    .token_stats
+                    .output_tokens
+                    .saturating_add(completion_tokens);
+            }
+            if !is_root_session(&session_id) {
+                return;
+            }
+            if prompt_tokens > 0 || completion_tokens > 0 {
+                let status = OutputBlock::Status(StatusBlock::success(format!(
+                    "tokens: prompt={} completion={}",
+                    prompt_tokens, completion_tokens
+                )));
+                if cli_is_root_focused(runtime) {
+                    let _ = print_block(Some(runtime), status, style);
+                } else {
+                    cli_cache_root_session_block(runtime, &status, style);
+                }
+            }
+        }
+        CliServerEvent::Unknown { event, data } => {
+            tracing::trace!("Ignoring unknown SSE event: {} ({})", event, data);
+        }
+    }
+}
+
+async fn handle_question_from_sse(
+    runtime: &CliExecutionRuntime,
+    api_client: &Arc<CliApiClient>,
+    request_id: &str,
+    questions_json: &serde_json::Value,
+) {
+    let questions: Vec<rocode_tool::QuestionDef> =
+        match serde_json::from_value(questions_json.clone()) {
+            Ok(questions) => questions,
+            Err(error) => {
+                tracing::warn!("Failed to parse questions from SSE: {}", error);
+                if let Err(reject_error) = api_client.reject_question(request_id).await {
+                    tracing::warn!(
+                        request_id,
+                        error = %reject_error,
+                        "Failed to reject malformed question request"
+                    );
+                }
+                return;
+            }
+        };
+
+    if questions.is_empty() {
+        tracing::debug!("Empty question list from SSE — rejecting");
+        if let Err(error) = api_client.reject_question(request_id).await {
+            tracing::warn!(
+                request_id,
+                error = %error,
+                "Failed to reject empty question request"
+            );
+        }
+        return;
+    }
+
+    let guard = runtime
+        .spinner_guard
+        .lock()
+        .map(|spinner| spinner.clone())
+        .unwrap_or_else(|_| SpinnerGuard::noop());
+    let result = cli_ask_question(
+        questions,
+        runtime.observed_topology.clone(),
+        runtime.frontend_projection.clone(),
+        runtime.prompt_session_slot.clone(),
+        runtime.terminal_surface.clone(),
+        guard,
+    )
+    .await;
+
+    match result {
+        Ok(answers) => {
+            if let Err(error) = api_client.reply_question(request_id, answers).await {
+                tracing::error!("Failed to reply question `{}`: {}", request_id, error);
+            }
+        }
+        Err(_) => {
+            if let Err(error) = api_client.reject_question(request_id).await {
+                tracing::error!("Failed to reject question `{}`: {}", request_id, error);
+            }
+        }
+    }
+}
+
+async fn handle_permission_from_sse(
+    runtime: &CliExecutionRuntime,
+    api_client: &Arc<CliApiClient>,
+    permission_id: &str,
+    info_json: &serde_json::Value,
+) {
+    let info: crate::api_client::PermissionRequestInfo =
+        match serde_json::from_value(info_json.clone()) {
+            Ok(info) => info,
+            Err(error) => {
+                tracing::warn!(permission_id, %error, "failed to parse permission info from SSE");
+                let _ = api_client
+                    .reply_permission(
+                        permission_id,
+                        "reject",
+                        Some("Invalid permission request payload".to_string()),
+                    )
+                    .await;
+                return;
+            }
+        };
+
+    let input = info.input.as_object().cloned().unwrap_or_default();
+    let permission = input
+        .get("permission")
+        .and_then(|value| value.as_str())
+        .unwrap_or(info.tool.as_str())
+        .to_string();
+    let patterns = input
+        .get("patterns")
+        .and_then(|value| value.as_array())
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let metadata = input
+        .get("metadata")
+        .and_then(|value| value.as_object())
+        .map(|map| {
+            map.iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+
+    {
+        let memory = runtime.permission_memory.lock().await;
+        if memory.is_granted(&permission, &patterns) {
+            let _ = api_client
+                .reply_permission(permission_id, "once", Some("auto-approved".to_string()))
+                .await;
+            return;
+        }
+    }
+
+    let guard = runtime
+        .spinner_guard
+        .lock()
+        .map(|spinner| spinner.clone())
+        .unwrap_or_else(|_| SpinnerGuard::noop());
+    guard.pause();
+
+    let decision = {
+        let permission = permission.clone();
+        let patterns = patterns.clone();
+        let metadata = metadata.clone();
+        tokio::task::spawn_blocking(move || {
+            let style = CliStyle::detect();
+            prompt_permission(&permission, &patterns, &metadata, &style)
+        })
+        .await
+    };
+
+    guard.resume();
+
+    let decision = match decision {
+        Ok(Ok(decision)) => decision,
+        Ok(Err(error)) => {
+            tracing::error!(permission_id, %error, "permission prompt IO error");
+            let _ = api_client
+                .reply_permission(
+                    permission_id,
+                    "reject",
+                    Some(format!("Permission prompt IO error: {}", error)),
+                )
+                .await;
+            return;
+        }
+        Err(error) => {
+            tracing::error!(permission_id, %error, "permission prompt task failed");
+            let _ = api_client
+                .reply_permission(
+                    permission_id,
+                    "reject",
+                    Some(format!("Permission prompt failed: {}", error)),
+                )
+                .await;
+            return;
+        }
+    };
+
+    let (reply, message) = match decision {
+        PermissionDecision::Allow => ("once", Some("approved".to_string())),
+        PermissionDecision::AllowAlways => {
+            let mut memory = runtime.permission_memory.lock().await;
+            memory.grant_always(&permission, &patterns);
+            ("always", Some("approved always".to_string()))
+        }
+        PermissionDecision::Deny => ("reject", Some("rejected".to_string())),
+    };
+
+    if let Err(error) = api_client
+        .reply_permission(permission_id, reply, message)
+        .await
+    {
+        tracing::error!(permission_id, %error, "failed to reply permission");
+    }
+}
+
+async fn cli_refresh_server_info(
+    api_client: &CliApiClient,
+    projection: &Arc<Mutex<CliFrontendProjection>>,
+    server_session_id: Option<&str>,
+) {
+    match api_client.get_mcp_status().await {
+        Ok(servers) => {
+            let statuses: Vec<CliMcpServerStatus> = servers.into_iter().map(Into::into).collect();
+            if let Ok(mut projection) = projection.lock() {
+                projection.mcp_servers = statuses;
+            }
+        }
+        Err(error) => {
+            tracing::debug!("Failed to refresh MCP status: {}", error);
+        }
+    }
+
+    match api_client.get_lsp_servers().await {
+        Ok(servers) => {
+            if let Ok(mut projection) = projection.lock() {
+                projection.lsp_servers = servers;
+            }
+        }
+        Err(error) => {
+            tracing::debug!("Failed to refresh LSP status: {}", error);
+        }
+    }
+
+    if let Some(session_id) = server_session_id {
+        match api_client.get_messages(session_id).await {
+            Ok(messages) => {
+                let mut stats = CliSessionTokenStats::default();
+                for message in &messages {
+                    if message.role == "assistant" {
+                        stats.accumulate(&message.tokens, message.cost);
+                    }
+                }
+                if let Ok(mut projection) = projection.lock() {
+                    projection.token_stats = stats;
+                }
+            }
+            Err(error) => {
+                tracing::debug!("Failed to refresh token stats: {}", error);
+            }
+        }
+    }
+}
+
+async fn handle_session_updated_from_sse(
+    runtime: &CliExecutionRuntime,
+    api_client: &Arc<CliApiClient>,
+    session_id: &str,
+    source: Option<&str>,
+    _style: &CliStyle,
+) {
+    let server_session_id = match runtime.server_session_id.as_deref() {
+        Some(server_session_id) if server_session_id == session_id => server_session_id,
+        _ => return,
+    };
+    if !cli_session_update_requires_refresh(source) {
+        return;
+    }
+    match api_client.get_session(server_session_id).await {
+        Ok(session) => {
+            if let Ok(mut projection) = runtime.frontend_projection.lock() {
+                projection.session_title = Some(session.title);
+            }
+        }
+        Err(error) => {
+            tracing::debug!(
+                "Failed to refresh session title after session.updated: {}",
+                error
+            );
+        }
+    }
+    cli_refresh_server_info(
+        api_client,
+        &runtime.frontend_projection,
+        Some(server_session_id),
+    )
+    .await;
+}

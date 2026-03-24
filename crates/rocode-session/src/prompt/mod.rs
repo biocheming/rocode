@@ -36,6 +36,7 @@ use tokio_util::sync::CancellationToken;
 use rocode_content::output_blocks::{
     MessageBlock, MessageRole as OutputMessageRole, OutputBlock, ReasoningBlock, ToolBlock,
 };
+use rocode_execution_types::{session_runtime_request_defaults, CompiledExecutionRequest};
 use rocode_orchestrator::runtime::events::{
     CancelToken as RuntimeCancelToken, FinishReason as RuntimeFinishReason,
     LoopError as RuntimeLoopError, LoopEvent, StepBoundary, ToolCallReady as RuntimeToolCallReady,
@@ -45,7 +46,6 @@ use rocode_orchestrator::runtime::policy::{LoopPolicy, ToolDedupScope};
 use rocode_orchestrator::runtime::run_loop;
 use rocode_orchestrator::runtime::traits::{LoopSink, ToolDispatcher};
 use rocode_orchestrator::runtime::{SimpleModelCaller, SimpleModelCallerConfig};
-use rocode_orchestrator::{session_runtime_request_defaults, CompiledExecutionRequest};
 use rocode_plugin::{HookContext, HookEvent};
 use rocode_provider::transform::{apply_caching, ProviderType};
 use rocode_provider::{Provider, ToolDefinition};
@@ -246,6 +246,7 @@ pub struct SessionPrompt {
     mcp_clients: Option<Arc<rocode_mcp::McpClientRegistry>>,
     lsp_registry: Option<Arc<rocode_lsp::LspClientRegistry>>,
     tool_runtime_config: rocode_tool::ToolRuntimeConfig,
+    config_store: Option<Arc<rocode_config::ConfigStore>>,
 }
 
 type StreamToolResultEntry = (
@@ -284,6 +285,7 @@ struct PromptLoopContext {
     tools: Vec<ToolDefinition>,
     compiled_request: CompiledExecutionRequest,
     hooks: PromptHooks,
+    config_store: Option<Arc<rocode_config::ConfigStore>>,
 }
 
 #[derive(Clone)]
@@ -294,6 +296,7 @@ struct RuntimeStepContext {
     agent_name: Option<String>,
     compiled_request: CompiledExecutionRequest,
     hooks: PromptHooks,
+    config_store: Option<Arc<rocode_config::ConfigStore>>,
 }
 
 struct RuntimeStepInput {
@@ -407,6 +410,7 @@ struct SessionStepToolDispatcher {
     ask_permission_hook: Option<AskPermissionHook>,
     publish_bus_hook: Option<PublishBusHook>,
     tool_runtime_config: rocode_tool::ToolRuntimeConfig,
+    config_store: Option<Arc<rocode_config::ConfigStore>>,
 }
 
 #[async_trait::async_trait]
@@ -434,6 +438,7 @@ impl ToolDispatcher for SessionStepToolDispatcher {
         let publish_bus_hook = self.publish_bus_hook.clone();
         let call_id = call.id.clone();
         let tool_runtime_config = self.tool_runtime_config.clone();
+        let config_store = self.config_store.clone();
 
         let tool_ctx_builder = Arc::new(move || {
             let mut base_ctx = rocode_tool::ToolContext::new(
@@ -444,6 +449,9 @@ impl ToolDispatcher for SessionStepToolDispatcher {
             .with_agent(agent_name.clone())
             .with_tool_runtime_config(tool_runtime_config.clone())
             .with_abort(abort_token.clone());
+            if let Some(config_store) = config_store.clone() {
+                base_ctx = base_ctx.with_config_store(config_store);
+            }
             base_ctx.call_id = Some(call_id.clone());
             let ctx = SessionPrompt::with_persistent_subsession_callbacks(
                 base_ctx,
@@ -1216,6 +1224,7 @@ impl SessionPrompt {
             mcp_clients: None,
             lsp_registry: None,
             tool_runtime_config: rocode_tool::ToolRuntimeConfig::default(),
+            config_store: None,
         }
     }
 
@@ -1224,6 +1233,11 @@ impl SessionPrompt {
         tool_runtime_config: rocode_tool::ToolRuntimeConfig,
     ) -> Self {
         self.tool_runtime_config = tool_runtime_config;
+        self
+    }
+
+    pub fn with_config_store(mut self, config_store: Arc<rocode_config::ConfigStore>) -> Self {
+        self.config_store = Some(config_store);
         self
     }
 
@@ -1492,6 +1506,7 @@ impl SessionPrompt {
                     tools,
                     compiled_request,
                     hooks,
+                    config_store: self.config_store.clone(),
                 },
             )
             .await;
@@ -1582,6 +1597,7 @@ impl SessionPrompt {
                     tools,
                     compiled_request: compiled_request.clone(),
                     hooks: PromptHooks::default(),
+                    config_store: self.config_store.clone(),
                 },
             )
             .await;
@@ -1654,6 +1670,7 @@ impl SessionPrompt {
             ask_permission_hook: input.step_ctx.hooks.ask_permission_hook.clone(),
             publish_bus_hook: input.step_ctx.hooks.publish_bus_hook.clone(),
             tool_runtime_config: self.tool_runtime_config.clone(),
+            config_store: input.step_ctx.config_store.clone(),
         };
 
         let mut sink = SessionStepSink::new(
@@ -2080,6 +2097,7 @@ impl SessionPrompt {
                             agent_name: prompt_ctx.agent_name.clone(),
                             compiled_request: prompt_ctx.compiled_request.clone(),
                             hooks: prompt_ctx.hooks.clone(),
+                            config_store: prompt_ctx.config_store.clone(),
                         },
                     },
                 )
@@ -2332,6 +2350,7 @@ impl SessionPrompt {
                     question_session_id: Some(session.id.clone()),
                     abort: None,
                     tool_runtime_config: self.tool_runtime_config.clone(),
+                    config_store: self.config_store.clone(),
                 },
             )
             .await

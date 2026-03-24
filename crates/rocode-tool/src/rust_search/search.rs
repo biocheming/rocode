@@ -1,6 +1,6 @@
 use std::{
     ffi::OsStr,
-    path::Path,
+    path::PathBuf,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -83,6 +83,19 @@ pub struct Search {
     rx: Box<dyn Iterator<Item = String>>,
 }
 
+pub(super) struct SearchOptions {
+    pub(super) search_location: PathBuf,
+    pub(super) more_locations: Option<Vec<PathBuf>>,
+    pub(super) search_input: Option<String>,
+    pub(super) file_ext: Option<String>,
+    pub(super) depth: Option<usize>,
+    pub(super) limit: Option<usize>,
+    pub(super) strict: bool,
+    pub(super) ignore_case: bool,
+    pub(super) with_hidden: bool,
+    pub(super) filters: Vec<FilterType>,
+}
+
 impl Iterator for Search {
     type Item = String;
 
@@ -103,20 +116,21 @@ impl Search {
     /// * `ignore_case` - Whether to ignore case or not
     /// * `hidden` - Whether to search hidden files or not
     /// * `filters` - Vector of filters to search by `DirEntry` data
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn new(
-        search_location: impl AsRef<Path>,
-        more_locations: Option<Vec<impl AsRef<Path>>>,
-        search_input: Option<&str>,
-        file_ext: Option<&str>,
-        depth: Option<usize>,
-        limit: Option<usize>,
-        strict: bool,
-        ignore_case: bool,
-        with_hidden: bool,
-        filters: Vec<FilterType>,
-    ) -> Self {
-        let mut walker = WalkBuilder::new(search_location);
+    pub(super) fn new(options: SearchOptions) -> Self {
+        let SearchOptions {
+            search_location,
+            more_locations,
+            search_input,
+            file_ext,
+            depth,
+            limit,
+            strict,
+            ignore_case,
+            with_hidden,
+            filters,
+        } = options;
+
+        let mut walker = WalkBuilder::new(&search_location);
 
         // Use more threads than CPUs for I/O-bound work: while one thread
         // waits for I/O, others can make progress.
@@ -132,7 +146,7 @@ impl Search {
         // Pre-filter by extension using ignore's type system when possible.
         // This avoids calling our callback for non-matching files.
         let mut types_filter_active = false;
-        if let Some(ext) = file_ext {
+        if let Some(ext) = file_ext.as_deref() {
             let mut types = TypesBuilder::new();
             if types.add("custom", &format!("*.{ext}")).is_ok() {
                 types.select("custom");
@@ -148,21 +162,21 @@ impl Search {
             if file_ext.is_some() && types_filter_active {
                 // Types pre-filter handles extension matching; no additional check needed.
                 Matcher::AcceptAll
-            } else if let Some(ext) = file_ext {
+            } else if let Some(ext) = file_ext.as_deref() {
                 // Fallback: simple extension comparison.
                 Matcher::ExtOnly(ext.to_owned())
             } else {
                 Matcher::Regex(build_regex_search_input(
-                    search_input,
-                    file_ext,
+                    search_input.as_deref(),
+                    file_ext.as_deref(),
                     strict,
                     ignore_case,
                 ))
             }
         } else {
             Matcher::Regex(build_regex_search_input(
-                search_input,
-                file_ext,
+                search_input.as_deref(),
+                file_ext.as_deref(),
                 strict,
                 ignore_case,
             ))

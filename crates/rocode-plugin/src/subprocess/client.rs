@@ -365,7 +365,13 @@ impl PluginSubprocess {
             tokio::select! {
                 _ = tokio::time::sleep_until(deadline) => {
                     if crate::feature_flags::is_enabled("plugin_timeout_self_heal") {
-                        let _ = self.reconnect().await;
+                        if let Err(error) = self.reconnect().await {
+                            tracing::debug!(
+                                plugin = %self.name,
+                                error = %error,
+                                "[plugin-heal] reconnect failed after tool timeout"
+                            );
+                        }
                     }
                     return Err(PluginSubprocessError::Timeout);
                 }
@@ -523,6 +529,7 @@ impl PluginSubprocess {
         >();
         let (chunk_tx, chunk_rx) = mpsc::channel(128);
         let transport = Arc::clone(&self.transport);
+        let plugin_name = self.name.clone();
 
         tokio::spawn(async move {
             let _rpc_guard = rpc_guard;
@@ -537,7 +544,13 @@ impl PluginSubprocess {
                         if let Some(tx) = start_tx.take() {
                             let _ = tx.send(Err(err));
                         } else {
-                            let _ = chunk_tx.send(Err(err)).await;
+                            if let Err(send_error) = chunk_tx.send(Err(err)).await {
+                                tracing::debug!(
+                                    plugin = %plugin_name,
+                                    error = %send_error,
+                                    "Failed to forward plugin stream startup error to consumer"
+                                );
+                            }
                         }
                         break;
                     }
@@ -551,7 +564,13 @@ impl PluginSubprocess {
                             if let Some(tx) = start_tx.take() {
                                 let _ = tx.send(Err(send_err));
                             } else {
-                                let _ = chunk_tx.send(Err(send_err)).await;
+                                if let Err(error) = chunk_tx.send(Err(send_err)).await {
+                                    tracing::debug!(
+                                        plugin = %plugin_name,
+                                        error = %error,
+                                        "Failed to forward plugin stream JSON decode error to consumer"
+                                    );
+                                }
                             }
                             break;
                         }
@@ -562,7 +581,13 @@ impl PluginSubprocess {
                         if let Some(tx) = start_tx.take() {
                             let _ = tx.send(Err(send_err));
                         } else {
-                            let _ = chunk_tx.send(Err(send_err)).await;
+                            if let Err(error) = chunk_tx.send(Err(send_err)).await {
+                                tracing::debug!(
+                                    plugin = %plugin_name,
+                                    error = %error,
+                                    "Failed to forward plugin stream RPC error to consumer"
+                                );
+                            }
                         }
                         break;
                     }
@@ -609,7 +634,13 @@ impl PluginSubprocess {
                         if let Some(tx) = start_tx.take() {
                             let _ = tx.send(Err(error));
                         } else {
-                            let _ = chunk_tx.send(Err(error)).await;
+                            if let Err(send_error) = chunk_tx.send(Err(error)).await {
+                                tracing::debug!(
+                                    plugin = %plugin_name,
+                                    error = %send_error,
+                                    "Failed to forward plugin stream protocol error to consumer"
+                                );
+                            }
                         }
                         break;
                     }
@@ -639,8 +670,30 @@ impl PluginSubprocess {
         let _: Value = self.call("shutdown", None).await?;
         // Give the process a moment to exit, then kill if needed
         let mut transport = self.transport.write().await;
-        let _ = tokio::time::timeout(Duration::from_secs(2), transport.process.wait()).await;
-        let _ = transport.process.kill().await;
+        match tokio::time::timeout(Duration::from_secs(2), transport.process.wait()).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                tracing::debug!(
+                    plugin = %self.name,
+                    error = %error,
+                    "Failed while waiting for plugin subprocess shutdown"
+                );
+            }
+            Err(error) => {
+                tracing::debug!(
+                    plugin = %self.name,
+                    error = %error,
+                    "Timed out waiting for plugin subprocess shutdown"
+                );
+            }
+        }
+        if let Err(error) = transport.process.kill().await {
+            tracing::debug!(
+                plugin = %self.name,
+                error = %error,
+                "Failed to kill plugin subprocess during shutdown"
+            );
+        }
         Ok(())
     }
 
@@ -670,7 +723,13 @@ impl PluginSubprocess {
                 guard.defuse();
             }
             let mut transport = self.transport.write().await;
-            let _ = transport.process.kill().await;
+            if let Err(error) = transport.process.kill().await {
+                tracing::debug!(
+                    plugin = %self.name,
+                    error = %error,
+                    "[plugin-heal] failed to kill old subprocess before reconnect"
+                );
+            }
         }
 
         // 2. Spawn new process
@@ -778,7 +837,13 @@ impl PluginSubprocess {
                 _ = tokio::time::sleep_until(deadline) => {
                     // Timeout — attempt reconnect so the *next* call works.
                     if crate::feature_flags::is_enabled("plugin_timeout_self_heal") {
-                        let _ = self.reconnect().await;
+                        if let Err(error) = self.reconnect().await {
+                            tracing::debug!(
+                                plugin = %self.name,
+                                error = %error,
+                                "[plugin-heal] reconnect failed after RPC timeout"
+                            );
+                        }
                     }
                     return Err(PluginSubprocessError::Timeout);
                 }

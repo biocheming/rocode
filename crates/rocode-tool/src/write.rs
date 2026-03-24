@@ -275,7 +275,13 @@ async fn get_lsp_diagnostics_impl(
 
     // Open/refresh the written file so the LSP re-publishes diagnostics
     if let Ok(content) = tokio::fs::read_to_string(path).await {
-        let _ = client.open_document(path, &content, language).await;
+        if let Err(error) = client.open_document(path, &content, language).await {
+            tracing::debug!(
+                path = %path.display(),
+                error = %error,
+                "Failed to sync written file to LSP before diagnostics"
+            );
+        }
     }
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;

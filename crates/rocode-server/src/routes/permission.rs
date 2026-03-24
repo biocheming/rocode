@@ -4,10 +4,13 @@ use axum::{
     Json, Router,
 };
 use once_cell::sync::Lazy;
+use rocode_permission::{
+    AskOutcome, Pattern, PermissionEngine, PermissionInfo, Response, TimeInfo,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{oneshot, Mutex, RwLock};
+use tokio::sync::{oneshot, Mutex};
 
 use crate::session_runtime::events::{broadcast_server_event, ServerEvent};
 use crate::{ApiError, Result, ServerState};
@@ -27,8 +30,8 @@ pub struct PermissionRequestInfo {
     pub message: String,
 }
 
-pub(crate) static PERMISSION_REQUESTS: Lazy<RwLock<HashMap<String, PermissionRequestInfo>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
+pub(crate) static PERMISSION_ENGINE: Lazy<Mutex<PermissionEngine>> =
+    Lazy::new(|| Mutex::new(PermissionEngine::new()));
 static PERMISSION_WAITERS: Lazy<Mutex<HashMap<String, oneshot::Sender<PermissionReply>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -63,22 +66,29 @@ fn permission_request_message(request: &rocode_tool::PermissionRequest) -> Strin
         .unwrap_or_else(|| format!("Permission required: {}", request.permission))
 }
 
-fn permission_request_info(
-    permission_id: String,
-    session_id: String,
-    request: &rocode_tool::PermissionRequest,
-) -> PermissionRequestInfo {
+fn permission_request_info(info: &PermissionInfo) -> PermissionRequestInfo {
     PermissionRequestInfo {
-        id: permission_id,
-        session_id,
-        tool: request.permission.clone(),
+        id: info.id.clone(),
+        session_id: info.session_id.clone(),
+        tool: info.permission_type.clone(),
         input: serde_json::json!({
-            "permission": request.permission,
-            "patterns": request.patterns,
-            "metadata": request.metadata,
-            "always": request.always,
+            "permission": info.permission_type,
+            "patterns": match &info.pattern {
+                Some(Pattern::Single(pattern)) => serde_json::json!([pattern]),
+                Some(Pattern::Multiple(patterns)) => serde_json::json!(patterns),
+                None => serde_json::json!([]),
+            },
+            "metadata": info.metadata,
         }),
-        message: permission_request_message(request),
+        message: info.message.clone(),
+    }
+}
+
+fn request_pattern(request: &rocode_tool::PermissionRequest) -> Option<Pattern> {
+    match request.patterns.as_slice() {
+        [] => None,
+        [single] => Some(Pattern::Single(single.clone())),
+        patterns => Some(Pattern::Multiple(patterns.to_vec())),
     }
 }
 
@@ -88,13 +98,42 @@ pub(crate) async fn request_permission(
     request: rocode_tool::PermissionRequest,
 ) -> std::result::Result<(), rocode_tool::ToolError> {
     let permission_id = format!("permission_{}", uuid::Uuid::new_v4().simple());
-    let info = permission_request_info(permission_id.clone(), session_id.clone(), &request);
+    let info = PermissionInfo {
+        id: permission_id.clone(),
+        permission_type: request.permission.clone(),
+        pattern: request_pattern(&request),
+        session_id: session_id.clone(),
+        message_id: String::new(),
+        call_id: None,
+        message: permission_request_message(&request),
+        metadata: request.metadata.clone(),
+        time: TimeInfo {
+            created: chrono::Utc::now().timestamp_millis().max(0) as u64,
+        },
+    };
+
+    {
+        let mut engine = PERMISSION_ENGINE.lock().await;
+        if !request.always.is_empty() {
+            engine.grant_patterns(&session_id, &request.permission, &request.patterns);
+            return Ok(());
+        }
+
+        match engine.ask(info.clone()).await {
+            Ok(AskOutcome::Granted) => return Ok(()),
+            Ok(AskOutcome::Pending) => {}
+            Err(_) => {
+                return Err(rocode_tool::ToolError::PermissionDenied(format!(
+                    "Permission rejected for {}",
+                    request.permission
+                )));
+            }
+        }
+    }
+
+    let request_info = permission_request_info(&info);
     let (tx, rx) = oneshot::channel();
 
-    PERMISSION_REQUESTS
-        .write()
-        .await
-        .insert(permission_id.clone(), info.clone());
     PERMISSION_WAITERS
         .lock()
         .await
@@ -105,7 +144,7 @@ pub(crate) async fn request_permission(
         &ServerEvent::PermissionRequested {
             session_id: session_id.clone(),
             permission_id: permission_id.clone(),
-            info: serde_json::to_value(&info).unwrap_or(serde_json::Value::Null),
+            info: serde_json::to_value(&request_info).unwrap_or(serde_json::Value::Null),
         },
     );
 
@@ -115,7 +154,7 @@ pub(crate) async fn request_permission(
         .permission_requested(
             &session_id,
             &permission_id,
-            serde_json::to_value(&info).unwrap_or(serde_json::Value::Null),
+            serde_json::to_value(&request_info).unwrap_or(serde_json::Value::Null),
         )
         .await;
 
@@ -138,13 +177,19 @@ pub(crate) async fn request_permission(
             ))),
         },
         Ok(Err(_)) => {
-            PERMISSION_REQUESTS.write().await.remove(&permission_id);
+            PERMISSION_ENGINE
+                .lock()
+                .await
+                .remove_pending(&permission_id);
             Err(rocode_tool::ToolError::ExecutionError(
                 "Permission response channel closed".to_string(),
             ))
         }
         Err(_) => {
-            PERMISSION_REQUESTS.write().await.remove(&permission_id);
+            PERMISSION_ENGINE
+                .lock()
+                .await
+                .remove_pending(&permission_id);
             Err(rocode_tool::ToolError::PermissionDenied(
                 "Permission request timed out".to_string(),
             ))
@@ -153,8 +198,12 @@ pub(crate) async fn request_permission(
 }
 
 async fn list_permissions() -> Json<Vec<PermissionRequestInfo>> {
-    let pending = PERMISSION_REQUESTS.read().await;
-    let mut result: Vec<_> = pending.values().cloned().collect();
+    let engine = PERMISSION_ENGINE.lock().await;
+    let mut result: Vec<_> = engine
+        .list()
+        .into_iter()
+        .map(permission_request_info)
+        .collect();
     result.sort_by(|a, b| a.id.cmp(&b.id));
     Json(result)
 }
@@ -170,20 +219,22 @@ async fn reply_permission(
     Path(id): Path<String>,
     Json(req): Json<ReplyPermissionRequest>,
 ) -> Result<Json<bool>> {
-    match req.reply.as_str() {
-        "once" | "always" | "reject" => {}
+    let response = match req.reply.as_str() {
+        "once" => Response::Once,
+        "always" => Response::Always,
+        "reject" => Response::Reject,
         _ => {
             return Err(ApiError::BadRequest(
                 "Invalid reply; expected `once`, `always`, or `reject`".to_string(),
             ));
         }
-    }
+    };
 
-    let mut pending = PERMISSION_REQUESTS.write().await;
-    let permission = pending
-        .remove(&id)
-        .ok_or_else(|| ApiError::NotFound(format!("Permission request not found: {}", id)))?;
-    drop(pending);
+    let permission = PERMISSION_ENGINE
+        .lock()
+        .await
+        .respond_by_id(&id, response)
+        .map_err(|_| ApiError::NotFound(format!("Permission request not found: {}", id)))?;
 
     if let Some(waiter) = PERMISSION_WAITERS.lock().await.remove(&id) {
         let _ = waiter.send(PermissionReply {
@@ -211,8 +262,13 @@ mod tests {
     use axum::extract::State;
     use axum::Json;
 
+    static TEST_PERMISSION_LOCK: Lazy<tokio::sync::Mutex<()>> =
+        Lazy::new(|| tokio::sync::Mutex::new(()));
+
     #[tokio::test]
     async fn request_permission_emits_requested_and_resolved_events() {
+        let _guard = TEST_PERMISSION_LOCK.lock().await;
+        PERMISSION_ENGINE.lock().await.clear_session("session-1");
         let state = Arc::new(ServerState::new());
         let mut rx = state.event_bus.subscribe();
 
@@ -229,11 +285,11 @@ mod tests {
         });
 
         let permission_id = loop {
-            let pending = PERMISSION_REQUESTS.read().await;
-            if let Some(id) = pending.keys().next().cloned() {
+            let engine = PERMISSION_ENGINE.lock().await;
+            if let Some(id) = engine.list().first().map(|info| info.id.clone()) {
                 break id;
             }
-            drop(pending);
+            drop(engine);
             tokio::task::yield_now().await;
         };
 
@@ -267,5 +323,60 @@ mod tests {
             .await
             .expect("request task join")
             .expect("permission allowed");
+        PERMISSION_ENGINE.lock().await.clear_session("session-1");
+    }
+
+    #[tokio::test]
+    async fn reply_permission_always_remembers_future_requests() {
+        let _guard = TEST_PERMISSION_LOCK.lock().await;
+        const SESSION_ID: &str = "session-always";
+        PERMISSION_ENGINE.lock().await.clear_session(SESSION_ID);
+
+        let state = Arc::new(ServerState::new());
+        let state_for_request = state.clone();
+        let request_task = tokio::spawn(async move {
+            request_permission(
+                state_for_request,
+                SESSION_ID.to_string(),
+                rocode_tool::PermissionRequest::new("read").with_pattern("src/main.rs"),
+            )
+            .await
+        });
+
+        let permission_id = loop {
+            let engine = PERMISSION_ENGINE.lock().await;
+            if let Some(id) = engine.list().first().map(|info| info.id.clone()) {
+                break id;
+            }
+            drop(engine);
+            tokio::task::yield_now().await;
+        };
+
+        let _ = reply_permission(
+            State(state.clone()),
+            Path(permission_id),
+            Json(ReplyPermissionRequest {
+                reply: "always".to_string(),
+                message: None,
+            }),
+        )
+        .await
+        .expect("reply should succeed");
+
+        request_task
+            .await
+            .expect("request task join")
+            .expect("permission allowed");
+
+        request_permission(
+            state,
+            SESSION_ID.to_string(),
+            rocode_tool::PermissionRequest::new("read").with_pattern("src/main.rs"),
+        )
+        .await
+        .expect("repeat request should be auto-approved");
+
+        assert!(PERMISSION_ENGINE.lock().await.list().is_empty());
+        PERMISSION_ENGINE.lock().await.clear_session(SESSION_ID);
     }
 }
