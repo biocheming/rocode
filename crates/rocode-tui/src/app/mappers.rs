@@ -41,11 +41,13 @@ pub(super) fn map_api_session(session: &SessionInfo) -> Session {
 
 pub(super) fn map_api_message(message: &MessageInfo) -> Message {
     let keep_synthetic_text = message.mode.as_deref() == Some("compaction");
-    let parts: Vec<ContextMessagePart> = message
-        .parts
-        .iter()
-        .filter_map(|part| map_api_message_part(part, keep_synthetic_text))
-        .collect();
+    let parts = merge_adjacent_textual_parts(
+        message
+            .parts
+            .iter()
+            .filter_map(|part| map_api_message_part(part, keep_synthetic_text))
+            .collect(),
+    );
 
     Message {
         id: message.id.clone(),
@@ -84,6 +86,32 @@ pub(super) fn map_api_message(message: &MessageInfo) -> Message {
         metadata: message.metadata.clone(),
         parts,
     }
+}
+
+fn merge_adjacent_textual_parts(parts: Vec<ContextMessagePart>) -> Vec<ContextMessagePart> {
+    let mut merged: Vec<ContextMessagePart> = Vec::with_capacity(parts.len());
+
+    for part in parts {
+        match part {
+            ContextMessagePart::Text { text } => {
+                if let Some(ContextMessagePart::Text { text: existing }) = merged.last_mut() {
+                    existing.push_str(&text);
+                } else {
+                    merged.push(ContextMessagePart::Text { text });
+                }
+            }
+            ContextMessagePart::Reasoning { text } => {
+                if let Some(ContextMessagePart::Reasoning { text: existing }) = merged.last_mut() {
+                    existing.push_str(&text);
+                } else {
+                    merged.push(ContextMessagePart::Reasoning { text });
+                }
+            }
+            other => merged.push(other),
+        }
+    }
+
+    merged
 }
 
 pub(super) fn map_api_revert(revert: &SessionRevertInfo) -> RevertInfo {
@@ -224,6 +252,41 @@ fn task_kind_from_tool_name(name: &str) -> TaskKind {
     }
 
     TaskKind::ToolCall
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_adjacent_textual_parts_coalesces_reasoning_and_text() {
+        let parts = vec![
+            ContextMessagePart::Reasoning {
+                text: "think".to_string(),
+            },
+            ContextMessagePart::Reasoning {
+                text: " more".to_string(),
+            },
+            ContextMessagePart::Text {
+                text: "answer".to_string(),
+            },
+            ContextMessagePart::Text {
+                text: " done".to_string(),
+            },
+        ];
+
+        let merged = merge_adjacent_textual_parts(parts);
+
+        assert_eq!(merged.len(), 2);
+        assert!(matches!(
+            &merged[0],
+            ContextMessagePart::Reasoning { text } if text == "think more"
+        ));
+        assert!(matches!(
+            &merged[1],
+            ContextMessagePart::Text { text } if text == "answer done"
+        ));
+    }
 }
 
 pub(super) fn map_mcp_status(server: &McpStatusInfo) -> McpConnectionStatus {

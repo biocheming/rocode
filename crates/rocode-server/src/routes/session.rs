@@ -114,6 +114,8 @@ mod tests {
     use rocode_core::agent_task_registry::{global_task_registry, AgentTaskStatus};
     use rocode_orchestrator::{ModelRef as OrchestratorModelRef, SchedulerProfileConfig};
     use rocode_session::Session;
+    use std::fs;
+    use std::path::PathBuf;
     use std::sync::Arc;
 
     use self::executions::{
@@ -121,9 +123,9 @@ mod tests {
     };
 
     use super::scheduler::{
-        resolve_request_model_inputs, resolve_scheduler_request_defaults,
-        resolve_scheduler_request_defaults_validated, scheduler_mode_kind,
-        scheduler_system_prompt_preview,
+        resolve_request_model_inputs, resolve_scheduler_profile_config,
+        resolve_scheduler_request_defaults, resolve_scheduler_request_defaults_validated,
+        scheduler_mode_kind, scheduler_system_prompt_preview,
     };
     use super::*;
 
@@ -221,6 +223,77 @@ mod tests {
 
         assert_eq!(defaults.profile_name.as_deref(), Some("sisyphus"));
         assert_eq!(scheduler_mode_kind("sisyphus"), "preset");
+    }
+
+    #[test]
+    fn builtin_autoresearch_profile_resolves_without_external_scheduler_file() {
+        let defaults =
+            resolve_scheduler_request_defaults(&AppConfig::default(), Some("autoresearch-run"))
+                .expect("built-in autoresearch profile should resolve without schedulerPath");
+
+        assert_eq!(defaults.profile_name.as_deref(), Some("autoresearch-run"));
+        assert_eq!(scheduler_mode_kind("autoresearch-run"), "profile");
+    }
+
+    #[test]
+    fn builtin_autoresearch_profile_config_resolves_without_external_scheduler_file() {
+        let (profile_name, profile) =
+            resolve_scheduler_profile_config(&AppConfig::default(), Some("autoresearch-run"))
+                .expect("built-in autoresearch profile config should resolve");
+
+        assert_eq!(profile_name, "autoresearch-run");
+        assert_eq!(profile.orchestrator.as_deref(), Some("hephaestus"));
+    }
+
+    #[test]
+    fn workspace_autoresearch_profile_overrides_bundled_defaults() {
+        let temp = std::env::temp_dir().join(format!(
+            "rocode_server_autoresearch_override_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(&temp).expect("create temp dir");
+        let scheduler_path = temp.join("autoresearch.jsonc");
+        fs::write(
+            &scheduler_path,
+            r#"{
+  "defaults": { "profile": "autoresearch-run" },
+  "profiles": {
+    "autoresearch-run": {
+      "orchestrator": "atlas",
+      "workflow": {
+        "workflow": { "kind": "autoresearch", "mode": "run" },
+        "objective": {
+          "goal": "demo goal",
+          "scope": { "include": ["book/**"] },
+          "direction": "higher-is-better",
+          "metric": { "kind": "numeric-extract", "pattern": "score=([0-9]+)" },
+          "verify": { "command": "bash ./scripts/verify-autoresearch.sh" }
+        },
+        "iterationPolicy": { "mode": "bounded", "maxIterations": 30 },
+        "decisionPolicy": { "baselineStrategy": "capture-before-first-iteration" },
+        "workspacePolicy": { "snapshotStrategy": "patch-file" }
+      }
+    }
+  }
+}"#,
+        )
+        .expect("write scheduler");
+
+        let config = AppConfig {
+            scheduler_path: Some(scheduler_path.display().to_string()),
+            ..AppConfig::default()
+        };
+
+        let defaults = resolve_scheduler_request_defaults(&config, Some("autoresearch-run"))
+            .expect("workspace profile should resolve");
+        assert_eq!(defaults.profile_name.as_deref(), Some("autoresearch-run"));
+
+        let (_, profile) = resolve_scheduler_profile_config(&config, Some("autoresearch-run"))
+            .expect("workspace profile config should resolve");
+        assert_eq!(profile.orchestrator.as_deref(), Some("atlas"));
+
+        let _ = fs::remove_dir_all(PathBuf::from(&temp));
     }
 
     #[test]

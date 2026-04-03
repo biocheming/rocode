@@ -20,6 +20,7 @@ pub(crate) fn pty_routes() -> Router<Arc<ServerState>> {
     Router::new()
         .route("/", get(list_pty).post(create_pty))
         .route("/{id}", get(get_pty).put(update_pty).delete(delete_pty))
+        .route("/{id}/resize", axum::routing::post(resize_pty))
         .route("/{id}/connect", get(pty_connect))
 }
 
@@ -89,6 +90,12 @@ pub struct UpdatePtyRequest {
     pub cwd: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ResizePtyRequest {
+    pub cols: u16,
+    pub rows: u16,
+}
+
 async fn update_pty(
     Path(id): Path<String>,
     Json(req): Json<UpdatePtyRequest>,
@@ -105,6 +112,18 @@ async fn delete_pty(Path(id): Path<String>) -> Result<Json<bool>> {
     let manager = get_pty_manager();
     let deleted = manager.delete_session(&id).await;
     Ok(Json(deleted))
+}
+
+async fn resize_pty(
+    Path(id): Path<String>,
+    Json(req): Json<ResizePtyRequest>,
+) -> Result<Json<bool>> {
+    let manager = get_pty_manager();
+    manager
+        .resize_session(&id, req.cols, req.rows)
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    Ok(Json(true))
 }
 
 #[derive(Debug, Deserialize)]

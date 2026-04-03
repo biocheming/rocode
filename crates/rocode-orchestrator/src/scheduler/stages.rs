@@ -1,6 +1,7 @@
 use crate::runtime::policy::{LoopPolicy, ToolDedupScope};
 use crate::skill_list::SkillListOrchestrator;
 use crate::traits::{Orchestrator, ToolExecutor};
+use crate::workflow_mode::attach_mode_artifacts_metadata;
 use crate::{
     AgentDescriptor, OrchestratorContext, OrchestratorError, OrchestratorOutput, ToolExecError,
     ToolOutput, ToolRunner,
@@ -115,7 +116,9 @@ pub async fn execute_stage_agent_with_exec_ctx(
     if let Some((stage_name, stage_index)) = stage_context {
         orchestrator.set_stage_context(stage_name, stage_index);
     }
-    orchestrator.execute(input, &stage_ctx).await
+    let mut output = orchestrator.execute(input, &stage_ctx).await?;
+    attach_mode_artifacts_metadata(&mut output, &stage_ctx.exec_ctx);
+    Ok(output)
 }
 
 pub(crate) fn clone_context_with_exec_ctx(

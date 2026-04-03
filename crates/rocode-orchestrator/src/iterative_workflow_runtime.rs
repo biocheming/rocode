@@ -5,6 +5,14 @@ use crate::iterative_workflow::{
 };
 use crate::tool_runner::{ToolCallInput, ToolRunner};
 use crate::types::{ExecutionContext, OrchestratorOutput};
+use crate::workflow_artifacts::{
+    workflow_run_dir, WorkflowArtifactWriter, WorkflowBaselineRecord, WorkflowCommandArtifact,
+    WorkflowIterationRecord, WorkflowModeArtifact, WorkflowRunSummaryRecord,
+};
+use crate::workflow_mode::{
+    mode_protocol_for, ModeFinalizeContext, ModeIterationContext, WorkflowModeProtocol,
+};
+use crate::workflow_workspace::WorkflowWorkspaceService;
 use crate::{OrchestratorError, SchedulerExecutionGateDecision, SchedulerExecutionGateStatus};
 use glob::Pattern;
 use regex::Regex;
@@ -19,12 +27,16 @@ use walkdir::WalkDir;
 
 const METRIC_EPSILON: f64 = 1e-9;
 
-#[derive(Clone)]
 pub struct WorkflowController {
     config: IterativeWorkflowConfig,
     runner: VerificationRunner,
     evaluator: ObjectiveEvaluator,
     policy: DecisionPolicy,
+    artifacts: WorkflowArtifactWriter,
+    mode_protocol: Box<dyn WorkflowModeProtocol>,
+    mode_iteration_notes: Vec<String>,
+    pending_iteration_brief: Option<String>,
+    workspace: WorkflowWorkspaceService,
     snapshot_engine: SnapshotEngine,
     active_checkpoint: Option<WorkspaceCheckpoint>,
     crash_retry_attempts: u32,
@@ -38,6 +50,7 @@ impl WorkflowController {
         config: IterativeWorkflowConfig,
         tool_runner: ToolRunner,
         exec_ctx: ExecutionContext,
+        profile_name: Option<String>,
     ) -> Result<Option<Self>, OrchestratorError> {
         if !Self::supports(&config) {
             return Ok(None);
@@ -54,6 +67,11 @@ impl WorkflowController {
             runner: VerificationRunner::new(tool_runner, exec_ctx.clone()),
             evaluator: ObjectiveEvaluator::new(&objective)?,
             policy: DecisionPolicy::new(policy, config.iteration_policy.clone()),
+            artifacts: WorkflowArtifactWriter::new(&config, &exec_ctx, profile_name.as_deref())?,
+            mode_protocol: mode_protocol_for(&config),
+            mode_iteration_notes: Vec::new(),
+            pending_iteration_brief: None,
+            workspace: WorkflowWorkspaceService::new(&config, &objective, &exec_ctx)?,
             snapshot_engine: SnapshotEngine::new(&config, &objective, &exec_ctx)?,
             active_checkpoint: None,
             crash_retry_attempts: 0,
@@ -86,7 +104,19 @@ impl WorkflowController {
                     .run_command("baseline-verify", 0, &objective.verify, None)
                     .await?;
                 self.pending_tool_calls += 1;
-                self.evaluator.capture_baseline(verify, &objective)?;
+                self.evaluator
+                    .capture_baseline(verify.clone(), &objective)?;
+                self.artifacts.record_baseline(&WorkflowBaselineRecord {
+                    source: "capture-before-first-iteration".to_string(),
+                    value: self
+                        .evaluator
+                        .history()
+                        .baseline
+                        .as_ref()
+                        .map(|sample| sample.value),
+                    summary: "baseline captured from verify command".to_string(),
+                    verify: Some(command_artifact(&verify)),
+                })?;
             }
             BaselineStrategy::FromConfig => {
                 let baseline_value = self
@@ -101,11 +131,39 @@ impl WorkflowController {
                         )
                     })?;
                 self.evaluator.capture_configured_baseline(baseline_value);
+                self.artifacts.record_baseline(&WorkflowBaselineRecord {
+                    source: "from-config".to_string(),
+                    value: Some(baseline_value),
+                    summary: "baseline loaded from workflow configuration".to_string(),
+                    verify: None,
+                })?;
             }
             BaselineStrategy::FromLastRun => {
-                return Err(OrchestratorError::Other(
-                    "workflow baselineStrategy 'from-last-run' is not implemented yet".to_string(),
-                ));
+                let manifest = self
+                    .artifacts
+                    .read_last_run_manifest()?
+                    .ok_or_else(|| {
+                        OrchestratorError::Other(
+                            "workflow baselineStrategy 'from-last-run' could not find a matching prior run"
+                                .to_string(),
+                        )
+                    })?;
+                let baseline_value = manifest.best_metric.ok_or_else(|| {
+                    OrchestratorError::Other(
+                        "workflow baselineStrategy 'from-last-run' found a prior run without best_metric"
+                            .to_string(),
+                    )
+                })?;
+                self.evaluator.capture_configured_baseline(baseline_value);
+                self.artifacts.record_baseline(&WorkflowBaselineRecord {
+                    source: "from-last-run".to_string(),
+                    value: Some(baseline_value),
+                    summary: format!(
+                        "baseline loaded from prior run '{}' (session {})",
+                        manifest.objective_fingerprint, manifest.session_id
+                    ),
+                    verify: None,
+                })?;
             }
         }
 
@@ -118,6 +176,10 @@ impl WorkflowController {
         }
 
         self.active_checkpoint = Some(self.snapshot_engine.capture(iteration)?);
+        self.pending_iteration_brief = self.mode_protocol.iteration_brief(iteration);
+        if let Some(note) = self.pending_iteration_brief.as_ref() {
+            self.mode_iteration_notes.push(note.clone());
+        }
         Ok(())
     }
 
@@ -141,22 +203,35 @@ impl WorkflowController {
         &self,
         base_exec_ctx: &ExecutionContext,
     ) -> Option<ExecutionContext> {
-        self.active_checkpoint
+        let mut exec_ctx = base_exec_ctx.clone();
+
+        if let Some(workdir) = self
+            .active_checkpoint
             .as_ref()
             .and_then(WorkspaceCheckpoint::execution_workdir)
-            .map(|workdir| {
-                let mut exec_ctx = base_exec_ctx.clone();
-                exec_ctx.workdir = workdir.display().to_string();
-                exec_ctx.metadata.insert(
-                    "workflow_checkpoint_id".to_string(),
-                    json!(self
-                        .active_checkpoint
-                        .as_ref()
-                        .map(|checkpoint| checkpoint.checkpoint_id.as_str())
-                        .unwrap_or_default()),
-                );
-                exec_ctx
-            })
+        {
+            exec_ctx.workdir = workdir.display().to_string();
+        }
+
+        if let Some(checkpoint) = self.active_checkpoint.as_ref() {
+            exec_ctx.metadata.insert(
+                "workflow_checkpoint_id".to_string(),
+                json!(checkpoint.checkpoint_id.as_str()),
+            );
+        }
+
+        exec_ctx.metadata.insert(
+            "workflow_mode".to_string(),
+            json!(self.mode_protocol.mode()),
+        );
+
+        if let Some(note) = self.pending_iteration_brief.as_deref() {
+            exec_ctx
+                .metadata
+                .insert("workflow_mode_iteration_brief".to_string(), json!(note));
+        }
+
+        Some(exec_ctx)
     }
 
     pub fn handle_execution_error(
@@ -175,17 +250,38 @@ impl WorkflowController {
         let gate_decision = self.map_crash_gate_decision(iteration, &decision);
         self.apply_iteration_outcome(&decision);
         self.pending_tool_calls = 0;
+        let gate_output =
+            self.compose_crash_gate_output(iteration, &decision, error, &gate_decision);
+        let _ = self.artifacts.append_iteration(&WorkflowIterationRecord {
+            iteration,
+            phase: "crash".to_string(),
+            decision: decision.label().to_string(),
+            gate_status: gate_status_label(gate_decision.status).to_string(),
+            commit_sha: None,
+            metric_value: None,
+            baseline_value: self
+                .evaluator
+                .history()
+                .baseline
+                .as_ref()
+                .map(|sample| sample.value),
+            delta_from_baseline: None,
+            verify: None,
+            guard: None,
+            summary: gate_decision.summary.clone(),
+        });
 
         WorkflowGateResult {
             decision: decision.clone(),
             gate_decision: gate_decision.clone(),
-            output: self.compose_crash_gate_output(iteration, &decision, error, &gate_decision),
+            output: gate_output,
         }
     }
 
-    pub async fn evaluate_round(
+    pub(crate) async fn evaluate_round(
         &mut self,
         iteration: u32,
+        structured_artifacts: Vec<WorkflowModeArtifact>,
     ) -> Result<WorkflowGateResult, OrchestratorError> {
         let objective = self.objective().clone();
         let workdir_override = self
@@ -226,20 +322,54 @@ impl WorkflowController {
             decision = IterationDecision::StopBlocked { reason };
         }
 
-        let gate_decision = self.map_to_gate_decision(iteration, &decision, &evaluation);
+        let mut gate_decision = self.map_to_gate_decision(iteration, &decision, &evaluation);
+        self.apply_mode_gate_annotation(
+            iteration,
+            &decision,
+            &evaluation,
+            structured_artifacts,
+            &mut gate_decision,
+        );
+        let workspace_update = match decision {
+            IterationDecision::Keep | IterationDecision::StopSatisfied => self
+                .workspace
+                .record_kept_iteration(iteration, decision.label(), &gate_decision.summary)?,
+            _ => self.workspace.snapshot(),
+        };
         self.apply_iteration_outcome(&decision);
         self.pending_tool_calls = 0;
+        let output = self.compose_gate_output(
+            iteration,
+            tool_calls,
+            &decision,
+            &evaluation,
+            &gate_decision,
+        );
+        self.artifacts.append_iteration(&WorkflowIterationRecord {
+            iteration,
+            phase: "iteration".to_string(),
+            decision: decision.label().to_string(),
+            gate_status: gate_status_label(gate_decision.status).to_string(),
+            commit_sha: workspace_update
+                .commit
+                .as_ref()
+                .map(|commit| commit.commit_sha.clone()),
+            metric_value: evaluation.metric.as_ref().map(|sample| sample.value),
+            baseline_value: evaluation.baseline_value,
+            delta_from_baseline: evaluation
+                .metric
+                .as_ref()
+                .zip(evaluation.baseline_value)
+                .map(|(metric, baseline)| metric.value - baseline),
+            verify: Some(command_artifact(&evaluation.verify)),
+            guard: evaluation.guard.as_ref().map(command_artifact),
+            summary: gate_decision.summary.clone(),
+        })?;
 
         Ok(WorkflowGateResult {
             decision: decision.clone(),
             gate_decision: gate_decision.clone(),
-            output: self.compose_gate_output(
-                iteration,
-                tool_calls,
-                &decision,
-                &evaluation,
-                &gate_decision,
-            ),
+            output,
         })
     }
 
@@ -248,6 +378,111 @@ impl WorkflowController {
             .objective
             .as_ref()
             .expect("workflow objective should exist when controller is active")
+    }
+
+    fn apply_mode_gate_annotation(
+        &mut self,
+        iteration: u32,
+        decision: &IterationDecision,
+        evaluation: &ObjectiveEvaluation,
+        structured_artifacts: Vec<WorkflowModeArtifact>,
+        gate_decision: &mut SchedulerExecutionGateDecision,
+    ) {
+        let ctx = ModeIterationContext {
+            iteration,
+            decision: decision.label().to_string(),
+            gate_status: gate_status_label(gate_decision.status).to_string(),
+            objective_satisfied: evaluation.objective_satisfied,
+            metric_value: evaluation.metric.as_ref().map(|sample| sample.value),
+            verify_passed: evaluation.verify.passed(),
+            guard_passed: evaluation.guard.as_ref().map(CommandRunResult::passed),
+            structured_artifacts,
+        };
+        let annotation = self.mode_protocol.annotate_gate(&ctx);
+        if let Some(suffix) = annotation.summary_suffix.as_deref() {
+            let trimmed = suffix.trim();
+            if !trimmed.is_empty() {
+                gate_decision.summary = format!("{} {}", gate_decision.summary.trim(), trimmed)
+                    .trim()
+                    .to_string();
+            }
+        }
+        if let Some(prefix) = annotation.next_input_prefix.as_deref() {
+            let trimmed = prefix.trim();
+            if !trimmed.is_empty() {
+                match gate_decision.next_input.as_mut() {
+                    Some(next_input) if !next_input.trim().is_empty() => {
+                        *next_input = format!("{trimmed}\n\n{}", next_input.trim());
+                    }
+                    _ if gate_decision.status == SchedulerExecutionGateStatus::Continue => {
+                        gate_decision.next_input = Some(trimmed.to_string());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if let Some(note) = annotation.iteration_note {
+            let trimmed = note.trim();
+            if !trimmed.is_empty() {
+                self.mode_iteration_notes.push(trimmed.to_string());
+            }
+        }
+        self.mode_protocol.record_iteration(&ctx);
+    }
+
+    pub(crate) fn persist_run_summary(
+        &mut self,
+        mut summary: WorkflowRunSummaryRecord,
+    ) -> Result<(), OrchestratorError> {
+        let workspace_update = self.workspace.finalize(
+            summary.final_iteration,
+            summary.final_decision.as_deref(),
+            summary.final_summary.as_deref(),
+        )?;
+        summary.baseline_metric = self
+            .evaluator
+            .history()
+            .baseline
+            .as_ref()
+            .map(|sample| sample.value);
+        summary.best_metric = self
+            .evaluator
+            .history()
+            .best
+            .as_ref()
+            .map(|sample| sample.value);
+        summary.final_metric = self
+            .evaluator
+            .history()
+            .current
+            .as_ref()
+            .map(|sample| sample.value);
+        let best_iteration = self
+            .evaluator
+            .history()
+            .best
+            .as_ref()
+            .map(|sample| sample.iteration);
+        summary.best_commit = best_iteration.and_then(|iteration| {
+            workspace_update
+                .kept_commits
+                .iter()
+                .find(|commit| commit.iteration == iteration)
+                .cloned()
+        });
+        summary.kept_commits = workspace_update.kept_commits;
+        summary.squashed_commit = workspace_update.squashed_commit;
+        summary.mode_report = Some(self.mode_protocol.finalize_report(
+            &ModeFinalizeContext {
+                iterations_completed: summary.iterations_completed,
+                objective_satisfied: summary.objective_satisfied,
+                final_decision: summary.final_decision.clone(),
+            },
+            &self.mode_iteration_notes,
+        ));
+        summary.mode_artifacts = self.mode_protocol.export_artifacts();
+        self.artifacts.write_summary(&summary)?;
+        Ok(())
     }
 
     fn apply_checkpoint_outcome(
@@ -609,7 +844,7 @@ pub enum IterationDecision {
 }
 
 impl IterationDecision {
-    fn label(&self) -> &'static str {
+    pub(crate) fn label(&self) -> &'static str {
         match self {
             Self::Keep => "keep",
             Self::Discard { .. } => "discard",
@@ -1404,6 +1639,16 @@ fn gate_status_label(status: SchedulerExecutionGateStatus) -> &'static str {
     }
 }
 
+fn command_artifact(result: &CommandRunResult) -> WorkflowCommandArtifact {
+    WorkflowCommandArtifact {
+        exit_code: result.exit_code,
+        passed: result.passed(),
+        timed_out: result.timed_out,
+        runtime_error: result.runtime_error.clone(),
+        output_excerpt: first_meaningful_line(&result.output).to_string(),
+    }
+}
+
 fn yes_no(value: bool) -> &'static str {
     if value {
         "yes"
@@ -1499,7 +1744,7 @@ impl SnapshotEngine {
             OrchestratorError::Other("workflow workspacePolicy is required".to_string())
         })?;
         let workdir = PathBuf::from(&exec_ctx.workdir);
-        let runtime_root = resolve_runtime_root(config, &workdir, &exec_ctx.session_id);
+        let runtime_root = workflow_run_dir(config, &workdir, &exec_ctx.session_id);
         let checkpoint_root = runtime_root.join("checkpoints");
         let worktree_root = resolve_worktree_root(&workdir, &runtime_root, &exec_ctx.session_id);
         let include = compile_patterns(&objective.scope.include, "include")?;
@@ -2227,25 +2472,6 @@ impl SnapshotEngine {
     }
 }
 
-fn resolve_runtime_root(
-    config: &IterativeWorkflowConfig,
-    workdir: &Path,
-    session_id: &str,
-) -> PathBuf {
-    let base = config
-        .artifacts
-        .as_ref()
-        .and_then(|artifacts| artifacts.root_dir.as_deref())
-        .map(|root| resolve_path(root, workdir))
-        .unwrap_or_else(|| workdir.join(".rocode").join("autoresearch"));
-    config
-        .artifacts
-        .as_ref()
-        .and_then(|artifacts| artifacts.run_dir.as_deref())
-        .map(|run_dir| resolve_path(run_dir, &base))
-        .unwrap_or_else(|| base.join(session_id))
-}
-
 fn resolve_worktree_root(workdir: &Path, runtime_root: &Path, session_id: &str) -> PathBuf {
     if runtime_root.starts_with(workdir) {
         workdir
@@ -2578,6 +2804,58 @@ mod tests {
         config
     }
 
+    fn workflow_config_with_artifacts() -> IterativeWorkflowConfig {
+        let mut config = run_workflow_config();
+        config.artifacts = Some(crate::iterative_workflow::ArtifactDefinition {
+            root_dir: None,
+            run_dir: None,
+            iteration_log: Some(crate::iterative_workflow::ArtifactFileDefinition {
+                format: Some("tsv".to_string()),
+                filename: Some("iterations.tsv".to_string()),
+            }),
+            summary: Some(crate::iterative_workflow::ArtifactFileDefinition {
+                format: Some("json".to_string()),
+                filename: Some("summary.json".to_string()),
+            }),
+        });
+        config
+    }
+
+    fn workflow_config_with_commit_policy(squash_on_completion: bool) -> IterativeWorkflowConfig {
+        let mut config = workflow_config_with_artifacts();
+        config
+            .workspace_policy
+            .as_mut()
+            .expect("workspace policy should exist")
+            .commit_policy = Some(crate::iterative_workflow::CommitPolicyDefinition {
+            commit_kept_iterations: Some(true),
+            message_template: Some(
+                "autoresearch iter {iteration}: {decision} {summary}".to_string(),
+            ),
+            squash_on_completion: Some(squash_on_completion),
+        });
+        config
+    }
+
+    fn workflow_config_for_security_mode() -> IterativeWorkflowConfig {
+        let mut config = workflow_config_with_artifacts();
+        config.workflow.mode = crate::iterative_workflow::IterativeWorkflowMode::Security;
+        config.security = Some(crate::iterative_workflow::SecurityConfig {
+            coverage_targets: vec![
+                crate::iterative_workflow::SecurityCoverageTarget::OwaspTop10,
+                crate::iterative_workflow::SecurityCoverageTarget::Stride,
+            ],
+            fail_on_severity: Some(crate::iterative_workflow::SeverityLevel::High),
+            diff_mode: Some(true),
+            auto_fix: Some(false),
+            required_evidence: vec![
+                crate::iterative_workflow::SecurityEvidenceRequirement::FileLine,
+                crate::iterative_workflow::SecurityEvidenceRequirement::SeverityJustification,
+            ],
+        });
+        config
+    }
+
     #[derive(Default)]
     struct ScriptedToolExecutor {
         responses: Mutex<VecDeque<Result<ToolOutput, ToolExecError>>>,
@@ -2661,6 +2939,7 @@ mod tests {
             run_workflow_config(),
             ToolRunner::new(executor),
             test_exec_ctx(&workdir),
+            None,
         )
         .expect("controller construction should succeed")
         .expect("workflow should activate controller");
@@ -2670,7 +2949,7 @@ mod tests {
             .await
             .expect("baseline should capture");
         let result = controller
-            .evaluate_round(1)
+            .evaluate_round(1, Vec::new())
             .await
             .expect("workflow evaluation should succeed");
 
@@ -2712,6 +2991,7 @@ mod tests {
             run_workflow_config(),
             ToolRunner::new(executor),
             test_exec_ctx(&workdir),
+            None,
         )
         .expect("controller construction should succeed")
         .expect("workflow should activate controller");
@@ -2727,7 +3007,7 @@ mod tests {
             .expect("iteration mutation should write");
         std::fs::write(workdir.join("src/new.rs"), "new file\n").expect("new file should write");
         let result = controller
-            .evaluate_round(1)
+            .evaluate_round(1, Vec::new())
             .await
             .expect("workflow evaluation should succeed");
 
@@ -2746,6 +3026,501 @@ mod tests {
             "baseline\n"
         );
         assert!(!workdir.join("src/new.rs").exists());
+
+        std::fs::remove_dir_all(&workdir).expect("temp workdir should clean up");
+    }
+
+    #[tokio::test]
+    async fn workflow_controller_persists_iteration_log_summary_and_manifest() {
+        let workdir = new_temp_workdir();
+        let executor = Arc::new(ScriptedToolExecutor {
+            responses: Mutex::new(VecDeque::from(vec![
+                Ok(ToolOutput {
+                    output: "score=10".to_string(),
+                    is_error: false,
+                    title: None,
+                    metadata: Some(json!({"exit_code": 0})),
+                }),
+                Ok(ToolOutput {
+                    output: "score=12".to_string(),
+                    is_error: false,
+                    title: None,
+                    metadata: Some(json!({"exit_code": 0})),
+                }),
+            ])),
+        });
+        let exec_ctx = test_exec_ctx(&workdir);
+        let session_id = exec_ctx.session_id.clone();
+        let mut controller = WorkflowController::from_config(
+            workflow_config_with_artifacts(),
+            ToolRunner::new(executor),
+            exec_ctx,
+            Some("autoresearch-run".to_string()),
+        )
+        .expect("controller construction should succeed")
+        .expect("workflow should activate controller");
+
+        controller
+            .capture_baseline()
+            .await
+            .expect("baseline should capture");
+        let result = controller
+            .evaluate_round(
+                1,
+                vec![WorkflowModeArtifact {
+                    name: "finding-registry".to_string(),
+                    description: "Security findings".to_string(),
+                    entries: vec![WorkflowModeArtifactEntry {
+                        iteration: Some(1),
+                        key: "active-finding".to_string(),
+                        status: "verified".to_string(),
+                        title: "Structured finding".to_string(),
+                        detail: "Imported from scheduler execution output.".to_string(),
+                        evidence: vec!["structured".to_string(), "file-line".to_string()],
+                    }],
+                }],
+            )
+            .await
+            .expect("workflow evaluation should succeed");
+        controller
+            .persist_run_summary(WorkflowRunSummaryRecord {
+                iterations_completed: 1,
+                final_iteration: Some(1),
+                baseline_metric: None,
+                best_metric: None,
+                final_metric: None,
+                kept_commits: Vec::new(),
+                best_commit: None,
+                squashed_commit: None,
+                final_decision: Some(result.decision.label().to_string()),
+                final_gate_status: Some(gate_status_label(result.gate_decision.status).to_string()),
+                final_summary: Some(result.gate_decision.summary.clone()),
+                final_response: result.gate_decision.final_response.clone(),
+                mode_report: None,
+                mode_artifacts: Vec::new(),
+                objective_satisfied: true,
+                cancelled: false,
+                exhausted_budget: false,
+            })
+            .expect("summary should persist");
+
+        let run_root = workdir
+            .join(".rocode")
+            .join("autoresearch")
+            .join(session_id);
+        let iteration_log =
+            std::fs::read_to_string(run_root.join("iterations.tsv")).expect("iteration log");
+        assert!(iteration_log.contains("baseline"));
+        assert!(iteration_log.contains("stop-satisfied"));
+        let summary = std::fs::read_to_string(run_root.join("summary.json")).expect("summary");
+        assert!(summary.contains("\"iterations_completed\": 1"));
+        let manifest =
+            std::fs::read_to_string(run_root.join("run-manifest.json")).expect("manifest");
+        assert!(manifest.contains("\"best_metric\": 12.0"));
+        assert!(manifest.contains("\"best_commit\""));
+        assert!(manifest.contains("\"mode_report\""));
+        let mode_artifacts =
+            std::fs::read_to_string(run_root.join("mode-artifacts.json")).expect("mode artifacts");
+        assert!(mode_artifacts.contains("objective-log"));
+        let objective_index_dir = workdir
+            .join(".rocode")
+            .join("autoresearch")
+            .join("objectives")
+            .join("autoresearch-run");
+        let latest = std::fs::read_to_string(
+            std::fs::read_dir(&objective_index_dir)
+                .expect("objective index dir")
+                .next()
+                .expect("objective index file")
+                .expect("objective index entry")
+                .path(),
+        )
+        .expect("objective index");
+        assert!(latest.contains("\"best_metric\": 12.0"));
+
+        std::fs::remove_dir_all(&workdir).expect("temp workdir should clean up");
+    }
+
+    #[tokio::test]
+    async fn workflow_controller_loads_baseline_from_last_run_manifest() {
+        let workdir = new_temp_workdir();
+        let first_executor = Arc::new(ScriptedToolExecutor {
+            responses: Mutex::new(VecDeque::from(vec![
+                Ok(ToolOutput {
+                    output: "score=10".to_string(),
+                    is_error: false,
+                    title: None,
+                    metadata: Some(json!({"exit_code": 0})),
+                }),
+                Ok(ToolOutput {
+                    output: "score=12".to_string(),
+                    is_error: false,
+                    title: None,
+                    metadata: Some(json!({"exit_code": 0})),
+                }),
+            ])),
+        });
+        let mut first_config = workflow_config_with_artifacts();
+        let first_exec_ctx = test_exec_ctx(&workdir);
+        let mut first_controller = WorkflowController::from_config(
+            first_config.clone(),
+            ToolRunner::new(first_executor),
+            first_exec_ctx,
+            Some("autoresearch-run".to_string()),
+        )
+        .expect("first controller construction should succeed")
+        .expect("workflow should activate controller");
+        first_controller
+            .capture_baseline()
+            .await
+            .expect("baseline should capture");
+        let first_result = first_controller
+            .evaluate_round(1, Vec::new())
+            .await
+            .expect("first workflow evaluation should succeed");
+        first_controller
+            .persist_run_summary(WorkflowRunSummaryRecord {
+                iterations_completed: 1,
+                final_iteration: Some(1),
+                baseline_metric: None,
+                best_metric: None,
+                final_metric: None,
+                kept_commits: Vec::new(),
+                best_commit: None,
+                squashed_commit: None,
+                final_decision: Some(first_result.decision.label().to_string()),
+                final_gate_status: Some(
+                    gate_status_label(first_result.gate_decision.status).to_string(),
+                ),
+                final_summary: Some(first_result.gate_decision.summary.clone()),
+                final_response: first_result.gate_decision.final_response.clone(),
+                mode_report: None,
+                mode_artifacts: Vec::new(),
+                objective_satisfied: true,
+                cancelled: false,
+                exhausted_budget: false,
+            })
+            .expect("first summary should persist");
+
+        first_config
+            .decision_policy
+            .as_mut()
+            .expect("decision policy")
+            .baseline_strategy = Some(BaselineStrategy::FromLastRun);
+        let second_executor = Arc::new(ScriptedToolExecutor::default());
+        let mut second_controller = WorkflowController::from_config(
+            first_config,
+            ToolRunner::new(second_executor),
+            test_exec_ctx(&workdir),
+            Some("autoresearch-run".to_string()),
+        )
+        .expect("second controller construction should succeed")
+        .expect("workflow should activate controller");
+        second_controller
+            .capture_baseline()
+            .await
+            .expect("from-last-run baseline should load");
+
+        assert_eq!(
+            second_controller
+                .evaluator
+                .history()
+                .baseline
+                .as_ref()
+                .map(|sample| sample.value),
+            Some(12.0)
+        );
+
+        std::fs::remove_dir_all(&workdir).expect("temp workdir should clean up");
+    }
+
+    #[tokio::test]
+    async fn workflow_controller_commits_kept_iterations_via_workspace_service() {
+        let workdir = new_temp_workdir();
+        std::fs::write(workdir.join("src/lib.rs"), "baseline\n")
+            .expect("baseline file should write");
+        init_git_repo(&workdir);
+        let executor = Arc::new(ScriptedToolExecutor {
+            responses: Mutex::new(VecDeque::from(vec![
+                Ok(ToolOutput {
+                    output: "score=10".to_string(),
+                    is_error: false,
+                    title: None,
+                    metadata: Some(json!({"exit_code": 0})),
+                }),
+                Ok(ToolOutput {
+                    output: "score=12".to_string(),
+                    is_error: false,
+                    title: None,
+                    metadata: Some(json!({"exit_code": 0})),
+                }),
+            ])),
+        });
+        let mut controller = WorkflowController::from_config(
+            workflow_config_with_commit_policy(false),
+            ToolRunner::new(executor),
+            test_exec_ctx(&workdir),
+            Some("autoresearch-run".to_string()),
+        )
+        .expect("controller construction should succeed")
+        .expect("workflow should activate controller");
+
+        controller
+            .capture_baseline()
+            .await
+            .expect("baseline should capture");
+        controller
+            .begin_iteration(1)
+            .expect("iteration should begin");
+        std::fs::write(workdir.join("src/lib.rs"), "candidate\n")
+            .expect("candidate mutation should write");
+        let result = controller
+            .evaluate_round(1, Vec::new())
+            .await
+            .expect("workflow evaluation should succeed");
+        controller
+            .persist_run_summary(WorkflowRunSummaryRecord {
+                iterations_completed: 1,
+                final_iteration: Some(1),
+                baseline_metric: None,
+                best_metric: None,
+                final_metric: None,
+                kept_commits: Vec::new(),
+                best_commit: None,
+                squashed_commit: None,
+                final_decision: Some(result.decision.label().to_string()),
+                final_gate_status: Some(gate_status_label(result.gate_decision.status).to_string()),
+                final_summary: Some(result.gate_decision.summary.clone()),
+                final_response: result.gate_decision.final_response.clone(),
+                mode_report: None,
+                mode_artifacts: Vec::new(),
+                objective_satisfied: true,
+                cancelled: false,
+                exhausted_budget: false,
+            })
+            .expect("summary should persist");
+
+        let head_subject =
+            run_git(&workdir, ["log", "-1", "--pretty=%s"]).expect("git log should succeed");
+        assert!(head_subject.contains("autoresearch iter 1: stop-satisfied"));
+        assert_eq!(
+            run_git(&workdir, ["rev-list", "--count", "HEAD"]).expect("commit count"),
+            "2"
+        );
+        let status =
+            run_git(&workdir, ["status", "--short", "--", "src/lib.rs"]).expect("git status");
+        assert!(status.trim().is_empty());
+
+        std::fs::remove_dir_all(&workdir).expect("temp workdir should clean up");
+    }
+
+    #[tokio::test]
+    async fn workflow_controller_squashes_kept_iteration_commits_on_completion() {
+        let workdir = new_temp_workdir();
+        std::fs::write(workdir.join("src/lib.rs"), "baseline\n")
+            .expect("baseline file should write");
+        init_git_repo(&workdir);
+        let executor = Arc::new(ScriptedToolExecutor {
+            responses: Mutex::new(VecDeque::from(vec![
+                Ok(ToolOutput {
+                    output: "score=10".to_string(),
+                    is_error: false,
+                    title: None,
+                    metadata: Some(json!({"exit_code": 0})),
+                }),
+                Ok(ToolOutput {
+                    output: "score=11".to_string(),
+                    is_error: false,
+                    title: None,
+                    metadata: Some(json!({"exit_code": 0})),
+                }),
+                Ok(ToolOutput {
+                    output: "score=12".to_string(),
+                    is_error: false,
+                    title: None,
+                    metadata: Some(json!({"exit_code": 0})),
+                }),
+            ])),
+        });
+        let mut controller = WorkflowController::from_config(
+            workflow_config_with_commit_policy(true),
+            ToolRunner::new(executor),
+            test_exec_ctx(&workdir),
+            Some("autoresearch-run".to_string()),
+        )
+        .expect("controller construction should succeed")
+        .expect("workflow should activate controller");
+
+        controller
+            .capture_baseline()
+            .await
+            .expect("baseline should capture");
+        controller
+            .begin_iteration(1)
+            .expect("iteration one should begin");
+        std::fs::write(workdir.join("src/lib.rs"), "candidate-one\n")
+            .expect("first candidate mutation should write");
+        let first = controller
+            .evaluate_round(1, Vec::new())
+            .await
+            .expect("first workflow evaluation should succeed");
+        assert_eq!(first.decision, IterationDecision::Keep);
+
+        controller
+            .begin_iteration(2)
+            .expect("iteration two should begin");
+        std::fs::write(workdir.join("src/lib.rs"), "candidate-two\n")
+            .expect("second candidate mutation should write");
+        let second = controller
+            .evaluate_round(2, Vec::new())
+            .await
+            .expect("second workflow evaluation should succeed");
+        assert_eq!(second.decision, IterationDecision::StopSatisfied);
+
+        controller
+            .persist_run_summary(WorkflowRunSummaryRecord {
+                iterations_completed: 2,
+                final_iteration: Some(2),
+                baseline_metric: None,
+                best_metric: None,
+                final_metric: None,
+                kept_commits: Vec::new(),
+                best_commit: None,
+                squashed_commit: None,
+                final_decision: Some(second.decision.label().to_string()),
+                final_gate_status: Some(gate_status_label(second.gate_decision.status).to_string()),
+                final_summary: Some(second.gate_decision.summary.clone()),
+                final_response: second.gate_decision.final_response.clone(),
+                mode_report: None,
+                mode_artifacts: Vec::new(),
+                objective_satisfied: true,
+                cancelled: false,
+                exhausted_budget: false,
+            })
+            .expect("summary should persist");
+
+        assert_eq!(
+            run_git(&workdir, ["rev-list", "--count", "HEAD"]).expect("commit count"),
+            "2"
+        );
+        let head_subject =
+            run_git(&workdir, ["log", "-1", "--pretty=%s"]).expect("git log should succeed");
+        assert!(head_subject.contains("autoresearch iter 2: stop-satisfied"));
+        let manifest = std::fs::read_to_string(
+            workdir
+                .join(".rocode")
+                .join("autoresearch")
+                .join("workflow-test")
+                .join("run-manifest.json"),
+        )
+        .expect("manifest should read");
+        assert!(manifest.contains("\"squashed_commit\""));
+
+        std::fs::remove_dir_all(&workdir).expect("temp workdir should clean up");
+    }
+
+    #[tokio::test]
+    async fn security_mode_protocol_annotates_gate_and_retry_input() {
+        let workdir = new_temp_workdir();
+        let executor = Arc::new(ScriptedToolExecutor {
+            responses: Mutex::new(VecDeque::from(vec![
+                Ok(ToolOutput {
+                    output: "score=10".to_string(),
+                    is_error: false,
+                    title: None,
+                    metadata: Some(json!({"exit_code": 0})),
+                }),
+                Ok(ToolOutput {
+                    output: "score=11".to_string(),
+                    is_error: false,
+                    title: None,
+                    metadata: Some(json!({"exit_code": 0})),
+                }),
+            ])),
+        });
+        let mut controller = WorkflowController::from_config(
+            workflow_config_for_security_mode(),
+            ToolRunner::new(executor),
+            test_exec_ctx(&workdir),
+            Some("autoresearch-security".to_string()),
+        )
+        .expect("controller construction should succeed")
+        .expect("workflow should activate controller");
+
+        controller
+            .capture_baseline()
+            .await
+            .expect("baseline should capture");
+        let result = controller
+            .evaluate_round(
+                1,
+                vec![WorkflowModeArtifact {
+                    name: "finding-registry".to_string(),
+                    description: "Security findings".to_string(),
+                    entries: vec![WorkflowModeArtifactEntry {
+                        iteration: Some(1),
+                        key: "active-finding".to_string(),
+                        status: "verified".to_string(),
+                        title: "Structured finding".to_string(),
+                        detail: "Imported from scheduler execution output.".to_string(),
+                        evidence: vec!["structured".to_string(), "file-line".to_string()],
+                    }],
+                }],
+            )
+            .await
+            .expect("workflow evaluation should succeed");
+
+        assert!(result
+            .gate_decision
+            .summary
+            .contains("Security protocol requires evidence-backed findings"));
+        assert!(result
+            .gate_decision
+            .next_input
+            .as_deref()
+            .unwrap_or_default()
+            .contains("finding registry"));
+
+        controller
+            .persist_run_summary(WorkflowRunSummaryRecord {
+                iterations_completed: 1,
+                final_iteration: Some(1),
+                baseline_metric: None,
+                best_metric: None,
+                final_metric: None,
+                kept_commits: Vec::new(),
+                best_commit: None,
+                squashed_commit: None,
+                final_decision: Some(result.decision.label().to_string()),
+                final_gate_status: Some(gate_status_label(result.gate_decision.status).to_string()),
+                final_summary: Some(result.gate_decision.summary.clone()),
+                final_response: result.gate_decision.final_response.clone(),
+                mode_report: None,
+                mode_artifacts: Vec::new(),
+                objective_satisfied: false,
+                cancelled: false,
+                exhausted_budget: false,
+            })
+            .expect("summary should persist");
+
+        let mode_artifacts = std::fs::read_to_string(
+            workdir
+                .join(".rocode")
+                .join("autoresearch")
+                .join("workflow-test")
+                .join("mode-artifacts.json"),
+        )
+        .expect("mode artifacts should read");
+        assert!(mode_artifacts.contains("\"name\": \"finding-registry\""));
+        assert!(mode_artifacts.contains("\"key\": \"active-finding\""));
+        assert!(
+            mode_artifacts.contains("\"status\": \"verified\""),
+            "{mode_artifacts}"
+        );
+        assert!(
+            mode_artifacts.contains("\"title\": \"Structured finding\""),
+            "{mode_artifacts}"
+        );
 
         std::fs::remove_dir_all(&workdir).expect("temp workdir should clean up");
     }
@@ -2783,6 +3558,7 @@ mod tests {
             run_workflow_config(),
             ToolRunner::new(Arc::new(ScriptedToolExecutor::default())),
             test_exec_ctx(&workdir),
+            None,
         )
         .expect("controller construction should succeed")
         .expect("workflow should activate controller");
@@ -2835,6 +3611,54 @@ mod tests {
             blocked.gate_decision.status,
             SchedulerExecutionGateStatus::Blocked
         );
+
+        std::fs::remove_dir_all(&workdir).expect("temp workdir should clean up");
+    }
+
+    #[tokio::test]
+    async fn patch_file_execution_context_override_still_exposes_workflow_metadata() {
+        let workdir = new_temp_workdir();
+        let executor = Arc::new(ScriptedToolExecutor {
+            responses: Mutex::new(VecDeque::from(vec![Ok(ToolOutput {
+                output: "score=10".to_string(),
+                is_error: false,
+                title: None,
+                metadata: Some(json!({"exit_code": 0})),
+            })])),
+        });
+        let exec_ctx = test_exec_ctx(&workdir);
+        let mut controller = WorkflowController::from_config(
+            workflow_config_for_security_mode(),
+            ToolRunner::new(executor),
+            exec_ctx.clone(),
+            None,
+        )
+        .expect("controller construction should succeed")
+        .expect("workflow should activate controller");
+
+        controller
+            .capture_baseline()
+            .await
+            .expect("baseline should capture");
+        controller
+            .begin_iteration(1)
+            .expect("iteration should begin");
+
+        let override_ctx = controller
+            .execution_context_override(&exec_ctx)
+            .expect("patch-file mode should still expose workflow metadata");
+
+        assert_eq!(override_ctx.workdir, exec_ctx.workdir);
+        assert_eq!(
+            override_ctx
+                .metadata
+                .get("workflow_mode")
+                .and_then(Value::as_str),
+            Some("security")
+        );
+        assert!(override_ctx
+            .metadata
+            .contains_key("workflow_mode_iteration_brief"));
 
         std::fs::remove_dir_all(&workdir).expect("temp workdir should clean up");
     }
@@ -2905,6 +3729,7 @@ mod tests {
             workflow_config_with_strategy(SnapshotStrategy::WorktreeFork),
             ToolRunner::new(executor.clone()),
             test_exec_ctx(&workdir),
+            None,
         )
         .expect("controller construction should succeed")
         .expect("workflow should activate controller");
@@ -2933,7 +3758,7 @@ mod tests {
             .expect("new candidate file should write");
 
         let result = controller
-            .evaluate_round(1)
+            .evaluate_round(1, Vec::new())
             .await
             .expect("workflow evaluation should succeed");
 

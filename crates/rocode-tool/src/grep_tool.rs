@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use walkdir::WalkDir;
 
+use crate::tool_access::{
+    self, search_block_message, search_warning_message, ToolAccessKey, ToolAccessOutcome,
+};
 use crate::{Metadata, Tool, ToolContext, ToolError, ToolResult};
 
 const MAX_LINE_LENGTH: usize = 2000;
@@ -133,6 +136,20 @@ impl Tool for GrepTool {
         let regex = Regex::new(&regex_pattern)
             .map_err(|e| ToolError::InvalidArguments(format!("Invalid regex: {}", e)))?;
 
+        let outcome = tool_access::record_tool_access(
+            &ctx.session_id,
+            ToolAccessKey::Search {
+                pattern: pattern.clone(),
+                path: base_dir_str.clone(),
+                glob: glob_filter.clone(),
+                ignore_case,
+                hidden: include_hidden,
+            },
+        );
+        if let ToolAccessOutcome::Block { consecutive } = outcome {
+            return Err(ToolError::ExecutionError(search_block_message(consecutive)));
+        }
+
         let glob_pattern = glob_filter
             .as_ref()
             .and_then(|g| glob::Pattern::new(g).ok());
@@ -250,7 +267,7 @@ impl Tool for GrepTool {
             output_lines.join("\n")
         };
 
-        Ok(ToolResult {
+        let mut result = ToolResult {
             title,
             output,
             metadata: {
@@ -261,6 +278,104 @@ impl Tool for GrepTool {
                 m
             },
             truncated,
-        })
+        };
+
+        if let ToolAccessOutcome::Warn { consecutive } = outcome {
+            let warning = search_warning_message(consecutive);
+            result.output = format!(
+                "[Repeated search warning]\n{}\n\n{}",
+                warning, result.output
+            );
+            result.metadata.insert(
+                "toolAccessGuard".into(),
+                serde_json::json!({
+                    "kind": "search",
+                    "status": "warning",
+                    "count": consecutive,
+                    "message": warning,
+                }),
+            );
+        }
+
+        Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tool_access::clear_tool_access_tracker;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn repeated_searches_warn_on_third_and_block_on_fourth() {
+        let session_id = "grep-tool-repeated-searches";
+        clear_tool_access_tracker(session_id);
+        let dir = tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("demo.txt"), "TODO: first\nTODO: second\n")
+            .expect("write test file");
+        let tool = GrepTool::new();
+
+        for idx in 0..2 {
+            let result = tool
+                .execute(
+                    serde_json::json!({
+                        "pattern": "TODO",
+                        "path": dir.path().display().to_string()
+                    }),
+                    ToolContext::new(
+                        session_id.to_string(),
+                        format!("message-{idx}"),
+                        dir.path().display().to_string(),
+                    ),
+                )
+                .await
+                .expect("grep should succeed");
+            assert!(!result.output.contains("[Repeated search warning]"));
+        }
+
+        let warning = tool
+            .execute(
+                serde_json::json!({
+                    "pattern": "TODO",
+                    "path": dir.path().display().to_string()
+                }),
+                ToolContext::new(
+                    session_id.to_string(),
+                    "message-3".to_string(),
+                    dir.path().display().to_string(),
+                ),
+            )
+            .await
+            .expect("third grep should warn");
+        assert!(warning.output.contains("[Repeated search warning]"));
+        assert_eq!(
+            warning
+                .metadata
+                .get("toolAccessGuard")
+                .and_then(|value| value.get("kind"))
+                .and_then(|value| value.as_str()),
+            Some("search")
+        );
+
+        let err = tool
+            .execute(
+                serde_json::json!({
+                    "pattern": "TODO",
+                    "path": dir.path().display().to_string()
+                }),
+                ToolContext::new(
+                    session_id.to_string(),
+                    "message-4".to_string(),
+                    dir.path().display().to_string(),
+                ),
+            )
+            .await
+            .expect_err("fourth grep should be blocked");
+        match err {
+            ToolError::ExecutionError(message) => assert!(message.contains("BLOCKED")),
+            other => panic!("unexpected error: {other}"),
+        }
+        clear_tool_access_tracker(session_id);
     }
 }

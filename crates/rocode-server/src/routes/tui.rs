@@ -185,6 +185,7 @@ pub(crate) async fn cancel_questions_for_session(
             },
         );
     }
+    state.runtime_state.question_resolved(session_id).await;
 
     cancelled.len()
 }
@@ -218,6 +219,10 @@ async fn reply_question(
         .answer_question(&id, req.answers.clone())
         .await
         .ok_or_else(|| ApiError::NotFound(format!("Question request not found: {}", id)))?;
+    state
+        .runtime_state
+        .question_resolved(&question.session_id)
+        .await;
 
     broadcast_server_event(
         state.as_ref(),
@@ -241,6 +246,10 @@ async fn reject_question(
         .reject_question(&id)
         .await
         .ok_or_else(|| ApiError::NotFound(format!("Question request not found: {}", id)))?;
+    state
+        .runtime_state
+        .question_resolved(&question.session_id)
+        .await;
 
     broadcast_server_event(
         state.as_ref(),

@@ -1,5 +1,7 @@
 mod config;
 mod file;
+#[cfg(debug_assertions)]
+mod frontend_smoke;
 mod global;
 mod mcp;
 mod permission;
@@ -56,10 +58,11 @@ use rocode_plugin::subprocess::{PluginLoader, PluginSubprocessError};
 use rocode_provider::AuthInfo;
 
 pub fn router() -> Router<Arc<ServerState>> {
-    Router::new()
-        .route("/", get(web::index))
-        .route("/web/app.css", get(web::app_css))
-        .route("/web/app.js", get(web::app_js))
+    let router = Router::new()
+        .route("/", get(web::web_index))
+        .route("/web/app.css", get(web::web_app_css))
+        .route("/web/app.js", get(web::web_app_js))
+        .route("/web/assets/{*path}", get(web::web_asset))
         .route("/health", get(health))
         .route("/event", get(event_stream))
         .route("/path", get(get_paths))
@@ -90,7 +93,15 @@ pub fn router() -> Router<Arc<ServerState>> {
         .nest("/task", task_routes())
         .nest("/global", global_routes())
         .nest("/experimental", experimental_routes())
-        .nest("/plugin", plugin_auth_routes())
+        .nest("/plugin", plugin_auth_routes());
+
+    #[cfg(debug_assertions)]
+    let router = router.nest(
+        "/experimental/frontend-smoke",
+        frontend_smoke::frontend_smoke_routes(),
+    );
+
+    router
 }
 
 #[derive(Debug, Serialize)]
@@ -461,11 +472,19 @@ async fn get_vcs_info() -> Result<Json<VcsInfo>> {
     }))
 }
 
-#[derive(Debug, Serialize)]
-struct CommandInfo {
-    id: String,
+#[derive(Debug, Clone, Serialize)]
+struct CommandApiSpec {
     name: String,
-    description: Option<String>,
+    description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scheduler_profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    aliases: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    invocation: Option<rocode_command::CommandInvocationSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interactive: Option<rocode_command::CommandInteractiveSpec>,
+    source: rocode_command::CommandSource,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -475,24 +494,29 @@ struct UiCommandApiSpec {
     argument_kind: rocode_command::UiCommandArgumentKind,
 }
 
-async fn list_commands() -> Result<Json<Vec<CommandInfo>>> {
-    Ok(Json(vec![
-        CommandInfo {
-            id: "build".to_string(),
-            name: "Build".to_string(),
-            description: Some("Build the project".to_string()),
-        },
-        CommandInfo {
-            id: "test".to_string(),
-            name: "Test".to_string(),
-            description: Some("Run tests".to_string()),
-        },
-        CommandInfo {
-            id: "lint".to_string(),
-            name: "Lint".to_string(),
-            description: Some("Run linter".to_string()),
-        },
-    ]))
+async fn list_commands() -> Result<Json<Vec<CommandApiSpec>>> {
+    let mut registry = CommandRegistry::new();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    registry.load_from_directory(&cwd).map_err(|error| {
+        ApiError::InternalError(format!("Failed to load command registry: {error}"))
+    })?;
+
+    let mut commands = registry
+        .list()
+        .into_iter()
+        .map(|command| CommandApiSpec {
+            name: command.name.clone(),
+            description: command.description.clone(),
+            scheduler_profile: command.scheduler_profile.clone(),
+            aliases: command.aliases.clone(),
+            invocation: command.invocation.clone(),
+            interactive: command.interactive.clone(),
+            source: command.source.clone(),
+        })
+        .collect::<Vec<_>>();
+    commands.sort_by(|left, right| left.name.cmp(&right.name));
+
+    Ok(Json(commands))
 }
 
 async fn list_ui_commands() -> Result<Json<Vec<UiCommandApiSpec>>> {

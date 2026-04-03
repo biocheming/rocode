@@ -30,11 +30,13 @@ pub enum CustomEvent {
         optimistic_session_id: String,
         optimistic_message_id: String,
         created_session: Option<Box<crate::api::SessionInfo>>,
+        response: Option<crate::api::PromptResponse>,
         error: Option<String>,
     },
     PromptDispatchSessionFinished {
         session_id: String,
         optimistic_message_id: String,
+        response: Option<crate::api::PromptResponse>,
         error: Option<String>,
     },
     StateChanged(StateChange),

@@ -220,9 +220,17 @@ impl SessionMessage {
     }
 
     pub fn add_reasoning(&mut self, text: impl Into<String>) {
+        let text = text.into();
+        for part in self.parts.iter_mut().rev() {
+            if let PartType::Reasoning { text: existing } = &mut part.part_type {
+                existing.push_str(&text);
+                return;
+            }
+        }
+
         self.parts.push(MessagePart {
             id: format!("prt_{}", uuid::Uuid::new_v4()),
-            part_type: PartType::Reasoning { text: text.into() },
+            part_type: PartType::Reasoning { text },
             created_at: Utc::now(),
             message_id: None,
         });
@@ -337,5 +345,26 @@ impl SessionMessage {
             })
             .collect::<Vec<_>>()
             .join("")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_reasoning_appends_to_last_reasoning_part() {
+        let mut message = SessionMessage::assistant("session-1");
+        message.add_reasoning("alpha");
+        message.add_reasoning(" beta");
+
+        let reasoning_parts = message
+            .parts
+            .iter()
+            .filter(|part| matches!(part.part_type, PartType::Reasoning { .. }))
+            .count();
+
+        assert_eq!(reasoning_parts, 1);
+        assert_eq!(message.get_reasoning(), "alpha beta");
     }
 }

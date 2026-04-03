@@ -1,4 +1,7 @@
+use crate::iterative_workflow::{IterationMode, IterativeWorkflowConfig};
 use crate::iterative_workflow_runtime::WorkflowController;
+use crate::workflow_artifacts::WorkflowRunSummaryRecord;
+use crate::workflow_mode::mode_artifacts_from_outputs;
 use crate::ExecutionContext;
 use crate::{OrchestratorContext, OrchestratorError, OrchestratorOutput};
 use std::future::Future;
@@ -85,7 +88,8 @@ impl<'a> SchedulerExecutionService<'a> {
         let workflow = self.plan.stage_execution_semantics().ok_or_else(|| {
             OrchestratorError::Other(self.plan.coordination_semantics_error().to_string())
         })?;
-        let max_rounds = workflow.max_rounds.max(1) as usize;
+        let max_rounds =
+            Self::resolve_round_budget(self.plan.workflow.as_ref(), workflow.max_rounds);
         SchedulerProfileOrchestrator::sync_preset_runtime_authority(
             self.plan, self.state, self.ctx,
         );
@@ -149,6 +153,7 @@ impl<'a> SchedulerExecutionService<'a> {
                         SchedulerExecutionGateStatus::Done,
                         &decision,
                         &execution_output,
+                        verification_output.as_ref(),
                     ) {
                         self.state.place_execution_output(
                             self.plan.coordination_terminal_placement(),
@@ -163,6 +168,7 @@ impl<'a> SchedulerExecutionService<'a> {
                         SchedulerExecutionGateStatus::Blocked,
                         &decision,
                         &execution_output,
+                        verification_output.as_ref(),
                     ) {
                         self.state.place_execution_output(
                             self.plan.coordination_terminal_placement(),
@@ -219,12 +225,14 @@ impl<'a> SchedulerExecutionService<'a> {
         let workflow = self.plan.stage_execution_semantics().ok_or_else(|| {
             OrchestratorError::Other(self.plan.autonomous_semantics_error().to_string())
         })?;
-        let max_rounds = workflow.max_rounds.max(1) as usize;
+        let max_rounds =
+            Self::resolve_round_budget(self.plan.workflow.as_ref(), workflow.max_rounds);
         let mut workflow_controller = match self.plan.workflow.clone() {
             Some(workflow_config) => WorkflowController::from_config(
                 workflow_config,
                 self.orchestrator.tool_runner(),
                 self.ctx.exec_ctx.clone(),
+                self.plan.profile_name.clone(),
             )?,
             None => None,
         };
@@ -236,6 +244,13 @@ impl<'a> SchedulerExecutionService<'a> {
             self.state,
             self.plan,
         );
+        let mut iterations_completed = 0u32;
+        let mut final_iteration = None;
+        let mut final_decision = None;
+        let mut final_gate_status = None;
+        let mut final_summary = None;
+        let mut final_response = None;
+        let mut exhausted_budget = false;
 
         for round in 1..=max_rounds {
             let previous_output_for_retry = self
@@ -266,9 +281,21 @@ impl<'a> SchedulerExecutionService<'a> {
                         let result = controller.handle_execution_error(round as u32, &err);
                         let gate_output = result.output;
                         let decision = result.gate_decision;
+                        iterations_completed = round as u32;
+                        final_iteration = Some(round as u32);
+                        final_decision = Some(result.decision.label().to_string());
+                        final_gate_status =
+                            Some(decision_status_label(decision.status).to_string());
+                        final_summary = Some(decision.summary.clone());
+                        final_response = decision.final_response.clone();
                         SchedulerProfileOrchestrator::record_output(self.state, &gate_output);
                         if self.state.is_cancelled {
                             controller.orphan_active_checkpoint()?;
+                            final_decision = Some("cancelled".to_string());
+                            final_gate_status = Some("blocked".to_string());
+                            final_summary =
+                                Some("workflow cancelled during crash recovery".to_string());
+                            final_response = None;
                             break;
                         }
 
@@ -280,6 +307,7 @@ impl<'a> SchedulerExecutionService<'a> {
                                         SchedulerExecutionGateStatus::Done,
                                         &decision,
                                         &previous_output_for_retry,
+                                        None,
                                     )
                                 {
                                     self.state.place_execution_output(
@@ -296,6 +324,7 @@ impl<'a> SchedulerExecutionService<'a> {
                                         SchedulerExecutionGateStatus::Blocked,
                                         &decision,
                                         &previous_output_for_retry,
+                                        None,
                                     )
                                 {
                                     self.state.place_execution_output(
@@ -328,6 +357,7 @@ impl<'a> SchedulerExecutionService<'a> {
                                 continue;
                             }
                             SchedulerExecutionGateStatus::Continue => {
+                                exhausted_budget = true;
                                 self.state.place_execution_output(
                                     self.plan.retry_exhausted_placement(),
                                     SchedulerProfileOrchestrator::retry_budget_exhausted_output(
@@ -351,6 +381,12 @@ impl<'a> SchedulerExecutionService<'a> {
                 if let Some(controller) = workflow_controller.as_mut() {
                     controller.orphan_active_checkpoint()?;
                 }
+                iterations_completed = round as u32;
+                final_iteration = Some(round as u32);
+                final_decision = Some("cancelled".to_string());
+                final_gate_status = Some("blocked".to_string());
+                final_summary = Some("workflow cancelled after execution round".to_string());
+                final_response = None;
                 self.state.execution.delegated = Some(execution_output);
                 break;
             }
@@ -371,6 +407,13 @@ impl<'a> SchedulerExecutionService<'a> {
                         if let Some(controller) = workflow_controller.as_mut() {
                             controller.orphan_active_checkpoint()?;
                         }
+                        iterations_completed = round as u32;
+                        final_iteration = Some(round as u32);
+                        final_decision = Some("cancelled".to_string());
+                        final_gate_status = Some("blocked".to_string());
+                        final_summary =
+                            Some("workflow cancelled after verification stage".to_string());
+                        final_response = None;
                         break;
                     }
                     self.state.place_execution_output(
@@ -396,10 +439,27 @@ impl<'a> SchedulerExecutionService<'a> {
                 }
             };
 
-            let (gate_output, decision) = match workflow_controller.as_mut() {
+            let (gate_output, decision, workflow_decision) = match workflow_controller.as_mut() {
                 Some(controller) => {
-                    self.execute_autonomous_workflow_gate(round, max_rounds, controller)
-                        .await?
+                    let structured_artifacts =
+                        if let Some(verification_output) = verification_output.as_ref() {
+                            mode_artifacts_from_outputs(&[&execution_output, verification_output])
+                        } else {
+                            mode_artifacts_from_outputs(&[&execution_output])
+                        };
+                    let result = self
+                        .execute_autonomous_workflow_gate(
+                            round,
+                            max_rounds,
+                            controller,
+                            structured_artifacts,
+                        )
+                        .await?;
+                    (
+                        result.output,
+                        Some(result.gate_decision.clone()),
+                        Some(result.decision.label().to_string()),
+                    )
                 }
                 None => {
                     let gate_input = self.orchestrator.compose_autonomous_gate_input(
@@ -410,8 +470,10 @@ impl<'a> SchedulerExecutionService<'a> {
                         &execution_output,
                         verification_output.as_ref(),
                     );
-                    self.execute_autonomous_gate(round, max_rounds, &gate_input)
-                        .await?
+                    let (output, decision) = self
+                        .execute_autonomous_gate(round, max_rounds, &gate_input)
+                        .await?;
+                    (output, decision, None)
                 }
             };
             SchedulerProfileOrchestrator::record_output(self.state, &gate_output);
@@ -419,6 +481,12 @@ impl<'a> SchedulerExecutionService<'a> {
                 if let Some(controller) = workflow_controller.as_mut() {
                     controller.orphan_active_checkpoint()?;
                 }
+                iterations_completed = round as u32;
+                final_iteration = Some(round as u32);
+                final_decision = Some("cancelled".to_string());
+                final_gate_status = Some("blocked".to_string());
+                final_summary = Some("workflow cancelled after gate evaluation".to_string());
+                final_response = None;
                 break;
             }
 
@@ -427,8 +495,23 @@ impl<'a> SchedulerExecutionService<'a> {
                     round,
                     "autonomous gate returned no parseable decision; stopping after current round"
                 );
+                iterations_completed = round as u32;
+                final_iteration = Some(round as u32);
+                final_decision = workflow_decision;
+                final_gate_status = Some("blocked".to_string());
+                final_summary = Some(
+                    "autonomous gate returned no parseable decision; stopped after current round"
+                        .to_string(),
+                );
+                final_response = None;
                 break;
             };
+            iterations_completed = round as u32;
+            final_iteration = Some(round as u32);
+            final_decision = workflow_decision;
+            final_gate_status = Some(decision_status_label(decision.status).to_string());
+            final_summary = Some(decision.summary.clone());
+            final_response = decision.final_response.clone();
 
             match decision.status {
                 SchedulerExecutionGateStatus::Done => {
@@ -437,6 +520,7 @@ impl<'a> SchedulerExecutionService<'a> {
                         SchedulerExecutionGateStatus::Done,
                         &decision,
                         &execution_output,
+                        verification_output.as_ref(),
                     ) {
                         self.state.place_execution_output(
                             self.plan.autonomous_terminal_placement(),
@@ -451,6 +535,7 @@ impl<'a> SchedulerExecutionService<'a> {
                         SchedulerExecutionGateStatus::Blocked,
                         &decision,
                         &execution_output,
+                        verification_output.as_ref(),
                     ) {
                         self.state.place_execution_output(
                             self.plan.autonomous_terminal_placement(),
@@ -481,6 +566,7 @@ impl<'a> SchedulerExecutionService<'a> {
                     );
                 }
                 SchedulerExecutionGateStatus::Continue => {
+                    exhausted_budget = true;
                     self.state.place_execution_output(
                         self.plan.retry_exhausted_placement(),
                         SchedulerProfileOrchestrator::retry_budget_exhausted_output(
@@ -495,6 +581,29 @@ impl<'a> SchedulerExecutionService<'a> {
                     break;
                 }
             }
+        }
+
+        if let Some(controller) = workflow_controller.as_mut() {
+            let objective_satisfied = matches!(final_decision.as_deref(), Some("stop-satisfied"));
+            controller.persist_run_summary(WorkflowRunSummaryRecord {
+                iterations_completed,
+                final_iteration,
+                baseline_metric: None,
+                best_metric: None,
+                final_metric: None,
+                kept_commits: Vec::new(),
+                best_commit: None,
+                squashed_commit: None,
+                final_decision,
+                final_gate_status,
+                final_summary,
+                final_response,
+                mode_report: None,
+                mode_artifacts: Vec::new(),
+                objective_satisfied,
+                cancelled: self.state.is_cancelled,
+                exhausted_budget,
+            })?;
         }
 
         Ok(())
@@ -696,12 +805,15 @@ impl<'a> SchedulerExecutionService<'a> {
         round: usize,
         total_rounds: usize,
         controller: &mut WorkflowController,
-    ) -> Result<(OrchestratorOutput, Option<SchedulerExecutionGateDecision>), OrchestratorError>
-    {
+        structured_artifacts: Vec<crate::workflow_artifacts::WorkflowModeArtifact>,
+    ) -> Result<crate::iterative_workflow_runtime::WorkflowGateResult, OrchestratorError> {
         let stage = self.plan.autonomous_gate_stage();
         let stage_name = stage.event_name;
         self.emit_internal_stage_start(stage_name, round).await;
-        match controller.evaluate_round(round as u32).await {
+        match controller
+            .evaluate_round(round as u32, structured_artifacts)
+            .await
+        {
             Ok(result) => {
                 self.emit_internal_stage_end(
                     stage_name,
@@ -710,7 +822,7 @@ impl<'a> SchedulerExecutionService<'a> {
                     &result.output.content,
                 )
                 .await;
-                Ok((result.output, Some(result.gate_decision)))
+                Ok(result)
             }
             Err(err) => {
                 self.emit_internal_stage_end(
@@ -731,6 +843,19 @@ impl<'a> SchedulerExecutionService<'a> {
                 .map(|workflow| workflow.verification_mode),
             Some(SchedulerExecutionVerificationMode::Required)
         )
+    }
+
+    fn resolve_round_budget(
+        workflow: Option<&IterativeWorkflowConfig>,
+        preset_max_rounds: u32,
+    ) -> usize {
+        workflow
+            .and_then(|config| config.iteration_policy.as_ref())
+            .and_then(|policy| match policy.mode {
+                IterationMode::Bounded => policy.max_iterations,
+                IterationMode::Unbounded => None,
+            })
+            .unwrap_or_else(|| preset_max_rounds.max(1)) as usize
     }
 
     fn stage_context(stage_name: &str, round: usize) -> (String, u32) {
@@ -897,5 +1022,77 @@ impl<'a> SchedulerExecutionService<'a> {
             .map(str::trim)
             .find(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with('-'))
             .map(str::to_string)
+    }
+}
+
+fn decision_status_label(status: SchedulerExecutionGateStatus) -> &'static str {
+    match status {
+        SchedulerExecutionGateStatus::Done => "done",
+        SchedulerExecutionGateStatus::Continue => "continue",
+        SchedulerExecutionGateStatus::Blocked => "blocked",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SchedulerExecutionService;
+    use crate::iterative_workflow::{
+        IterationMode, IterationPolicyDefinition, IterativeWorkflowConfig, IterativeWorkflowKind,
+        IterativeWorkflowMode, WorkflowDescriptor,
+    };
+
+    fn workflow_with_iterations(
+        mode: IterationMode,
+        max_iterations: Option<u32>,
+    ) -> IterativeWorkflowConfig {
+        IterativeWorkflowConfig {
+            workflow: WorkflowDescriptor {
+                kind: IterativeWorkflowKind::Autoresearch,
+                mode: IterativeWorkflowMode::Run,
+            },
+            objective: None,
+            iteration_policy: Some(IterationPolicyDefinition {
+                mode,
+                max_iterations,
+                stop_conditions: Vec::new(),
+                stuck_threshold: None,
+                progress_report_every: None,
+            }),
+            decision_policy: None,
+            workspace_policy: None,
+            artifacts: None,
+            approval_policy: None,
+            security: None,
+            debug: None,
+            fix: None,
+            ship: None,
+        }
+    }
+
+    #[test]
+    fn bounded_workflow_round_budget_overrides_preset_default() {
+        let workflow = workflow_with_iterations(IterationMode::Bounded, Some(5));
+        assert_eq!(
+            SchedulerExecutionService::resolve_round_budget(Some(&workflow), 3),
+            5
+        );
+    }
+
+    #[test]
+    fn bounded_workflow_round_budget_can_be_stricter_than_preset_default() {
+        let workflow = workflow_with_iterations(IterationMode::Bounded, Some(2));
+        assert_eq!(
+            SchedulerExecutionService::resolve_round_budget(Some(&workflow), 3),
+            2
+        );
+    }
+
+    #[test]
+    fn unbounded_workflow_round_budget_falls_back_to_preset_guardrail() {
+        let workflow = workflow_with_iterations(IterationMode::Unbounded, Some(30));
+        assert_eq!(
+            SchedulerExecutionService::resolve_round_budget(Some(&workflow), 3),
+            3
+        );
     }
 }

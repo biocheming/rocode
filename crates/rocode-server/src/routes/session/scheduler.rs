@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use rocode_agent::{AgentInfo, AgentMode, AgentRegistry};
 use rocode_command::output_blocks::{MessageBlock, MessageRole as OutputMessageRole, OutputBlock};
@@ -42,6 +43,9 @@ use super::session_crud::{resolved_session_directory, set_session_run_status};
 
 use super::cancel::abort_session_execution;
 
+const BUILTIN_AUTORESEARCH_SCHEDULER_JSONC: &str =
+    include_str!("../../../assets/autoresearch.scheduler.jsonc");
+
 fn to_orchestrator_skill_tree(node: &SkillTreeNodeConfig) -> SkillTreeNode {
     SkillTreeNode {
         node_id: node.node_id.clone(),
@@ -52,6 +56,57 @@ fn to_orchestrator_skill_tree(node: &SkillTreeNodeConfig) -> SkillTreeNode {
             .map(to_orchestrator_skill_tree)
             .collect(),
     }
+}
+
+fn builtin_autoresearch_scheduler_config() -> Option<SchedulerConfig> {
+    static CONFIG: OnceLock<Option<SchedulerConfig>> = OnceLock::new();
+
+    CONFIG
+        .get_or_init(|| {
+            let mut config = match SchedulerConfig::load_from_str(
+                BUILTIN_AUTORESEARCH_SCHEDULER_JSONC,
+            ) {
+                Ok(config) => config,
+                Err(error) => {
+                    tracing::warn!(%error, "failed to load built-in autoresearch scheduler config");
+                    return None;
+                }
+            };
+            let base_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+            if let Err(error) = config.resolve_agent_tree_paths(base_dir.as_path()) {
+                tracing::warn!(%error, "failed to resolve built-in autoresearch agent trees");
+                return None;
+            }
+            if let Err(error) = config.resolve_workflow_paths(base_dir.as_path()) {
+                tracing::warn!(%error, "failed to resolve built-in autoresearch workflow paths");
+                return None;
+            }
+            Some(config)
+        })
+        .clone()
+}
+
+fn resolve_bundled_scheduler_request_defaults(
+    requested_profile: Option<&str>,
+) -> Option<SchedulerRequestDefaults> {
+    let profile_name = requested_profile
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let scheduler_config = builtin_autoresearch_scheduler_config()?;
+    let profile = scheduler_config.profile(profile_name).ok()?;
+    let plan = scheduler_plan_from_profile(Some(profile_name.to_string()), profile).ok()?;
+    Some(scheduler_request_defaults_from_plan(&plan))
+}
+
+fn resolve_bundled_scheduler_profile_config(
+    requested_profile: Option<&str>,
+) -> Option<(String, SchedulerProfileConfig)> {
+    let profile_name = requested_profile
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let scheduler_config = builtin_autoresearch_scheduler_config()?;
+    let profile = scheduler_config.profile(profile_name).ok()?.clone();
+    Some((profile_name.to_string(), profile))
 }
 
 fn resolve_builtin_scheduler_request_defaults(
@@ -84,40 +139,45 @@ pub(crate) fn resolve_scheduler_request_defaults(
     if let Some(defaults) = resolve_builtin_scheduler_request_defaults(requested_profile) {
         return Some(defaults);
     }
-
     let scheduler_path = config
         .scheduler_path
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())?;
+        .filter(|value| !value.is_empty());
 
     if let Some(profile_name) = requested_profile
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        let scheduler_config = match SchedulerConfig::load_from_file(scheduler_path) {
-            Ok(config) => config,
-            Err(error) => {
-                tracing::warn!(path = %scheduler_path, %error, "failed to load scheduler config");
-                return None;
-            }
-        };
-        let profile = match scheduler_config.profile(profile_name) {
-            Ok(profile) => profile,
-            Err(error) => {
-                tracing::warn!(path = %scheduler_path, profile = %profile_name, %error, "failed to resolve requested scheduler profile");
-                return None;
-            }
-        };
-        let plan = match scheduler_plan_from_profile(Some(profile_name.to_string()), profile) {
-            Ok(plan) => plan,
-            Err(error) => {
-                tracing::warn!(path = %scheduler_path, profile = %profile_name, %error, "failed to build requested scheduler profile plan");
-                return None;
-            }
-        };
-        return Some(scheduler_request_defaults_from_plan(&plan));
+        if let Some(scheduler_path) = scheduler_path {
+            let scheduler_config = match SchedulerConfig::load_from_file(scheduler_path) {
+                Ok(config) => config,
+                Err(error) => {
+                    tracing::warn!(path = %scheduler_path, %error, "failed to load scheduler config");
+                    return None;
+                }
+            };
+            let profile = match scheduler_config.profile(profile_name) {
+                Ok(profile) => profile,
+                Err(error) => {
+                    tracing::warn!(path = %scheduler_path, profile = %profile_name, %error, "failed to resolve requested scheduler profile");
+                    return None;
+                }
+            };
+            let plan = match scheduler_plan_from_profile(Some(profile_name.to_string()), profile) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    tracing::warn!(path = %scheduler_path, profile = %profile_name, %error, "failed to build requested scheduler profile plan");
+                    return None;
+                }
+            };
+            return Some(scheduler_request_defaults_from_plan(&plan));
+        }
+
+        return resolve_bundled_scheduler_request_defaults(Some(profile_name));
     }
+
+    let scheduler_path = scheduler_path?;
 
     match scheduler_request_defaults_from_file(scheduler_path) {
         Ok(defaults) => Some(defaults),
@@ -144,55 +204,60 @@ pub(crate) fn resolve_scheduler_request_defaults_validated(
         .scheduler_path
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            ApiError::BadRequest(format!(
-                "Scheduler profile could not be resolved: `{}`. No scheduler config is configured.",
-                profile_name
-            ))
-        })?;
+        .filter(|value| !value.is_empty());
 
-    let scheduler_config = SchedulerConfig::load_from_file(scheduler_path).map_err(|error| {
-        tracing::warn!(
-            path = %scheduler_path,
-            profile = %profile_name,
-            %error,
-            "failed to load scheduler config for requested scheduler profile"
-        );
-        ApiError::BadRequest(format!(
-            "Scheduler profile could not be resolved: `{}`. Failed to load scheduler config: {}",
-            profile_name, error
-        ))
-    })?;
-
-    let profile = scheduler_config.profile(profile_name).map_err(|error| {
-        tracing::warn!(
-            path = %scheduler_path,
-            profile = %profile_name,
-            %error,
-            "failed to resolve requested scheduler profile"
-        );
-        ApiError::BadRequest(format!(
-            "Scheduler profile could not be resolved: `{}`. {}",
-            profile_name, error
-        ))
-    })?;
-
-    let plan =
-        scheduler_plan_from_profile(Some(profile_name.to_string()), profile).map_err(|error| {
+    if let Some(scheduler_path) = scheduler_path {
+        let scheduler_config = SchedulerConfig::load_from_file(scheduler_path).map_err(|error| {
             tracing::warn!(
                 path = %scheduler_path,
                 profile = %profile_name,
                 %error,
-                "failed to build requested scheduler profile plan"
+                "failed to load scheduler config for requested scheduler profile"
             );
             ApiError::BadRequest(format!(
-                "Scheduler profile could not be resolved: `{}`. Failed to build profile plan: {}",
+                "Scheduler profile could not be resolved: `{}`. Failed to load scheduler config: {}",
                 profile_name, error
             ))
         })?;
 
-    Ok(Some(scheduler_request_defaults_from_plan(&plan)))
+        let profile = scheduler_config.profile(profile_name).map_err(|error| {
+            tracing::warn!(
+                path = %scheduler_path,
+                profile = %profile_name,
+                %error,
+                "failed to resolve requested scheduler profile"
+            );
+            ApiError::BadRequest(format!(
+                "Scheduler profile could not be resolved: `{}`. {}",
+                profile_name, error
+            ))
+        })?;
+
+        let plan =
+            scheduler_plan_from_profile(Some(profile_name.to_string()), profile).map_err(|error| {
+                tracing::warn!(
+                    path = %scheduler_path,
+                    profile = %profile_name,
+                    %error,
+                    "failed to build requested scheduler profile plan"
+                );
+                ApiError::BadRequest(format!(
+                    "Scheduler profile could not be resolved: `{}`. Failed to build profile plan: {}",
+                    profile_name, error
+                ))
+            })?;
+
+        return Ok(Some(scheduler_request_defaults_from_plan(&plan)));
+    }
+
+    if let Some(defaults) = resolve_bundled_scheduler_request_defaults(Some(profile_name)) {
+        return Ok(Some(defaults));
+    }
+
+    Err(ApiError::BadRequest(format!(
+        "Scheduler profile could not be resolved: `{}`. No scheduler config is configured.",
+        profile_name
+    )))
 }
 
 pub(super) fn scheduler_system_prompt_preview(
@@ -253,22 +318,26 @@ pub(super) fn resolve_scheduler_profile_config(
         .scheduler_path
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    let scheduler_config = match SchedulerConfig::load_from_file(scheduler_path) {
-        Ok(config) => config,
-        Err(error) => {
-            tracing::warn!(path = %scheduler_path, %error, "failed to load scheduler profile config");
-            return None;
-        }
-    };
-    let profile = match scheduler_config.profile(profile_name) {
-        Ok(profile) => profile.clone(),
-        Err(error) => {
-            tracing::warn!(path = %scheduler_path, profile = %profile_name, %error, "failed to resolve scheduler profile config");
-            return None;
-        }
-    };
-    Some((profile_name.to_string(), profile))
+        .filter(|value| !value.is_empty());
+    if let Some(scheduler_path) = scheduler_path {
+        let scheduler_config = match SchedulerConfig::load_from_file(scheduler_path) {
+            Ok(config) => config,
+            Err(error) => {
+                tracing::warn!(path = %scheduler_path, %error, "failed to load scheduler profile config");
+                return None;
+            }
+        };
+        let profile = match scheduler_config.profile(profile_name) {
+            Ok(profile) => profile.clone(),
+            Err(error) => {
+                tracing::warn!(path = %scheduler_path, profile = %profile_name, %error, "failed to resolve scheduler profile config");
+                return None;
+            }
+        };
+        return Some((profile_name.to_string(), profile));
+    }
+
+    resolve_bundled_scheduler_profile_config(Some(profile_name))
 }
 
 #[derive(Clone)]
@@ -1330,7 +1399,8 @@ mod tests {
 
     #[tokio::test]
     async fn local_scheduler_prompt_parts_resolve_file_references() {
-        let temp_dir = std::env::temp_dir().join(format!("rocode-local-scheduler-{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("rocode-local-scheduler-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp_dir).expect("temp dir should be created");
         let file_path = temp_dir.join("note.txt");
         std::fs::write(&file_path, "hello").expect("temp file should be written");

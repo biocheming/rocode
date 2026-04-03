@@ -8,6 +8,7 @@ use axum::{
     http::HeaderMap,
     Json,
 };
+use rocode_config::Config as AppConfig;
 use serde::Deserialize;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -24,12 +25,17 @@ use crate::session_runtime::{
 };
 use crate::{ApiError, Result, ServerState};
 use rocode_agent::{AgentMode, AgentRegistry};
-use rocode_command::{CommandContext, CommandRegistry};
+use rocode_command::{
+    Command, CommandArgumentField, CommandArgumentKind, CommandContext, CommandRegistry,
+    InteractivePolicy,
+};
 use rocode_orchestrator::output_metadata::output_usage;
 use rocode_orchestrator::{
     scheduler_orchestrator_from_profile, AvailableAgentMeta, AvailableCategoryMeta,
-    ExecutionContext as OrchestratorExecutionContext, ModelResolver, Orchestrator,
-    OrchestratorContext, OrchestratorError, ToolExecutor as OrchestratorToolExecutor, ToolRunner,
+    CommandDefinition as WorkflowCommandDefinition, DebugConfig,
+    ExecutionContext as OrchestratorExecutionContext, IterationPolicyDefinition, MetricDefinition,
+    ModelResolver, ObjectiveDefinition, Orchestrator, OrchestratorContext, OrchestratorError,
+    ScopeDefinition, ToolExecutor as OrchestratorToolExecutor, ToolRunner,
 };
 
 use super::super::tui::request_question_answers;
@@ -54,28 +60,66 @@ struct ResolvedPromptPayload {
     execution_text: String,
     agent: Option<String>,
     scheduler_profile: Option<String>,
+    command: Option<Command>,
+    raw_arguments: Option<String>,
 }
 
 async fn resolve_prompt_payload(
     display_text: &str,
     session_id: &str,
     session_directory: &str,
+    config: &AppConfig,
 ) -> Result<ResolvedPromptPayload> {
     let mut registry = CommandRegistry::new();
     registry
         .load_from_directory(&PathBuf::from(session_directory))
         .map_err(|error| ApiError::BadRequest(format!("Failed to load commands: {}", error)))?;
 
-    let Some((command, arguments)) = registry.parse(display_text) else {
+    let Some(parsed) = registry.parse_invocation(display_text) else {
         return Ok(ResolvedPromptPayload {
             display_text: display_text.to_string(),
             execution_text: display_text.to_string(),
             agent: None,
             scheduler_profile: None,
+            command: None,
+            raw_arguments: None,
         });
     };
 
-    let mut ctx = CommandContext::new(PathBuf::from(session_directory)).with_arguments(arguments);
+    let command = parsed.command.clone();
+    let invocation = command.invocation.as_ref();
+    let scheduler_defaults = invocation
+        .map(|invocation| {
+            hydrate_scheduler_command_arguments(
+                config,
+                &command,
+                &parsed.raw_arguments,
+                &invocation.argument_schema,
+            )
+        })
+        .transpose()?;
+    let hydrated_raw_arguments = scheduler_defaults
+        .as_ref()
+        .map(|(_, raw)| raw.clone())
+        .unwrap_or_else(|| parsed.raw_arguments.clone());
+    let hydrated_arguments = if let Some((arguments, _)) = scheduler_defaults {
+        flatten_argument_values(
+            &invocation
+                .map(|item| item.argument_schema.as_slice())
+                .unwrap_or(&[]),
+            &arguments,
+        )
+    } else {
+        parsed.arguments.clone()
+    };
+
+    let mut ctx =
+        CommandContext::new(PathBuf::from(session_directory)).with_arguments(hydrated_arguments);
+    let raw_arguments =
+        (!hydrated_raw_arguments.trim().is_empty()).then_some(hydrated_raw_arguments);
+    if let Some(raw_arguments) = raw_arguments.as_ref() {
+        ctx = ctx.with_raw_arguments(raw_arguments.clone());
+    }
     ctx = ctx
         .with_variable("SESSION_ID".to_string(), session_id.to_string())
         .with_variable("TIMESTAMP".to_string(), chrono::Utc::now().to_rfc3339());
@@ -94,7 +138,420 @@ async fn resolve_prompt_payload(
         execution_text,
         agent: None,
         scheduler_profile: command.scheduler_profile.clone(),
+        command: Some(command.clone()),
+        raw_arguments,
     })
+}
+
+fn normalize_command_field_key(key: &str) -> String {
+    key.trim()
+        .trim_start_matches('-')
+        .replace('_', "-")
+        .to_ascii_lowercase()
+}
+
+fn tokenize_command_arguments(raw_arguments: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut escape = false;
+
+    for ch in raw_arguments.chars() {
+        if escape {
+            current.push(ch);
+            escape = false;
+            continue;
+        }
+
+        match ch {
+            '\\' => escape = true,
+            '"' | '\'' => {
+                if quote == Some(ch) {
+                    quote = None;
+                } else if quote.is_none() {
+                    quote = Some(ch);
+                } else {
+                    current.push(ch);
+                }
+            }
+            _ if ch.is_whitespace() && quote.is_none() => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    tokens
+}
+
+fn shell_quote_command_value(value: &str) -> String {
+    if value.is_empty() {
+        return "\"\"".to_string();
+    }
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '-' | '_' | '.' | '*' | ':'))
+    {
+        return value.to_string();
+    }
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn parse_command_argument_map(
+    raw_arguments: Option<&str>,
+    fields: &[CommandArgumentField],
+) -> std::collections::HashMap<String, Vec<String>> {
+    let mut values = std::collections::HashMap::<String, Vec<String>>::new();
+    let Some(raw_arguments) = raw_arguments.filter(|value| !value.trim().is_empty()) else {
+        return values;
+    };
+
+    let field_map = fields
+        .iter()
+        .map(|field| (normalize_command_field_key(&field.key), field))
+        .collect::<std::collections::HashMap<_, _>>();
+    let tokens = tokenize_command_arguments(raw_arguments);
+    let mut index = 0;
+
+    while index < tokens.len() {
+        let token = &tokens[index];
+        if !token.starts_with("--") {
+            index += 1;
+            continue;
+        }
+
+        let key = normalize_command_field_key(token.trim_start_matches("--"));
+        let Some(field) = field_map.get(&key) else {
+            index += 1;
+            continue;
+        };
+
+        let mut captured = Vec::new();
+        let mut cursor = index + 1;
+
+        while cursor < tokens.len() && !tokens[cursor].starts_with("--") {
+            captured.push(tokens[cursor].clone());
+            cursor += 1;
+            if !field.repeatable && !matches!(field.kind, CommandArgumentKind::GlobList) {
+                break;
+            }
+        }
+
+        if matches!(field.kind, CommandArgumentKind::Boolean) && captured.is_empty() {
+            captured.push("true".to_string());
+        }
+
+        if !captured.is_empty() {
+            values.entry(key).or_default().extend(captured);
+        }
+        index = cursor.max(index + 1);
+    }
+
+    values
+}
+
+fn flatten_argument_values(
+    fields: &[CommandArgumentField],
+    arguments: &std::collections::HashMap<String, Vec<String>>,
+) -> Vec<String> {
+    let mut result = Vec::new();
+    for field in fields {
+        let key = normalize_command_field_key(&field.key);
+        if let Some(values) = arguments.get(&key) {
+            result.extend(values.iter().cloned());
+        }
+    }
+    result
+}
+
+fn build_raw_arguments_from_map(
+    fields: &[CommandArgumentField],
+    arguments: &std::collections::HashMap<String, Vec<String>>,
+) -> String {
+    let mut parts = Vec::new();
+
+    for field in fields {
+        let key = normalize_command_field_key(&field.key);
+        let Some(values) = arguments.get(&key) else {
+            continue;
+        };
+        let values = values
+            .iter()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>();
+        if values.is_empty() {
+            continue;
+        }
+        parts.push(format!("--{}", field.key));
+        parts.extend(values.into_iter().map(shell_quote_command_value));
+    }
+
+    parts.join(" ")
+}
+
+fn workflow_command_value(def: &WorkflowCommandDefinition) -> String {
+    def.command.trim().to_string()
+}
+
+fn workflow_scope_values(scope: &ScopeDefinition) -> Vec<String> {
+    scope
+        .include
+        .iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn workflow_metric_value(metric: &MetricDefinition) -> String {
+    serde_json::to_string(metric).unwrap_or_else(|_| "metric".to_string())
+}
+
+fn workflow_debug_symptom(debug: &DebugConfig) -> String {
+    debug.symptom.trim().to_string()
+}
+
+fn workflow_iteration_value(iteration_policy: &IterationPolicyDefinition) -> Option<String> {
+    iteration_policy
+        .max_iterations
+        .map(|value| value.to_string())
+}
+
+fn populate_objective_defaults(
+    defaults: &mut std::collections::HashMap<String, Vec<String>>,
+    objective: &ObjectiveDefinition,
+) {
+    let goal = objective.goal.trim();
+    if !goal.is_empty() {
+        defaults.insert("goal".to_string(), vec![goal.to_string()]);
+    }
+
+    let scope = workflow_scope_values(&objective.scope);
+    if !scope.is_empty() {
+        defaults.insert("scope".to_string(), scope);
+    }
+
+    let metric = workflow_metric_value(&objective.metric);
+    if !metric.trim().is_empty() {
+        defaults.insert("metric".to_string(), vec![metric]);
+    }
+
+    let verify = workflow_command_value(&objective.verify);
+    if !verify.is_empty() {
+        defaults.insert("verify".to_string(), vec![verify]);
+    }
+
+    if let Some(guard) = objective.guard.as_ref() {
+        let guard = workflow_command_value(guard);
+        if !guard.is_empty() {
+            defaults.insert("guard".to_string(), vec![guard]);
+        }
+    }
+}
+
+fn workflow_command_defaults(
+    config: &AppConfig,
+    command: &Command,
+) -> Result<std::collections::HashMap<String, Vec<String>>> {
+    let Some(profile_name) = command.scheduler_profile.as_deref() else {
+        return Ok(std::collections::HashMap::new());
+    };
+    let Some((_, profile)) = resolve_scheduler_profile_config(config, Some(profile_name)) else {
+        return Ok(std::collections::HashMap::new());
+    };
+    let Some(workflow) = profile.workflow() else {
+        return Ok(std::collections::HashMap::new());
+    };
+
+    let mut defaults = std::collections::HashMap::new();
+
+    if let Some(objective) = workflow.objective.as_ref() {
+        populate_objective_defaults(&mut defaults, objective);
+    }
+    if let Some(iteration_policy) = workflow.iteration_policy.as_ref() {
+        if let Some(iterations) = workflow_iteration_value(iteration_policy) {
+            defaults.insert("iterations".to_string(), vec![iterations]);
+        }
+    }
+    if let Some(debug) = workflow.debug.as_ref() {
+        let symptom = workflow_debug_symptom(debug);
+        if !symptom.is_empty() {
+            defaults.insert("symptom".to_string(), vec![symptom]);
+        }
+    }
+    if let Some(ship) = workflow.ship.as_ref() {
+        defaults.entry("target".to_string()).or_insert_with(|| {
+            vec![format!(
+                "ship {}",
+                serde_json::to_string(&ship.ship_type).unwrap_or_else(|_| "target".to_string())
+            )]
+        });
+    }
+
+    Ok(defaults)
+}
+
+fn hydrate_scheduler_command_arguments(
+    config: &AppConfig,
+    command: &Command,
+    raw_arguments: &str,
+    fields: &[CommandArgumentField],
+) -> Result<(std::collections::HashMap<String, Vec<String>>, String)> {
+    let mut parsed_arguments = parse_command_argument_map(Some(raw_arguments), fields);
+    let defaults = workflow_command_defaults(config, command)?;
+
+    for field in fields {
+        let key = normalize_command_field_key(&field.key);
+        let has_value = parsed_arguments
+            .get(&key)
+            .is_some_and(|values| values.iter().any(|value| !value.trim().is_empty()));
+        if has_value {
+            continue;
+        }
+        let Some(default_values) = defaults.get(&key) else {
+            continue;
+        };
+        if default_values.is_empty() {
+            continue;
+        }
+        parsed_arguments.insert(key, default_values.clone());
+    }
+
+    let hydrated_raw = build_raw_arguments_from_map(fields, &parsed_arguments);
+    Ok((parsed_arguments, hydrated_raw))
+}
+
+fn missing_required_command_fields(
+    fields: &[CommandArgumentField],
+    parsed_arguments: &std::collections::HashMap<String, Vec<String>>,
+) -> Vec<CommandArgumentField> {
+    fields
+        .iter()
+        .filter(|field| field.required)
+        .filter(|field| {
+            let key = normalize_command_field_key(&field.key);
+            parsed_arguments
+                .get(&key)
+                .is_none_or(|values| values.iter().all(|value| value.trim().is_empty()))
+        })
+        .cloned()
+        .collect()
+}
+
+fn command_question_for_field(
+    command: &Command,
+    field: &CommandArgumentField,
+) -> rocode_tool::QuestionDef {
+    let template = command.interactive.as_ref().and_then(|interactive| {
+        interactive.questions.iter().find(|question| {
+            normalize_command_field_key(&question.field_key)
+                == normalize_command_field_key(&field.key)
+        })
+    });
+
+    rocode_tool::QuestionDef {
+        question: template
+            .map(|question| question.prompt.clone())
+            .unwrap_or_else(|| format!("Provide `{}` for `/{}`.", field.label, command.name)),
+        header: template
+            .map(|question| question.header.clone())
+            .or_else(|| Some(field.label.clone())),
+        options: template
+            .map(|question| {
+                question
+                    .options
+                    .iter()
+                    .map(|option| rocode_tool::QuestionOption {
+                        label: option.label.clone(),
+                        description: option.description.clone(),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| {
+                field
+                    .options
+                    .iter()
+                    .map(|option| rocode_tool::QuestionOption {
+                        label: option.label.clone(),
+                        description: option.description.clone(),
+                    })
+                    .collect()
+            }),
+        multiple: field.repeatable || matches!(field.kind, CommandArgumentKind::GlobList),
+    }
+}
+
+async fn create_pending_command_question(
+    state: &Arc<ServerState>,
+    session_id: &str,
+    command: &Command,
+    raw_arguments: Option<&str>,
+    missing_fields: &[CommandArgumentField],
+) -> Result<String> {
+    let questions = missing_fields
+        .iter()
+        .map(|field| command_question_for_field(command, field))
+        .collect::<Vec<_>>();
+    let (question_info, _) = state
+        .runtime_control
+        .register_question(session_id.to_string(), questions.clone())
+        .await;
+
+    let created_event = ServerEvent::QuestionCreated {
+        session_id: session_id.to_string(),
+        request_id: question_info.id.clone(),
+        questions: serde_json::to_value(&questions)
+            .unwrap_or_else(|_| serde_json::Value::Array(vec![])),
+    };
+    if let Some(payload) = created_event.to_json_string() {
+        state.broadcast(&payload);
+    }
+    state
+        .runtime_state
+        .question_created(
+            session_id,
+            &question_info.id,
+            serde_json::to_value(&questions).unwrap_or_else(|_| serde_json::Value::Array(vec![])),
+        )
+        .await;
+
+    let mut sessions = state.sessions.lock().await;
+    let Some(mut session) = sessions.get(session_id).cloned() else {
+        return Err(ApiError::SessionNotFound(session_id.to_string()));
+    };
+    session.metadata.insert(
+        "pending_command_invocation".to_string(),
+        serde_json::json!({
+            "command": command.name,
+            "rawArguments": raw_arguments.unwrap_or_default(),
+            "missingFields": missing_fields.iter().map(|field| field.key.clone()).collect::<Vec<_>>(),
+            "schedulerProfile": command.scheduler_profile.clone(),
+            "questionId": question_info.id.clone(),
+        }),
+    );
+    sessions.update(session);
+
+    Ok(question_info.id)
+}
+
+fn frontend_smoke_skip_execution_enabled() -> bool {
+    #[cfg(debug_assertions)]
+    {
+        std::env::var("ROCODE_FRONTEND_SMOKE_SKIP_EXECUTION")
+            .ok()
+            .as_deref()
+            == Some("1")
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        false
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,7 +588,10 @@ pub(super) async fn create_scheduler_user_message(
         .create_user_message(input, session)
         .await
         .map_err(|error| {
-            ApiError::BadRequest(format!("Failed to create scheduler user message: {}", error))
+            ApiError::BadRequest(format!(
+                "Failed to create scheduler user message: {}",
+                error
+            ))
         })?;
 
     let Some(user_message) = session
@@ -284,10 +744,81 @@ pub(super) async fn session_prompt(
             execution_text: prompt_text_from_parts(parts),
             agent: None,
             scheduler_profile: None,
+            command: None,
+            raw_arguments: None,
         }
     } else {
-        resolve_prompt_payload(&display_prompt_text, &id, &session_directory).await?
+        resolve_prompt_payload(&display_prompt_text, &id, &session_directory, &config).await?
     };
+    if let Some(command) = resolved_prompt.command.as_ref() {
+        if let (Some(invocation), Some(interactive)) =
+            (command.invocation.as_ref(), command.interactive.as_ref())
+        {
+            if interactive.when_missing_required != InteractivePolicy::None {
+                let parsed_arguments = parse_command_argument_map(
+                    resolved_prompt.raw_arguments.as_deref(),
+                    &invocation.argument_schema,
+                );
+                let mut missing_fields =
+                    missing_required_command_fields(&invocation.argument_schema, &parsed_arguments);
+                if interactive.when_missing_required == InteractivePolicy::AskPerStep {
+                    missing_fields.truncate(1);
+                }
+                if !missing_fields.is_empty() {
+                    let question_id = create_pending_command_question(
+                        &state,
+                        &id,
+                        command,
+                        resolved_prompt.raw_arguments.as_deref(),
+                        &missing_fields,
+                    )
+                    .await?;
+                    broadcast_session_updated(
+                        state.as_ref(),
+                        id.clone(),
+                        "prompt.command.awaiting_user",
+                    );
+                    persist_sessions_if_enabled(&state).await;
+                    return Ok(Json(serde_json::json!({
+                        "status": "awaiting_user",
+                        "session_id": id,
+                        "pending_question_id": question_id,
+                        "command": command.name,
+                        "missing_fields": missing_fields
+                            .iter()
+                            .map(|field| field.key.clone())
+                            .collect::<Vec<_>>(),
+                    })));
+                }
+            }
+        }
+    }
+    if frontend_smoke_skip_execution_enabled() {
+        let mut pending_command_cleared = false;
+        {
+            let mut sessions = state.sessions.lock().await;
+            if let Some(mut session) = sessions.get(&id).cloned() {
+                pending_command_cleared = session
+                    .metadata
+                    .remove("pending_command_invocation")
+                    .is_some();
+                if pending_command_cleared {
+                    sessions.update(session);
+                }
+            }
+        }
+        if pending_command_cleared {
+            broadcast_session_updated(state.as_ref(), id.clone(), "prompt.command.accepted");
+        }
+        broadcast_session_updated(state.as_ref(), id.clone(), "prompt.smoke.accepted");
+        persist_sessions_if_enabled(&state).await;
+        return Ok(Json(serde_json::json!({
+            "status": "accepted",
+            "ok": true,
+            "session_id": id,
+            "smoke_skip_execution": true,
+        })));
+    }
     let prompt_text = resolved_prompt.execution_text.clone();
     let display_prompt_text = resolved_prompt.display_text.clone();
     let prompt_parts = if let Some(parts) = request_parts.clone() {
@@ -348,6 +879,23 @@ pub(super) async fn session_prompt(
         .as_deref()
         .and_then(|profile_name| resolve_scheduler_profile_config(&task_config, Some(profile_name)))
         .map(|(_, profile)| profile);
+    let mut pending_command_cleared = false;
+    {
+        let mut sessions = state.sessions.lock().await;
+        if let Some(mut session) = sessions.get(&id).cloned() {
+            pending_command_cleared = session
+                .metadata
+                .remove("pending_command_invocation")
+                .is_some();
+            if pending_command_cleared {
+                sessions.update(session);
+            }
+        }
+    }
+    if pending_command_cleared {
+        broadcast_session_updated(state.as_ref(), id.clone(), "prompt.command.accepted");
+        persist_sessions_if_enabled(&state).await;
+    }
     tokio::spawn(async move {
         let mut session = {
             let sessions = task_state.sessions.lock().await;
@@ -1058,15 +1606,20 @@ pub(super) async fn session_prompt(
     });
 
     Ok(Json(serde_json::json!({
-        "status": "started",
+        "status": "accepted",
+        "ok": true,
+        "session_id": id,
         "model": format!("{}/{}", provider_id, model_id),
         "variant": req.variant,
+        "command": resolved_prompt.command.as_ref().map(|command| command.name.clone()),
     })))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocode_command::{CommandArgumentOption, CommandRegistry};
+    use rocode_config::Config as AppConfig;
     use rocode_session::{PartType, Session, SessionStateManager};
     use std::sync::Arc;
     use tokio::sync::RwLock;
@@ -1200,5 +1753,161 @@ mod tests {
             message.metadata.get("resolved_user_prompt"),
             Some(&serde_json::json!("Inspect @note.txt"))
         );
+    }
+
+    #[test]
+    fn parse_command_argument_map_preserves_quoted_values() {
+        let fields = vec![
+            CommandArgumentField {
+                key: "goal".to_string(),
+                label: "Goal".to_string(),
+                required: true,
+                kind: CommandArgumentKind::LongText,
+                repeatable: false,
+                options: Vec::new(),
+            },
+            CommandArgumentField {
+                key: "scope".to_string(),
+                label: "Scope".to_string(),
+                required: true,
+                kind: CommandArgumentKind::GlobList,
+                repeatable: true,
+                options: Vec::new(),
+            },
+            CommandArgumentField {
+                key: "ship".to_string(),
+                label: "Ship".to_string(),
+                required: false,
+                kind: CommandArgumentKind::Boolean,
+                repeatable: false,
+                options: vec![CommandArgumentOption {
+                    label: "true".to_string(),
+                    description: None,
+                }],
+            },
+        ];
+
+        let parsed = parse_command_argument_map(
+            Some("--goal \"reduce test flakes\" --scope src/** tests/** --ship"),
+            &fields,
+        );
+
+        assert_eq!(
+            parsed.get("goal"),
+            Some(&vec!["reduce test flakes".to_string()])
+        );
+        assert_eq!(
+            parsed.get("scope"),
+            Some(&vec!["src/**".to_string(), "tests/**".to_string()])
+        );
+        assert_eq!(parsed.get("ship"), Some(&vec!["true".to_string()]));
+    }
+
+    #[test]
+    fn missing_required_command_fields_only_returns_unset_fields() {
+        let fields = vec![
+            CommandArgumentField {
+                key: "goal".to_string(),
+                label: "Goal".to_string(),
+                required: true,
+                kind: CommandArgumentKind::LongText,
+                repeatable: false,
+                options: Vec::new(),
+            },
+            CommandArgumentField {
+                key: "verify".to_string(),
+                label: "Verify".to_string(),
+                required: true,
+                kind: CommandArgumentKind::CommandLine,
+                repeatable: false,
+                options: Vec::new(),
+            },
+        ];
+
+        let parsed = parse_command_argument_map(Some("--goal improve-docs"), &fields);
+        let missing = missing_required_command_fields(&fields, &parsed);
+
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].key, "verify");
+    }
+
+    #[test]
+    fn hydrate_scheduler_command_arguments_uses_workflow_defaults_for_autoresearch() {
+        let registry = CommandRegistry::new();
+        let command = registry.get("autoresearch").expect("autoresearch command");
+        let invocation = command
+            .invocation
+            .as_ref()
+            .expect("autoresearch invocation");
+
+        let (arguments, raw_arguments) = hydrate_scheduler_command_arguments(
+            &AppConfig::default(),
+            command,
+            "",
+            &invocation.argument_schema,
+        )
+        .expect("workflow defaults should hydrate autoresearch command");
+
+        assert_eq!(
+            arguments.get("verify"),
+            Some(&vec!["./scripts/verify-autoresearch.sh".to_string()])
+        );
+        assert_eq!(arguments.get("iterations"), Some(&vec!["6".to_string()]));
+        assert_eq!(
+            arguments.get("scope"),
+            Some(&vec![
+                "crates/**".to_string(),
+                "scripts/**".to_string(),
+                "Cargo.toml".to_string(),
+                "Cargo.lock".to_string(),
+            ])
+        );
+        assert!(
+            arguments
+                .get("goal")
+                .and_then(|values| values.first())
+                .is_some_and(|value| value.contains("Increase the curated regression score")),
+            "workflow goal should hydrate command defaults"
+        );
+        assert!(
+            arguments
+                .get("metric")
+                .and_then(|values| values.first())
+                .is_some_and(|value| value.contains("\"kind\":\"numeric-extract\"")),
+            "workflow metric should hydrate command defaults"
+        );
+        assert!(raw_arguments.contains("--verify ./scripts/verify-autoresearch.sh"));
+        assert!(raw_arguments.contains("--iterations 6"));
+    }
+
+    #[test]
+    fn hydrate_scheduler_command_arguments_preserves_explicit_user_values() {
+        let registry = CommandRegistry::new();
+        let command = registry.get("autoresearch").expect("autoresearch command");
+        let invocation = command
+            .invocation
+            .as_ref()
+            .expect("autoresearch invocation");
+
+        let (arguments, raw_arguments) = hydrate_scheduler_command_arguments(
+            &AppConfig::default(),
+            command,
+            "--goal \"teacher demo goal\" --verify ./custom-verify.sh",
+            &invocation.argument_schema,
+        )
+        .expect("workflow defaults should merge with explicit arguments");
+
+        assert_eq!(
+            arguments.get("goal"),
+            Some(&vec!["teacher demo goal".to_string()])
+        );
+        assert_eq!(
+            arguments.get("verify"),
+            Some(&vec!["./custom-verify.sh".to_string()])
+        );
+        assert!(raw_arguments.contains("--goal \"teacher demo goal\""));
+        assert!(raw_arguments.contains("--verify ./custom-verify.sh"));
+        assert!(raw_arguments.contains("--guard"));
+        assert!(raw_arguments.contains("--iterations 6"));
     }
 }

@@ -1,4 +1,6 @@
 use crate::runtime::events::StepUsage;
+use crate::workflow_artifacts::{WorkflowModeArtifact, WorkflowModeArtifactEntry};
+use crate::workflow_mode::{mode_artifacts_from_metadata, WORKFLOW_MODE_ARTIFACTS_METADATA_KEY};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -149,6 +151,21 @@ pub fn append_continuation_target(
     }
 }
 
+pub(crate) fn append_workflow_mode_artifacts(
+    metadata: &mut HashMap<String, Value>,
+    artifacts: &[WorkflowModeArtifact],
+) {
+    let mut merged = mode_artifacts_from_metadata(metadata);
+    for artifact in artifacts {
+        merge_workflow_mode_artifact(&mut merged, artifact);
+    }
+    if merged.is_empty() {
+        metadata.remove(WORKFLOW_MODE_ARTIFACTS_METADATA_KEY);
+    } else if let Ok(value) = serde_json::to_value(merged) {
+        metadata.insert(WORKFLOW_MODE_ARTIFACTS_METADATA_KEY.to_string(), value);
+    }
+}
+
 pub fn merge_output_metadata(target: &mut HashMap<String, Value>, source: &HashMap<String, Value>) {
     for continuation in continuation_targets(source) {
         append_continuation_target(target, continuation);
@@ -156,11 +173,58 @@ pub fn merge_output_metadata(target: &mut HashMap<String, Value>, source: &HashM
     if let Some(usage) = output_usage(source) {
         append_output_usage(target, &usage);
     }
+    let mode_artifacts = mode_artifacts_from_metadata(source);
+    if !mode_artifacts.is_empty() {
+        append_workflow_mode_artifacts(target, &mode_artifacts);
+    }
+}
+
+fn merge_workflow_mode_artifact(
+    merged: &mut Vec<WorkflowModeArtifact>,
+    incoming: &WorkflowModeArtifact,
+) {
+    if let Some(existing) = merged
+        .iter_mut()
+        .find(|artifact| artifact.name == incoming.name)
+    {
+        if !incoming.description.trim().is_empty() {
+            existing.description = incoming.description.clone();
+        }
+        for entry in &incoming.entries {
+            merge_workflow_mode_entry(&mut existing.entries, entry);
+        }
+    } else {
+        merged.push(incoming.clone());
+    }
+}
+
+fn merge_workflow_mode_entry(
+    entries: &mut Vec<WorkflowModeArtifactEntry>,
+    incoming: &WorkflowModeArtifactEntry,
+) {
+    if let Some(existing) = entries.iter_mut().find(|entry| entry.key == incoming.key) {
+        existing.iteration = incoming.iteration.or(existing.iteration);
+        existing.status = incoming.status.clone();
+        if !incoming.title.trim().is_empty() {
+            existing.title = incoming.title.clone();
+        }
+        if !incoming.detail.trim().is_empty() {
+            existing.detail = incoming.detail.clone();
+        }
+        for evidence in &incoming.evidence {
+            if !existing.evidence.iter().any(|item| item == evidence) {
+                existing.evidence.push(evidence.clone());
+            }
+        }
+    } else {
+        entries.push(incoming.clone());
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn merge_output_metadata_accumulates_usage() {
@@ -200,5 +264,64 @@ mod tests {
                 cache_write_tokens: 5,
             }
         );
+    }
+
+    #[test]
+    fn merge_output_metadata_merges_workflow_mode_artifacts() {
+        let mut target = HashMap::from([(
+            WORKFLOW_MODE_ARTIFACTS_METADATA_KEY.to_string(),
+            json!([{
+                "name": "finding-registry",
+                "description": "base",
+                "entries": [{
+                    "iteration": 1,
+                    "key": "active-finding",
+                    "status": "open",
+                    "title": "Open finding",
+                    "detail": "base detail",
+                    "evidence": ["attack-scenario"]
+                }]
+            }]),
+        )]);
+        let source = HashMap::from([(
+            WORKFLOW_MODE_ARTIFACTS_METADATA_KEY.to_string(),
+            json!([{
+                "name": "finding-registry",
+                "description": "updated",
+                "entries": [
+                    {
+                        "iteration": 2,
+                        "key": "active-finding",
+                        "status": "verified",
+                        "title": "Verified finding",
+                        "detail": "updated detail",
+                        "evidence": ["file-line"]
+                    },
+                    {
+                        "iteration": 2,
+                        "key": "coverage-review",
+                        "status": "needs-evidence",
+                        "title": "Coverage review",
+                        "detail": "still incomplete",
+                        "evidence": ["required-evidence"]
+                    }
+                ]
+            }]),
+        )]);
+
+        merge_output_metadata(&mut target, &source);
+
+        let artifacts = mode_artifacts_from_metadata(&target);
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].description, "updated");
+        assert_eq!(artifacts[0].entries.len(), 2);
+        let finding = artifacts[0]
+            .entries
+            .iter()
+            .find(|entry| entry.key == "active-finding")
+            .expect("active finding should exist");
+        assert_eq!(finding.status, "verified");
+        assert!(finding.evidence.contains(&"attack-scenario".to_string()));
+        assert!(finding.evidence.contains(&"file-line".to_string()));
     }
 }

@@ -1,0 +1,2337 @@
+import {
+  type ChangeEvent,
+  type ClipboardEvent,
+  type DragEvent,
+  type FormEvent,
+  Suspense,
+  lazy,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { ComposerSection } from "./components/ComposerSection";
+import { ConversationFeedPanel } from "./components/ConversationFeedPanel";
+import { InteractionOverlays } from "./components/InteractionOverlays";
+import {
+  SessionSidebar,
+  type SessionTreeNode,
+  type WorkspaceSummary,
+} from "./components/SessionSidebar";
+import { WorkspacePanel } from "./components/WorkspacePanel";
+import { cn } from "./lib/utils";
+import { useConversationJump } from "./hooks/useConversationJump";
+import { useExecutionActivity } from "./hooks/useExecutionActivity";
+import { useSchedulerNavigation } from "./hooks/useSchedulerNavigation";
+import { useTerminalSessions } from "./hooks/useTerminalSessions";
+import { prepareComposerAttachments } from "./lib/composerAttachments";
+import {
+  attachmentContainsWorkspacePath,
+  attachmentLabel,
+  attachmentWorkspacePath,
+  appendReferenceToken,
+  droppedFiles,
+  extractPromptReferences,
+  fileUrlFromPath,
+  findFirstFile,
+  findNodeByPath,
+  guessWorkspaceMime,
+  parentDirectory,
+  removePromptReference,
+  resolveWorkspacePath,
+  toWorkspaceReferencePath,
+} from "./lib/composerContext";
+import {
+  FolderTreeIcon,
+  PanelLeftIcon,
+  PanelLeftCloseIcon,
+  SettingsIcon,
+} from "lucide-react";
+
+type ThemeId = "daylight" | "sunset" | "graphite" | "midnight";
+
+interface SessionRecord {
+  id: string;
+  title: string;
+  parent_id?: string;
+  directory?: string;
+  project_id?: string;
+  updated?: number;
+  metadata?: Record<string, unknown> | null;
+  time?: {
+    updated?: number;
+  };
+}
+
+interface ProviderModel {
+  id: string;
+  name?: string;
+}
+
+interface ProviderRecord {
+  id: string;
+  name: string;
+  models?: ProviderModel[];
+}
+
+interface KnownProviderEntry {
+  id: string;
+  name: string;
+  env: string[];
+  connected: boolean;
+}
+
+interface ConnectProtocolOption {
+  id: string;
+  name: string;
+}
+
+interface ExecutionMode {
+  id: string;
+  name: string;
+  kind: string;
+  hidden?: boolean;
+  mode?: string;
+}
+
+type PromptPart =
+  | {
+      type: "text";
+      text: string;
+    }
+  | {
+      type: "file";
+      url: string;
+      filename?: string;
+      mime?: string;
+    }
+  | {
+      type: "agent";
+      name: string;
+    }
+  | {
+      type: "subtask";
+      prompt: string;
+      description?: string;
+      agent: string;
+    };
+
+interface OutputField {
+  label?: string;
+  value?: string;
+  tone?: string;
+}
+
+interface OutputBlock {
+  kind: string;
+  phase?: string;
+  role?: string;
+  title?: string;
+  event?: string;
+  text?: string;
+  tone?: string;
+  silent?: boolean;
+  id?: string;
+  name?: string;
+  stage_id?: string;
+  status?: string;
+  summary?: string;
+  fields?: OutputField[];
+  preview?: string;
+  body?: string;
+  ts?: number;
+}
+
+interface MessagePart {
+  id: string;
+  type: string;
+  text?: string;
+  output_block?: OutputBlock;
+}
+
+interface MessageRecord {
+  id: string;
+  role: string;
+  parts?: MessagePart[];
+}
+
+interface FileTreeNode {
+  name: string;
+  path: string;
+  type: "file" | "directory";
+  size?: number | null;
+  modified?: number | null;
+  children?: FileTreeNode[];
+}
+
+interface FileContentResponse {
+  path: string;
+  content: string;
+}
+
+interface PathsResponse {
+  cwd: string;
+  home: string;
+  config: string;
+  data: string;
+}
+
+interface UploadedFileRecord {
+  name: string;
+  path: string;
+  size: number;
+  mime?: string;
+}
+
+interface UploadFilesResponse {
+  files: UploadedFileRecord[];
+}
+
+interface DirectoryCreateResponse {
+  path: string;
+}
+
+interface FeedMessage extends OutputBlock {
+  feedId: string;
+  text: string;
+}
+
+type SessionLiveBlockCache = Record<string, OutputBlock[]>;
+
+interface QuestionOption {
+  label: string;
+  description?: string;
+}
+
+interface QuestionItem {
+  question: string;
+  header?: string;
+  multiple?: boolean;
+  options?: QuestionOption[];
+}
+
+interface QuestionInteraction {
+  request_id: string;
+  session_id?: string;
+  questions: QuestionItem[];
+}
+
+interface PermissionInteraction {
+  permission_id: string;
+  session_id?: string;
+  message?: string;
+  permission?: string;
+  command?: string;
+  filepath?: string;
+  patterns?: string[];
+}
+
+interface PromptResponse {
+  status: string;
+  ok?: boolean;
+  session_id?: string;
+  pending_question_id?: string;
+  command?: string;
+  missing_fields?: string[];
+}
+
+interface PendingCommandInvocation {
+  command: string;
+  rawArguments?: string;
+  missingFields?: string[];
+  schedulerProfile?: string;
+  questionId?: string;
+}
+
+interface QuestionInfoResponse {
+  id: string;
+  session_id?: string;
+  sessionId?: string;
+  questions?: string[];
+  options?: string[][];
+  items?: Array<{
+    question: string;
+    header?: string;
+    multiple?: boolean;
+    options?: Array<{
+      label: string;
+      description?: string;
+    }>;
+  }>;
+}
+
+type QuestionAnswerValue = string | string[];
+
+const THEMES: Array<{ id: ThemeId; label: string }> = [
+  { id: "daylight", label: "Daylight" },
+  { id: "sunset", label: "Sunset" },
+  { id: "graphite", label: "Graphite" },
+  { id: "midnight", label: "Midnight" },
+];
+
+const SettingsDrawer = lazy(async () => {
+  const module = await import("./components/SettingsDrawer");
+  return { default: module.SettingsDrawer };
+});
+
+let feedSequence = 0;
+
+function nextFeedId() {
+  feedSequence += 1;
+  return `feed-${feedSequence}`;
+}
+
+async function api(path: string, options: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(options.headers);
+  if (!headers.has("Content-Type") && options.body) {
+    headers.set("Content-Type", "application/json");
+  }
+  const response = await fetch(path, { ...options, headers });
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return response;
+}
+
+async function apiJson<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const response = await api(path, options);
+  return response.json() as Promise<T>;
+}
+
+async function parseSSE(
+  response: Response,
+  onEvent: (eventName: string, data: unknown) => void,
+): Promise<void> {
+  if (!response.body) return;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let eventName: string | null = null;
+  let dataLines: string[] = [];
+
+  const flush = () => {
+    if (dataLines.length === 0) {
+      eventName = null;
+      return;
+    }
+    const data = dataLines.join("\n");
+    dataLines = [];
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(data);
+    } catch {
+      parsed = { raw: data };
+    }
+    onEvent(eventName ?? "message", parsed);
+    eventName = null;
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const rawLine of lines) {
+      const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+      if (!line) {
+        flush();
+        continue;
+      }
+      if (line.startsWith("event:")) {
+        eventName = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice(5).trimStart());
+      }
+    }
+  }
+
+  flush();
+}
+
+function normalizeSession(session: SessionRecord): SessionRecord {
+  return {
+    ...session,
+    title: session.title || "(untitled)",
+    updated: session.time?.updated ?? session.updated ?? Date.now(),
+  };
+}
+
+function normalizeSessions(sessions: SessionRecord[]): SessionRecord[] {
+  return (sessions ?? [])
+    .map(normalizeSession)
+    .sort((left, right) => (right.updated ?? 0) - (left.updated ?? 0));
+}
+
+function basenamePath(path: string): string {
+  const parts = path.split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? path;
+}
+
+function buildWorkspaceSummaries(
+  sessions: SessionRecord[],
+  serviceRootPath: string,
+): WorkspaceSummary[] {
+  const workspaces = new Map<
+    string,
+    {
+      path: string;
+      label: string;
+      sessionCount: number;
+      rootCount: number;
+      lastUpdated: number;
+    }
+  >();
+
+  for (const session of sessions) {
+    const path = session.directory?.trim();
+    if (!path) continue;
+    if (serviceRootPath && !path.startsWith(serviceRootPath)) continue;
+    const current = workspaces.get(path);
+    if (current) {
+      current.sessionCount += 1;
+      if (!session.parent_id) current.rootCount += 1;
+      current.lastUpdated = Math.max(current.lastUpdated, session.updated ?? 0);
+      continue;
+    }
+    workspaces.set(path, {
+      path,
+      label: basenamePath(path),
+      sessionCount: 1,
+      rootCount: session.parent_id ? 0 : 1,
+      lastUpdated: session.updated ?? 0,
+    });
+  }
+
+  return Array.from(workspaces.values())
+    .sort((left, right) => right.lastUpdated - left.lastUpdated)
+    .map(({ lastUpdated: _lastUpdated, ...workspace }) => workspace);
+}
+
+function buildSessionTree(
+  sessions: SessionRecord[],
+  workspacePath: string | null,
+): SessionTreeNode[] {
+  if (!workspacePath) return [];
+  const workspaceSessions = sessions.filter(
+    (session) => session.directory?.trim() === workspacePath,
+  );
+  if (workspaceSessions.length === 0) return [];
+
+  const sessionMap = new Map(workspaceSessions.map((session) => [session.id, session]));
+  const childMap = new Map<string, SessionRecord[]>();
+
+  for (const session of workspaceSessions) {
+    if (!session.parent_id || !sessionMap.has(session.parent_id)) continue;
+    const children = childMap.get(session.parent_id) ?? [];
+    children.push(session);
+    childMap.set(session.parent_id, children);
+  }
+
+  const sortByUpdated = (items: SessionRecord[]) =>
+    items.slice().sort((left, right) => (right.updated ?? 0) - (left.updated ?? 0));
+
+  const roots = sortByUpdated(
+    workspaceSessions.filter((session) => !session.parent_id || !sessionMap.has(session.parent_id)),
+  );
+
+  const visit = (session: SessionRecord): SessionTreeNode => ({
+    id: session.id,
+    title: session.title,
+    directory: session.directory,
+    updated: session.updated,
+    children: sortByUpdated(childMap.get(session.id) ?? []).map(visit),
+  });
+
+  return roots.map(visit);
+}
+
+function shellQuoteCommandValue(value: string): string {
+  if (!value) return '""';
+  if (/^[A-Za-z0-9/_.*:-]+$/.test(value)) return value;
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+function splitRepeatableAnswer(answer: string): string[] {
+  return answer
+    .split(/[\n,\t]/)
+    .flatMap((segment) => segment.split(/\s+/))
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function normalizeQuestionItems(input: unknown): QuestionItem[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((candidate) => {
+      const item = (candidate ?? {}) as Record<string, unknown>;
+      const options = Array.isArray(item.options)
+        ? item.options
+            .map((option) => {
+              if (typeof option === "string") {
+                return { label: option };
+              }
+              if (!option || typeof option !== "object") return null;
+              const record = option as Record<string, unknown>;
+              const label =
+                typeof record.label === "string"
+                  ? record.label
+                  : typeof record.value === "string"
+                    ? record.value
+                    : "";
+              if (!label) return null;
+              return {
+                label,
+                description:
+                  typeof record.description === "string" ? record.description : undefined,
+              };
+            })
+            .filter((option): option is QuestionOption => Boolean(option))
+        : undefined;
+      const question = typeof item.question === "string" ? item.question : "";
+      if (!question) return null;
+      return {
+        question,
+        header: typeof item.header === "string" ? item.header : undefined,
+        multiple: Boolean(item.multiple),
+        options,
+      };
+    })
+    .filter((item): item is QuestionItem => Boolean(item));
+}
+
+function questionInteractionFromInfo(info: QuestionInfoResponse): QuestionInteraction {
+  const items = normalizeQuestionItems(info.items);
+  if (items.length > 0) {
+    return {
+      request_id: info.id,
+      session_id:
+        typeof info.session_id === "string"
+          ? info.session_id
+          : typeof info.sessionId === "string"
+            ? info.sessionId
+            : undefined,
+      questions: items,
+    };
+  }
+  const questions = Array.isArray(info.questions) ? info.questions : [];
+  const options = Array.isArray(info.options) ? info.options : [];
+  return {
+    request_id: info.id,
+    session_id:
+      typeof info.session_id === "string"
+        ? info.session_id
+        : typeof info.sessionId === "string"
+          ? info.sessionId
+          : undefined,
+    questions: questions.map((question, index) => ({
+      question,
+      multiple: false,
+      options: Array.isArray(options[index])
+        ? options[index]
+            .map((label) => (typeof label === "string" && label ? { label } : null))
+            .filter((option): option is QuestionOption => Boolean(option))
+        : undefined,
+    })),
+  };
+}
+
+function pendingCommandFromSession(
+  session: SessionRecord,
+  questionId: string,
+): PendingCommandInvocation | null {
+  const pending = session.metadata?.pending_command_invocation;
+  if (!pending || typeof pending !== "object") return null;
+  const invocation = pending as PendingCommandInvocation;
+  if (invocation.questionId && invocation.questionId !== questionId) {
+    return null;
+  }
+  return invocation;
+}
+
+function normalizedAnswerValues(
+  answer: QuestionAnswerValue | undefined,
+  multiple: boolean,
+): string[] {
+  if (Array.isArray(answer)) {
+    return answer.map((value) => value.trim()).filter(Boolean);
+  }
+  const text = typeof answer === "string" ? answer.trim() : "";
+  if (!text) return [];
+  if (multiple || /[\n,\t]/.test(text)) {
+    return splitRepeatableAnswer(text);
+  }
+  return [text];
+}
+
+function mergePendingCommandArguments(
+  pending: PendingCommandInvocation,
+  answers: string[][],
+): string {
+  const parts: string[] = [];
+  const raw = pending.rawArguments?.trim() ?? "";
+  if (raw) parts.push(raw);
+  for (const [index, field] of (pending.missingFields ?? []).entries()) {
+    const values = (answers[index] ?? [])
+      .flatMap((value) =>
+        /[\n,\t]/.test(value) ? splitRepeatableAnswer(value) : [value],
+      )
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (!values.length) continue;
+    parts.push(`--${field}`);
+    parts.push(...values.map((value) => shellQuoteCommandValue(value)));
+  }
+  return parts.join(" ").trim();
+}
+
+function promptPreviewText(content: string, parts: PromptPart[]): string {
+  const trimmed = content.trim();
+  if (trimmed) return trimmed;
+  const attachmentCount = parts.filter((part) => part.type !== "text").length;
+  if (attachmentCount === 0) return "";
+  return attachmentCount === 1 ? "[1 attachment]" : `[${attachmentCount} attachments]`;
+}
+
+function normalizeBlockText(block: OutputBlock): string {
+  if (block.text?.trim()) return block.text;
+  if (block.summary?.trim()) return block.summary;
+  if (block.preview?.trim()) return block.preview;
+  if (block.body?.trim()) return block.body;
+  if (block.fields?.length) {
+    return block.fields
+      .map((field) => `${field.label ?? "Field"}: ${String(field.value ?? "")}`)
+      .join("\n");
+  }
+  return "";
+}
+
+function toFeedMessage(block: OutputBlock): FeedMessage {
+  return {
+    ...block,
+    feedId: nextFeedId(),
+    text: normalizeBlockText(block),
+  };
+}
+
+function upsertFeedMessage(
+  messages: FeedMessage[],
+  block: OutputBlock,
+  overrides: Partial<FeedMessage> = {},
+): FeedMessage[] {
+  if (!block.id) {
+    return [...messages, { ...toFeedMessage(block), ...overrides }];
+  }
+
+  const index = messages.findIndex(
+    (message) => message.kind === block.kind && message.id === block.id,
+  );
+  if (index < 0) {
+    return [...messages, { ...toFeedMessage(block), ...overrides }];
+  }
+
+  const next = [...messages];
+  next[index] = {
+    ...next[index],
+    ...block,
+    ...overrides,
+    feedId: next[index].feedId,
+  };
+  return next;
+}
+
+function updateLastMatchingMessage(
+  messages: FeedMessage[],
+  predicate: (message: FeedMessage) => boolean,
+  incomingText: string,
+): FeedMessage[] {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const candidate = messages[index];
+    if (!predicate(candidate)) continue;
+    const next = [...messages];
+    next[index] = { ...candidate, text: `${candidate.text}${incomingText}` };
+    return next;
+  }
+  return messages;
+}
+
+function appendStreamingDelta(
+  messages: FeedMessage[],
+  block: OutputBlock,
+  predicate: (message: FeedMessage) => boolean,
+): FeedMessage[] {
+  const incomingText = block.text ?? "";
+  if (block.id) {
+    const index = messages.findIndex(
+      (message) => message.kind === block.kind && message.id === block.id,
+    );
+    if (index >= 0) {
+      const next = [...messages];
+      const candidate = next[index];
+      next[index] = {
+        ...candidate,
+        ...block,
+        text: `${candidate.text}${incomingText}`,
+        feedId: candidate.feedId,
+      };
+      return next;
+    }
+
+    return [
+      ...messages,
+      {
+        ...toFeedMessage({ ...block, text: incomingText }),
+        text: incomingText,
+      },
+    ];
+  }
+
+  return updateLastMatchingMessage(messages, predicate, incomingText);
+}
+
+function applyOutputBlock(
+  messages: FeedMessage[],
+  block: OutputBlock,
+  showThinking: boolean,
+): FeedMessage[] {
+  if (block.kind === "reasoning" && !showThinking) {
+    return messages;
+  }
+  if (block.kind === "status" && block.silent) {
+    return messages;
+  }
+
+  if (block.kind === "message") {
+    if (block.phase === "start") {
+      return upsertFeedMessage(messages, block, { text: "" });
+    }
+    if (block.phase === "delta") {
+      return appendStreamingDelta(
+        messages,
+        block,
+        (message) => message.kind === "message" && message.role === block.role,
+      );
+    }
+    if (block.phase === "end") {
+      return messages;
+    }
+    return [...messages, toFeedMessage(block)];
+  }
+
+  if (block.kind === "reasoning") {
+    if (block.phase === "start") {
+      return upsertFeedMessage(messages, block, { text: "" });
+    }
+    if (block.phase === "delta") {
+      return appendStreamingDelta(
+        messages,
+        block,
+        (message) => message.kind === "reasoning",
+      );
+    }
+    if (block.phase === "end") {
+      return messages;
+    }
+    return [...messages, toFeedMessage(block)];
+  }
+
+  if (block.id) {
+    return upsertFeedMessage(messages, block, {
+      text: normalizeBlockText(block),
+    });
+  }
+
+  return [...messages, toFeedMessage(block)];
+}
+
+function buildFeedFromHistory(history: MessageRecord[], showThinking: boolean): FeedMessage[] {
+  feedSequence = 0;
+  let messages: FeedMessage[] = [];
+
+  for (const message of history || []) {
+    let startedReasoning = false;
+    let startedText = false;
+
+    for (const part of message.parts ?? []) {
+      if (part.output_block) {
+        messages = applyOutputBlock(messages, part.output_block, showThinking);
+        continue;
+      }
+
+      if (part.type === "reasoning" && part.text) {
+        const blockId = `${message.id}:reasoning`;
+        if (!startedReasoning) {
+          messages = applyOutputBlock(
+            messages,
+            {
+              id: blockId,
+              kind: "reasoning",
+              phase: "start",
+              role: message.role,
+              text: "",
+            },
+            showThinking,
+          );
+          startedReasoning = true;
+        }
+        messages = applyOutputBlock(
+          messages,
+          {
+            id: blockId,
+            kind: "reasoning",
+            phase: "delta",
+            role: message.role,
+            text: part.text,
+          },
+          showThinking,
+        );
+        continue;
+      }
+
+      if (part.type === "text" && part.text) {
+        const blockId = `${message.id}:message`;
+        if (!startedText) {
+          messages = applyOutputBlock(
+            messages,
+            {
+              id: blockId,
+              kind: "message",
+              phase: "start",
+              role: message.role,
+              text: "",
+            },
+            showThinking,
+          );
+          startedText = true;
+        }
+        messages = applyOutputBlock(
+          messages,
+          {
+            id: blockId,
+            kind: "message",
+            phase: "delta",
+            role: message.role,
+            text: part.text,
+          },
+          showThinking,
+        );
+      }
+    }
+
+    if (startedReasoning) {
+      messages = applyOutputBlock(
+        messages,
+        {
+          id: `${message.id}:reasoning`,
+          kind: "reasoning",
+          phase: "end",
+          role: message.role,
+          text: "",
+        },
+        showThinking,
+      );
+    }
+
+    if (startedText) {
+      messages = applyOutputBlock(
+        messages,
+        {
+          id: `${message.id}:message`,
+          kind: "message",
+          phase: "end",
+          role: message.role,
+          text: "",
+        },
+        showThinking,
+      );
+    }
+  }
+
+  return messages;
+}
+
+function shouldRetainLiveBlock(block: OutputBlock): boolean {
+  return Boolean(block.id && block.kind !== "message" && block.kind !== "reasoning");
+}
+
+function appendLiveBlock(blocks: OutputBlock[], block: OutputBlock): OutputBlock[] {
+  if (!shouldRetainLiveBlock(block)) {
+    return blocks;
+  }
+
+  const next = blocks.slice();
+  const existingIndex = next.findIndex(
+    (candidate) => candidate.kind === block.kind && candidate.id === block.id,
+  );
+  if (existingIndex >= 0) {
+    next[existingIndex] = block;
+    return next;
+  }
+  next.push(block);
+  return next;
+}
+
+function mergeHistoryWithLiveBlocks(
+  history: MessageRecord[],
+  liveBlocks: OutputBlock[],
+  showThinking: boolean,
+): FeedMessage[] {
+  return liveBlocks.reduce(
+    (current, block) => applyOutputBlock(current, block, showThinking),
+    buildFeedFromHistory(history, showThinking),
+  );
+}
+
+function modeKey(mode: ExecutionMode): string {
+  return `${mode.kind}:${mode.id}`;
+}
+
+function applyPreferences(config: Record<string, unknown>) {
+  const ui = (config.uiPreferences ?? config.ui_preferences ?? {}) as Record<string, unknown>;
+  return {
+    theme: String(ui.webTheme ?? ui.web_theme ?? "daylight") as ThemeId,
+    mode: String(ui.webMode ?? ui.web_mode ?? ""),
+    model: String(ui.webModel ?? ui.web_model ?? ""),
+    showThinking: Boolean(ui.showThinking ?? ui.show_thinking ?? false),
+  };
+}
+
+function flattenModels(providers: ProviderRecord[]) {
+  return providers.flatMap((provider) =>
+    (provider.models ?? []).map((model) => ({
+      key: `${provider.id}/${model.id}`,
+      label: `${provider.name} / ${model.name || model.id}`,
+    })),
+  );
+}
+
+function formatError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return "Unknown error";
+}
+
+function findLastMessage(messages: FeedMessage[], predicate: (message: FeedMessage) => boolean) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (predicate(messages[index])) return messages[index];
+  }
+  return null;
+}
+
+export default function App() {
+  const [sessions, setSessions] = useState<SessionRecord[]>([]);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<FeedMessage[]>([]);
+  const [composer, setComposer] = useState("");
+  const [attachments, setAttachments] = useState<PromptPart[]>([]);
+  const [providers, setProviders] = useState<ProviderRecord[]>([]);
+  const [knownProviders, setKnownProviders] = useState<KnownProviderEntry[]>([]);
+  const [connectProtocols, setConnectProtocols] = useState<ConnectProtocolOption[]>([]);
+  const [modes, setModes] = useState<ExecutionMode[]>([]);
+  const [selectedModel, setSelectedModel] = useState("");
+  const [selectedMode, setSelectedMode] = useState("");
+  const [connectProviderId, setConnectProviderId] = useState("");
+  const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
+  const [rightSidebarOpen, setRightSidebarOpen] = useState(true);
+  const [connectProtocol, setConnectProtocol] = useState("");
+  const [connectApiKey, setConnectApiKey] = useState("");
+  const [connectBaseUrl, setConnectBaseUrl] = useState("");
+  const [connectBusy, setConnectBusy] = useState(false);
+  const [theme, setTheme] = useState<ThemeId>("daylight");
+  const [showThinking, setShowThinking] = useState(false);
+  const [streaming, setStreaming] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [statusLine, setStatusLine] = useState("ready");
+  const [banner, setBanner] = useState<string | null>(null);
+  const [question, setQuestion] = useState<QuestionInteraction | null>(null);
+  const [permission, setPermission] = useState<PermissionInteraction | null>(null);
+  const [questionAnswers, setQuestionAnswers] = useState<Record<number, QuestionAnswerValue>>({});
+  const [questionSubmitting, setQuestionSubmitting] = useState(false);
+  const [permissionSubmitting, setPermissionSubmitting] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [composerDragActive, setComposerDragActive] = useState(false);
+  const [selectedAttachmentIndex, setSelectedAttachmentIndex] = useState<number | null>(null);
+  const [terminalExpanded, setTerminalExpanded] = useState(false);
+  const [fileTree, setFileTree] = useState<FileTreeNode | null>(null);
+  const [serviceRootPath, setServiceRootPath] = useState("");
+  const [currentWorkspacePath, setCurrentWorkspacePath] = useState<string | null>(null);
+  const [workspaceRootPath, setWorkspaceRootPath] = useState("");
+  const [workspaceLoading, setWorkspaceLoading] = useState(false);
+  const [selectedWorkspacePath, setSelectedWorkspacePath] = useState<string | null>(null);
+  const [selectedWorkspaceType, setSelectedWorkspaceType] = useState<"file" | "directory">(
+    "directory",
+  );
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
+  const [selectedFileContent, setSelectedFileContent] = useState("");
+  const [savedFileContent, setSavedFileContent] = useState("");
+  const [fileLoading, setFileLoading] = useState(false);
+  const [fileSaving, setFileSaving] = useState(false);
+  const [fileDeleting, setFileDeleting] = useState(false);
+  const [fileUploading, setFileUploading] = useState(false);
+  const [workspaceReloadToken, setWorkspaceReloadToken] = useState(0);
+  const [pendingWorkspaceSelection, setPendingWorkspaceSelection] = useState<{
+    path: string;
+    type: "file" | "directory";
+  } | null>(null);
+  const feedRef = useRef<HTMLDivElement | null>(null);
+  const preferencesReadyRef = useRef(false);
+  const selectedSessionRef = useRef<string | null>(null);
+  const liveBlocksRef = useRef<SessionLiveBlockCache>({});
+
+  const modelOptions = useMemo(() => flattenModels(providers), [providers]);
+  const settingsModeOptions = useMemo(
+    () =>
+      modes.map((mode) => ({
+        key: modeKey(mode),
+        label: mode.kind === "agent" ? mode.name : `${mode.kind}:${mode.name}`,
+      })),
+    [modes],
+  );
+  const composerReferences = useMemo(() => extractPromptReferences(composer), [composer]);
+  const currentSession = useMemo(() => sessions.find((session) => session.id === selectedSessionId) ?? null, [selectedSessionId, sessions]);
+  const workspaceSummaries = useMemo(
+    () => buildWorkspaceSummaries(sessions, serviceRootPath),
+    [serviceRootPath, sessions],
+  );
+  const currentWorkspaceSummary = useMemo(
+    () =>
+      workspaceSummaries.find((workspace) => workspace.path === currentWorkspacePath) ??
+      workspaceSummaries[0] ??
+      null,
+    [currentWorkspacePath, workspaceSummaries],
+  );
+  const sessionTree = useMemo(
+    () => buildSessionTree(sessions, currentWorkspaceSummary?.path ?? null),
+    [currentWorkspaceSummary?.path, sessions],
+  );
+  const selectedAttachment = (selectedAttachmentIndex !== null && attachments[selectedAttachmentIndex]) || attachments[attachments.length - 1] || null;
+  const workspaceDirty = Boolean(selectedFilePath) && selectedFileContent !== savedFileContent;
+  const workspaceBasePath =
+    currentSession?.directory?.trim() ||
+    currentWorkspaceSummary?.path ||
+    workspaceRootPath ||
+    serviceRootPath ||
+    "";
+  const workspaceTargetDirectory =
+    selectedWorkspaceType === "directory" && selectedWorkspacePath
+      ? selectedWorkspacePath
+      : selectedFilePath
+        ? parentDirectory(selectedFilePath) || workspaceBasePath
+        : workspaceBasePath;
+  const selectedWorkspaceReference = selectedWorkspacePath ? toWorkspaceReferencePath(selectedWorkspacePath, workspaceBasePath || workspaceRootPath) : null;
+  const selectedWorkspaceFilename = selectedWorkspacePath ? selectedWorkspacePath.split("/").filter(Boolean).pop() || selectedWorkspacePath : null;
+  const selectedWorkspaceIsRoot = Boolean(selectedWorkspacePath) && selectedWorkspaceType === "directory" && selectedWorkspacePath === (workspaceRootPath || workspaceBasePath);
+  const executionActivity = useExecutionActivity({
+    selectedSessionId,
+    apiJson,
+    onError: setBanner,
+    onInfo: setBanner,
+  });
+  const refreshExecutionActivity = executionActivity.refreshExecutionActivity;
+  const conversationJump = useConversationJump({
+    messages,
+    feedRef,
+    onMiss: setBanner,
+  });
+  const schedulerNavigation = useSchedulerNavigation({
+    sessions,
+    selectedSessionId,
+    currentSession,
+    setSessions,
+    setSelectedSessionId,
+    apiJson,
+    setBanner,
+    executionActivity,
+    jumpToConversationTarget: conversationJump.jumpOrQueueConversationTarget,
+    queueConversationJumpTarget: conversationJump.queueConversationJumpTarget,
+  });
+  const workspaceLinkLabel = schedulerNavigation.activeStageId ? `stage ${schedulerNavigation.activeStageId}` : schedulerNavigation.currentBreadcrumbProvenance?.toolCallId ? `tool ${schedulerNavigation.currentBreadcrumbProvenance.toolCallId}` : schedulerNavigation.currentBreadcrumbProvenance?.stageId ? `stage ${schedulerNavigation.currentBreadcrumbProvenance.stageId}` : null;
+  const workspaceLinkStageId = schedulerNavigation.activeStageId ?? schedulerNavigation.currentBreadcrumbProvenance?.stageId ?? null;
+  const terminalSessions = useTerminalSessions({
+    api,
+    apiJson,
+    setBanner,
+    enabled: terminalExpanded,
+    defaultCwd: workspaceBasePath || currentSession?.directory || "",
+  });
+
+  const loadPendingQuestion = async (requestId: string, sessionId?: string | null) => {
+    const questions = await apiJson<QuestionInfoResponse[]>("/question");
+    const pending = (questions ?? []).find((candidate) => candidate.id === requestId);
+    if (!pending) return;
+    const interaction = questionInteractionFromInfo(pending);
+    if (sessionId && interaction.session_id && interaction.session_id !== sessionId) {
+      return;
+    }
+    setQuestion(interaction);
+    setQuestionAnswers({});
+  };
+
+  const sendPromptRequest = async (
+    sessionId: string,
+    payload: Record<string, unknown>,
+  ): Promise<PromptResponse> =>
+    apiJson<PromptResponse>(`/session/${sessionId}/prompt`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+
+  const fetchSessions = async (): Promise<SessionRecord[]> => {
+    const sessionData = await apiJson<SessionRecord[]>("/session?limit=500");
+    return normalizeSessions(sessionData ?? []);
+  };
+
+  const reloadCoreSettingsData = async () => {
+    try {
+      const [providersData, modeData, connectSchema] = await Promise.all([
+        apiJson<{ providers?: ProviderRecord[]; all?: ProviderRecord[] }>("/config/providers"),
+        apiJson<ExecutionMode[]>("/mode"),
+        apiJson<{ providers: KnownProviderEntry[]; protocols: ConnectProtocolOption[] }>(
+          "/provider/connect/schema",
+        ),
+      ]);
+      setProviders(providersData.providers ?? providersData.all ?? []);
+      setKnownProviders(connectSchema.providers ?? []);
+      setConnectProtocols(connectSchema.protocols ?? []);
+      setModes(
+        (modeData ?? [])
+          .filter((mode) => mode.hidden !== true)
+          .filter((mode) => mode.kind !== "agent" || mode.mode !== "subagent"),
+      );
+    } catch (error) {
+      setBanner(`Failed to refresh config data: ${formatError(error)}`);
+    }
+  };
+
+  useEffect(() => {
+    if (!selectedWorkspacePath) return;
+    const nextIndex = attachments.findIndex((attachment) =>
+      attachmentContainsWorkspacePath(attachment, selectedWorkspacePath),
+    );
+    if (nextIndex >= 0 && nextIndex !== selectedAttachmentIndex) {
+      setSelectedAttachmentIndex(nextIndex);
+    }
+  }, [attachments, selectedAttachmentIndex, selectedWorkspacePath]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
+
+  useEffect(() => {
+    selectedSessionRef.current = selectedSessionId;
+  }, [selectedSessionId]);
+
+  useEffect(() => {
+    const selectedWorkspace = currentSession?.directory?.trim();
+    if (selectedWorkspace) {
+      setCurrentWorkspacePath(selectedWorkspace);
+      return;
+    }
+    setCurrentWorkspacePath((current) => {
+      if (current && workspaceSummaries.some((workspace) => workspace.path === current)) {
+        return current;
+      }
+      return workspaceSummaries[0]?.path ?? serviceRootPath ?? null;
+    });
+  }, [currentSession?.directory, serviceRootPath, workspaceSummaries]);
+
+  useEffect(() => {
+    if (!feedRef.current) return;
+    feedRef.current.scrollTop = feedRef.current.scrollHeight;
+  }, [messages]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadBootstrap = async () => {
+      try {
+        const [sessionData, providersData, modeData, config, connectSchema, paths] = await Promise.all([
+          fetchSessions(),
+          apiJson<{ providers?: ProviderRecord[]; all?: ProviderRecord[] }>("/config/providers"),
+          apiJson<ExecutionMode[]>("/mode"),
+          apiJson<Record<string, unknown>>("/config"),
+          apiJson<{ providers: KnownProviderEntry[]; protocols: ConnectProtocolOption[] }>(
+            "/provider/connect/schema",
+          ),
+          apiJson<PathsResponse>("/path"),
+        ]);
+
+        if (cancelled) return;
+
+        const nextProviders = providersData.providers ?? providersData.all ?? [];
+        const nextModes = (modeData ?? [])
+          .filter((mode) => mode.hidden !== true)
+          .filter((mode) => mode.kind !== "agent" || mode.mode !== "subagent");
+        const prefs = applyPreferences(config);
+
+        setServiceRootPath(paths.cwd || "");
+        setSessions(sessionData);
+        setProviders(nextProviders);
+        setKnownProviders(connectSchema.providers ?? []);
+        setConnectProtocols(connectSchema.protocols ?? []);
+        setModes(nextModes);
+        setTheme(THEMES.some((item) => item.id === prefs.theme) ? prefs.theme : "daylight");
+        setSelectedMode(prefs.mode);
+        setSelectedModel(prefs.model);
+        setShowThinking(prefs.showThinking);
+        setConnectProviderId((current) => current || connectSchema.providers?.[0]?.id || "");
+        setConnectProtocol((current) => current || connectSchema.protocols?.[0]?.id || "");
+        setSelectedSessionId((current) => current ?? sessionData[0]?.id ?? null);
+        preferencesReadyRef.current = true;
+      } catch (error) {
+        if (!cancelled) {
+          setBanner(`Bootstrap failed: ${formatError(error)}`);
+        }
+      }
+    };
+
+    void loadBootstrap();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!preferencesReadyRef.current) return;
+    const timer = window.setTimeout(() => {
+      void api("/config", {
+        method: "PATCH",
+        body: JSON.stringify({
+          uiPreferences: {
+            webTheme: theme,
+            webMode: selectedMode || null,
+            webModel: selectedModel || null,
+            showThinking,
+          },
+        }),
+      }).catch((error) => {
+        setBanner(`Failed to persist settings: ${formatError(error)}`);
+      });
+    }, 150);
+
+    return () => window.clearTimeout(timer);
+  }, [theme, selectedMode, selectedModel, showThinking]);
+
+  useEffect(() => {
+    if (!selectedSessionId) {
+      setMessages([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadHistory = async () => {
+      setHistoryLoading(true);
+      try {
+        const history = await apiJson<MessageRecord[]>(`/session/${selectedSessionId}/message`);
+        if (cancelled) return;
+        setMessages(
+          mergeHistoryWithLiveBlocks(
+            history,
+            liveBlocksRef.current[selectedSessionId] ?? [],
+            showThinking,
+          ),
+        );
+      } catch (error) {
+        if (!cancelled) {
+          setBanner(`Failed to load messages: ${formatError(error)}`);
+        }
+      } finally {
+        if (!cancelled) {
+          setHistoryLoading(false);
+        }
+      }
+    };
+
+    void loadHistory();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSessionId, showThinking]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadTree = async () => {
+      setWorkspaceLoading(true);
+      setFileTree(null);
+      setSelectedWorkspacePath(null);
+      setSelectedWorkspaceType("directory");
+      setSelectedFilePath(null);
+      setSelectedFileContent("");
+      setSavedFileContent("");
+
+      try {
+        const query =
+          currentSession?.directory && currentSession.directory.trim()
+            ? `?path=${encodeURIComponent(currentSession.directory)}`
+            : "";
+        const tree = await apiJson<FileTreeNode>(`/file/tree${query}`);
+        if (cancelled) return;
+        setFileTree(tree);
+        setWorkspaceRootPath(tree.path);
+        const preferredNode = pendingWorkspaceSelection
+          ? findNodeByPath(tree, pendingWorkspaceSelection.path)
+          : null;
+        const fallbackFilePath = findFirstFile(tree);
+        const fallbackNode = fallbackFilePath ? findNodeByPath(tree, fallbackFilePath) : tree;
+        const nextNode = preferredNode ?? fallbackNode;
+
+        setSelectedWorkspacePath(nextNode?.path ?? null);
+        setSelectedWorkspaceType(nextNode?.type ?? "directory");
+        setSelectedFilePath(nextNode?.type === "file" ? nextNode.path : null);
+        setPendingWorkspaceSelection(null);
+      } catch (error) {
+        if (!cancelled) {
+          setBanner(`Failed to load workspace tree: ${formatError(error)}`);
+          setWorkspaceRootPath(currentSession?.directory || "");
+        }
+      } finally {
+        if (!cancelled) {
+          setWorkspaceLoading(false);
+        }
+      }
+    };
+
+    void loadTree();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSession?.directory, selectedSessionId, workspaceReloadToken]);
+
+  useEffect(() => {
+    if (!selectedFilePath) {
+      setSelectedFileContent("");
+      setSavedFileContent("");
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadFile = async () => {
+      setFileLoading(true);
+      try {
+        const response = await apiJson<FileContentResponse>(
+          `/file/content?path=${encodeURIComponent(selectedFilePath)}`,
+        );
+        if (cancelled) return;
+        setSelectedFileContent(response.content ?? "");
+        setSavedFileContent(response.content ?? "");
+      } catch (error) {
+        if (!cancelled) {
+          setBanner(`Failed to read file: ${formatError(error)}`);
+        }
+      } finally {
+        if (!cancelled) {
+          setFileLoading(false);
+        }
+      }
+    };
+
+    void loadFile();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedFilePath]);
+
+  useEffect(() => {
+    let active = true;
+    let controller: AbortController | null = null;
+
+    const refreshSessions = async () => {
+      try {
+        const sessionData = await fetchSessions();
+        if (!active) return;
+        setSessions(sessionData);
+        setSelectedSessionId((current) => {
+          if (current && sessionData.some((session) => session.id === current)) {
+            return current;
+          }
+          return sessionData[0]?.id ?? null;
+        });
+      } catch (error) {
+        if (active) {
+          setBanner(`Failed to refresh sessions: ${formatError(error)}`);
+        }
+      }
+    };
+
+    const reloadProvidersAndModes = async () => {
+      try {
+        const [providersData, modeData, connectSchema] = await Promise.all([
+          apiJson<{ providers?: ProviderRecord[]; all?: ProviderRecord[] }>("/config/providers"),
+          apiJson<ExecutionMode[]>("/mode"),
+          apiJson<{ providers: KnownProviderEntry[]; protocols: ConnectProtocolOption[] }>(
+            "/provider/connect/schema",
+          ),
+        ]);
+        if (!active) return;
+        setProviders(providersData.providers ?? providersData.all ?? []);
+        setKnownProviders(connectSchema.providers ?? []);
+        setConnectProtocols(connectSchema.protocols ?? []);
+        setModes(
+          (modeData ?? [])
+            .filter((mode) => mode.hidden !== true)
+            .filter((mode) => mode.kind !== "agent" || mode.mode !== "subagent"),
+        );
+      } catch (error) {
+        if (active) {
+          setBanner(`Failed to refresh config data: ${formatError(error)}`);
+        }
+      }
+    };
+
+    const handleServerEvent = (payload: unknown) => {
+      const event = payload as Record<string, unknown>;
+      const type = typeof event.type === "string" ? event.type : "";
+      const eventSessionId =
+        typeof event.sessionID === "string"
+          ? event.sessionID
+          : typeof event.session_id === "string"
+            ? event.session_id
+            : undefined;
+
+      if (type === "output_block" && eventSessionId === selectedSessionRef.current) {
+        const rawBlock = event.block as OutputBlock | undefined;
+        const block = rawBlock
+          ? {
+              ...rawBlock,
+              id:
+                typeof rawBlock.id === "string"
+                  ? rawBlock.id
+                  : typeof event.id === "string"
+                    ? event.id
+                    : undefined,
+            }
+          : undefined;
+        if (!block) return;
+        liveBlocksRef.current = {
+          ...liveBlocksRef.current,
+          [eventSessionId]: appendLiveBlock(liveBlocksRef.current[eventSessionId] ?? [], block),
+        };
+        setMessages((current) => applyOutputBlock(current, block, showThinking));
+        return;
+      }
+
+      if (type === "error" && eventSessionId === selectedSessionRef.current) {
+        setMessages((current) =>
+          applyOutputBlock(
+            current,
+            {
+              kind: "status",
+              tone: "error",
+              text: String(event.error ?? "Unknown error"),
+            },
+            showThinking,
+          ),
+        );
+        setStreaming(false);
+        setStatusLine("idle");
+        return;
+      }
+
+      if (type === "session.updated") {
+        void refreshSessions();
+        return;
+      }
+
+      if (type === "config.updated") {
+        void reloadProvidersAndModes();
+        return;
+      }
+
+      if (type === "session.status" && eventSessionId === selectedSessionRef.current) {
+        const status = String(event.status ?? "");
+        if (status === "idle" || status === "complete" || status === "error") {
+          setStreaming(false);
+          setStatusLine(status || "idle");
+        }
+        return;
+      }
+
+      if (type === "question.created" && eventSessionId === selectedSessionRef.current) {
+        const requestId = String(event.requestID ?? "");
+        setQuestion(
+          questionInteractionFromInfo({
+            id: requestId,
+            session_id: eventSessionId,
+            items:
+              Array.isArray(event.questions) &&
+              event.questions.some((candidate) => candidate && typeof candidate === "object")
+                ? (event.questions as QuestionInfoResponse["items"])
+                : [],
+            questions:
+              Array.isArray(event.questions) &&
+              event.questions.every((candidate) => typeof candidate === "string")
+                ? (event.questions as string[])
+                : undefined,
+          }),
+        );
+        setQuestionAnswers({});
+        setStreaming(false);
+        setStatusLine("awaiting_user");
+        return;
+      }
+
+      if (type === "question.resolved" && eventSessionId === selectedSessionRef.current) {
+        setQuestion(null);
+        setQuestionAnswers({});
+        setQuestionSubmitting(false);
+        return;
+      }
+
+      if (type === "execution.topology.changed" && eventSessionId === selectedSessionRef.current) {
+        void refreshExecutionActivity(eventSessionId);
+        return;
+      }
+
+      if (type === "permission.requested" && eventSessionId === selectedSessionRef.current) {
+        const info = (event.info ?? {}) as Record<string, unknown>;
+        setPermission({
+          permission_id: String(event.permissionID ?? ""),
+          session_id: eventSessionId,
+          message: typeof info.message === "string" ? info.message : undefined,
+          permission: typeof info.tool === "string" ? info.tool : undefined,
+          command:
+            typeof info.input === "object" &&
+            info.input &&
+            typeof (info.input as Record<string, unknown>).command === "string"
+              ? ((info.input as Record<string, unknown>).command as string)
+              : undefined,
+          filepath:
+            typeof info.input === "object" &&
+            info.input &&
+            Array.isArray((info.input as Record<string, unknown>).patterns)
+              ? String(((info.input as Record<string, unknown>).patterns as unknown[])[0] ?? "")
+              : undefined,
+        });
+        return;
+      }
+
+      if (type === "permission.resolved" && eventSessionId === selectedSessionRef.current) {
+        setPermission(null);
+        setPermissionSubmitting(false);
+      }
+    };
+
+    const connect = async () => {
+      while (active) {
+        controller = new AbortController();
+        try {
+          const response = await fetch("/event", {
+            headers: { Accept: "text/event-stream" },
+            signal: controller.signal,
+          });
+          if (!response.ok) {
+            throw new Error(`${response.status} ${response.statusText}`);
+          }
+          await parseSSE(response, (_eventName, payload) => handleServerEvent(payload));
+        } catch (error) {
+          if (!active || controller.signal.aborted) return;
+          setStatusLine("reconnecting");
+          await new Promise((resolve) => window.setTimeout(resolve, 1500));
+        }
+      }
+    };
+
+    void connect();
+    return () => {
+      active = false;
+      controller?.abort();
+    };
+  }, [refreshExecutionActivity, showThinking]);
+
+  const createSession = async (options?: {
+    directory?: string;
+    title?: string;
+    projectId?: string;
+  }) => {
+    const created = await apiJson<SessionRecord>("/session", {
+      method: "POST",
+      body: JSON.stringify({
+        directory: options?.directory,
+        title: options?.title,
+        project_id: options?.projectId,
+      }),
+    });
+    const normalized = normalizeSession(created);
+    setSessions((current) =>
+      normalizeSessions([normalized, ...current.filter((item) => item.id !== normalized.id)]),
+    );
+    setCurrentWorkspacePath(normalized.directory?.trim() || options?.directory || null);
+    setSelectedSessionId(normalized.id);
+    return normalized.id;
+  };
+
+  const selectWorkspace = (workspacePath: string) => {
+    setCurrentWorkspacePath(workspacePath);
+    const workspaceSessions = sessions
+      .filter((session) => session.directory?.trim() === workspacePath)
+      .sort((left, right) => (right.updated ?? 0) - (left.updated ?? 0));
+    const preferred =
+      workspaceSessions.find((session) => !session.parent_id) ?? workspaceSessions[0] ?? null;
+    if (preferred) {
+      setSelectedSessionId(preferred.id);
+    }
+  };
+
+  const createProject = async (input: { path: string; title?: string }) => {
+    const baseRoot = serviceRootPath || workspaceBasePath || workspaceRootPath;
+    const targetPath = resolveWorkspacePath(baseRoot, input.path);
+    if (!targetPath) {
+      setBanner("Project path is required");
+      return;
+    }
+
+    try {
+      const directory = await apiJson<DirectoryCreateResponse>("/file/directory", {
+        method: "POST",
+        body: JSON.stringify({ path: targetPath }),
+      });
+      const folderName = basenamePath(directory.path);
+      await createSession({
+        directory: directory.path,
+        projectId: folderName,
+        title: input.title || `${folderName} workspace`,
+      });
+      setPendingWorkspaceSelection({ path: directory.path, type: "directory" });
+      setWorkspaceReloadToken((current) => current + 1);
+      setBanner(`Created project ${folderName}`);
+    } catch (error) {
+      setBanner(`Failed to create project: ${formatError(error)}`);
+    }
+  };
+
+  const submitPrompt = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const content = composer.trim();
+    const promptParts = attachments;
+    if ((!content && promptParts.length === 0) || streaming) return;
+
+    setBanner(null);
+
+    let sessionId = selectedSessionRef.current;
+    if (!sessionId) {
+      try {
+        sessionId = await createSession();
+      } catch (error) {
+        setBanner(`Failed to create session: ${formatError(error)}`);
+        return;
+      }
+    }
+
+    const preview = promptPreviewText(content, promptParts);
+    setMessages((current) =>
+      applyOutputBlock(
+        current,
+        {
+          kind: "message",
+          phase: "full",
+          role: "user",
+          text: preview,
+        },
+        showThinking,
+      ),
+    );
+    setComposer("");
+    setAttachments([]);
+    setStreaming(true);
+    setStatusLine("running");
+
+    try {
+      const payload: Record<string, unknown> = {
+        message: content || undefined,
+      };
+      if (selectedModel) payload.model = selectedModel;
+      if (promptParts.length > 0) payload.parts = promptParts;
+      if (selectedMode) {
+        const [kind, id] = selectedMode.split(":", 2);
+        if (kind === "agent") payload.agent = id;
+        if (kind === "preset" || kind === "profile") payload.scheduler_profile = id;
+      }
+
+      const response = await sendPromptRequest(sessionId, payload);
+      if (response.status === "awaiting_user") {
+        setStreaming(false);
+        setStatusLine("awaiting_user");
+        if (response.pending_question_id) {
+          await loadPendingQuestion(response.pending_question_id, sessionId);
+        }
+      }
+    } catch (error) {
+      setMessages((current) =>
+        applyOutputBlock(
+          current,
+          {
+            kind: "status",
+            tone: "error",
+            text: formatError(error),
+          },
+          showThinking,
+        ),
+      );
+      setBanner(`Prompt failed: ${formatError(error)}`);
+      setStreaming(false);
+      setStatusLine("idle");
+    }
+
+    try {
+      const sessionData = await fetchSessions();
+      setSessions(sessionData);
+    } catch {
+      // best effort
+    }
+  };
+
+  const attachComposerFiles = async (files: File[], failurePrefix: string) => {
+    if (!files.length) return;
+
+    const nextParts = await prepareComposerAttachments(files, {
+      workspaceBasePath,
+      uploadJson: apiJson,
+    }).catch((error) => {
+      setBanner(`${failurePrefix}: ${formatError(error)}`);
+      return [];
+    });
+
+    if (!nextParts.length) return;
+    setAttachments((current) => {
+      setSelectedAttachmentIndex(current.length + nextParts.length - 1);
+      return [...current, ...nextParts];
+    });
+    const uploadedPaths = nextParts
+      .map((part) => attachmentWorkspacePath(part))
+      .filter((path): path is string => Boolean(path && path.includes("/.rocode/uploads/")));
+    if (uploadedPaths.length && !workspaceDirty) {
+      setPendingWorkspaceSelection(
+        selectedWorkspacePath
+          ? { path: selectedWorkspacePath, type: selectedWorkspaceType }
+          : workspaceRootPath
+            ? { path: workspaceRootPath, type: "directory" }
+            : null,
+      );
+      setWorkspaceReloadToken((current) => current + 1);
+    }
+    setBanner(
+      nextParts.length === 1
+        ? `Attached ${attachmentLabel(nextParts[0])}`
+        : `Attached ${nextParts.length} items`,
+    );
+  };
+
+  const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    await attachComposerFiles(Array.from(event.target.files ?? []), "Attachment failed");
+    event.target.value = "";
+  };
+
+  const handleComposerPaste = async (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(event.clipboardData.files ?? []).filter((file) =>
+      file.type.startsWith("image/"),
+    );
+    if (!files.length) return;
+    event.preventDefault();
+    await attachComposerFiles(files, "Image paste failed");
+  };
+
+  const handleComposerDrop = async (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setComposerDragActive(false);
+    await attachComposerFiles(droppedFiles(event.dataTransfer), "Drop attach failed");
+  };
+
+  const submitQuestion = async () => {
+    if (!question) return;
+    setQuestionSubmitting(true);
+    try {
+      const answers = question.questions.map((item, index) =>
+        normalizedAnswerValues(questionAnswers[index], Boolean(item.multiple)),
+      );
+      await api(`/question/${question.request_id}/reply`, {
+        method: "POST",
+        body: JSON.stringify({ answers }),
+      });
+      setQuestion(null);
+      setQuestionAnswers({});
+      const sessionId = question.session_id ?? selectedSessionRef.current;
+      if (sessionId) {
+        const session = await apiJson<SessionRecord>(`/session/${sessionId}`);
+        const pending = pendingCommandFromSession(session, question.request_id);
+        if (pending) {
+          const argumentsText = mergePendingCommandArguments(pending, answers);
+          const response = await sendPromptRequest(sessionId, {
+            command: pending.command,
+            arguments: argumentsText || undefined,
+            model: selectedModel || undefined,
+          });
+          if (response.status === "awaiting_user") {
+            setStreaming(false);
+            setStatusLine("awaiting_user");
+            if (response.pending_question_id) {
+              await loadPendingQuestion(response.pending_question_id, sessionId);
+            }
+          } else {
+            setStreaming(true);
+            setStatusLine("running");
+          }
+        }
+      }
+    } catch (error) {
+      setBanner(`Question reply failed: ${formatError(error)}`);
+    } finally {
+      setQuestionSubmitting(false);
+    }
+  };
+
+  const rejectQuestion = async () => {
+    if (!question) return;
+    setQuestionSubmitting(true);
+    try {
+      await api(`/question/${question.request_id}/reject`, { method: "POST" });
+      setQuestion(null);
+      setQuestionAnswers({});
+    } catch (error) {
+      setBanner(`Question reject failed: ${formatError(error)}`);
+    } finally {
+      setQuestionSubmitting(false);
+    }
+  };
+
+  const replyPermission = async (reply: "once" | "always" | "reject") => {
+    if (!permission) return;
+    setPermissionSubmitting(true);
+    try {
+      await api(`/permission/${permission.permission_id}/reply`, {
+        method: "POST",
+        body: JSON.stringify({ reply }),
+      });
+      setPermission(null);
+    } catch (error) {
+      setBanner(`Permission reply failed: ${formatError(error)}`);
+    } finally {
+      setPermissionSubmitting(false);
+    }
+  };
+
+  const connectProvider = async () => {
+    if (!connectProviderId.trim() || !connectApiKey.trim()) {
+      setBanner("provider_id and api_key are required");
+      return;
+    }
+
+    setConnectBusy(true);
+    try {
+      await api("/provider/connect", {
+        method: "POST",
+        body: JSON.stringify({
+          provider_id: connectProviderId.trim(),
+          api_key: connectApiKey.trim(),
+          base_url: connectBaseUrl.trim() || undefined,
+          protocol: connectBaseUrl.trim() ? connectProtocol.trim() || undefined : undefined,
+        }),
+      });
+      setConnectApiKey("");
+      setConnectBaseUrl("");
+      await reloadCoreSettingsData();
+      setBanner(`Connected provider ${connectProviderId.trim()}`);
+    } catch (error) {
+      setBanner(`Provider connect failed: ${formatError(error)}`);
+    } finally {
+      setConnectBusy(false);
+    }
+  };
+
+  const lastAssistant = findLastMessage(
+    messages,
+    (message) => message.kind === "message" && message.role === "assistant",
+  );
+
+  const confirmDiscardWorkspaceChanges = (targetLabel: string) => {
+    if (!workspaceDirty) {
+      return true;
+    }
+
+    return window.confirm(
+      `Unsaved changes in ${selectedFilePath || "the current file"} will be lost. Continue to ${targetLabel}?`,
+    );
+  };
+
+  const selectWorkspaceNode = (path: string, typeHint?: "file" | "directory") => {
+    if (
+      selectedFilePath &&
+      workspaceDirty &&
+      (path !== selectedWorkspacePath || (typeHint ?? "file") !== selectedWorkspaceType) &&
+      !confirmDiscardWorkspaceChanges("switch workspace selection")
+    ) {
+      return;
+    }
+
+    const node = findNodeByPath(fileTree, path);
+    if (node) {
+      setSelectedWorkspacePath(node.path);
+      setSelectedWorkspaceType(node.type);
+      setSelectedFilePath(node.type === "file" ? node.path : null);
+      return;
+    }
+
+    setPendingWorkspaceSelection({ path, type: typeHint ?? "file" });
+    setWorkspaceReloadToken((current) => current + 1);
+  };
+
+  const locateAttachmentInWorkspace = (attachment: PromptPart) => {
+    const path = attachmentWorkspacePath(attachment);
+    if (!path) return;
+    selectWorkspaceNode(path, attachment.mime === "application/x-directory" ? "directory" : "file");
+    schedulerNavigation.restoreActiveStage();
+    setBanner(`Located ${attachmentLabel(attachment)} in workspace`);
+  };
+
+  const removeAttachmentAt = (index: number) => {
+    setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index));
+    setSelectedAttachmentIndex((current) => {
+      if (current === null) return null;
+      if (current === index) return null;
+      if (current > index) return current - 1;
+      return current;
+    });
+  };
+
+  const saveSelectedFile = async () => {
+    if (!selectedFilePath || fileSaving) return;
+    setFileSaving(true);
+    try {
+      await api("/file/content", {
+        method: "PUT",
+        body: JSON.stringify({
+          path: selectedFilePath,
+          content: selectedFileContent,
+        }),
+      });
+      setSavedFileContent(selectedFileContent);
+      setBanner(`Saved ${selectedFilePath}`);
+    } catch (error) {
+      setBanner(`Failed to save file: ${formatError(error)}`);
+    } finally {
+      setFileSaving(false);
+    }
+  };
+
+  const createWorkspaceDirectory = async () => {
+    const requestedPath = window.prompt("New folder path", "notes");
+    if (!requestedPath) return;
+
+    if (!confirmDiscardWorkspaceChanges("create a folder and refresh workspace")) {
+      return;
+    }
+
+    const targetPath = resolveWorkspacePath(workspaceTargetDirectory || workspaceBasePath, requestedPath);
+    if (!targetPath) {
+      setBanner("Directory path is required");
+      return;
+    }
+
+    try {
+      const response = await apiJson<DirectoryCreateResponse>("/file/directory", {
+        method: "POST",
+        body: JSON.stringify({
+          path: targetPath,
+        }),
+      });
+      setPendingWorkspaceSelection({ path: response.path, type: "directory" });
+      setWorkspaceReloadToken((current) => current + 1);
+      setBanner(`Created directory ${response.path}`);
+    } catch (error) {
+      setBanner(`Failed to create directory: ${formatError(error)}`);
+    }
+  };
+
+  const createWorkspaceFile = async () => {
+    const requestedPath = window.prompt("New file path", "notes.md");
+    if (!requestedPath) return;
+
+    if (!confirmDiscardWorkspaceChanges("create a file and refresh workspace")) {
+      return;
+    }
+
+    const targetPath = resolveWorkspacePath(workspaceTargetDirectory || workspaceBasePath, requestedPath);
+    if (!targetPath) {
+      setBanner("File path is required");
+      return;
+    }
+
+    try {
+      await api("/file/content", {
+        method: "PUT",
+        body: JSON.stringify({
+          path: targetPath,
+          content: "",
+          create_parents: true,
+        }),
+      });
+      setPendingWorkspaceSelection({ path: targetPath, type: "file" });
+      setWorkspaceReloadToken((current) => current + 1);
+      setBanner(`Created ${targetPath}`);
+    } catch (error) {
+      setBanner(`Failed to create file: ${formatError(error)}`);
+    }
+  };
+
+  const deleteSelectedWorkspaceNode = async () => {
+    if (!selectedWorkspacePath || fileDeleting) return;
+    if (selectedWorkspaceIsRoot) {
+      setBanner("Refusing to delete the workspace root directory");
+      return;
+    }
+    if (!confirmDiscardWorkspaceChanges("delete the selected workspace node")) {
+      return;
+    }
+    if (!window.confirm(`Delete ${selectedWorkspacePath}?`)) return;
+
+    setFileDeleting(true);
+    try {
+      await api("/file", {
+        method: "DELETE",
+        body: JSON.stringify({
+          path: selectedWorkspacePath,
+          recursive: selectedWorkspaceType === "directory",
+        }),
+      });
+      const nextPath =
+        selectedWorkspaceType === "file"
+          ? parentDirectory(selectedWorkspacePath) || workspaceBasePath
+          : parentDirectory(selectedWorkspacePath) || workspaceBasePath;
+      setPendingWorkspaceSelection(nextPath ? { path: nextPath, type: "directory" } : null);
+      setWorkspaceReloadToken((current) => current + 1);
+      setBanner(`Deleted ${selectedWorkspacePath}`);
+    } catch (error) {
+      setBanner(`Failed to delete selection: ${formatError(error)}`);
+    } finally {
+      setFileDeleting(false);
+    }
+  };
+
+  const downloadSelectedFile = () => {
+    if (!selectedFilePath) return;
+    window.location.assign(`/file/download?path=${encodeURIComponent(selectedFilePath)}`);
+  };
+
+  const insertWorkspaceReference = () => {
+    if (!selectedWorkspaceReference) return;
+    setComposer((current) => appendReferenceToken(current, selectedWorkspaceReference));
+    setBanner(`Inserted @${selectedWorkspaceReference}`);
+  };
+
+  const attachSelectedWorkspaceNode = () => {
+    if (!selectedWorkspacePath) return;
+
+    const nextAttachment: PromptPart = {
+      type: "file",
+      url: fileUrlFromPath(selectedWorkspacePath),
+      filename: selectedWorkspaceReference || selectedWorkspaceFilename || "attachment",
+      mime: guessWorkspaceMime(selectedWorkspacePath, selectedWorkspaceType),
+    };
+
+    setAttachments((current) => {
+      if (current.some((part) => part.type === "file" && part.url === nextAttachment.url)) {
+        return current;
+      }
+      setSelectedAttachmentIndex(current.length);
+      return [...current, nextAttachment];
+    });
+    setBanner(
+      selectedWorkspaceType === "directory"
+        ? `Attached directory ${selectedWorkspaceReference || selectedWorkspacePath}`
+        : `Attached file ${selectedWorkspaceReference || selectedWorkspacePath}`,
+    );
+  };
+
+  const uploadWorkspaceFiles = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    if (!files.length || fileUploading) return;
+
+    if (!confirmDiscardWorkspaceChanges("upload files and refresh workspace")) {
+      event.target.value = "";
+      return;
+    }
+
+    setFileUploading(true);
+    try {
+      const payloadFiles = await Promise.all(
+        files.map(
+          (file) =>
+            new Promise<{ name: string; content: string; mime?: string }>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onerror = () => reject(reader.error ?? new Error("Failed to read file"));
+              reader.onload = () =>
+                resolve({
+                  name: file.name,
+                  content: String(reader.result ?? ""),
+                  mime: file.type || undefined,
+                });
+              reader.readAsDataURL(file);
+            }),
+        ),
+      );
+
+      const response = await apiJson<UploadFilesResponse>("/file/upload", {
+        method: "POST",
+        body: JSON.stringify({
+          path: workspaceTargetDirectory || workspaceBasePath || undefined,
+          files: payloadFiles,
+        }),
+      });
+
+      if (response.files[0]?.path) {
+        setPendingWorkspaceSelection({ path: response.files[0].path, type: "file" });
+      }
+      setWorkspaceReloadToken((current) => current + 1);
+      setBanner(
+        response.files.length === 1
+          ? `Uploaded ${response.files[0]?.name ?? "1 file"}`
+          : `Uploaded ${response.files.length} files`,
+      );
+    } catch (error) {
+      setBanner(`Failed to upload files: ${formatError(error)}`);
+    } finally {
+      event.target.value = "";
+      setFileUploading(false);
+    }
+  };
+
+  return (
+    <div className="flex h-dvh flex-col bg-background text-foreground font-sans overflow-hidden">
+      {/* Header — minimal, refined */}
+      <header className="relative flex items-center justify-between border-b border-border px-6 py-3 shrink-0">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setLeftSidebarOpen((value) => !value)}
+            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title={leftSidebarOpen ? "Hide sessions" : "Show sessions"}
+          >
+            {leftSidebarOpen ? (
+              <PanelLeftCloseIcon className="size-4" />
+            ) : (
+              <PanelLeftIcon className="size-4" />
+            )}
+          </button>
+          <span className="text-sm font-semibold tracking-tight text-foreground/80">ROCode</span>
+          <span className="text-[10px] text-muted-foreground/50 tracking-wide">/new</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setRightSidebarOpen((value) => !value)}
+            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title={rightSidebarOpen ? "Hide workspace" : "Show workspace"}
+          >
+            <FolderTreeIcon className={cn("size-4", rightSidebarOpen && "text-foreground")} />
+          </button>
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title="Settings"
+          >
+            <SettingsIcon className="size-4" />
+          </button>
+        </div>
+      </header>
+
+      {/* Main: workspace + chat */}
+      <div className="flex flex-1 overflow-hidden">
+        {leftSidebarOpen && (
+          <div className="w-[22rem] shrink-0 overflow-hidden border-r border-border bg-sidebar/70">
+            <SessionSidebar
+              workspaces={workspaceSummaries}
+              currentWorkspacePath={currentWorkspaceSummary?.path ?? null}
+              currentWorkspaceLabel={currentWorkspaceSummary?.label ?? null}
+              currentWorkspaceRootPath={(currentWorkspaceSummary?.path ?? serviceRootPath) || null}
+              sessionTree={sessionTree}
+              selectedSessionId={selectedSessionId}
+              onCreateProject={(input) => {
+                void createProject(input);
+              }}
+              onCreateSession={() => {
+                void createSession({
+                  directory: (currentWorkspaceSummary?.path ?? serviceRootPath) || undefined,
+                });
+              }}
+              onSelectWorkspace={selectWorkspace}
+              onSelectSession={(sessionId) => setSelectedSessionId(sessionId)}
+              onOpenSettings={() => setSettingsOpen(true)}
+            />
+          </div>
+        )}
+
+        {/* Center: chat area */}
+        <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+          {banner ? (
+            <div className="px-4 pt-2">
+              <div className="rounded-lg border border-amber-300/70 bg-amber-50/60 px-3 py-2 text-xs text-amber-900 dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-200">
+                {banner}
+              </div>
+            </div>
+          ) : null}
+          <ConversationFeedPanel
+            feedRef={feedRef}
+            historyLoading={historyLoading}
+            messages={messages}
+            highlightedFeedId={conversationJump.highlightedFeedId}
+            activeStageId={schedulerNavigation.previewStageId ?? schedulerNavigation.activeStageId}
+            activeToolCallId={schedulerNavigation.activeToolCallId}
+            streaming={streaming}
+            onNavigateStage={schedulerNavigation.navigateToStage}
+            onNavigateChildSession={schedulerNavigation.navigateToChildSession}
+          />
+          <div className="px-6 pb-5 pt-2 shrink-0">
+            <ComposerSection
+              composer={composer}
+              composerDragActive={composerDragActive}
+              streaming={streaming}
+              references={composerReferences}
+              attachments={attachments}
+              selectedAttachmentIndex={selectedAttachmentIndex}
+              selectedAttachment={selectedAttachment}
+              selectedWorkspacePath={selectedWorkspacePath}
+              workspaceRootPath={workspaceBasePath || workspaceRootPath}
+              activeStageId={schedulerNavigation.activeStageId}
+              provenance={schedulerNavigation.currentBreadcrumbProvenance}
+              onPreviewStage={schedulerNavigation.previewStage}
+              onSubmit={submitPrompt}
+              onRemoveReference={(reference) => setComposer((current) => removePromptReference(current, reference))}
+              onRemoveAttachment={removeAttachmentAt}
+              onSelectAttachment={(index, attachment) => {
+                setSelectedAttachmentIndex(index);
+                locateAttachmentInWorkspace(attachment as PromptPart);
+              }}
+              onLocateAttachment={(attachment) => locateAttachmentInWorkspace(attachment as PromptPart)}
+              onNavigateStage={schedulerNavigation.navigateToStage}
+              onNavigateProvenanceSession={schedulerNavigation.navigateToProvenanceSession}
+              onNavigateProvenanceStage={schedulerNavigation.navigateToProvenanceStage}
+              onNavigateProvenanceToolCall={schedulerNavigation.navigateToProvenanceToolCall}
+              onDragEnter={(event) => {
+                if (event.dataTransfer.types.includes("Files")) {
+                  setComposerDragActive(true);
+                }
+              }}
+              onDragOver={(event) => {
+                if (!event.dataTransfer.types.includes("Files")) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+                setComposerDragActive(true);
+              }}
+              onDragLeave={(event) => {
+                if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+                setComposerDragActive(false);
+              }}
+              onDrop={(event) => void handleComposerDrop(event)}
+              onFileChange={(event) => void handleFileChange(event)}
+              onPaste={(event) => void handleComposerPaste(event)}
+              onComposerChange={setComposer}
+            />
+          </div>
+        </div>
+
+        {rightSidebarOpen && (
+          <div className="w-80 shrink-0 overflow-hidden border-l border-border bg-sidebar/55">
+            <WorkspacePanel
+              workspaceLoading={workspaceLoading}
+              fileTree={fileTree}
+              workspaceRootPath={workspaceRootPath}
+              workspaceRootLabel={workspaceRootPath || currentSession?.directory || "project"}
+              selectedWorkspacePath={selectedWorkspacePath}
+              selectedWorkspaceType={selectedWorkspaceType}
+              workspaceLinkLabel={workspaceLinkLabel}
+              workspaceLinkStageId={workspaceLinkStageId}
+              selectedFilePath={selectedFilePath}
+              selectedFileContent={selectedFileContent}
+              fileLoading={fileLoading}
+              fileSaving={fileSaving}
+              fileDeleting={fileDeleting}
+              fileUploading={fileUploading}
+              workspaceDirty={workspaceDirty}
+              selectedWorkspaceIsRoot={selectedWorkspaceIsRoot}
+              selectedWorkspaceReference={selectedWorkspaceReference}
+              lastAssistant={lastAssistant}
+              activeStageId={schedulerNavigation.activeStageId}
+              previewStageId={schedulerNavigation.previewStageId}
+              executionActivity={executionActivity}
+              conversationJump={conversationJump}
+              schedulerNavigation={schedulerNavigation}
+              terminalExpanded={terminalExpanded}
+              terminalSessions={terminalSessions}
+              onExpandTerminal={() => setTerminalExpanded(true)}
+              onCreateWorkspaceFile={createWorkspaceFile}
+              onCreateWorkspaceDirectory={createWorkspaceDirectory}
+              onUploadWorkspaceFiles={uploadWorkspaceFiles}
+              onSelectWorkspaceNode={selectWorkspaceNode}
+              onWorkspaceContentChange={setSelectedFileContent}
+              onInsertWorkspaceReference={insertWorkspaceReference}
+              onAttachSelectedWorkspaceNode={attachSelectedWorkspaceNode}
+              onDownloadSelectedFile={downloadSelectedFile}
+              onDeleteSelectedWorkspaceNode={deleteSelectedWorkspaceNode}
+              onSaveSelectedFile={saveSelectedFile}
+            />
+          </div>
+        )}
+      </div>
+
+      {settingsOpen ? (
+        <Suspense
+          fallback={
+            <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-start justify-end">
+              <section className="h-full w-full max-w-md bg-card border-l border-border overflow-y-auto p-6 flex flex-col gap-4">
+                <div className="flex flex-col items-center justify-center gap-2 text-muted-foreground py-12">
+                  <h3 className="text-sm">Loading settings...</h3>
+                  <p className="text-xs">Please wait</p>
+                </div>
+              </section>
+            </div>
+          }
+        >
+          <SettingsDrawer
+            onClose={() => setSettingsOpen(false)}
+            theme={theme}
+            themes={THEMES}
+            onThemeChange={(nextTheme) => setTheme(nextTheme as ThemeId)}
+            modeOptions={settingsModeOptions}
+            selectedMode={selectedMode}
+            onModeChange={setSelectedMode}
+            modelOptions={modelOptions}
+            selectedModel={selectedModel}
+            onModelChange={setSelectedModel}
+            showThinking={showThinking}
+            onShowThinkingChange={setShowThinking}
+            providers={providers}
+            knownProviders={knownProviders}
+            connectProtocols={connectProtocols}
+            connectProviderId={connectProviderId}
+            onConnectProviderIdChange={setConnectProviderId}
+            connectProtocol={connectProtocol}
+            onConnectProtocolChange={setConnectProtocol}
+            connectApiKey={connectApiKey}
+            onConnectApiKeyChange={setConnectApiKey}
+            connectBaseUrl={connectBaseUrl}
+            onConnectBaseUrlChange={setConnectBaseUrl}
+            connectBusy={connectBusy}
+            onConnectProvider={connectProvider}
+            api={api}
+            apiJson={apiJson}
+            onBanner={setBanner}
+            onReloadCoreData={reloadCoreSettingsData}
+          />
+        </Suspense>
+      ) : null}
+
+      <InteractionOverlays
+        question={question}
+        permission={permission}
+        questionAnswers={questionAnswers}
+        questionSubmitting={questionSubmitting}
+        permissionSubmitting={permissionSubmitting}
+        onQuestionAnswerChange={(index, value) =>
+          setQuestionAnswers((current) => ({ ...current, [index]: value }))
+        }
+        onRejectQuestion={rejectQuestion}
+        onSubmitQuestion={submitQuestion}
+        onReplyPermission={replyPermission}
+      />
+    </div>
+  );
+}

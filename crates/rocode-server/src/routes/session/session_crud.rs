@@ -110,6 +110,9 @@ pub struct FileDiffInfo {
 pub struct CreateSessionRequest {
     pub parent_id: Option<String>,
     pub scheduler_profile: Option<String>,
+    pub directory: Option<String>,
+    pub project_id: Option<String>,
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -230,6 +233,31 @@ pub(super) fn session_to_info(session: &rocode_session::Session) -> SessionInfo 
             Some(session.metadata.clone())
         },
     }
+}
+
+fn collect_session_tree_ids(
+    sessions: &rocode_session::SessionManager,
+    root_id: &str,
+) -> Option<Vec<String>> {
+    if sessions.get(root_id).is_none() {
+        return None;
+    }
+
+    fn visit(sessions: &rocode_session::SessionManager, session_id: &str, out: &mut Vec<String>) {
+        out.push(session_id.to_string());
+        let child_ids: Vec<String> = sessions
+            .children(session_id)
+            .into_iter()
+            .map(|session| session.id.clone())
+            .collect();
+        for child_id in child_ids {
+            visit(sessions, &child_id, out);
+        }
+    }
+
+    let mut ids = Vec::new();
+    visit(sessions, root_id, &mut ids);
+    Some(ids)
 }
 
 pub(super) async fn persist_sessions_if_enabled(state: &Arc<ServerState>) {
@@ -447,6 +475,24 @@ pub(super) async fn create_session(
     } else {
         None
     };
+    let requested_directory = req
+        .directory
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(resolved_session_directory);
+    let requested_project_id = req
+        .project_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let requested_title = req
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
 
     let mut sessions = state.sessions.lock().await;
     let mut session = if let Some(parent_id) = &req.parent_id {
@@ -454,13 +500,24 @@ pub(super) async fn create_session(
             .create_child(parent_id)
             .ok_or_else(|| ApiError::SessionNotFound(parent_id.clone()))?
     } else {
-        sessions.create("default", resolved_session_directory("."))
+        let directory = requested_directory.unwrap_or_else(|| resolved_session_directory("."));
+        let project_id = requested_project_id.unwrap_or_else(|| {
+            PathBuf::from(&directory)
+                .file_name()
+                .map(|value| value.to_string_lossy().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "default".to_string())
+        });
+        sessions.create(project_id, directory)
     };
     let normalized_directory = resolved_session_directory(&session.directory);
     if session.directory != normalized_directory {
         session.directory = normalized_directory;
-        sessions.update(session.clone());
     }
+    if let Some(title) = requested_title {
+        session.set_title(title);
+    }
+    sessions.update(session.clone());
     if let Some(profile) = resolved_scheduler_profile
         .as_deref()
         .or(requested_scheduler_profile.as_deref())
@@ -515,17 +572,24 @@ pub(super) async fn delete_session(
     State(state): State<Arc<ServerState>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>> {
-    state
-        .sessions
-        .lock()
-        .await
-        .delete(&id)
-        .ok_or_else(|| ApiError::SessionNotFound(id.clone()))?;
-    state
-        .runtime_control
-        .set_session_run_status(&id, SessionRunStatus::Idle)
-        .await;
-    state.runtime_state.remove(&id).await;
+    let deleted_session_ids = {
+        let mut sessions = state.sessions.lock().await;
+        let deleted_ids = collect_session_tree_ids(&sessions, &id)
+            .ok_or_else(|| ApiError::SessionNotFound(id.clone()))?;
+        sessions
+            .delete(&id)
+            .ok_or_else(|| ApiError::SessionNotFound(id.clone()))?;
+        deleted_ids
+    };
+
+    for session_id in &deleted_session_ids {
+        rocode_tool::tool_access::clear_tool_access_tracker(session_id);
+        state
+            .runtime_control
+            .set_session_run_status(session_id, SessionRunStatus::Idle)
+            .await;
+        state.runtime_state.remove(session_id).await;
+    }
     persist_sessions_if_enabled(&state).await;
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
@@ -703,6 +767,30 @@ pub(super) async fn get_session_summary(
         deletions: s.deletions,
         files: s.files,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collect_session_tree_ids;
+
+    #[test]
+    fn collect_session_tree_ids_includes_descendants() {
+        let mut sessions = rocode_session::SessionManager::new();
+        let root = sessions.create("project", "/tmp/project");
+        let child = sessions
+            .create_child(&root.id)
+            .expect("child session should exist");
+        let grandchild = sessions
+            .create_child(&child.id)
+            .expect("grandchild session should exist");
+
+        let ids = collect_session_tree_ids(&sessions, &root.id).expect("root subtree");
+
+        assert_eq!(ids.len(), 3);
+        assert_eq!(ids[0], root.id);
+        assert!(ids.contains(&child.id));
+        assert!(ids.contains(&grandchild.id));
+    }
 }
 
 pub(super) async fn set_session_summary(

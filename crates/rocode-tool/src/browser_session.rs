@@ -38,9 +38,9 @@ enum BrowserSessionOperation {
 #[serde(rename_all = "camelCase")]
 struct BrowserSessionInput {
     operation: BrowserSessionOperation,
-    #[serde(default, alias = "sessionId")]
+    #[serde(default, alias = "sessionId", alias = "session_id")]
     session_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "base_url")]
     base_url: Option<String>,
     #[serde(default)]
     url: Option<String>,
@@ -48,7 +48,7 @@ struct BrowserSessionInput {
     path: Option<String>,
     #[serde(default)]
     headers: HashMap<String, String>,
-    #[serde(default)]
+    #[serde(default, alias = "user_agent")]
     user_agent: Option<String>,
     #[serde(default = "default_format")]
     format: String,
@@ -708,6 +708,21 @@ mod tests {
         assert!(operations.iter().any(|value| value == "read"));
         assert!(operations.iter().any(|value| value == "status"));
         assert!(operations.iter().any(|value| value == "terminate"));
+    }
+
+    #[test]
+    fn browser_session_input_accepts_snake_case_fields() {
+        let input: BrowserSessionInput = serde_json::from_value(serde_json::json!({
+            "operation": "visit",
+            "session_id": "browser_123",
+            "base_url": "http://127.0.0.1:8080",
+            "user_agent": "rocode-test"
+        }))
+        .expect("snake_case browser session input should deserialize");
+
+        assert_eq!(input.session_id.as_deref(), Some("browser_123"));
+        assert_eq!(input.base_url.as_deref(), Some("http://127.0.0.1:8080"));
+        assert_eq!(input.user_agent.as_deref(), Some("rocode-test"));
     }
 
     #[tokio::test]

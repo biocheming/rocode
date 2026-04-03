@@ -799,11 +799,18 @@ impl SchedulerProfileOrchestrator {
         status: SchedulerExecutionGateStatus,
         decision: &SchedulerExecutionGateDecision,
         fallback_output: &OrchestratorOutput,
+        supplemental_output: Option<&OrchestratorOutput>,
     ) -> Option<OrchestratorOutput> {
         plan.resolve_gate_terminal_content(status, decision, &fallback_output.content)
-            .map(|content| OrchestratorOutput {
-                content,
-                ..fallback_output.clone()
+            .map(|content| {
+                let mut output = fallback_output.clone();
+                output.content = content;
+                if let Some(supplemental_output) = supplemental_output {
+                    merge_output_metadata(&mut output.metadata, &supplemental_output.metadata);
+                    output.steps += supplemental_output.steps;
+                    output.tool_calls_count += supplemental_output.tool_calls_count;
+                }
+                output
             })
     }
 

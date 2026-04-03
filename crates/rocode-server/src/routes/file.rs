@@ -1,14 +1,26 @@
-use axum::{extract::Query, routing::get, Json, Router};
+use axum::{
+    body::Body,
+    extract::Query,
+    http::header,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
+use base64::Engine;
 use serde::{Deserialize, Serialize};
-use std::path::{Path as FsPath, PathBuf};
+use std::path::{Component, Path as FsPath, PathBuf};
 use std::sync::Arc;
 
 use crate::{ApiError, Result, ServerState};
 
 pub(crate) fn file_routes() -> Router<Arc<ServerState>> {
     Router::new()
-        .route("/", get(list_files))
-        .route("/content", get(read_file))
+        .route("/", get(list_files).delete(delete_file))
+        .route("/directory", post(create_directory))
+        .route("/content", get(read_file).put(write_file))
+        .route("/tree", get(get_file_tree))
+        .route("/download", get(download_file))
+        .route("/upload", axum::routing::post(upload_files))
         .route("/status", get(get_file_status))
 }
 
@@ -24,6 +36,31 @@ pub struct ListFilesQuery {
     pub path: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct FileTreeQuery {
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteFileRequest {
+    pub path: String,
+    #[serde(default)]
+    pub recursive: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WriteFileRequest {
+    pub path: String,
+    pub content: String,
+    #[serde(default)]
+    pub create_parents: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateDirectoryRequest {
+    pub path: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct FileInfo {
     pub name: String,
@@ -34,15 +71,105 @@ pub struct FileInfo {
     pub modified: Option<i64>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct FileTreeNode {
+    pub name: String,
+    pub path: String,
+    #[serde(rename = "type")]
+    pub file_type: String,
+    pub size: Option<u64>,
+    pub modified: Option<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<FileTreeNode>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UploadFileInfo {
+    pub name: String,
+    pub path: String,
+    pub size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UploadFilesResponse {
+    pub files: Vec<UploadFileInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UploadFileRequest {
+    pub name: String,
+    pub content: String,
+    #[serde(default)]
+    pub mime: Option<String>,
+    #[serde(default)]
+    pub encoding: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UploadFilesRequest {
+    #[serde(default)]
+    pub path: Option<String>,
+    pub files: Vec<UploadFileRequest>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FileWriteResponse {
+    pub path: String,
+    pub bytes_written: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FileDeleteResponse {
+    pub path: String,
+    #[serde(rename = "type")]
+    pub file_type: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DirectoryCreateResponse {
+    pub path: String,
+}
+
 fn project_root() -> Result<PathBuf> {
     std::env::current_dir()
         .map_err(|e| ApiError::BadRequest(format!("Failed to resolve current directory: {}", e)))
 }
 
+fn modified_millis(path: &FsPath) -> Option<i64> {
+    std::fs::metadata(path).ok().and_then(|metadata| {
+        metadata.modified().ok().map(|time| {
+            time.duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64
+        })
+    })
+}
+
+fn normalize_path(path: &FsPath) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+    normalized
+}
+
+fn canonical_root(root: &FsPath) -> Result<PathBuf> {
+    root.canonicalize()
+        .map_err(|e| ApiError::BadRequest(format!("Failed to resolve project root: {}", e)))
+}
+
 fn canonicalize_within_root(path: &FsPath, root: &FsPath) -> Result<PathBuf> {
-    let canonical_root = root
-        .canonicalize()
-        .map_err(|e| ApiError::BadRequest(format!("Failed to resolve project root: {}", e)))?;
+    let canonical_root = canonical_root(root)?;
     let canonical_path = path
         .canonicalize()
         .map_err(|e| ApiError::BadRequest(format!("Failed to resolve path: {}", e)))?;
@@ -56,70 +183,157 @@ fn canonicalize_within_root(path: &FsPath, root: &FsPath) -> Result<PathBuf> {
     Ok(canonical_path)
 }
 
-fn resolve_input_path(input: &str, root: &FsPath) -> Result<PathBuf> {
+fn resolve_user_path(input: &str, root: &FsPath) -> PathBuf {
     let path = PathBuf::from(input);
-    let resolved = if path.is_absolute() {
+    if path.is_absolute() {
         path
     } else {
         root.join(path)
-    };
+    }
+}
+
+fn ensure_within_root_nonexistent(path: &FsPath, root: &FsPath) -> Result<PathBuf> {
+    let canonical_root = canonical_root(root)?;
+    let normalized = normalize_path(path);
+
+    if !normalized.starts_with(&canonical_root) {
+        return Err(ApiError::BadRequest(
+            "Access denied: path escapes project directory".to_string(),
+        ));
+    }
+
+    if let Some(parent) = normalized.parent() {
+        if parent.exists() {
+            let canonical_parent = parent.canonicalize().map_err(|e| {
+                ApiError::BadRequest(format!("Failed to resolve parent directory: {}", e))
+            })?;
+            if !canonical_parent.starts_with(&canonical_root) {
+                return Err(ApiError::BadRequest(
+                    "Access denied: path escapes project directory".to_string(),
+                ));
+            }
+        }
+    }
+
+    Ok(normalized)
+}
+
+fn resolve_existing_input_path(input: &str, root: &FsPath) -> Result<PathBuf> {
+    let resolved = resolve_user_path(input, root);
     if !resolved.exists() {
         return Err(ApiError::NotFound("File not found".to_string()));
     }
     canonicalize_within_root(&resolved, root)
 }
 
+fn resolve_output_path(input: &str, root: &FsPath) -> Result<PathBuf> {
+    let resolved = resolve_user_path(input, root);
+    ensure_within_root_nonexistent(&resolved, root)
+}
+
 fn is_within_root(path: &FsPath, root: &FsPath) -> bool {
     canonicalize_within_root(path, root).is_ok()
 }
 
+fn file_info_from_path(path: &FsPath) -> FileInfo {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.display().to_string());
+    let file_type = if path.is_dir() { "directory" } else { "file" };
+    let size = if path.is_file() {
+        std::fs::metadata(path).ok().map(|metadata| metadata.len())
+    } else {
+        None
+    };
+
+    FileInfo {
+        name,
+        path: path.to_string_lossy().to_string(),
+        file_type: file_type.to_string(),
+        size,
+        modified: modified_millis(path),
+    }
+}
+
+fn build_tree_node(path: &FsPath, root: &FsPath) -> Result<FileTreeNode> {
+    let canonical = canonicalize_within_root(path, root)?;
+    let name = canonical
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| canonical.display().to_string());
+    let file_type = if canonical.is_dir() {
+        "directory"
+    } else {
+        "file"
+    };
+    let size = if canonical.is_file() {
+        std::fs::metadata(&canonical)
+            .ok()
+            .map(|metadata| metadata.len())
+    } else {
+        None
+    };
+
+    let mut children = Vec::new();
+    if canonical.is_dir() {
+        let mut entries = std::fs::read_dir(&canonical)
+            .map_err(|e| ApiError::BadRequest(format!("Failed to read directory: {}", e)))?
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| is_within_root(path, root))
+            .collect::<Vec<_>>();
+        entries.sort();
+        for child in entries {
+            children.push(build_tree_node(&child, root)?);
+        }
+    }
+
+    Ok(FileTreeNode {
+        name,
+        path: canonical.to_string_lossy().to_string(),
+        file_type: file_type.to_string(),
+        size,
+        modified: modified_millis(&canonical),
+        children,
+    })
+}
+
 async fn list_files(Query(query): Query<ListFilesQuery>) -> Result<Json<Vec<FileInfo>>> {
     let root = project_root()?;
-    let path = resolve_input_path(&query.path, &root)?;
+    let path = resolve_existing_input_path(&query.path, &root)?;
     let mut files = Vec::new();
 
     if path.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(&path) {
-            for entry in entries.flatten() {
-                let path_buf = entry.path();
-                if !is_within_root(&path_buf, &root) {
-                    continue;
-                }
-                let file_type = if path_buf.is_dir() {
-                    "directory"
-                } else {
-                    "file"
-                };
-                let size = if path_buf.is_file() {
-                    std::fs::metadata(&path_buf).ok().map(|m| m.len())
-                } else {
-                    None
-                };
-                let modified = std::fs::metadata(&path_buf).ok().and_then(|m| {
-                    m.modified().ok().map(|t| {
-                        t.duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as i64
-                    })
-                });
+        let mut entries = std::fs::read_dir(&path)
+            .map_err(|e| ApiError::BadRequest(format!("Failed to read directory: {}", e)))?
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path_buf| is_within_root(path_buf, &root))
+            .collect::<Vec<_>>();
+        entries.sort();
 
-                files.push(FileInfo {
-                    name: entry.file_name().to_string_lossy().to_string(),
-                    path: path_buf.to_string_lossy().to_string(),
-                    file_type: file_type.to_string(),
-                    size,
-                    modified,
-                });
-            }
+        for path_buf in entries {
+            files.push(file_info_from_path(&path_buf));
         }
     }
 
     Ok(Json(files))
 }
 
+async fn get_file_tree(Query(query): Query<FileTreeQuery>) -> Result<Json<FileTreeNode>> {
+    let root = project_root()?;
+    let path = if let Some(input) = query.path.as_deref() {
+        resolve_existing_input_path(input, &root)?
+    } else {
+        canonical_root(&root)?
+    };
+    Ok(Json(build_tree_node(&path, &root)?))
+}
+
 async fn read_file(Query(query): Query<ListFilesQuery>) -> Result<Json<serde_json::Value>> {
     let root = project_root()?;
-    let path = resolve_input_path(&query.path, &root)?;
+    let path = resolve_existing_input_path(&query.path, &root)?;
 
     if path.is_file() {
         match std::fs::read_to_string(&path) {
@@ -131,6 +345,185 @@ async fn read_file(Query(query): Query<ListFilesQuery>) -> Result<Json<serde_jso
     } else {
         Err(ApiError::BadRequest("Path is not a file".to_string()))
     }
+}
+
+async fn write_file(Json(req): Json<WriteFileRequest>) -> Result<Json<FileWriteResponse>> {
+    let root = project_root()?;
+    let path = resolve_output_path(&req.path, &root)?;
+
+    if path.exists() && path.is_dir() {
+        return Err(ApiError::BadRequest(
+            "Cannot write file content to a directory".to_string(),
+        ));
+    }
+
+    let parent = path.parent().ok_or_else(|| {
+        ApiError::BadRequest("Target file path must have a parent directory".to_string())
+    })?;
+
+    if !parent.exists() {
+        if req.create_parents {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                ApiError::BadRequest(format!("Failed to create parent directories: {}", e))
+            })?;
+        } else {
+            return Err(ApiError::BadRequest(
+                "Parent directory does not exist".to_string(),
+            ));
+        }
+    }
+
+    std::fs::write(&path, req.content.as_bytes())
+        .map_err(|e| ApiError::BadRequest(format!("Failed to write file: {}", e)))?;
+
+    Ok(Json(FileWriteResponse {
+        path: path.to_string_lossy().to_string(),
+        bytes_written: req.content.len(),
+    }))
+}
+
+async fn create_directory(
+    Json(req): Json<CreateDirectoryRequest>,
+) -> Result<Json<DirectoryCreateResponse>> {
+    let root = project_root()?;
+    let path = resolve_output_path(&req.path, &root)?;
+
+    if path.exists() {
+        if path.is_dir() {
+            return Ok(Json(DirectoryCreateResponse {
+                path: path.to_string_lossy().to_string(),
+            }));
+        }
+
+        return Err(ApiError::BadRequest(
+            "Cannot create directory because a file already exists at the target path".to_string(),
+        ));
+    }
+
+    std::fs::create_dir_all(&path)
+        .map_err(|e| ApiError::BadRequest(format!("Failed to create directory: {}", e)))?;
+
+    Ok(Json(DirectoryCreateResponse {
+        path: path.to_string_lossy().to_string(),
+    }))
+}
+
+async fn delete_file(Json(req): Json<DeleteFileRequest>) -> Result<Json<FileDeleteResponse>> {
+    let root = project_root()?;
+    let path = resolve_existing_input_path(&req.path, &root)?;
+
+    if path.is_dir() {
+        if req.recursive {
+            std::fs::remove_dir_all(&path)
+                .map_err(|e| ApiError::BadRequest(format!("Failed to delete directory: {}", e)))?;
+        } else {
+            std::fs::remove_dir(&path)
+                .map_err(|e| ApiError::BadRequest(format!("Failed to delete directory: {}", e)))?;
+        }
+        return Ok(Json(FileDeleteResponse {
+            path: path.to_string_lossy().to_string(),
+            file_type: "directory".to_string(),
+        }));
+    }
+
+    std::fs::remove_file(&path)
+        .map_err(|e| ApiError::BadRequest(format!("Failed to delete file: {}", e)))?;
+
+    Ok(Json(FileDeleteResponse {
+        path: path.to_string_lossy().to_string(),
+        file_type: "file".to_string(),
+    }))
+}
+
+async fn download_file(Query(query): Query<ListFilesQuery>) -> Result<impl IntoResponse> {
+    let root = project_root()?;
+    let path = resolve_existing_input_path(&query.path, &root)?;
+
+    if !path.is_file() {
+        return Err(ApiError::BadRequest(
+            "Only files can be downloaded".to_string(),
+        ));
+    }
+
+    let bytes = std::fs::read(&path)
+        .map_err(|e| ApiError::BadRequest(format!("Failed to read file for download: {}", e)))?;
+    let filename = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "download.bin".to_string());
+
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/octet-stream"),
+            (
+                header::CONTENT_DISPOSITION,
+                Box::leak(format!("attachment; filename=\"{}\"", filename).into_boxed_str()),
+            ),
+        ],
+        Body::from(bytes),
+    ))
+}
+
+fn decode_upload_bytes(file: &UploadFileRequest) -> Result<Vec<u8>> {
+    let trimmed = file.content.trim();
+
+    if let Some(rest) = trimmed.strip_prefix("data:") {
+        let (_, payload) = rest
+            .split_once(',')
+            .ok_or_else(|| ApiError::BadRequest("Invalid data URL payload".to_string()))?;
+        return base64::engine::general_purpose::STANDARD
+            .decode(payload)
+            .map_err(|e| ApiError::BadRequest(format!("Failed to decode data URL: {}", e)));
+    }
+
+    if matches!(file.encoding.as_deref(), Some("base64")) {
+        return base64::engine::general_purpose::STANDARD
+            .decode(trimmed)
+            .map_err(|e| ApiError::BadRequest(format!("Failed to decode base64 content: {}", e)));
+    }
+
+    Ok(file.content.as_bytes().to_vec())
+}
+
+async fn upload_files(Json(req): Json<UploadFilesRequest>) -> Result<Json<UploadFilesResponse>> {
+    let root = project_root()?;
+    if req.files.is_empty() {
+        return Err(ApiError::BadRequest(
+            "No uploaded files were provided".to_string(),
+        ));
+    }
+
+    let target_dir = if let Some(path) = req.path.as_deref() {
+        resolve_output_path(path, &root)?
+    } else {
+        canonical_root(&root)?
+    };
+
+    std::fs::create_dir_all(&target_dir)
+        .map_err(|e| ApiError::BadRequest(format!("Failed to create upload target: {}", e)))?;
+
+    let mut saved_files = Vec::new();
+    for file in req.files {
+        let safe_name = FsPath::new(&file.name)
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .filter(|name| !name.trim().is_empty())
+            .ok_or_else(|| ApiError::BadRequest("Uploaded file name is invalid".to_string()))?;
+        let bytes = decode_upload_bytes(&file)?;
+
+        let output_path = ensure_within_root_nonexistent(&target_dir.join(&safe_name), &root)?;
+        std::fs::write(&output_path, &bytes)
+            .map_err(|e| ApiError::BadRequest(format!("Failed to write uploaded file: {}", e)))?;
+
+        saved_files.push(UploadFileInfo {
+            name: safe_name,
+            path: output_path.to_string_lossy().to_string(),
+            size: bytes.len() as u64,
+            mime: file.mime,
+        });
+    }
+
+    Ok(Json(UploadFilesResponse { files: saved_files }))
 }
 
 async fn get_file_status() -> Result<Json<Vec<FileStatusInfo>>> {
@@ -212,10 +605,10 @@ async fn find_text(Query(query): Query<FindTextQuery>) -> Result<Json<Vec<Search
     let base_input = query
         .path
         .unwrap_or_else(|| root.to_string_lossy().to_string());
-    let base_path = resolve_input_path(&base_input, &root)?;
+    let base_path = resolve_existing_input_path(&base_input, &root)?;
     let mut results = Vec::new();
 
-    fn search_in_file(path: &std::path::Path, pattern: &str, results: &mut Vec<SearchResult>) {
+    fn search_in_file(path: &FsPath, pattern: &str, results: &mut Vec<SearchResult>) {
         if let Ok(content) = std::fs::read_to_string(path) {
             for (line_num, line) in content.lines().enumerate() {
                 if let Some(col) = line.find(pattern) {
@@ -269,6 +662,8 @@ async fn find_files(Query(query): Query<FindFilesQuery>) -> Result<Json<Vec<Stri
     let base_path = project_root()?;
     let mut results = Vec::new();
     let limit = query.limit.unwrap_or(100);
+    let match_directories = query.file_type.as_deref() != Some("file");
+    let match_files = query.file_type.as_deref() != Some("directory");
 
     fn find_recursive(
         path: &FsPath,
@@ -276,6 +671,8 @@ async fn find_files(Query(query): Query<FindFilesQuery>) -> Result<Json<Vec<Stri
         query: &str,
         results: &mut Vec<String>,
         limit: usize,
+        match_directories: bool,
+        match_files: bool,
     ) {
         if results.len() >= limit {
             return;
@@ -288,18 +685,36 @@ async fn find_files(Query(query): Query<FindFilesQuery>) -> Result<Json<Vec<Stri
                         continue;
                     }
                     let name = entry.file_name().to_string_lossy().to_string();
-                    if name.contains(query) {
+                    let should_match = (path_buf.is_dir() && match_directories)
+                        || (path_buf.is_file() && match_files);
+                    if should_match && name.contains(query) {
                         results.push(path_buf.to_string_lossy().to_string());
                     }
                     if path_buf.is_dir() && results.len() < limit {
-                        find_recursive(&path_buf, root, query, results, limit);
+                        find_recursive(
+                            &path_buf,
+                            root,
+                            query,
+                            results,
+                            limit,
+                            match_directories,
+                            match_files,
+                        );
                     }
                 }
             }
         }
     }
 
-    find_recursive(&base_path, &base_path, &query.query, &mut results, limit);
+    find_recursive(
+        &base_path,
+        &base_path,
+        &query.query,
+        &mut results,
+        limit,
+        match_directories,
+        match_files,
+    );
     Ok(Json(results))
 }
 
@@ -316,6 +731,7 @@ pub struct SymbolInfo {
     pub line: usize,
 }
 
-async fn find_symbols(Query(_query): Query<FindSymbolsQuery>) -> Result<Json<Vec<SymbolInfo>>> {
+async fn find_symbols(Query(query): Query<FindSymbolsQuery>) -> Result<Json<Vec<SymbolInfo>>> {
+    let _ = query.query.as_str();
     Ok(Json(Vec::new()))
 }

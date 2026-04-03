@@ -23,6 +23,34 @@ pub struct SessionInfo {
     pub metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PromptResponse {
+    pub status: String,
+    #[serde(default)]
+    pub ok: Option<bool>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub pending_question_id: Option<String>,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub missing_fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PendingCommandInvocation {
+    pub command: String,
+    #[serde(rename = "rawArguments", default)]
+    pub raw_arguments: String,
+    #[serde(rename = "missingFields", default)]
+    pub missing_fields: Vec<String>,
+    #[serde(rename = "schedulerProfile", default)]
+    pub scheduler_profile: Option<String>,
+    #[serde(rename = "questionId", default)]
+    pub question_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionTimeInfo {
     pub created: i64,
@@ -907,10 +935,13 @@ impl ApiClient {
         scheduler_profile: Option<String>,
         model: Option<String>,
         variant: Option<String>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<PromptResponse> {
         let url = format!("{}/session/{}/prompt", self.base_url, session_id);
         let request = PromptRequest {
-            message: parts.as_ref().map(|_| None).unwrap_or_else(|| Some(content)),
+            message: parts
+                .as_ref()
+                .map(|_| None)
+                .unwrap_or_else(|| Some(content)),
             parts,
             agent,
             scheduler_profile,
@@ -928,8 +959,42 @@ impl ApiClient {
             anyhow::bail!("Failed to send prompt to {}: {} - {}", url, status, text);
         }
 
-        let result: serde_json::Value = response.json()?;
-        Ok(result)
+        Ok(response.json::<PromptResponse>()?)
+    }
+
+    pub fn send_command_prompt(
+        &self,
+        session_id: &str,
+        command: String,
+        arguments: Option<String>,
+        model: Option<String>,
+        variant: Option<String>,
+    ) -> anyhow::Result<PromptResponse> {
+        let url = format!("{}/session/{}/prompt", self.base_url, session_id);
+        let request = PromptRequest {
+            message: None,
+            parts: None,
+            agent: None,
+            scheduler_profile: None,
+            model,
+            variant,
+            command: Some(command),
+            arguments,
+        };
+        let response = self.client.post(&url).json(&request).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to send command prompt to {}: {} - {}",
+                url,
+                status,
+                text
+            );
+        }
+
+        Ok(response.json::<PromptResponse>()?)
     }
 
     pub fn execute_shell(

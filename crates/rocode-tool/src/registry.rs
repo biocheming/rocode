@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::tool_access;
 use crate::{Tool, ToolContext, ToolError, ToolResult};
 use rocode_plugin::{HookContext, HookEvent};
 
@@ -467,6 +468,9 @@ impl ToolRegistry {
 
         tool.validate(&args)
             .map_err(|e| rewrite_invalid_arguments(tool_id, e))?;
+        if !matches!(tool_id, "read" | "grep") {
+            tool_access::notify_other_tool_call(&ctx.session_id);
+        }
         let mut result = tool.execute(args.clone(), ctx.clone()).await;
         if let Err(e) = &result {
             // Log the exact args when a tool fails, to diagnose argument parsing issues.
@@ -707,6 +711,7 @@ async fn register_plugin_tools(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tool_access::{self, ToolAccessKey, ToolAccessOutcome};
     use async_trait::async_trait;
     use std::sync::{Arc, Mutex};
 
@@ -757,6 +762,46 @@ mod tests {
             })
             .await;
         (registry, captured)
+    }
+
+    #[tokio::test]
+    async fn non_read_tool_execution_resets_repeated_access_counter() {
+        let session_id = "registry-reset-repeated-access";
+        tool_access::clear_tool_access_tracker(session_id);
+        let key = ToolAccessKey::Read {
+            path: "/tmp/demo.txt".to_string(),
+            offset: 1,
+            limit: 2000,
+        };
+        let (registry, _captured) = setup_capture_registry().await;
+
+        assert_eq!(
+            tool_access::record_tool_access(session_id, key.clone()),
+            ToolAccessOutcome::Fresh { consecutive: 1 }
+        );
+        assert_eq!(
+            tool_access::record_tool_access(session_id, key.clone()),
+            ToolAccessOutcome::Fresh { consecutive: 2 }
+        );
+
+        registry
+            .execute(
+                "capture",
+                serde_json::json!({}),
+                ToolContext::new(
+                    session_id.to_string(),
+                    "message-1".to_string(),
+                    ".".to_string(),
+                ),
+            )
+            .await
+            .expect("capture tool should execute");
+
+        assert_eq!(
+            tool_access::record_tool_access(session_id, key),
+            ToolAccessOutcome::Fresh { consecutive: 1 }
+        );
+        tool_access::clear_tool_access_tracker(session_id);
     }
 
     fn test_tool_context() -> ToolContext {

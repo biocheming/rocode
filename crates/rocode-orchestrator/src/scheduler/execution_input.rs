@@ -1,3 +1,4 @@
+use crate::workflow_mode::mode_artifact_contract;
 use crate::OrchestratorOutput;
 
 use super::execution_contracts::{
@@ -72,6 +73,9 @@ pub(super) fn compose_execution_orchestration_input(
         });
     sections.push(charter);
     sections.push(SHARED_EXECUTION_EVIDENCE_CONTRACT.to_string());
+    if let Some(workflow) = plan.workflow.as_ref() {
+        sections.push(mode_artifact_contract(workflow.workflow.mode));
+    }
     sections.join("\n\n")
 }
 
@@ -124,6 +128,9 @@ pub(super) fn compose_coordination_verification_input(
             }),
     );
     sections.push(SHARED_VERIFICATION_EVIDENCE_CONTRACT.to_string());
+    if let Some(workflow) = plan.workflow.as_ref() {
+        sections.push(mode_artifact_contract(workflow.workflow.mode));
+    }
     sections.join("\n\n")
 }
 
@@ -216,6 +223,9 @@ pub(super) fn compose_autonomous_verification_input(
             }),
     );
     sections.push(SHARED_VERIFICATION_EVIDENCE_CONTRACT.to_string());
+    if let Some(workflow) = plan.workflow.as_ref() {
+        sections.push(mode_artifact_contract(workflow.workflow.mode));
+    }
     sections.join("\n\n")
 }
 

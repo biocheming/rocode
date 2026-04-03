@@ -1,9 +1,93 @@
 use super::*;
 
 impl App {
-    pub(super) fn question_info_to_prompt(question: &QuestionInfo) -> Option<QuestionRequest> {
+    fn pending_command_from_session(
+        session: &crate::api::SessionInfo,
+        question_id: &str,
+    ) -> Option<crate::api::PendingCommandInvocation> {
+        let metadata = session.metadata.as_ref()?;
+        let pending = metadata.get("pending_command_invocation")?.clone();
+        let pending =
+            serde_json::from_value::<crate::api::PendingCommandInvocation>(pending).ok()?;
+        if pending
+            .question_id
+            .as_deref()
+            .is_some_and(|candidate| candidate != question_id)
+        {
+            return None;
+        }
+        Some(pending)
+    }
+
+    fn shell_quote_command_value(value: &str) -> String {
+        if value.is_empty() {
+            return "\"\"".to_string();
+        }
+        if value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '-' | '_' | '.' | '*' | ':'))
+        {
+            return value.to_string();
+        }
+        format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+
+    fn split_repeatable_answer(answer: &str) -> Vec<String> {
+        answer
+            .split(|ch: char| matches!(ch, '\n' | ',' | '\t'))
+            .flat_map(|segment| segment.split_whitespace())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn merge_pending_command_arguments(
+        pending: &crate::api::PendingCommandInvocation,
+        answers: &[Vec<String>],
+    ) -> String {
+        let mut parts = Vec::new();
+        let raw = pending.raw_arguments.trim();
+        if !raw.is_empty() {
+            parts.push(raw.to_string());
+        }
+
+        for (index, field) in pending.missing_fields.iter().enumerate() {
+            let values = answers
+                .get(index)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .flat_map(|value| {
+                    if value.contains('\n') || value.contains(',') {
+                        Self::split_repeatable_answer(&value)
+                    } else {
+                        vec![value]
+                    }
+                })
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>();
+            if values.is_empty() {
+                continue;
+            }
+            parts.push(format!("--{}", field));
+            parts.extend(
+                values
+                    .iter()
+                    .map(|value| Self::shell_quote_command_value(value)),
+            );
+        }
+
+        parts.join(" ").trim().to_string()
+    }
+
+    pub(super) fn question_prompt_at(
+        question: &QuestionInfo,
+        index: usize,
+    ) -> Option<QuestionRequest> {
         // Prefer full-fidelity `items` field; fallback to legacy `questions`/`options`.
-        if let Some(item) = question.items.first() {
+        if let Some(item) = question.items.get(index) {
             let mut options: Vec<QuestionOption> = item
                 .options
                 .iter()
@@ -39,11 +123,11 @@ impl App {
         }
 
         // Legacy path: consume `questions`/`options` fields.
-        let prompt_text = question.questions.first()?.clone();
+        let prompt_text = question.questions.get(index)?.clone();
         let option_labels = question
             .options
             .as_ref()
-            .and_then(|all| all.first().cloned())
+            .and_then(|all| all.get(index).cloned())
             .unwrap_or_default();
         let mut options = option_labels
             .into_iter()
@@ -80,6 +164,7 @@ impl App {
         self.pending_question_ids.remove(question_id);
         self.pending_questions.remove(question_id);
         self.pending_question_queue.retain(|id| id != question_id);
+        self.pending_question_drafts.remove(question_id);
     }
 
     pub(super) fn open_next_question_prompt(&mut self) -> bool {
@@ -91,7 +176,12 @@ impl App {
             let Some(question) = self.pending_questions.get(&question_id).cloned() else {
                 continue;
             };
-            if let Some(prompt) = Self::question_info_to_prompt(&question) {
+            let draft = self
+                .pending_question_drafts
+                .entry(question_id.clone())
+                .or_default()
+                .clone();
+            if let Some(prompt) = Self::question_prompt_at(&question, draft.current_index) {
                 self.question_prompt.ask(prompt);
                 return true;
             }
@@ -159,6 +249,50 @@ impl App {
         changed
     }
 
+    fn resume_pending_command_after_question(
+        &mut self,
+        question_id: &str,
+        answers: &[Vec<String>],
+    ) -> anyhow::Result<()> {
+        let Some(session_id) = self.current_session_id() else {
+            return Ok(());
+        };
+        let Some(client) = self.context.get_api_client() else {
+            return Ok(());
+        };
+        let session = client.get_session(&session_id)?;
+        let Some(pending) = Self::pending_command_from_session(&session, question_id) else {
+            return Ok(());
+        };
+        let arguments = Self::merge_pending_command_arguments(&pending, answers);
+        let response = client.send_command_prompt(
+            &session_id,
+            pending.command.clone(),
+            (!arguments.trim().is_empty()).then_some(arguments),
+            self.selected_model_for_prompt(),
+            self.context.current_model_variant(),
+        )?;
+
+        match response.status.as_str() {
+            "accepted" => {
+                self.set_session_status(&session_id, SessionStatus::Running);
+                self.prompt.set_spinner_task_kind(TaskKind::LlmRequest);
+                self.prompt.set_spinner_active(true);
+                self.refresh_session_runtime(&session_id);
+            }
+            "awaiting_user" => {
+                self.set_session_status(&session_id, SessionStatus::Idle);
+                self.prompt.set_spinner_active(false);
+                self.refresh_session_runtime(&session_id);
+                self.sync_question_requests();
+            }
+            _ => {
+                self.prompt.set_spinner_active(false);
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn submit_question_reply(&mut self, question_id: &str, answers: Vec<String>) {
         let Some(client) = self.context.get_api_client() else {
             self.alert_dialog
@@ -168,32 +302,71 @@ impl App {
         };
 
         let question = self.pending_questions.get(question_id).cloned();
-        let mut first_answer = answers
+        let normalized_answers = answers
             .into_iter()
             .map(|answer| answer.trim().to_string())
             .filter(|answer| !answer.is_empty())
             .collect::<Vec<_>>();
-        if first_answer.is_empty() {
-            if let Some(default_option) = question
-                .as_ref()
-                .and_then(|q| q.options.as_ref())
-                .and_then(|all| all.first())
-                .and_then(|opts| {
-                    opts.iter()
-                        .find(|option| !option.eq_ignore_ascii_case(OTHER_OPTION_LABEL))
-                        .cloned()
-                })
-            {
-                first_answer.push(default_option);
+        let mut next_prompt = None;
+        let answers = {
+            let draft = self
+                .pending_question_drafts
+                .entry(question_id.to_string())
+                .or_default();
+            let current_index = draft.current_index;
+            if draft.answers.len() <= current_index {
+                draft.answers.resize(current_index + 1, Vec::new());
             }
+            let mut question_answers = normalized_answers;
+            if question_answers.is_empty() {
+                if let Some(default_option) = question
+                    .as_ref()
+                    .and_then(|q| q.options.as_ref())
+                    .and_then(|all| all.get(current_index))
+                    .and_then(|opts| {
+                        opts.iter()
+                            .find(|option| !option.eq_ignore_ascii_case(OTHER_OPTION_LABEL))
+                            .cloned()
+                    })
+                {
+                    question_answers.push(default_option);
+                }
+            }
+            draft.answers[current_index] = question_answers;
+
+            let question_count = question
+                .as_ref()
+                .map(|q| q.items.len().max(q.questions.len()))
+                .unwrap_or(1)
+                .max(1);
+            if draft.answers.len() < question_count {
+                draft.answers.resize(question_count, Vec::new());
+            }
+
+            if current_index + 1 < question_count {
+                draft.current_index += 1;
+                if let Some(question) = question.as_ref() {
+                    next_prompt = Self::question_prompt_at(question, draft.current_index);
+                }
+            }
+
+            draft.answers.clone()
+        };
+
+        if let Some(prompt) = next_prompt {
+            self.question_prompt.ask(prompt);
+            return;
         }
 
-        let question_count = question.as_ref().map(|q| q.questions.len()).unwrap_or(1);
-        let mut answers = vec![Vec::<String>::new(); question_count.max(1)];
-        answers[0] = first_answer;
-
-        match client.reply_question(question_id, answers) {
+        match client.reply_question(question_id, answers.clone()) {
             Ok(()) => {
+                if let Err(error) =
+                    self.resume_pending_command_after_question(question_id, &answers)
+                {
+                    self.alert_dialog
+                        .set_message(&format!("Failed to resume pending command:\n{}", error));
+                    self.alert_dialog.open();
+                }
                 self.clear_question_tracking(question_id);
                 self.toast
                     .show(ToastVariant::Success, "Question answered", 2000);
@@ -203,8 +376,16 @@ impl App {
                 self.alert_dialog
                     .set_message(&format!("Failed to submit question response:\n{}", err));
                 self.alert_dialog.open();
-                if let Some(question) = question.and_then(|q| Self::question_info_to_prompt(&q)) {
-                    self.question_prompt.ask(question);
+                let current_index = self
+                    .pending_question_drafts
+                    .get(question_id)
+                    .map(|draft| draft.current_index)
+                    .unwrap_or(0);
+                if let Some(prompt) = question
+                    .as_ref()
+                    .and_then(|question| Self::question_prompt_at(question, current_index))
+                {
+                    self.question_prompt.ask(prompt);
                 }
             }
         }

@@ -205,91 +205,193 @@ pub(super) async fn run_chat_session(
         }
 
         if let Some(cmd) = parse_interactive_command(&trimmed) {
-            if let Some(invocation) = cmd.ui_action_invocation() {
-                match cli_execute_ui_action(
-                    invocation.action_id,
-                    invocation.argument.as_deref(),
-                    &mut runtime,
-                    &api_client,
-                    &provider_registry,
-                    &agent_registry_arc,
-                    &current_dir,
-                    &repl_style,
-                )
-                .await?
-                {
-                    CliUiActionOutcome::Break => break,
-                    CliUiActionOutcome::Continue => continue,
-                }
-            }
-            match cmd {
-                InteractiveCommand::Abort => {
-                    let _ = print_block(
-                        Some(&runtime),
-                        OutputBlock::Status(StatusBlock::warning(
-                            "No active run to abort. Use /abort while a response is running.",
-                        )),
-                        &repl_style,
-                    );
-                }
-                InteractiveCommand::ExecuteRecovery(selector) => {
-                    let Some(action) = cli_select_recovery_action(&runtime, &selector) else {
-                        let _ = print_block(
-                            Some(&runtime),
-                            OutputBlock::Status(StatusBlock::warning(format!(
-                                "Unknown recovery action: {}",
-                                selector
-                            ))),
-                            &repl_style,
-                        );
-                        cli_print_recovery_actions(&runtime);
-                        continue;
-                    };
-                    let _ = print_block(
-                        Some(&runtime),
-                        OutputBlock::Status(StatusBlock::title(format!("↺ {}", action.label))),
-                        &repl_style,
-                    );
-                    run_server_prompt(
+            if matches!(cmd, InteractiveCommand::Unknown(_)) {
+                // Forward unknown slash commands to the server-side command registry
+                // so built-in/custom scheduler commands like `/autoresearch` still work.
+            } else {
+                if let Some(invocation) = cmd.ui_action_invocation() {
+                    match cli_execute_ui_action(
+                        invocation.action_id,
+                        invocation.argument.as_deref(),
                         &mut runtime,
                         &api_client,
-                        &mut sse_rx,
-                        &action.prompt,
+                        &provider_registry,
+                        &agent_registry_arc,
+                        &current_dir,
                         &repl_style,
-                        false,
                     )
-                    .await?;
-                }
-                InteractiveCommand::ClearScreen => {
-                    if let Some(surface) = runtime.terminal_surface.as_ref() {
-                        let _ = surface.clear_transcript();
-                    } else {
-                        print!("\x1B[2J\x1B[1;1H");
-                        io::stdout().flush()?;
+                    .await?
+                    {
+                        CliUiActionOutcome::Break => break,
+                        CliUiActionOutcome::Continue => continue,
                     }
                 }
-                InteractiveCommand::ListChildSessions => {
-                    cli_list_child_sessions(&runtime);
-                }
-                InteractiveCommand::FocusChildSession(session_id) => {
-                    match cli_focus_child_session(&runtime, &session_id) {
+                match cmd {
+                    InteractiveCommand::Abort => {
+                        let _ = print_block(
+                            Some(&runtime),
+                            OutputBlock::Status(StatusBlock::warning(
+                                "No active run to abort. Use /abort while a response is running.",
+                            )),
+                            &repl_style,
+                        );
+                    }
+                    InteractiveCommand::ExecuteRecovery(selector) => {
+                        let Some(action) = cli_select_recovery_action(&runtime, &selector) else {
+                            let _ = print_block(
+                                Some(&runtime),
+                                OutputBlock::Status(StatusBlock::warning(format!(
+                                    "Unknown recovery action: {}",
+                                    selector
+                                ))),
+                                &repl_style,
+                            );
+                            cli_print_recovery_actions(&runtime);
+                            continue;
+                        };
+                        let _ = print_block(
+                            Some(&runtime),
+                            OutputBlock::Status(StatusBlock::title(format!("↺ {}", action.label))),
+                            &repl_style,
+                        );
+                        run_server_prompt(
+                            &mut runtime,
+                            &api_client,
+                            &mut sse_rx,
+                            &action.prompt,
+                            &repl_style,
+                            false,
+                        )
+                        .await?;
+                    }
+                    InteractiveCommand::ClearScreen => {
+                        if let Some(surface) = runtime.terminal_surface.as_ref() {
+                            let _ = surface.clear_transcript();
+                        } else {
+                            print!("\x1B[2J\x1B[1;1H");
+                            io::stdout().flush()?;
+                        }
+                    }
+                    InteractiveCommand::ListChildSessions => {
+                        cli_list_child_sessions(&runtime);
+                    }
+                    InteractiveCommand::FocusChildSession(session_id) => {
+                        match cli_focus_child_session(&runtime, &session_id) {
+                            Ok(true) => {
+                                let _ = print_block(
+                                    Some(&runtime),
+                                    OutputBlock::Status(StatusBlock::title(format!(
+                                        "Focused child session: {}",
+                                        session_id
+                                    ))),
+                                    &repl_style,
+                                );
+                            }
+                            Ok(false) => {
+                                let _ = print_block(
+                                    Some(&runtime),
+                                    OutputBlock::Status(StatusBlock::warning(format!(
+                                        "Unknown child session: {}. Use /child list first.",
+                                        session_id
+                                    ))),
+                                    &repl_style,
+                                );
+                            }
+                            Err(error) => {
+                                let _ = print_block(
+                                    Some(&runtime),
+                                    OutputBlock::Status(StatusBlock::error(format!(
+                                        "Failed to focus child session: {}",
+                                        error
+                                    ))),
+                                    &repl_style,
+                                );
+                            }
+                        }
+                    }
+                    InteractiveCommand::FocusNextChildSession => {
+                        match cli_cycle_child_session(&runtime, true) {
+                            Ok(Some((session_id, index, total))) => {
+                                let _ = print_block(
+                                    Some(&runtime),
+                                    OutputBlock::Status(StatusBlock::title(format!(
+                                        "Focused child session [{}/{}]: {}",
+                                        index, total, session_id
+                                    ))),
+                                    &repl_style,
+                                );
+                            }
+                            Ok(None) => {
+                                let _ = print_block(
+                            Some(&runtime),
+                            OutputBlock::Status(StatusBlock::warning(
+                                "No child sessions available. Use /child list to inspect the cache.",
+                            )),
+                            &repl_style,
+                        );
+                            }
+                            Err(error) => {
+                                let _ = print_block(
+                                    Some(&runtime),
+                                    OutputBlock::Status(StatusBlock::error(format!(
+                                        "Failed to switch to next child session: {}",
+                                        error
+                                    ))),
+                                    &repl_style,
+                                );
+                            }
+                        }
+                    }
+                    InteractiveCommand::FocusPreviousChildSession => {
+                        match cli_cycle_child_session(&runtime, false) {
+                            Ok(Some((session_id, index, total))) => {
+                                let _ = print_block(
+                                    Some(&runtime),
+                                    OutputBlock::Status(StatusBlock::title(format!(
+                                        "Focused child session [{}/{}]: {}",
+                                        index, total, session_id
+                                    ))),
+                                    &repl_style,
+                                );
+                            }
+                            Ok(None) => {
+                                let _ = print_block(
+                            Some(&runtime),
+                            OutputBlock::Status(StatusBlock::warning(
+                                "No child sessions available. Use /child list to inspect the cache.",
+                            )),
+                            &repl_style,
+                        );
+                            }
+                            Err(error) => {
+                                let _ = print_block(
+                                    Some(&runtime),
+                                    OutputBlock::Status(StatusBlock::error(format!(
+                                        "Failed to switch to previous child session: {}",
+                                        error
+                                    ))),
+                                    &repl_style,
+                                );
+                            }
+                        }
+                    }
+                    InteractiveCommand::BackToRootSession => match cli_focus_root_session(&runtime)
+                    {
                         Ok(true) => {
                             let _ = print_block(
                                 Some(&runtime),
-                                OutputBlock::Status(StatusBlock::title(format!(
-                                    "Focused child session: {}",
-                                    session_id
-                                ))),
+                                OutputBlock::Status(StatusBlock::title(
+                                    "Returned to root session view.",
+                                )),
                                 &repl_style,
                             );
                         }
                         Ok(false) => {
                             let _ = print_block(
                                 Some(&runtime),
-                                OutputBlock::Status(StatusBlock::warning(format!(
-                                    "Unknown child session: {}. Use /child list first.",
-                                    session_id
-                                ))),
+                                OutputBlock::Status(StatusBlock::warning(
+                                    "Already viewing the root session.",
+                                )),
                                 &repl_style,
                             );
                         }
@@ -297,197 +399,101 @@ pub(super) async fn run_chat_session(
                             let _ = print_block(
                                 Some(&runtime),
                                 OutputBlock::Status(StatusBlock::error(format!(
-                                    "Failed to focus child session: {}",
+                                    "Failed to restore root session view: {}",
                                     error
                                 ))),
                                 &repl_style,
                             );
                         }
+                    },
+                    InteractiveCommand::Compact => {}
+                    InteractiveCommand::ShowTask(id) => {
+                        cli_show_task(&id, Some(&runtime));
                     }
-                }
-                InteractiveCommand::FocusNextChildSession => {
-                    match cli_cycle_child_session(&runtime, true) {
-                        Ok(Some((session_id, index, total))) => {
-                            let _ = print_block(
-                                Some(&runtime),
-                                OutputBlock::Status(StatusBlock::title(format!(
-                                    "Focused child session [{}/{}]: {}",
-                                    index, total, session_id
-                                ))),
-                                &repl_style,
-                            );
-                        }
-                        Ok(None) => {
-                            let _ = print_block(
-                            Some(&runtime),
-                            OutputBlock::Status(StatusBlock::warning(
-                                "No child sessions available. Use /child list to inspect the cache.",
-                            )),
-                            &repl_style,
-                        );
-                        }
-                        Err(error) => {
-                            let _ = print_block(
-                                Some(&runtime),
-                                OutputBlock::Status(StatusBlock::error(format!(
-                                    "Failed to switch to next child session: {}",
-                                    error
-                                ))),
-                                &repl_style,
-                            );
-                        }
+                    InteractiveCommand::KillTask(id) => {
+                        cli_kill_task(&id, Some(&runtime));
                     }
-                }
-                InteractiveCommand::FocusPreviousChildSession => {
-                    match cli_cycle_child_session(&runtime, false) {
-                        Ok(Some((session_id, index, total))) => {
-                            let _ = print_block(
-                                Some(&runtime),
-                                OutputBlock::Status(StatusBlock::title(format!(
-                                    "Focused child session [{}/{}]: {}",
-                                    index, total, session_id
-                                ))),
-                                &repl_style,
-                            );
-                        }
-                        Ok(None) => {
-                            let _ = print_block(
-                            Some(&runtime),
-                            OutputBlock::Status(StatusBlock::warning(
-                                "No child sessions available. Use /child list to inspect the cache.",
-                            )),
-                            &repl_style,
-                        );
-                        }
-                        Err(error) => {
-                            let _ = print_block(
-                                Some(&runtime),
-                                OutputBlock::Status(StatusBlock::error(format!(
-                                    "Failed to switch to previous child session: {}",
-                                    error
-                                ))),
-                                &repl_style,
-                            );
-                        }
-                    }
-                }
-                InteractiveCommand::BackToRootSession => match cli_focus_root_session(&runtime) {
-                    Ok(true) => {
+                    InteractiveCommand::ToggleActive => {
                         let _ = print_block(
-                            Some(&runtime),
-                            OutputBlock::Status(StatusBlock::title(
-                                "Returned to root session view.",
-                            )),
-                            &repl_style,
-                        );
-                    }
-                    Ok(false) => {
-                        let _ = print_block(
-                            Some(&runtime),
-                            OutputBlock::Status(StatusBlock::warning(
-                                "Already viewing the root session.",
-                            )),
-                            &repl_style,
-                        );
-                    }
-                    Err(error) => {
-                        let _ = print_block(
-                            Some(&runtime),
-                            OutputBlock::Status(StatusBlock::error(format!(
-                                "Failed to restore root session view: {}",
-                                error
-                            ))),
-                            &repl_style,
-                        );
-                    }
-                },
-                InteractiveCommand::Compact => {}
-                InteractiveCommand::ShowTask(id) => {
-                    cli_show_task(&id, Some(&runtime));
-                }
-                InteractiveCommand::KillTask(id) => {
-                    cli_kill_task(&id, Some(&runtime));
-                }
-                InteractiveCommand::ToggleActive => {
-                    let _ = print_block(
                         Some(&runtime),
                         OutputBlock::Status(StatusBlock::warning(
                             "CLI mode renders stage activity inline in the transcript; no separate active panel is kept onscreen.",
                         )),
                         &repl_style,
                     );
-                }
-                InteractiveCommand::ScrollUp => {
-                    let _ = print_block(
-                        Some(&runtime),
-                        OutputBlock::Status(StatusBlock::warning(
-                            "Use your terminal's native scrollback in CLI mode.",
-                        )),
-                        &repl_style,
-                    );
-                }
-                InteractiveCommand::ScrollDown => {
-                    let _ = print_block(
-                        Some(&runtime),
-                        OutputBlock::Status(StatusBlock::warning(
-                            "Use your terminal's native scrollback in CLI mode.",
-                        )),
-                        &repl_style,
-                    );
-                }
-                InteractiveCommand::ScrollBottom => {
-                    let _ = print_block(
-                        Some(&runtime),
-                        OutputBlock::Status(StatusBlock::warning(
-                            "Use your terminal's native scrollback in CLI mode.",
-                        )),
-                        &repl_style,
-                    );
-                }
-                InteractiveCommand::InspectStage(stage_filter) => {
-                    let _ = print_block(
-                        Some(&runtime),
-                        OutputBlock::Status(StatusBlock::title(
-                            if let Some(ref sid) = stage_filter {
-                                format!("Stage inspect: {} (use Web UI for full details)", sid)
-                            } else {
-                                "Stage inspect: use Web UI at /session/{{id}}/events for full details"
+                    }
+                    InteractiveCommand::ScrollUp => {
+                        let _ = print_block(
+                            Some(&runtime),
+                            OutputBlock::Status(StatusBlock::warning(
+                                "Use your terminal's native scrollback in CLI mode.",
+                            )),
+                            &repl_style,
+                        );
+                    }
+                    InteractiveCommand::ScrollDown => {
+                        let _ = print_block(
+                            Some(&runtime),
+                            OutputBlock::Status(StatusBlock::warning(
+                                "Use your terminal's native scrollback in CLI mode.",
+                            )),
+                            &repl_style,
+                        );
+                    }
+                    InteractiveCommand::ScrollBottom => {
+                        let _ = print_block(
+                            Some(&runtime),
+                            OutputBlock::Status(StatusBlock::warning(
+                                "Use your terminal's native scrollback in CLI mode.",
+                            )),
+                            &repl_style,
+                        );
+                    }
+                    InteractiveCommand::InspectStage(stage_filter) => {
+                        let _ = print_block(
+                            Some(&runtime),
+                            OutputBlock::Status(StatusBlock::title(
+                                if let Some(ref sid) = stage_filter {
+                                    format!("Stage inspect: {} (use Web UI for full details)", sid)
+                                } else {
+                                    "Stage inspect: use Web UI at /session/{{id}}/events for full details"
                                 .to_string()
-                            },
-                        )),
-                        &repl_style,
-                    );
+                                },
+                            )),
+                            &repl_style,
+                        );
+                    }
+                    InteractiveCommand::Unknown(name) => {
+                        let _ = print_block(
+                            Some(&runtime),
+                            OutputBlock::Status(StatusBlock::warning(format!(
+                                "Unknown command: /{}. Type /help for available commands.",
+                                name
+                            ))),
+                            &repl_style,
+                        );
+                    }
+                    InteractiveCommand::Exit
+                    | InteractiveCommand::ShowHelp
+                    | InteractiveCommand::ShowRecovery
+                    | InteractiveCommand::NewSession
+                    | InteractiveCommand::ShowStatus
+                    | InteractiveCommand::ListModels
+                    | InteractiveCommand::ListProviders
+                    | InteractiveCommand::ListThemes
+                    | InteractiveCommand::ListPresets
+                    | InteractiveCommand::ListSessions
+                    | InteractiveCommand::ParentSession
+                    | InteractiveCommand::ListTasks
+                    | InteractiveCommand::ListAgents
+                    | InteractiveCommand::Copy
+                    | InteractiveCommand::ToggleSidebar
+                    | InteractiveCommand::SelectModel(_)
+                    | InteractiveCommand::SelectPreset(_)
+                    | InteractiveCommand::SelectAgent(_) => {}
                 }
-                InteractiveCommand::Unknown(name) => {
-                    let _ = print_block(
-                        Some(&runtime),
-                        OutputBlock::Status(StatusBlock::warning(format!(
-                            "Unknown command: /{}. Type /help for available commands.",
-                            name
-                        ))),
-                        &repl_style,
-                    );
-                }
-                InteractiveCommand::Exit
-                | InteractiveCommand::ShowHelp
-                | InteractiveCommand::ShowRecovery
-                | InteractiveCommand::NewSession
-                | InteractiveCommand::ShowStatus
-                | InteractiveCommand::ListModels
-                | InteractiveCommand::ListProviders
-                | InteractiveCommand::ListThemes
-                | InteractiveCommand::ListPresets
-                | InteractiveCommand::ListSessions
-                | InteractiveCommand::ParentSession
-                | InteractiveCommand::ListTasks
-                | InteractiveCommand::ListAgents
-                | InteractiveCommand::Copy
-                | InteractiveCommand::ToggleSidebar
-                | InteractiveCommand::SelectModel(_)
-                | InteractiveCommand::SelectPreset(_)
-                | InteractiveCommand::SelectAgent(_) => {}
+                continue;
             }
-            continue;
         }
 
         runtime.busy_flag.store(true, Ordering::SeqCst);

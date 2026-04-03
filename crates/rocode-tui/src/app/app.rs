@@ -160,6 +160,7 @@ pub struct App {
     pending_question_ids: HashSet<String>,
     pending_question_queue: VecDeque<String>,
     pending_questions: HashMap<String, QuestionInfo>,
+    pending_question_drafts: HashMap<String, PendingQuestionDraft>,
     pending_initial_submit: bool,
     pending_session_sync: Option<String>,
     pending_session_sync_due_at: Option<Instant>,
@@ -189,6 +190,12 @@ struct QueuedPrompt {
     display_mode: Option<String>,
     model: Option<String>,
     variant: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct PendingQuestionDraft {
+    current_index: usize,
+    answers: Vec<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -367,6 +374,7 @@ impl App {
             pending_question_ids: HashSet::new(),
             pending_question_queue: VecDeque::new(),
             pending_questions: HashMap::new(),
+            pending_question_drafts: HashMap::new(),
             pending_initial_submit,
             pending_session_sync: None,
             pending_session_sync_due_at: None,
@@ -943,16 +951,6 @@ impl App {
                     return Ok(());
                 }
 
-                // Slash command popup: open when '/' is typed at position 0
-                if key.code == KeyCode::Char('/')
-                    && key.modifiers.is_empty()
-                    && self.prompt.cursor_position() == 0
-                    && self.prompt.get_input().is_empty()
-                {
-                    self.slash_popup.open();
-                    return Ok(());
-                }
-
                 let route = self.context.current_route();
                 match route {
                     Route::Home | Route::Session { .. } => {
@@ -1139,6 +1137,7 @@ impl App {
                     optimistic_session_id,
                     optimistic_message_id,
                     created_session,
+                    response,
                     error,
                 } => {
                     if let Some(session) = created_session.as_deref() {
@@ -1162,9 +1161,19 @@ impl App {
                                 .set_message(&format!("Failed to send prompt:\n{}", err));
                             self.alert_dialog.open();
                         } else {
-                            self.set_session_status(&session.id, SessionStatus::Running);
-                            self.prompt.set_spinner_task_kind(TaskKind::LlmRequest);
-                            self.prompt.set_spinner_active(true);
+                            match response.as_ref().map(|response| response.status.as_str()) {
+                                Some("awaiting_user") => {
+                                    self.set_session_status(&session.id, SessionStatus::Idle);
+                                    self.prompt.set_spinner_active(false);
+                                    self.refresh_session_runtime(&session.id);
+                                    self.sync_question_requests();
+                                }
+                                _ => {
+                                    self.set_session_status(&session.id, SessionStatus::Running);
+                                    self.prompt.set_spinner_task_kind(TaskKind::LlmRequest);
+                                    self.prompt.set_spinner_active(true);
+                                }
+                            }
                         }
                     } else {
                         self.remove_optimistic_session(optimistic_session_id);
@@ -1188,6 +1197,7 @@ impl App {
                 CustomEvent::PromptDispatchSessionFinished {
                     session_id,
                     optimistic_message_id,
+                    response,
                     error,
                 } => {
                     if let Some(err) = error {
@@ -1198,6 +1208,14 @@ impl App {
                         self.alert_dialog
                             .set_message(&format!("Failed to send prompt:\n{}", err));
                         self.alert_dialog.open();
+                    } else if matches!(
+                        response.as_ref().map(|response| response.status.as_str()),
+                        Some("awaiting_user")
+                    ) {
+                        self.set_session_status(session_id, SessionStatus::Idle);
+                        self.prompt.set_spinner_active(false);
+                        self.refresh_session_runtime(session_id);
+                        self.sync_question_requests();
                     }
                     self.event_caused_change = true;
                 }
@@ -1782,14 +1800,17 @@ mod tests {
     }
 
     #[test]
-    fn question_info_to_prompt_appends_other_option_once() {
-        let prompt = App::question_info_to_prompt(&QuestionInfo {
-            id: "q1".to_string(),
-            session_id: "s1".to_string(),
-            questions: vec!["Pick one".to_string()],
-            options: Some(vec![vec!["Yes".to_string(), "No".to_string()]]),
-            items: Vec::new(),
-        })
+    fn question_prompt_at_appends_other_option_once() {
+        let prompt = App::question_prompt_at(
+            &QuestionInfo {
+                id: "q1".to_string(),
+                session_id: "s1".to_string(),
+                questions: vec!["Pick one".to_string()],
+                options: Some(vec![vec!["Yes".to_string(), "No".to_string()]]),
+                items: Vec::new(),
+            },
+            0,
+        )
         .expect("prompt should exist");
 
         assert_eq!(prompt.question_type, QuestionType::SingleChoice);

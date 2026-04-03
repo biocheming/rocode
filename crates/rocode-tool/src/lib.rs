@@ -34,6 +34,7 @@ pub mod task;
 pub mod task_flow;
 pub mod todo;
 pub mod tool;
+pub mod tool_access;
 pub mod truncation;
 pub mod web_page;
 pub mod webfetch;

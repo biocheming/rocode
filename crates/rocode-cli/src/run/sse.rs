@@ -1,3 +1,201 @@
+fn pending_command_from_session(
+    session: &crate::api_client::SessionInfo,
+    question_id: &str,
+) -> Option<crate::api_client::PendingCommandInvocation> {
+    let metadata = session.metadata.as_ref()?;
+    let pending = metadata.get("pending_command_invocation")?.clone();
+    let pending =
+        serde_json::from_value::<crate::api_client::PendingCommandInvocation>(pending).ok()?;
+    if pending
+        .question_id
+        .as_deref()
+        .is_some_and(|candidate| candidate != question_id)
+    {
+        return None;
+    }
+    Some(pending)
+}
+
+fn shell_quote_command_value(value: &str) -> String {
+    if value.is_empty() {
+        return "\"\"".to_string();
+    }
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '-' | '_' | '.' | '*' | ':'))
+    {
+        return value.to_string();
+    }
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn split_repeatable_answer(answer: &str) -> Vec<String> {
+    answer
+        .split(|ch: char| matches!(ch, '\n' | ',' | '\t'))
+        .flat_map(|segment| segment.split_whitespace())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn merge_pending_command_arguments(
+    pending: &crate::api_client::PendingCommandInvocation,
+    answers: &[Vec<String>],
+) -> String {
+    let mut parts = Vec::new();
+    let raw = pending.raw_arguments.trim();
+    if !raw.is_empty() {
+        parts.push(raw.to_string());
+    }
+
+    for (index, field) in pending.missing_fields.iter().enumerate() {
+        let answer_values = answers.get(index).cloned().unwrap_or_default();
+        let expanded_values = answer_values
+            .into_iter()
+            .flat_map(|value| {
+                if value.contains('\n') || value.contains(',') {
+                    split_repeatable_answer(&value)
+                } else {
+                    vec![value]
+                }
+            })
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>();
+        if expanded_values.is_empty() {
+            continue;
+        }
+        parts.push(format!("--{}", field));
+        parts.extend(
+            expanded_values
+                .iter()
+                .map(|value| shell_quote_command_value(value)),
+        );
+    }
+
+    parts.join(" ").trim().to_string()
+}
+
+fn question_defs_from_info(
+    info: &crate::api_client::QuestionInfo,
+) -> Vec<rocode_tool::QuestionDef> {
+    if !info.items.is_empty() {
+        return info
+            .items
+            .iter()
+            .map(|item| rocode_tool::QuestionDef {
+                question: item.question.clone(),
+                header: item.header.clone(),
+                options: item
+                    .options
+                    .iter()
+                    .map(|option| rocode_tool::QuestionOption {
+                        label: option.label.clone(),
+                        description: option.description.clone(),
+                    })
+                    .collect(),
+                multiple: item.multiple,
+            })
+            .collect();
+    }
+
+    info.questions
+        .iter()
+        .enumerate()
+        .map(|(index, question)| rocode_tool::QuestionDef {
+            question: question.clone(),
+            header: None,
+            options: info
+                .options
+                .as_ref()
+                .and_then(|all| all.get(index))
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|label| rocode_tool::QuestionOption {
+                    label,
+                    description: None,
+                })
+                .collect(),
+            multiple: false,
+        })
+        .collect()
+}
+
+async fn resolve_prompt_submission(
+    runtime: &CliExecutionRuntime,
+    api_client: &Arc<CliApiClient>,
+    session_id: &str,
+    style: &CliStyle,
+    prompt_response: crate::api_client::PromptResponse,
+) -> anyhow::Result<(crate::api_client::PromptResponse, std::collections::HashSet<String>)> {
+    let mut response = prompt_response;
+    let mut ignored_question_ids = std::collections::HashSet::new();
+
+    loop {
+        if response.status != "awaiting_user" {
+            return Ok((response, ignored_question_ids));
+        }
+
+        let Some(question_id) = response.pending_question_id.clone() else {
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::error(
+                    "Command is awaiting user input, but no question id was returned.",
+                )),
+                style,
+            );
+            anyhow::bail!("prompt returned awaiting_user without pending_question_id");
+        };
+        ignored_question_ids.insert(question_id.clone());
+
+        let questions = api_client
+            .list_questions()
+            .await?
+            .into_iter()
+            .find(|question| question.id == question_id)
+            .map(|question| question_defs_from_info(&question))
+            .unwrap_or_default();
+        if questions.is_empty() {
+            anyhow::bail!("pending question `{}` was not available to answer", question_id);
+        }
+
+        let guard = runtime
+            .spinner_guard
+            .lock()
+            .map(|spinner| spinner.clone())
+            .unwrap_or_else(|_| SpinnerGuard::noop());
+        let answers = cli_ask_question(
+            questions,
+            runtime.observed_topology.clone(),
+            runtime.frontend_projection.clone(),
+            runtime.prompt_session_slot.clone(),
+            runtime.terminal_surface.clone(),
+            guard,
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("command question failed: {}", error))?;
+        api_client.reply_question(&question_id, answers.clone()).await?;
+
+        let session = api_client.get_session(session_id).await?;
+        let Some(pending) = pending_command_from_session(&session, &question_id) else {
+            return Ok((response, ignored_question_ids));
+        };
+        let arguments = merge_pending_command_arguments(&pending, &answers);
+        response = api_client
+            .send_command_prompt(
+                session_id,
+                pending.command.clone(),
+                (!arguments.trim().is_empty()).then_some(arguments),
+                (runtime.resolved_model_label != "auto")
+                    .then(|| runtime.resolved_model_label.clone()),
+                None,
+            )
+            .await?;
+    }
+}
+
 async fn run_server_prompt(
     runtime: &mut CliExecutionRuntime,
     api_client: &Arc<CliApiClient>,
@@ -55,7 +253,7 @@ async fn run_server_prompt(
         runtime.resolved_scheduler_profile_name.as_deref(),
     );
 
-    if let Err(error) = api_client
+    let prompt_response = match api_client
         .send_prompt(
             &session_id,
             input.to_string(),
@@ -67,6 +265,8 @@ async fn run_server_prompt(
         )
         .await
     {
+        Ok(response) => response,
+        Err(error) => {
         cli_frontend_set_phase(
             &runtime.frontend_projection,
             CliFrontendPhase::Failed,
@@ -84,7 +284,11 @@ async fn run_server_prompt(
         *active_abort = None;
         cli_frontend_clear(runtime);
         return Ok(());
-    }
+        }
+    };
+
+    let (_accepted_response, ignored_question_ids) =
+        resolve_prompt_submission(runtime, api_client, &session_id, style, prompt_response).await?;
 
     loop {
         match sse_rx.recv().await {
@@ -93,10 +297,18 @@ async fn run_server_prompt(
                 session_id,
                 questions_json,
             }) => {
+                if ignored_question_ids.contains(&request_id) {
+                    continue;
+                }
                 if cli_tracks_related_session(runtime, &session_id) {
                     handle_question_from_sse(runtime, api_client, &request_id, &questions_json)
                         .await;
                 }
+            }
+            Some(CliServerEvent::QuestionResolved { request_id })
+                if ignored_question_ids.contains(&request_id) =>
+            {
+                continue;
             }
             Some(CliServerEvent::PermissionRequested {
                 session_id,

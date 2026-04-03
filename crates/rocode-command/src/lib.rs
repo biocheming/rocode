@@ -36,6 +36,82 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandExecutionMode {
+    Scheduler,
+    Agent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandArgumentKind {
+    Text,
+    LongText,
+    GlobList,
+    CommandLine,
+    Integer,
+    Boolean,
+    Enum,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CommandArgumentOption {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CommandArgumentField {
+    pub key: String,
+    pub label: String,
+    #[serde(default)]
+    pub required: bool,
+    pub kind: CommandArgumentKind,
+    #[serde(default)]
+    pub repeatable: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<CommandArgumentOption>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CommandInvocationSpec {
+    pub mode: CommandExecutionMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_scheduler_profile: Option<String>,
+    #[serde(default)]
+    pub allow_inline_arguments: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub argument_schema: Vec<CommandArgumentField>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InteractivePolicy {
+    None,
+    AskBatchOnce,
+    AskPerStep,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CommandQuestionTemplate {
+    pub id: String,
+    pub header: String,
+    pub field_key: String,
+    pub prompt: String,
+    pub input_kind: CommandArgumentKind,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<CommandArgumentOption>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CommandInteractiveSpec {
+    pub when_missing_required: InteractivePolicy,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub questions: Vec<CommandQuestionTemplate>,
+}
+
 /// Command metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Command {
@@ -44,6 +120,12 @@ pub struct Command {
     pub template: String,
     #[serde(default)]
     pub scheduler_profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation: Option<CommandInvocationSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interactive: Option<CommandInteractiveSpec>,
     pub source: CommandSource,
 }
 
@@ -59,6 +141,7 @@ pub enum CommandSource {
 #[derive(Debug, Clone)]
 pub struct CommandContext {
     pub arguments: Vec<String>,
+    pub raw_arguments: Option<String>,
     pub variables: HashMap<String, String>,
     pub working_directory: PathBuf,
 }
@@ -67,6 +150,7 @@ impl CommandContext {
     pub fn new(working_directory: PathBuf) -> Self {
         Self {
             arguments: Vec::new(),
+            raw_arguments: None,
             variables: HashMap::new(),
             working_directory,
         }
@@ -77,15 +161,28 @@ impl CommandContext {
         self
     }
 
+    pub fn with_raw_arguments(mut self, raw_arguments: impl Into<String>) -> Self {
+        self.raw_arguments = Some(raw_arguments.into());
+        self
+    }
+
     pub fn with_variable(mut self, key: String, value: String) -> Self {
         self.variables.insert(key, value);
         self
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ParsedCommandMatch<'a> {
+    pub command: &'a Command,
+    pub arguments: Vec<String>,
+    pub raw_arguments: String,
+}
+
 /// Command registry for loading and executing commands
 pub struct CommandRegistry {
     commands: HashMap<String, Command>,
+    command_aliases: HashMap<String, String>,
     ui_commands: Vec<UiCommandSpec>,
     ui_command_by_action: HashMap<UiActionId, usize>,
     ui_slash_aliases: HashMap<String, UiActionId>,
@@ -102,6 +199,7 @@ impl CommandRegistry {
     pub fn new() -> Self {
         let mut registry = Self {
             commands: HashMap::new(),
+            command_aliases: HashMap::new(),
             ui_commands: Vec::new(),
             ui_command_by_action: HashMap::new(),
             ui_slash_aliases: HashMap::new(),
@@ -118,6 +216,9 @@ impl CommandRegistry {
             description: "Initialize OpenCode in the current project".to_string(),
             template: include_str!("../commands/init.md").to_string(),
             scheduler_profile: None,
+            aliases: Vec::new(),
+            invocation: None,
+            interactive: None,
             source: CommandSource::Builtin,
         });
 
@@ -126,6 +227,9 @@ impl CommandRegistry {
             description: "Review the current changes in the project".to_string(),
             template: include_str!("../commands/review.md").to_string(),
             scheduler_profile: None,
+            aliases: Vec::new(),
+            invocation: None,
+            interactive: None,
             source: CommandSource::Builtin,
         });
 
@@ -134,6 +238,9 @@ impl CommandRegistry {
             description: "Create a git commit with the current changes".to_string(),
             template: include_str!("../commands/commit.md").to_string(),
             scheduler_profile: None,
+            aliases: Vec::new(),
+            invocation: None,
+            interactive: None,
             source: CommandSource::Builtin,
         });
 
@@ -142,6 +249,9 @@ impl CommandRegistry {
             description: "Run tests for the project".to_string(),
             template: include_str!("../commands/test.md").to_string(),
             scheduler_profile: None,
+            aliases: Vec::new(),
+            invocation: None,
+            interactive: None,
             source: CommandSource::Builtin,
         });
 
@@ -150,6 +260,285 @@ impl CommandRegistry {
             description: "Start Atlas execution session from Prometheus plan".to_string(),
             template: include_str!("../commands/start-work.md").to_string(),
             scheduler_profile: Some("atlas".to_string()),
+            aliases: Vec::new(),
+            invocation: None,
+            interactive: None,
+            source: CommandSource::Builtin,
+        });
+
+        self.register_autoresearch_commands();
+    }
+
+    fn register_autoresearch_commands(&mut self) {
+        let autoresearch_fields = vec![
+            CommandArgumentField {
+                key: "goal".to_string(),
+                label: "Goal".to_string(),
+                required: true,
+                kind: CommandArgumentKind::LongText,
+                repeatable: false,
+                options: Vec::new(),
+            },
+            CommandArgumentField {
+                key: "scope".to_string(),
+                label: "Scope".to_string(),
+                required: true,
+                kind: CommandArgumentKind::GlobList,
+                repeatable: true,
+                options: Vec::new(),
+            },
+            CommandArgumentField {
+                key: "metric".to_string(),
+                label: "Metric".to_string(),
+                required: true,
+                kind: CommandArgumentKind::LongText,
+                repeatable: false,
+                options: Vec::new(),
+            },
+            CommandArgumentField {
+                key: "verify".to_string(),
+                label: "Verify".to_string(),
+                required: true,
+                kind: CommandArgumentKind::CommandLine,
+                repeatable: false,
+                options: Vec::new(),
+            },
+            CommandArgumentField {
+                key: "guard".to_string(),
+                label: "Guard".to_string(),
+                required: false,
+                kind: CommandArgumentKind::CommandLine,
+                repeatable: false,
+                options: Vec::new(),
+            },
+            CommandArgumentField {
+                key: "iterations".to_string(),
+                label: "Iterations".to_string(),
+                required: false,
+                kind: CommandArgumentKind::Integer,
+                repeatable: false,
+                options: Vec::new(),
+            },
+        ];
+
+        let autoresearch_questions = vec![
+            CommandQuestionTemplate {
+                id: "goal".to_string(),
+                header: "Goal".to_string(),
+                field_key: "goal".to_string(),
+                prompt: "What should autoresearch improve?".to_string(),
+                input_kind: CommandArgumentKind::LongText,
+                options: Vec::new(),
+            },
+            CommandQuestionTemplate {
+                id: "scope".to_string(),
+                header: "Scope".to_string(),
+                field_key: "scope".to_string(),
+                prompt: "Which files or globs are in scope for modification?".to_string(),
+                input_kind: CommandArgumentKind::GlobList,
+                options: Vec::new(),
+            },
+            CommandQuestionTemplate {
+                id: "metric".to_string(),
+                header: "Metric".to_string(),
+                field_key: "metric".to_string(),
+                prompt: "What mechanical metric should be optimized?".to_string(),
+                input_kind: CommandArgumentKind::LongText,
+                options: Vec::new(),
+            },
+            CommandQuestionTemplate {
+                id: "verify".to_string(),
+                header: "Verify".to_string(),
+                field_key: "verify".to_string(),
+                prompt: "What command should verify progress on each iteration?".to_string(),
+                input_kind: CommandArgumentKind::CommandLine,
+                options: Vec::new(),
+            },
+        ];
+
+        self.register(Command {
+            name: "autoresearch".to_string(),
+            description: "Run the bounded autoresearch scheduler workflow".to_string(),
+            template: include_str!("../commands/autoresearch.md").to_string(),
+            scheduler_profile: Some("autoresearch-run".to_string()),
+            aliases: vec!["ar".to_string()],
+            invocation: Some(CommandInvocationSpec {
+                mode: CommandExecutionMode::Scheduler,
+                default_scheduler_profile: Some("autoresearch-run".to_string()),
+                allow_inline_arguments: true,
+                argument_schema: autoresearch_fields.clone(),
+            }),
+            interactive: Some(CommandInteractiveSpec {
+                when_missing_required: InteractivePolicy::AskBatchOnce,
+                questions: autoresearch_questions,
+            }),
+            source: CommandSource::Builtin,
+        });
+
+        self.register(Command {
+            name: "autoresearch:plan".to_string(),
+            description: "Plan an autoresearch workflow from a plain-language goal".to_string(),
+            template: include_str!("../commands/autoresearch-plan.md").to_string(),
+            scheduler_profile: Some("autoresearch-plan".to_string()),
+            aliases: Vec::new(),
+            invocation: Some(CommandInvocationSpec {
+                mode: CommandExecutionMode::Scheduler,
+                default_scheduler_profile: Some("autoresearch-plan".to_string()),
+                allow_inline_arguments: true,
+                argument_schema: vec![CommandArgumentField {
+                    key: "goal".to_string(),
+                    label: "Goal".to_string(),
+                    required: true,
+                    kind: CommandArgumentKind::LongText,
+                    repeatable: false,
+                    options: Vec::new(),
+                }],
+            }),
+            interactive: Some(CommandInteractiveSpec {
+                when_missing_required: InteractivePolicy::AskBatchOnce,
+                questions: vec![CommandQuestionTemplate {
+                    id: "goal".to_string(),
+                    header: "Goal".to_string(),
+                    field_key: "goal".to_string(),
+                    prompt: "What should the plan optimize or achieve?".to_string(),
+                    input_kind: CommandArgumentKind::LongText,
+                    options: Vec::new(),
+                }],
+            }),
+            source: CommandSource::Builtin,
+        });
+
+        self.register(Command {
+            name: "autoresearch:debug".to_string(),
+            description: "Run the autoresearch debug workflow".to_string(),
+            template: include_str!("../commands/autoresearch-debug.md").to_string(),
+            scheduler_profile: Some("autoresearch-debug".to_string()),
+            aliases: Vec::new(),
+            invocation: Some(CommandInvocationSpec {
+                mode: CommandExecutionMode::Scheduler,
+                default_scheduler_profile: Some("autoresearch-debug".to_string()),
+                allow_inline_arguments: true,
+                argument_schema: vec![
+                    CommandArgumentField {
+                        key: "symptom".to_string(),
+                        label: "Symptom".to_string(),
+                        required: true,
+                        kind: CommandArgumentKind::LongText,
+                        repeatable: false,
+                        options: Vec::new(),
+                    },
+                    CommandArgumentField {
+                        key: "scope".to_string(),
+                        label: "Scope".to_string(),
+                        required: false,
+                        kind: CommandArgumentKind::GlobList,
+                        repeatable: true,
+                        options: Vec::new(),
+                    },
+                ],
+            }),
+            interactive: Some(CommandInteractiveSpec {
+                when_missing_required: InteractivePolicy::AskBatchOnce,
+                questions: vec![CommandQuestionTemplate {
+                    id: "symptom".to_string(),
+                    header: "Issue".to_string(),
+                    field_key: "symptom".to_string(),
+                    prompt: "What bug or failure should the debug workflow investigate?"
+                        .to_string(),
+                    input_kind: CommandArgumentKind::LongText,
+                    options: Vec::new(),
+                }],
+            }),
+            source: CommandSource::Builtin,
+        });
+
+        self.register(Command {
+            name: "autoresearch:fix".to_string(),
+            description: "Run the autoresearch fix workflow".to_string(),
+            template: include_str!("../commands/autoresearch-fix.md").to_string(),
+            scheduler_profile: Some("autoresearch-fix".to_string()),
+            aliases: Vec::new(),
+            invocation: Some(CommandInvocationSpec {
+                mode: CommandExecutionMode::Scheduler,
+                default_scheduler_profile: Some("autoresearch-fix".to_string()),
+                allow_inline_arguments: true,
+                argument_schema: vec![CommandArgumentField {
+                    key: "verify".to_string(),
+                    label: "Verify".to_string(),
+                    required: true,
+                    kind: CommandArgumentKind::CommandLine,
+                    repeatable: false,
+                    options: Vec::new(),
+                }],
+            }),
+            interactive: Some(CommandInteractiveSpec {
+                when_missing_required: InteractivePolicy::AskBatchOnce,
+                questions: vec![CommandQuestionTemplate {
+                    id: "verify".to_string(),
+                    header: "Verify".to_string(),
+                    field_key: "verify".to_string(),
+                    prompt: "What command should define the broken state and confirm the fix?"
+                        .to_string(),
+                    input_kind: CommandArgumentKind::CommandLine,
+                    options: Vec::new(),
+                }],
+            }),
+            source: CommandSource::Builtin,
+        });
+
+        self.register(Command {
+            name: "autoresearch:security".to_string(),
+            description: "Run the autoresearch security workflow".to_string(),
+            template: include_str!("../commands/autoresearch-security.md").to_string(),
+            scheduler_profile: Some("autoresearch-security".to_string()),
+            aliases: Vec::new(),
+            invocation: Some(CommandInvocationSpec {
+                mode: CommandExecutionMode::Scheduler,
+                default_scheduler_profile: Some("autoresearch-security".to_string()),
+                allow_inline_arguments: true,
+                argument_schema: vec![CommandArgumentField {
+                    key: "scope".to_string(),
+                    label: "Scope".to_string(),
+                    required: false,
+                    kind: CommandArgumentKind::GlobList,
+                    repeatable: true,
+                    options: Vec::new(),
+                }],
+            }),
+            interactive: None,
+            source: CommandSource::Builtin,
+        });
+
+        self.register(Command {
+            name: "autoresearch:ship".to_string(),
+            description: "Run the autoresearch ship workflow".to_string(),
+            template: include_str!("../commands/autoresearch-ship.md").to_string(),
+            scheduler_profile: Some("autoresearch-ship".to_string()),
+            aliases: Vec::new(),
+            invocation: Some(CommandInvocationSpec {
+                mode: CommandExecutionMode::Scheduler,
+                default_scheduler_profile: Some("autoresearch-ship".to_string()),
+                allow_inline_arguments: true,
+                argument_schema: vec![CommandArgumentField {
+                    key: "target".to_string(),
+                    label: "Target".to_string(),
+                    required: true,
+                    kind: CommandArgumentKind::LongText,
+                    repeatable: false,
+                    options: Vec::new(),
+                }],
+            }),
+            interactive: Some(CommandInteractiveSpec {
+                when_missing_required: InteractivePolicy::AskBatchOnce,
+                questions: vec![CommandQuestionTemplate {
+                    id: "target".to_string(),
+                    header: "Target".to_string(),
+                    field_key: "target".to_string(),
+                    prompt: "What artifact, release, or deliverable should be shipped?".to_string(),
+                    input_kind: CommandArgumentKind::LongText,
+                    options: Vec::new(),
+                }],
+            }),
             source: CommandSource::Builtin,
         });
     }
@@ -177,6 +566,13 @@ impl CommandRegistry {
 
     /// Register a new command
     pub fn register(&mut self, command: Command) {
+        for alias in &command.aliases {
+            let normalized = alias.trim().trim_start_matches('/').to_string();
+            if !normalized.is_empty() {
+                self.command_aliases
+                    .insert(normalized, command.name.clone());
+            }
+        }
         self.commands.insert(command.name.clone(), command);
     }
 
@@ -218,6 +614,9 @@ impl CommandRegistry {
                 description,
                 template,
                 scheduler_profile: None,
+                aliases: Vec::new(),
+                invocation: None,
+                interactive: None,
                 source: CommandSource::File(path),
             });
         }
@@ -225,24 +624,44 @@ impl CommandRegistry {
         Ok(())
     }
 
-    pub fn parse(&self, input: &str) -> Option<(&Command, Vec<String>)> {
+    pub fn parse_invocation(&self, input: &str) -> Option<ParsedCommandMatch<'_>> {
         let input = input.trim_start();
 
         if !input.starts_with('/') {
             return None;
         }
 
-        let input = &input[1..];
-        let parts: Vec<&str> = input.split_whitespace().collect();
-
-        if parts.is_empty() {
+        let body = &input[1..];
+        let mut parts = body.splitn(2, char::is_whitespace);
+        let name = parts.next()?.trim();
+        if name.is_empty() {
             return None;
         }
+        let raw_arguments = parts.next().map(str::trim).unwrap_or("").to_string();
+        let arguments = if raw_arguments.is_empty() {
+            Vec::new()
+        } else {
+            raw_arguments
+                .split_whitespace()
+                .map(|value| value.to_string())
+                .collect()
+        };
+        let command = self.commands.get(name).or_else(|| {
+            self.command_aliases
+                .get(name)
+                .and_then(|canonical| self.commands.get(canonical))
+        })?;
 
-        let name = parts[0];
-        let args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
+        Some(ParsedCommandMatch {
+            command,
+            arguments,
+            raw_arguments,
+        })
+    }
 
-        self.commands.get(name).map(|cmd| (cmd, args))
+    pub fn parse(&self, input: &str) -> Option<(&Command, Vec<String>)> {
+        self.parse_invocation(input)
+            .map(|parsed| (parsed.command, parsed.arguments))
     }
 
     /// Execute a command and return the rendered template
@@ -310,7 +729,8 @@ impl CommandRegistry {
         }
 
         let all_args = ctx.arguments.join(" ");
-        result = result.replace("$ARGUMENTS", &all_args);
+        let raw_arguments = ctx.raw_arguments.as_deref().unwrap_or(&all_args);
+        result = result.replace("$ARGUMENTS", raw_arguments);
 
         for (key, value) in &ctx.variables {
             let placeholder = format!("${{{}}}", key);
@@ -568,5 +988,49 @@ mod tests {
 
         assert_eq!(registry.resolve_ui_slash_input("/rename demo"), None);
         assert_eq!(registry.resolve_ui_slash_input("/copy extra"), None);
+    }
+
+    #[test]
+    fn parse_invocation_preserves_raw_command_arguments() {
+        let registry = CommandRegistry::new();
+        let parsed = registry
+            .parse_invocation("/autoresearch Goal: Improve coverage\nVerify: cargo test")
+            .expect("command should parse");
+
+        assert_eq!(parsed.command.name, "autoresearch");
+        assert_eq!(
+            parsed.raw_arguments,
+            "Goal: Improve coverage\nVerify: cargo test"
+        );
+    }
+
+    #[test]
+    fn autoresearch_builtin_commands_expose_scheduler_metadata() {
+        let registry = CommandRegistry::new();
+        let command = registry.get("autoresearch").expect("autoresearch command");
+        let invocation = command.invocation.as_ref().expect("invocation metadata");
+        let interactive = command.interactive.as_ref().expect("interactive metadata");
+
+        assert_eq!(
+            command.scheduler_profile.as_deref(),
+            Some("autoresearch-run")
+        );
+        assert_eq!(command.aliases, vec!["ar".to_string()]);
+        assert_eq!(
+            invocation.default_scheduler_profile.as_deref(),
+            Some("autoresearch-run")
+        );
+        assert!(invocation
+            .argument_schema
+            .iter()
+            .any(|field| field.key == "goal" && field.required));
+        assert_eq!(
+            interactive.when_missing_required,
+            InteractivePolicy::AskBatchOnce
+        );
+        assert!(interactive
+            .questions
+            .iter()
+            .any(|question| question.field_key == "verify"));
     }
 }

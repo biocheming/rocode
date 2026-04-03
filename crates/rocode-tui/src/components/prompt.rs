@@ -1171,6 +1171,12 @@ impl Prompt {
     }
 
     fn hint_line(&self, theme: &Theme) -> Line<'static> {
+        if let Some((_, _, token)) = self.current_token() {
+            if token.starts_with('/') {
+                return self.slash_hint_line(theme, &token);
+            }
+        }
+
         let keybind = self.context.keybind.read();
         let variant_cycle = keybind.print("variant_cycle");
         let agent_cycle = keybind.print("agent_cycle");
@@ -1197,6 +1203,45 @@ impl Prompt {
             " commands",
             Style::default().fg(theme.text_muted),
         ));
+        Line::from(spans)
+    }
+
+    fn slash_hint_line(&self, theme: &Theme, token: &str) -> Line<'static> {
+        let mut spans = vec![
+            Span::styled("Tab", Style::default().fg(theme.text)),
+            Span::styled(" autocomplete", Style::default().fg(theme.text_muted)),
+        ];
+
+        let preview = self
+            .suggestions
+            .iter()
+            .filter(|item| item.starts_with('/'))
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if preview.is_empty() {
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(
+                token.to_string(),
+                Style::default().fg(theme.primary),
+            ));
+            spans.push(Span::styled(
+                " will be sent directly",
+                Style::default().fg(theme.text_muted),
+            ));
+            return Line::from(spans);
+        }
+
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            "matches:",
+            Style::default().fg(theme.text_muted),
+        ));
+        for item in preview {
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(item, Style::default().fg(theme.primary)));
+        }
         Line::from(spans)
     }
 }

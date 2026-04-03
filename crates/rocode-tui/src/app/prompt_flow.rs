@@ -148,31 +148,29 @@ impl App {
                 let _ = self.draw();
                 let event_tx = self.event_tx.clone();
                 thread::spawn(move || {
-                    let (created_session, error) = match client
+                    let (created_session, response, error) = match client
                         .create_session(None, selected_mode.scheduler_profile.clone())
                     {
-                        Ok(session) => {
-                            let error = client
-                                .send_prompt(
-                                    &session.id,
-                                    input,
-                                    None,
-                                    selected_mode.agent,
-                                    selected_mode.scheduler_profile,
-                                    model,
-                                    variant,
-                                )
-                                .err()
-                                .map(|e| e.to_string());
-                            (Some(session), error)
-                        }
-                        Err(err) => (None, Some(err.to_string())),
+                        Ok(session) => match client.send_prompt(
+                            &session.id,
+                            input,
+                            None,
+                            selected_mode.agent,
+                            selected_mode.scheduler_profile,
+                            model,
+                            variant,
+                        ) {
+                            Ok(response) => (Some(session), Some(response), None),
+                            Err(err) => (Some(session), None, Some(err.to_string())),
+                        },
+                        Err(err) => (None, None, Some(err.to_string())),
                     };
                     let _ = event_tx.send(Event::Custom(Box::new(
                         CustomEvent::PromptDispatchHomeFinished {
                             optimistic_session_id,
                             optimistic_message_id: opt_id,
                             created_session: created_session.map(Box::new),
+                            response,
                             error,
                         },
                     )));
@@ -266,22 +264,23 @@ impl App {
         let event_tx = self.event_tx.clone();
         let session_id = session_id.to_string();
         thread::spawn(move || {
-            let error = client
-                .send_prompt(
-                    &session_id,
-                    input,
-                    None,
-                    agent,
-                    scheduler_profile,
-                    model,
-                    variant,
-                )
-                .err()
-                .map(|e| e.to_string());
+            let (response, error) = match client.send_prompt(
+                &session_id,
+                input,
+                None,
+                agent,
+                scheduler_profile,
+                model,
+                variant,
+            ) {
+                Ok(response) => (Some(response), None),
+                Err(err) => (None, Some(err.to_string())),
+            };
             let _ = event_tx.send(Event::Custom(Box::new(
                 CustomEvent::PromptDispatchSessionFinished {
                     session_id,
                     optimistic_message_id: opt_id,
+                    response,
                     error,
                 },
             )));

@@ -467,8 +467,12 @@ impl App {
             InteractiveCommand::InspectStage(_stage_id) => {
                 // Stage inspection not yet wired in TUI — planned for inspector panel
             }
-            InteractiveCommand::Unknown(_)
-            | InteractiveCommand::Exit
+            InteractiveCommand::Unknown(_) => {
+                // Forward unknown slash commands to the server-side command registry
+                // so built-in/custom scheduler commands like `/autoresearch` still work.
+                return Ok(false);
+            }
+            InteractiveCommand::Exit
             | InteractiveCommand::ShowHelp
             | InteractiveCommand::Abort
             | InteractiveCommand::ShowRecovery

@@ -6,6 +6,7 @@ use super::super::profile_state::{
 use super::*;
 use crate::runtime::events::FinishReason;
 use crate::traits::{AgentResolver, ModelResolver, NoopLifecycleHook, ToolExecutor};
+use crate::workflow_mode::{mode_artifacts_from_metadata, WORKFLOW_MODE_ARTIFACTS_METADATA_KEY};
 use crate::{
     AgentDescriptor, DirectKind, ExecutionContext, ModelRef, Orchestrator, OrchestratorContext,
     ReviewMode, SchedulerEffectKind, SchedulerEffectMoment, SchedulerEffectSpec,
@@ -209,6 +210,75 @@ fn finalize_output_prefers_handoff_over_review_and_plan() {
 }
 
 #[test]
+fn finalize_output_merges_workflow_mode_artifacts_with_stage_precedence() {
+    let orchestrator = SchedulerProfileOrchestrator::new(
+        runtime_execution_plan("atlas"),
+        ToolRunner::new(Arc::new(NoopToolExecutor)),
+    );
+    let stage_output = |stage: &str, iteration: u32, status: &str| OrchestratorOutput {
+        content: format!("{stage} output"),
+        steps: 1,
+        tool_calls_count: 0,
+        metadata: HashMap::from([(
+            WORKFLOW_MODE_ARTIFACTS_METADATA_KEY.to_string(),
+            serde_json::json!([{
+                "name": "finding-registry",
+                "description": format!("{stage} registry"),
+                "entries": [{
+                    "iteration": iteration,
+                    "key": "shared-finding",
+                    "status": status,
+                    "title": format!("{stage} title"),
+                    "detail": format!("{stage} detail"),
+                    "evidence": [format!("{stage}-evidence")]
+                }]
+            }]),
+        )]),
+        finish_reason: FinishReason::EndTurn,
+    };
+    let state = SchedulerProfileState {
+        execution: SchedulerExecutionState {
+            delegated: Some(stage_output("delegated", 1, "open")),
+            reviewed: Some(stage_output("reviewed", 2, "triaged")),
+            handed_off: Some(stage_output("handed_off", 3, "ready")),
+            synthesized: Some(stage_output("synthesized", 4, "verified")),
+            ..Default::default()
+        },
+        metrics: SchedulerMetricsState {
+            total_steps: 4,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let output = orchestrator.finalize_output(state);
+    let artifacts = mode_artifacts_from_metadata(&output.metadata);
+    let finding = artifacts
+        .iter()
+        .find(|artifact| artifact.name == "finding-registry")
+        .and_then(|artifact| {
+            artifact
+                .entries
+                .iter()
+                .find(|entry| entry.key == "shared-finding")
+        })
+        .expect("shared finding should exist");
+
+    assert_eq!(finding.iteration, Some(4));
+    assert_eq!(finding.status, "verified");
+    assert_eq!(finding.title, "synthesized title");
+    assert_eq!(finding.detail, "synthesized detail");
+    assert!(finding.evidence.contains(&"delegated-evidence".to_string()));
+    assert!(finding.evidence.contains(&"reviewed-evidence".to_string()));
+    assert!(finding
+        .evidence
+        .contains(&"handed_off-evidence".to_string()));
+    assert!(finding
+        .evidence
+        .contains(&"synthesized-evidence".to_string()));
+}
+
+#[test]
 fn finalize_output_normalizes_sisyphus_delivery_shape() {
     let orchestrator = SchedulerProfileOrchestrator::new(
         SchedulerProfilePlan::new(vec![SchedulerStageKind::ExecutionOrchestration])
@@ -304,6 +374,135 @@ fn finalize_output_normalizes_hephaestus_delivery_shape() {
     assert!(output.content.contains("**Completion Status**"));
     assert!(output.content.contains("**What Changed**"));
     assert!(output.content.contains("**Verification**"));
+}
+
+#[test]
+fn gate_terminal_output_merges_supplemental_workflow_mode_artifacts() {
+    let plan = runtime_execution_plan("hephaestus");
+    let decision = SchedulerExecutionGateDecision {
+        status: SchedulerExecutionGateStatus::Done,
+        summary: "objective satisfied".to_string(),
+        next_input: None,
+        final_response: None,
+    };
+    let fallback_output = OrchestratorOutput {
+        content: "executor output".to_string(),
+        steps: 2,
+        tool_calls_count: 1,
+        metadata: HashMap::from([(
+            WORKFLOW_MODE_ARTIFACTS_METADATA_KEY.to_string(),
+            serde_json::json!([{
+                "name": "finding-registry",
+                "description": "base",
+                "entries": [{
+                    "iteration": 1,
+                    "key": "active-finding",
+                    "status": "open",
+                    "title": "Open finding",
+                    "detail": "base detail",
+                    "evidence": ["attack-scenario"]
+                }]
+            }]),
+        )]),
+        finish_reason: FinishReason::EndTurn,
+    };
+    let review_output = OrchestratorOutput {
+        content: "verification output".to_string(),
+        steps: 3,
+        tool_calls_count: 2,
+        metadata: HashMap::from([(
+            WORKFLOW_MODE_ARTIFACTS_METADATA_KEY.to_string(),
+            serde_json::json!([{
+                "name": "finding-registry",
+                "description": "reviewed",
+                "entries": [{
+                    "iteration": 2,
+                    "key": "active-finding",
+                    "status": "verified",
+                    "title": "Verified finding",
+                    "detail": "review detail",
+                    "evidence": ["file-line"]
+                }]
+            }]),
+        )]),
+        finish_reason: FinishReason::EndTurn,
+    };
+
+    let output = SchedulerProfileOrchestrator::gate_terminal_output(
+        &plan,
+        SchedulerExecutionGateStatus::Done,
+        &decision,
+        &fallback_output,
+        Some(&review_output),
+    )
+    .expect("terminal output should resolve");
+
+    let artifacts = output
+        .metadata
+        .get(WORKFLOW_MODE_ARTIFACTS_METADATA_KEY)
+        .expect("workflow mode artifacts should exist")
+        .to_string();
+    assert!(artifacts.contains("\"status\":\"verified\""));
+    assert!(artifacts.contains("attack-scenario"));
+    assert!(artifacts.contains("file-line"));
+    assert_eq!(output.steps, 5);
+    assert_eq!(output.tool_calls_count, 3);
+}
+
+#[test]
+fn retry_budget_exhausted_output_preserves_review_workflow_mode_artifacts() {
+    let plan = runtime_execution_plan("atlas");
+    let decision = SchedulerExecutionGateDecision {
+        status: SchedulerExecutionGateStatus::Continue,
+        summary: "need more evidence".to_string(),
+        next_input: Some("verify the unresolved item".to_string()),
+        final_response: None,
+    };
+    let previous_output = OrchestratorOutput {
+        content: "executor output".to_string(),
+        steps: 1,
+        tool_calls_count: 1,
+        metadata: HashMap::new(),
+        finish_reason: FinishReason::EndTurn,
+    };
+    let review_output = OrchestratorOutput {
+        content: "verification output".to_string(),
+        steps: 1,
+        tool_calls_count: 1,
+        metadata: HashMap::from([(
+            WORKFLOW_MODE_ARTIFACTS_METADATA_KEY.to_string(),
+            serde_json::json!([{
+                "name": "ship-checklist",
+                "description": "Ship checklist",
+                "entries": [{
+                    "iteration": 2,
+                    "key": "dry-run",
+                    "status": "passed",
+                    "title": "Dry-run",
+                    "detail": "Dry-run succeeded",
+                    "evidence": ["verify_passed=true"]
+                }]
+            }]),
+        )]),
+        finish_reason: FinishReason::EndTurn,
+    };
+
+    let output = SchedulerProfileOrchestrator::retry_budget_exhausted_output(
+        &plan,
+        3,
+        3,
+        &decision,
+        &previous_output,
+        Some(&review_output),
+    );
+
+    let artifacts = output
+        .metadata
+        .get(WORKFLOW_MODE_ARTIFACTS_METADATA_KEY)
+        .expect("workflow mode artifacts should exist")
+        .to_string();
+    assert!(artifacts.contains("ship-checklist"));
+    assert!(artifacts.contains("\"status\":\"passed\""));
 }
 
 #[derive(Default)]
@@ -715,6 +914,7 @@ fn hephaestus_done_gate_prefers_execution_output_when_final_response_missing() {
         SchedulerExecutionGateStatus::Done,
         &decision,
         &execution,
+        None,
     )
     .expect("done gate should resolve execution output");
 
@@ -750,6 +950,7 @@ fn sisyphus_done_gate_prefers_execution_output_when_final_response_missing() {
         SchedulerExecutionGateStatus::Done,
         &decision,
         &execution,
+        None,
     )
     .expect("done gate should resolve execution output");
 

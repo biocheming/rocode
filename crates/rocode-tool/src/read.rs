@@ -4,6 +4,9 @@ use tokio::fs;
 use walkdir::WalkDir;
 
 use crate::path_guard::{resolve_user_path, RootPathFallbackPolicy};
+use crate::tool_access::{
+    self, read_block_message, read_warning_message, ToolAccessKey, ToolAccessOutcome,
+};
 use crate::{Metadata, Tool, ToolContext, ToolError, ToolResult};
 
 const DEFAULT_READ_LIMIT: usize = 2000;
@@ -190,9 +193,21 @@ impl Tool for ReadTool {
         })?;
 
         if metadata.is_dir() {
+            let outcome = tool_access::record_tool_access(
+                &ctx.session_id,
+                ToolAccessKey::Read {
+                    path: path_str.clone(),
+                    offset,
+                    limit,
+                },
+            );
+            if let ToolAccessOutcome::Block { consecutive } = outcome {
+                return Err(ToolError::ExecutionError(read_block_message(consecutive)));
+            }
             ctx.do_file_time_read(path_str.clone()).await?;
             ctx.do_lsp_touch_file(path_str.clone(), false).await?;
-            return read_directory(&path, offset, limit, title);
+            let result = read_directory(&path, offset, limit, title)?;
+            return Ok(apply_repeated_access_feedback(result, outcome));
         }
 
         let content = fs::read(&path)
@@ -202,9 +217,21 @@ impl Tool for ReadTool {
         let mime = detect_mime(&path);
 
         if is_image_mime(&mime) || mime == "application/pdf" {
+            let outcome = tool_access::record_tool_access(
+                &ctx.session_id,
+                ToolAccessKey::Read {
+                    path: path_str.clone(),
+                    offset,
+                    limit,
+                },
+            );
+            if let ToolAccessOutcome::Block { consecutive } = outcome {
+                return Err(ToolError::ExecutionError(read_block_message(consecutive)));
+            }
             ctx.do_file_time_read(path_str.clone()).await?;
             ctx.do_lsp_touch_file(path_str.clone(), false).await?;
-            return handle_binary_file(&path, &content, &mime, title);
+            let result = handle_binary_file(&path, &content, &mime, title)?;
+            return Ok(apply_repeated_access_feedback(result, outcome));
         }
 
         if is_binary(&content) {
@@ -213,7 +240,18 @@ impl Tool for ReadTool {
 
         ctx.do_file_time_read(path_str.clone()).await?;
         ctx.do_lsp_touch_file(path_str.clone(), false).await?;
-        read_file_content(
+        let outcome = tool_access::record_tool_access(
+            &ctx.session_id,
+            ToolAccessKey::Read {
+                path: path_str.clone(),
+                offset,
+                limit,
+            },
+        );
+        if let ToolAccessOutcome::Block { consecutive } = outcome {
+            return Err(ToolError::ExecutionError(read_block_message(consecutive)));
+        }
+        let result = read_file_content(
             &path,
             &path_str,
             &content,
@@ -222,8 +260,29 @@ impl Tool for ReadTool {
             title,
             &ctx.project_root,
         )
-        .await
+        .await?;
+        Ok(apply_repeated_access_feedback(result, outcome))
     }
+}
+
+fn apply_repeated_access_feedback(
+    mut result: ToolResult,
+    outcome: ToolAccessOutcome,
+) -> ToolResult {
+    if let ToolAccessOutcome::Warn { consecutive } = outcome {
+        let warning = read_warning_message(consecutive);
+        result.output = format!("[Repeated read warning]\n{}\n\n{}", warning, result.output);
+        result.metadata.insert(
+            "toolAccessGuard".into(),
+            serde_json::json!({
+                "kind": "read",
+                "status": "warning",
+                "count": consecutive,
+                "message": warning,
+            }),
+        );
+    }
+    result
 }
 
 fn detect_mime(path: &Path) -> String {
@@ -411,6 +470,7 @@ async fn read_file_content(
     let mut result_lines: Vec<String> = Vec::new();
     let mut bytes = 0;
     let mut truncated_by_bytes = false;
+    let mut truncated_by_line = false;
 
     for (i, line_text) in lines
         .iter()
@@ -418,11 +478,8 @@ async fn read_file_content(
         .take(std::cmp::min(lines.len(), start + limit))
         .skip(start)
     {
-        let line = if line_text.len() > MAX_LINE_LENGTH {
-            format!("{}...", &line_text[..MAX_LINE_LENGTH])
-        } else {
-            (*line_text).to_string()
-        };
+        let (line, line_was_truncated) = truncate_line_for_output(line_text, MAX_LINE_LENGTH);
+        truncated_by_line |= line_was_truncated;
 
         let size = line.len() + if result_lines.is_empty() { 0 } else { 1 };
         if bytes + size > MAX_BYTES {
@@ -443,12 +500,17 @@ async fn read_file_content(
     let total_lines = lines.len();
     let last_read_line = start + result_lines.len();
     let has_more_lines = total_lines > last_read_line;
-    let truncated = has_more_lines || truncated_by_bytes;
+    let truncated = has_more_lines || truncated_by_bytes || truncated_by_line;
 
     let truncation_msg = if truncated_by_bytes {
         format!(
             "\n\n(Output truncated at {} bytes. Use 'offset' parameter to read beyond line {})",
             MAX_BYTES, last_read_line
+        )
+    } else if truncated_by_line {
+        format!(
+            "\n\n(Some lines were truncated at {} characters for display.)",
+            MAX_LINE_LENGTH
         )
     } else if has_more_lines {
         format!(
@@ -502,6 +564,16 @@ async fn read_file_content(
         },
         truncated,
     })
+}
+
+fn truncate_line_for_output(value: &str, max_chars: usize) -> (String, bool) {
+    let mut chars = value.chars();
+    let truncated: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        (format!("{truncated}..."), true)
+    } else {
+        (truncated, false)
+    }
 }
 
 fn is_binary(content: &[u8]) -> bool {
@@ -594,6 +666,9 @@ async fn find_instruction_file(dir: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tool_access::clear_tool_access_tracker;
+    use tempfile::tempdir;
+    use tokio::fs;
 
     #[tokio::test]
     async fn read_rejects_empty_file_path() {
@@ -647,5 +722,93 @@ mod tests {
                 .unwrap_or(false),
             "attachment url should contain data-url"
         );
+    }
+
+    #[tokio::test]
+    async fn read_file_content_truncates_multibyte_lines_without_panicking() {
+        let path = Path::new("/tmp/utf8-long-line.md");
+        let long_line = "教".repeat(MAX_LINE_LENGTH + 50);
+        let content = long_line.into_bytes();
+
+        let result = read_file_content(
+            path,
+            &path.display().to_string(),
+            &content,
+            1,
+            10,
+            "utf8-long-line.md".to_string(),
+            "/tmp",
+        )
+        .await
+        .expect("utf8 truncation should succeed");
+
+        assert!(result.output.contains("1: "));
+        assert!(result.output.contains("..."));
+        assert!(result.truncated);
+    }
+
+    #[tokio::test]
+    async fn repeated_reads_warn_on_third_and_block_on_fourth() {
+        let session_id = "read-tool-repeated-reads";
+        clear_tool_access_tracker(session_id);
+        let dir = tempdir().expect("tempdir");
+        let file_path = dir.path().join("demo.txt");
+        fs::write(&file_path, "line1\nline2\n")
+            .await
+            .expect("write demo file");
+        let tool = ReadTool::with_directory(dir.path());
+
+        for idx in 0..2 {
+            let result = tool
+                .execute(
+                    serde_json::json!({ "file_path": "demo.txt" }),
+                    ToolContext::new(
+                        session_id.to_string(),
+                        format!("message-{idx}"),
+                        dir.path().display().to_string(),
+                    ),
+                )
+                .await
+                .expect("read should succeed");
+            assert!(!result.output.contains("[Repeated read warning]"));
+        }
+
+        let warning = tool
+            .execute(
+                serde_json::json!({ "file_path": "demo.txt" }),
+                ToolContext::new(
+                    session_id.to_string(),
+                    "message-3".to_string(),
+                    dir.path().display().to_string(),
+                ),
+            )
+            .await
+            .expect("third read should warn");
+        assert!(warning.output.contains("[Repeated read warning]"));
+        assert_eq!(
+            warning
+                .metadata
+                .get("toolAccessGuard")
+                .and_then(|value| value.get("status"))
+                .and_then(|value| value.as_str()),
+            Some("warning")
+        );
+
+        let err = tool
+            .execute(
+                serde_json::json!({ "file_path": "demo.txt" }),
+                ToolContext::new(
+                    session_id.to_string(),
+                    "message-4".to_string(),
+                    dir.path().display().to_string(),
+                ),
+            )
+            .await
+            .expect_err("fourth read should be blocked");
+        match err {
+            ToolError::ExecutionError(message) => assert!(message.contains("BLOCKED")),
+            other => panic!("unexpected error: {other}"),
+        }
+        clear_tool_access_tracker(session_id);
     }
 }

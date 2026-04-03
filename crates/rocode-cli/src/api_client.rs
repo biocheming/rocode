@@ -17,11 +17,11 @@ use rocode_config::Config;
 pub use rocode_tui::api::{
     AgentInfo, CompactResponse, CreateSessionRequest, ExecuteRecoveryRequest, ExecuteShellRequest,
     ExecutionModeInfo, FullProviderListResponse, KnownProvidersResponse, McpAuthStartInfo,
-    McpStatusInfo, MessageInfo, MessageTokensInfo, PermissionRequestInfo, PromptPart,
-    PromptRequest,
-    ProviderConnectSchemaResponse, ProviderListResponse, QuestionInfo, RecoveryActionKind,
-    RevertRequest, RevertResponse, SessionExecutionTopology, SessionInfo, SessionRecoveryProtocol,
-    SessionRuntimeState, SessionStatusInfo, ShareResponse, UpdateSessionRequest,
+    McpStatusInfo, MessageInfo, MessageTokensInfo, PendingCommandInvocation, PermissionRequestInfo,
+    PromptPart, PromptRequest, PromptResponse, ProviderConnectSchemaResponse, ProviderListResponse,
+    QuestionInfo, RecoveryActionKind, RevertRequest, RevertResponse, SessionExecutionTopology,
+    SessionInfo, SessionRecoveryProtocol, SessionRuntimeState, SessionStatusInfo, ShareResponse,
+    UpdateSessionRequest,
 };
 
 /// Async HTTP client for communicating with the ROCode server.
@@ -131,10 +131,13 @@ impl CliApiClient {
         scheduler_profile: Option<String>,
         model: Option<String>,
         variant: Option<String>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> anyhow::Result<PromptResponse> {
         let url = server_url(&self.base_url, &format!("/session/{}/prompt", session_id));
         let req = PromptRequest {
-            message: parts.as_ref().map(|_| None).unwrap_or_else(|| Some(content)),
+            message: parts
+                .as_ref()
+                .map(|_| None)
+                .unwrap_or_else(|| Some(content)),
             parts,
             agent,
             scheduler_profile,
@@ -145,6 +148,29 @@ impl CliApiClient {
         };
         let resp = self.client.post(&url).json(&req).send().await?;
         Self::json_ok(resp, "send prompt").await
+    }
+
+    pub async fn send_command_prompt(
+        &self,
+        session_id: &str,
+        command: String,
+        arguments: Option<String>,
+        model: Option<String>,
+        variant: Option<String>,
+    ) -> anyhow::Result<PromptResponse> {
+        let url = server_url(&self.base_url, &format!("/session/{}/prompt", session_id));
+        let req = PromptRequest {
+            message: None,
+            parts: None,
+            agent: None,
+            scheduler_profile: None,
+            model,
+            variant,
+            command: Some(command),
+            arguments,
+        };
+        let resp = self.client.post(&url).json(&req).send().await?;
+        Self::json_ok(resp, "send command prompt").await
     }
 
     pub async fn abort_session(&self, session_id: &str) -> anyhow::Result<serde_json::Value> {

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://rocode.dev/schemas/scheduler-profile.schema.json",
+  "version": "2026-04-01",
+  "defaults": {
+    "profile": "pharmacy-research-autoresearch"
+  },
+  "profiles": {
+    "pharmacy-research-autoresearch": {
+      "orchestrator": "hephaestus",
+      "description": "Runnable pharmacy research autoresearch demo. Keep only changes that improve the local natural-product classification score while preserving the demo scripts and assets.",
+      "workflow": {
+        "workflow": {
+          "kind": "autoresearch",
+          "mode": "run"
+        },
+        "objective": {
+          "goal": "Increase the local natural-product classification score for the packaged research demo without breaking the demo scripts.",
+          "scope": {
+            "include": [
+              "docs/examples/scheduler/demo_assets/research_analysis/**",
+              "scripts/evaluate-natural-product-model.sh",
+              "scripts/check-pharmacy-demo-basics.sh"
+            ],
+            "exclude": [
+              "target/**"
+            ]
+          },
+          "direction": "higher-is-better",
+          "metric": {
+            "kind": "numeric-extract",
+            "pattern": "score=([0-9]+)"
+          },
+          "verify": {
+            "command": "./scripts/evaluate-natural-product-model.sh",
+            "timeoutMs": 120000
+          },
+          "guard": {
+            "command": "./scripts/check-pharmacy-demo-basics.sh",
+            "timeoutMs": 120000
+          }
+        },
+        "iterationPolicy": {
+          "mode": "bounded",
+          "maxIterations": 3,
+          "stuckThreshold": 2
+        },
+        "decisionPolicy": {
+          "baselineStrategy": "capture-before-first-iteration",
+          "keepConditions": [
+            "metric-improved",
+            "verify-passed"
+          ],
+          "discardConditions": [
+            "metric-regressed",
+            "metric-unchanged",
+            "verify-failed"
+          ]
+        },
+        "workspacePolicy": {
+          "snapshotStrategy": "patch-file"
+        }
+      },
+      "skillTree": {
+        "contextMarkdown": "Operate as an evidence-backed research-demo autoresearch loop. Improve the packaged natural-product classification assets one coherent change-set at a time and only keep changes when the measured score improves."
+      }
+    }
+  }
+}

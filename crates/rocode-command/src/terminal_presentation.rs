@@ -1282,6 +1282,53 @@ mod tests {
     }
 
     #[test]
+    fn semantic_stream_renderer_emits_reasoning_header_only_once_for_multiple_deltas() {
+        let style = CliStyle::plain();
+        let mut accumulator = TerminalStreamAccumulator::new();
+        let mut state = TerminalSemanticStreamRenderState::default();
+
+        accumulator.apply_output_block(
+            Some("assistant-1"),
+            &OutputBlock::Reasoning(OutputReasoningBlock::start()),
+        );
+        let reasoning_start = render_terminal_stream_block_semantic(
+            &mut state,
+            &accumulator,
+            &OutputBlock::Reasoning(OutputReasoningBlock::start()),
+            &style,
+            true,
+        );
+
+        accumulator.apply_output_block(
+            Some("assistant-1"),
+            &OutputBlock::Reasoning(OutputReasoningBlock::delta("alpha")),
+        );
+        let delta_one = render_terminal_stream_block_semantic(
+            &mut state,
+            &accumulator,
+            &OutputBlock::Reasoning(OutputReasoningBlock::delta("alpha")),
+            &style,
+            true,
+        );
+
+        accumulator.apply_output_block(
+            Some("assistant-1"),
+            &OutputBlock::Reasoning(OutputReasoningBlock::delta(" beta")),
+        );
+        let delta_two = render_terminal_stream_block_semantic(
+            &mut state,
+            &accumulator,
+            &OutputBlock::Reasoning(OutputReasoningBlock::delta(" beta")),
+            &style,
+            true,
+        );
+
+        assert_eq!(reasoning_start, "\n[thinking]\n│ ");
+        assert_eq!(delta_one, "alpha");
+        assert_eq!(delta_two, " beta");
+    }
+
+    #[test]
     fn semantic_stream_renderer_uses_segment_order_for_tool_start_and_result() {
         let style = CliStyle::plain();
         let mut accumulator = TerminalStreamAccumulator::new();

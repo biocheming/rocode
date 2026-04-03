@@ -16,6 +16,9 @@ pub mod skill_tree;
 pub mod tool_runner;
 pub mod traits;
 pub mod types;
+mod workflow_artifacts;
+mod workflow_mode;
+mod workflow_workspace;
 
 pub use agent_tree::*;
 pub use conversation::*;

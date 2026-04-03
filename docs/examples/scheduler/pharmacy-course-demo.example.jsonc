@@ -1,0 +1,29 @@
+{
+  "$schema": "https://rocode.dev/schemas/scheduler-profile.schema.json",
+  "version": "2026-04-01",
+  "defaults": {
+    "profile": "pharmacy-course-demo"
+  },
+  "profiles": {
+    "pharmacy-course-demo": {
+      "orchestrator": "sisyphus",
+      "description": "Runnable teaching demo profile for pharmacy educators. Use one focused assistant to organize lecture-ready outputs from local course material.",
+      "skillList": [
+        "request-analysis",
+        "route",
+        "execution-orchestration"
+      ],
+      "stages": [
+        "request-analysis",
+        "route",
+        "execution-orchestration"
+      ],
+      "agentTree": {
+        "agent": {
+          "name": "course-assistant",
+          "systemPrompt": "You are a pharmacy course assistant. Organize outputs into lecture notes, case discussions, quiz prompts, and lab teaching points."
+        }
+      }
+    }
+  }
+}

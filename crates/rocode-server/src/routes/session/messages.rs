@@ -46,12 +46,7 @@ pub(crate) fn prompt_display_text(parts: &[rocode_session::prompt::PartInput]) -
 
     let attachment_count = parts
         .iter()
-        .filter(|part| {
-            !matches!(
-                part,
-                rocode_session::prompt::PartInput::Text { .. }
-            )
-        })
+        .filter(|part| !matches!(part, rocode_session::prompt::PartInput::Text { .. }))
         .count();
     if attachment_count == 0 {
         String::new()
