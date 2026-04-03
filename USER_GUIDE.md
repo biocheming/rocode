@@ -5,7 +5,7 @@
 
 ## 0. 版本
 
-- 当前版本：`v2026.3.16`
+- 当前版本：`v2026.4.4`
 
 ## 1. 快速启动
 
@@ -109,6 +109,11 @@ rocode debug agent
 - `Atlas` 的 gate Yes / No 是内部 QA rubric，不是用户问卷
 - `Hephaestus` 使用更明确的失败恢复升级协议，而不是泛化重试
 
+补充说明：
+
+- `/autoresearch` 不是第五个公开 preset，也不是一个独立 mode；它是一个命令入口，底层仍然调用 scheduler 配置文件
+- 如果项目里定义了自定义 scheduler profile，命令会解析并把它作为实际执行配置；mode 列表与 `/autoresearch` 的职责不同，不要求一一对应
+
 ## 4. TUI 与 Run 常用参数
 
 查看完整参数：
@@ -152,6 +157,32 @@ rocode run --help
 - 如果当前 workflow 需要你回答，它应该通过 `question` 卡片发起，而不是要求你在普通输入框里插话
 - question 卡片有选项时会自动追加 `Other (type your own)`，用于自定义答案
 
+### 5.4 Slash Commands 与 `/autoresearch`
+
+- TUI、CLI、Web 三端现在使用统一的 slash command 语义
+- 输入 `/autoresearch` 后，如果参数不完整，会进入标准 question 补参流程
+- 已注册 slash 命令仍然提供提示与建议；未知命令不会强制阻塞普通输入流
+- `/autoresearch` 运行期间，scheduler stage、verification 和 reasoning 会持续投影到当前 session
+
+最小示例：
+
+```text
+/autoresearch --profile autoresearch-run --goal "继续扩写 book/ml_drug_discovery_book.md"
+```
+
+常见前提：
+
+- 项目目录内存在 `.rocode/scheduler/autoresearch.jsonc` 或等价 profile
+- profile 中配置了 `verify.command`
+- 如果需要只保留改进结果，应同时配置 metric 提取与 discard/keep 条件
+
+### 5.5 Web 会话与侧栏
+
+- Web 首页以当前 workspace 为主视角
+- 左侧侧栏展示当前 workspace 的 session tree
+- 右侧侧栏展示 workspace 文件树
+- 历史 `/new`、`/web-next` 路由已经收口，默认访问 `/`
+
 ## 6. 配置文件位置
 
 程序会按优先级合并多份配置（向上查找）：
@@ -186,6 +217,21 @@ rocode run --help
 2. 用 `rocode run ... --format json` 或服务 API 集成
 3. 用 `rocode stats` 追踪 token / cost
 
+### 7.3 文档/书稿的 `autoresearch` 工作流
+
+1. 在项目内定义 `.rocode/scheduler/autoresearch.jsonc`
+2. 配置 `verify.command`、metric 提取规则、iterationPolicy
+3. 用 `/autoresearch` 或 `rocode run "/autoresearch ..."` 启动
+4. 根据 `stats=`、`gaps=`、章节长度等验证输出持续收敛目标稿件
+
+如果目标是教材或书稿，建议验证器至少约束：
+
+- 全书总字数
+- 每章最小字数
+- 表格与参考文献数量
+- 近三年论文覆盖
+- 章节固定栏目完整度
+
 ## 8. 故障排查
 
 ### 8.1 端口冲突
@@ -214,5 +260,6 @@ rocode run --help
 - 项目总览：`README.md`
 - 文档总索引：`docs/README.md`
 - Scheduler 文档：`docs/examples/scheduler/README.md`
+- `/autoresearch` 统一设计：`docs/autoresearch-command-unified-design.md`
 - Context Docs：`docs/examples/context_docs/README.md`
 - 插件 / skill / Rust 示例：`docs/plugins_example/README.md`

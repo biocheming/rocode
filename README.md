@@ -7,7 +7,7 @@ RustingOpenCode（简称 ROCode）是 OpenCode 的 Rust 实现与演进版本，
 ## 当前状态
 
 - 软件名：`RustingOpenCode` / `ROCode`
-- 版本标识：`v2026.3.16`
+- 版本标识：`v2026.4.4`
 - 可执行命令：`rocode`
 - 公共 scheduler presets：`sisyphus` / `prometheus` / `atlas` / `hephaestus`
 
@@ -20,6 +20,7 @@ RustingOpenCode（简称 ROCode）是 OpenCode 的 Rust 实现与演进版本，
 - 扩展能力：插件桥接（含 TS 插件）、MCP、LSP
 - Scheduler：共享执行骨架 + public OMO-aligned presets
 - 终端体验：增强排版、可折叠侧栏、代码高亮、路径补全、question 卡片
+- `/autoresearch`：CLI / TUI / Web 统一命令入口，支持补参与验证驱动的迭代优化
 
 ## Scheduler 快览
 
@@ -36,6 +37,8 @@ RustingOpenCode（简称 ROCode）是 OpenCode 的 Rust 实现与演进版本，
 - `Atlas` 的 QA `Gate Decision` 是内部 gate rubric，不是用户问卷；只有真实用户决策阻塞才应发 question
 - `Hephaestus` 使用更明确的 `3-Level Escalation Protocol`
 - TUI 会把 scheduler stage transcript 投影到主 session，并对 `route` 阶段做可读摘要渲染
+- `/autoresearch` 命令走统一的 command + scheduler 配置链路，CLI / TUI / Web 都使用同一套参数补全与 question 流程
+- verification / reasoning / scheduler stage 的流式输出在三端保持同构，Web 与 TUI 会做更稳定的历史回放与增量合并
 
 ## TUI 交互说明
 
@@ -43,6 +46,26 @@ RustingOpenCode（简称 ROCode）是 OpenCode 的 Rust 实现与演进版本，
 - scheduler stage transcript 会作为 assistant stage 消息投影到主 session 中
 - 当 session 处于 `busy` 时，普通输入会排队；若当前 workflow 需要用户回答，应通过 `question` 卡片完成
 - question 卡片在有选项时会自动追加 `Other (type your own)`，用于自定义答案
+- slash command 弹窗不再要求所有命令都必须预注册；已注册命令继续提供提示，`/autoresearch` 这类仓库命令会进入统一补参与执行链路
+
+## `/autoresearch` 快览
+
+`/autoresearch` 不是一个单独的 mode，而是一个命令入口。它的职责是把“目标 + 参数 + scheduler 配置 + verify/guard”组织成一次迭代优化运行。
+
+- CLI：`rocode run "/autoresearch ..."`
+- TUI：输入 `/autoresearch`，按 question 卡片补齐缺失参数
+- Web：在输入框直接发送 `/autoresearch`，缺失参数会走同一套 question UI
+
+适用场景：
+
+- 持续改进文档、教案、书稿、报告、代码质量基线
+- 本地有明确 `verify` 指标与 `guard` 约束的优化回路
+- 希望让 scheduler 自动执行“修改 → 验证 → 保留/丢弃”循环
+
+不适用场景：
+
+- 只有开放式聊天目标、没有可检验输出
+- 尚未定义 `verify` / `guard` / metric 提取规则
 
 ## 快速开始
 
@@ -95,6 +118,18 @@ cargo run -p rocode-cli -- run "请检查这个仓库中的风险点"
 ```bash
 cargo run -p rocode-cli -- serve --port 3000 --hostname 127.0.0.1
 ```
+
+Web 前端入口说明：
+
+- `/`：默认 React Web 首页
+- `/web/*`：React Web 静态资源前缀
+
+当前 Web 交互约定：
+
+- 首页左侧为 workspace-scoped session tree，按 workspace 聚合 session
+- 右侧为 workspace 文件树侧栏，可显隐
+- session 列表只展示当前 workspace 下的会话，避免跨项目噪音
+- 已移除 `/new`、`/web-next` 等过渡期入口，`/` 为唯一主入口
 
 ## CLI 命令总览
 
@@ -219,6 +254,7 @@ cargo check -p rocode-orchestrator
 - 用户指南：`USER_GUIDE.md`
 - 文档索引：`docs/README.md`
 - Scheduler 示例与说明：`docs/examples/scheduler/README.md`
+- `/autoresearch` 统一实现设计：`docs/autoresearch-command-unified-design.md`
 - Context Docs 示例与 schema：`docs/examples/context_docs/README.md`
 - 插件 / skill / Rust 扩展示例：`docs/plugins_example/README.md`
 

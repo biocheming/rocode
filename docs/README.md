@@ -1,6 +1,6 @@
 # ROCode Docs
 
-文档基线：`v2026.3.16`（更新日期：`2026-03-16`）
+文档基线：`v2026.4.4`（更新日期：`2026-04-04`）
 
 This directory contains product-facing examples and design references for ROCode features.
 
@@ -87,3 +87,11 @@ The public scheduler presets are:
 The current schema IDs are:
 
 - `https://rocode.dev/schemas/scheduler-profile.schema.json`
+
+## Web Frontend Entry
+
+当前默认 Web 前端是 `crates/rocode-server/web`（React 版本）：
+
+- `/` 是正式 Web 入口
+- `/web/*` 是正式静态资源前缀
+- `crates/rocode-server/web-ui` 已从主线构建中清理
