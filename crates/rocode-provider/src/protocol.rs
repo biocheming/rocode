@@ -32,6 +32,8 @@ impl Protocol {
         if (lower.contains("anthropic") || lower.contains("ethnopic")) && !lower.contains("vertex")
         {
             Protocol::Messages
+        } else if lower == "@openrouter/ai-sdk-provider" || lower == "@ai-sdk/perplexity" {
+            Protocol::OpenAI
         } else if lower.contains("google-vertex") || lower.contains("vertex") {
             Protocol::Vertex
         } else if lower.contains("google") {

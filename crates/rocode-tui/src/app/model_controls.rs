@@ -137,6 +137,110 @@ impl App {
         }
         if let Ok(resp) = client.get_known_providers() {
             self.provider_dialog.populate_from_known(resp.providers);
+            self.provider_dialog.clear_resolution();
+        }
+    }
+
+    pub(super) fn resolve_provider_dialog_search(&mut self) {
+        let query = self.provider_dialog.search_query.trim().to_string();
+        if query.is_empty() {
+            self.provider_dialog.clear_resolution();
+            return;
+        }
+
+        let Some(client) = self.context.get_api_client() else {
+            self.provider_dialog
+                .set_resolve_error("No API connection".to_string());
+            return;
+        };
+
+        match client.resolve_provider_connect(&query) {
+            Ok(response) => self.provider_dialog.apply_resolve_response(response),
+            Err(error) => self.provider_dialog.set_resolve_error(error.to_string()),
+        }
+    }
+
+    pub(super) fn quick_connect_provider_dialog_selection(&mut self) {
+        let query = self
+            .provider_dialog
+            .selected_provider()
+            .map(|provider| provider.id)
+            .or_else(|| {
+                let query = self.provider_dialog.search_query.trim();
+                (!query.is_empty()).then_some(query.to_string())
+            });
+
+        let Some(query) = query else {
+            return;
+        };
+
+        let Some(client) = self.context.get_api_client() else {
+            self.provider_dialog
+                .set_resolve_error("No API connection".to_string());
+            return;
+        };
+
+        match client.resolve_provider_connect(&query) {
+            Ok(response) => {
+                self.provider_dialog
+                    .apply_resolve_response(response.clone());
+                match response.draft.mode {
+                    crate::api::ProviderConnectDraftMode::Known => {
+                        let provider =
+                            crate::components::provider_from_connect_draft(&response.draft);
+                        self.provider_dialog.enter_input_mode_for_provider(provider);
+                    }
+                    crate::api::ProviderConnectDraftMode::Custom => {
+                        self.provider_dialog.start_custom_flow_with_prefill(
+                            response.custom_draft.provider_id,
+                            response.custom_draft.base_url.unwrap_or_default(),
+                            response
+                                .custom_draft
+                                .protocol
+                                .unwrap_or_else(|| "openai".to_string()),
+                        );
+                    }
+                }
+            }
+            Err(error) => self.provider_dialog.set_resolve_error(error.to_string()),
+        }
+    }
+
+    pub(super) fn start_advanced_provider_dialog_selection(&mut self) {
+        let query = self
+            .provider_dialog
+            .selected_provider()
+            .map(|provider| provider.id)
+            .or_else(|| {
+                let query = self.provider_dialog.search_query.trim();
+                (!query.is_empty()).then_some(query.to_string())
+            });
+
+        let Some(query) = query else {
+            return;
+        };
+
+        let Some(client) = self.context.get_api_client() else {
+            self.provider_dialog
+                .set_resolve_error("No API connection".to_string());
+            return;
+        };
+
+        match client.resolve_provider_connect(&query) {
+            Ok(response) => {
+                self.provider_dialog
+                    .apply_resolve_response(response.clone());
+                let draft = match response.draft.mode {
+                    crate::api::ProviderConnectDraftMode::Known => response.draft,
+                    crate::api::ProviderConnectDraftMode::Custom => response.custom_draft,
+                };
+                self.provider_dialog.start_custom_flow_with_prefill(
+                    draft.provider_id,
+                    draft.base_url.unwrap_or_default(),
+                    draft.protocol.unwrap_or_else(|| "openai".to_string()),
+                );
+            }
+            Err(error) => self.provider_dialog.set_resolve_error(error.to_string()),
         }
     }
 

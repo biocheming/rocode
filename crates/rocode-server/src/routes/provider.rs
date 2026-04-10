@@ -6,19 +6,21 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::OnceCell;
 
 use crate::oauth::ProviderAuth;
 use crate::{ApiError, Result, ServerState};
-use rocode_provider::{AuthInfo, AuthMethodType, ModelsData, ModelsDevInfo, ModelsRegistry};
+use rocode_provider::{
+    AuthInfo, AuthMethodType, CatalogRefreshStatus, CatalogSnapshot, ModelsData, ModelsDevInfo,
+};
 
 pub(crate) fn provider_routes() -> Router<Arc<ServerState>> {
     Router::new()
         .route("/", get(list_providers))
+        .route("/refresh", post(refresh_provider_catalog))
         .route("/managed", get(list_managed_providers))
         .route("/known", get(list_known_providers))
         .route("/connect/schema", get(get_provider_connect_schema))
+        .route("/connect/resolve", post(resolve_provider_connect))
         .route("/connect", post(connect_provider))
         .route("/register", post(register_custom_provider))
         .route("/auth", get(get_provider_auth))
@@ -120,11 +122,10 @@ pub struct ModelInfo {
     pub variants: Vec<String>,
 }
 
-static MODEL_VARIANT_LOOKUP: OnceCell<HashMap<String, HashMap<String, Vec<String>>>> =
-    OnceCell::const_new();
-
 const CONNECT_PROTOCOL_OPTIONS: &[(&str, &str)] = &[
     ("openai", "OpenAI"),
+    ("openrouter", "OpenRouter"),
+    ("perplexity", "Perplexity"),
     ("anthropic", "Ethnopic / Messages"),
     ("google", "Google"),
     ("bedrock", "Bedrock"),
@@ -136,6 +137,8 @@ const CONNECT_PROTOCOL_OPTIONS: &[(&str, &str)] = &[
 fn protocol_to_npm(protocol: &str) -> Option<&'static str> {
     match protocol {
         "openai" => Some("@ai-sdk/openai-compatible"),
+        "openrouter" => Some("@openrouter/ai-sdk-provider"),
+        "perplexity" => Some("@ai-sdk/perplexity"),
         "anthropic" => Some("@ai-sdk/anthropic"),
         "google" => Some("@ai-sdk/google"),
         "bedrock" => Some("@ai-sdk/amazon-bedrock"),
@@ -149,6 +152,8 @@ fn protocol_to_npm(protocol: &str) -> Option<&'static str> {
 fn npm_to_protocol(npm: &str) -> Option<&'static str> {
     match npm {
         "@ai-sdk/openai-compatible" => Some("openai"),
+        "@openrouter/ai-sdk-provider" => Some("openrouter"),
+        "@ai-sdk/perplexity" => Some("perplexity"),
         "@ai-sdk/anthropic" => Some("anthropic"),
         "@ai-sdk/google" => Some("google"),
         "@ai-sdk/amazon-bedrock" => Some("bedrock"),
@@ -159,22 +164,131 @@ fn npm_to_protocol(npm: &str) -> Option<&'static str> {
     }
 }
 
-async fn load_models_dev_data() -> ModelsData {
-    let cache_path = dirs::cache_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("rocode")
-        .join("models.json");
+fn search_text_matches(value: &str, query_lower: &str) -> bool {
+    let value = value.trim().to_ascii_lowercase();
+    !value.is_empty() && value.contains(query_lower)
+}
 
-    if let Ok(content) = tokio::fs::read_to_string(&cache_path).await {
-        if let Ok(parsed) = serde_json::from_str::<ModelsData>(&content) {
-            return parsed;
-        }
+fn known_provider_match_score(provider: &KnownProviderEntry, query: &str) -> Option<u8> {
+    let query = query.trim();
+    if query.is_empty() {
+        return None;
     }
 
-    let registry = ModelsRegistry::default();
-    tokio::time::timeout(Duration::from_secs(2), registry.get())
-        .await
-        .unwrap_or_default()
+    let query_lower = query.to_ascii_lowercase();
+    let id = provider.id.to_ascii_lowercase();
+    let name = provider.name.to_ascii_lowercase();
+
+    if id == query_lower {
+        return Some(0);
+    }
+    if name == query_lower {
+        return Some(1);
+    }
+    if id.starts_with(&query_lower) {
+        return Some(2);
+    }
+    if name.starts_with(&query_lower) {
+        return Some(3);
+    }
+    if search_text_matches(&provider.id, &query_lower) {
+        return Some(4);
+    }
+    if search_text_matches(&provider.name, &query_lower) {
+        return Some(5);
+    }
+    if provider
+        .env
+        .iter()
+        .any(|value| search_text_matches(value, &query_lower))
+    {
+        return Some(6);
+    }
+
+    None
+}
+
+fn resolve_known_provider_matches(
+    providers: &[KnownProviderEntry],
+    query: &str,
+) -> Vec<KnownProviderEntry> {
+    let mut scored = providers
+        .iter()
+        .filter_map(|provider| {
+            known_provider_match_score(provider, query).map(|score| (score, provider.clone()))
+        })
+        .collect::<Vec<_>>();
+
+    scored.sort_by(|(score_a, provider_a), (score_b, provider_b)| {
+        score_a
+            .cmp(score_b)
+            .then_with(|| provider_a.id.cmp(&provider_b.id))
+    });
+
+    scored.into_iter().map(|(_, provider)| provider).collect()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderConnectDraftMode {
+    Known,
+    Custom,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderConnectDraft {
+    pub mode: ProviderConnectDraftMode,
+    pub provider_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub known_provider_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+    #[serde(default)]
+    pub env: Vec<String>,
+    #[serde(default)]
+    pub connected: bool,
+    #[serde(default)]
+    pub model_count: usize,
+    #[serde(default)]
+    pub supports_api_key_connect: bool,
+}
+
+fn connect_draft_from_known_provider(provider: &KnownProviderEntry) -> ProviderConnectDraft {
+    ProviderConnectDraft {
+        mode: ProviderConnectDraftMode::Known,
+        provider_id: provider.id.clone(),
+        known_provider_id: Some(provider.id.clone()),
+        name: Some(provider.name.clone()),
+        base_url: provider.base_url.clone(),
+        protocol: provider.protocol.clone(),
+        env: provider.env.clone(),
+        connected: provider.connected,
+        model_count: provider.model_count,
+        supports_api_key_connect: provider.supports_api_key_connect,
+    }
+}
+
+fn connect_draft_from_custom_query(query: &str) -> ProviderConnectDraft {
+    ProviderConnectDraft {
+        mode: ProviderConnectDraftMode::Custom,
+        provider_id: query.trim().to_string(),
+        known_provider_id: None,
+        name: None,
+        base_url: None,
+        protocol: Some("openai".to_string()),
+        env: Vec::new(),
+        connected: false,
+        model_count: 0,
+        supports_api_key_connect: true,
+    }
+}
+
+async fn load_catalog_snapshot(state: &ServerState) -> CatalogSnapshot {
+    state.catalog_authority.snapshot().await
 }
 
 fn build_model_variant_lookup(data: ModelsData) -> HashMap<String, HashMap<String, Vec<String>>> {
@@ -234,13 +348,10 @@ fn synthetic_variant_names(provider_id: &str, model: &ModelsDevInfo) -> Vec<Stri
 }
 
 pub(crate) async fn get_model_variant_lookup(
-) -> &'static HashMap<String, HashMap<String, Vec<String>>> {
-    MODEL_VARIANT_LOOKUP
-        .get_or_init(|| async {
-            let data = load_models_dev_data().await;
-            build_model_variant_lookup(data)
-        })
-        .await
+    state: &ServerState,
+) -> HashMap<String, HashMap<String, Vec<String>>> {
+    let snapshot = load_catalog_snapshot(state).await;
+    build_model_variant_lookup(snapshot.data)
 }
 
 pub(crate) fn variants_for_model(
@@ -256,8 +367,8 @@ pub(crate) fn variants_for_model(
 }
 
 async fn list_providers(State(state): State<Arc<ServerState>>) -> Json<ProviderListResponse> {
-    let variant_lookup = get_model_variant_lookup().await;
-    let models_data = load_models_dev_data().await;
+    let variant_lookup = get_model_variant_lookup(state.as_ref()).await;
+    let models_data = load_catalog_snapshot(state.as_ref()).await.data;
 
     let providers_guard = state.providers.read().await;
     let connected: std::collections::HashSet<String> = providers_guard
@@ -284,7 +395,7 @@ async fn list_providers(State(state): State<Arc<ServerState>>) -> Json<ProviderL
             .entry(provider_id.clone())
             .or_insert_with(|| provider.name.clone());
         for model in provider.models.values() {
-            let variants = variants_for_model(variant_lookup, provider_id, &model.id);
+            let variants = variants_for_model(&variant_lookup, provider_id, &model.id);
             upsert_model(
                 provider_id,
                 ModelInfo {
@@ -316,7 +427,7 @@ async fn list_providers(State(state): State<Arc<ServerState>>) -> Json<ProviderL
                         .map(|items| items.keys().cloned().collect::<Vec<_>>())
                         .unwrap_or_default();
                     if variants.is_empty() {
-                        variants = variants_for_model(variant_lookup, provider_id, &model_id);
+                        variants = variants_for_model(&variant_lookup, provider_id, &model_id);
                     } else {
                         variants.sort();
                     }
@@ -340,7 +451,7 @@ async fn list_providers(State(state): State<Arc<ServerState>>) -> Json<ProviderL
         provider_names
             .entry(provider_id.clone())
             .or_insert_with(|| provider_id.clone());
-        let variants = variants_for_model(variant_lookup, &provider_id, &model.id);
+        let variants = variants_for_model(&variant_lookup, &provider_id, &model.id);
         upsert_model(
             &provider_id,
             ModelInfo {
@@ -417,8 +528,8 @@ fn managed_provider_auth_type(auth: Option<&AuthInfo>) -> Option<String> {
 async fn list_managed_providers(
     State(state): State<Arc<ServerState>>,
 ) -> Json<ManagedProvidersResponse> {
-    let variant_lookup = get_model_variant_lookup().await;
-    let models_data = load_models_dev_data().await;
+    let variant_lookup = get_model_variant_lookup(state.as_ref()).await;
+    let models_data = load_catalog_snapshot(state.as_ref()).await.data;
     let auth_store = state.auth_manager.list().await;
     let config = state.config_store.config();
 
@@ -461,7 +572,7 @@ async fn list_managed_providers(
                             .map(|items| items.keys().cloned().collect::<Vec<_>>())
                             .unwrap_or_default();
                         if variants.is_empty() {
-                            variants = variants_for_model(variant_lookup, &id, &model_id);
+                            variants = variants_for_model(&variant_lookup, &id, &model_id);
                         } else {
                             variants.sort();
                         }
@@ -481,7 +592,7 @@ async fn list_managed_providers(
                 }
 
                 for runtime_model in runtime_models.iter().filter(|model| model.provider == id) {
-                    let variants = variants_for_model(variant_lookup, &id, &runtime_model.id);
+                    let variants = variants_for_model(&variant_lookup, &id, &runtime_model.id);
                     model_map.insert(
                         runtime_model.id.clone(),
                         ModelInfo {
@@ -582,7 +693,9 @@ async fn list_managed_providers(
 }
 
 async fn known_provider_entries(state: &ServerState) -> Vec<KnownProviderEntry> {
-    let models_data = load_models_dev_data().await;
+    let models_data = load_catalog_snapshot(state).await.data;
+    let config = state.config_store.config();
+    let configured_providers = config.provider.clone().unwrap_or_default();
     let connected_ids: std::collections::HashSet<String> = state
         .providers
         .read()
@@ -594,26 +707,76 @@ async fn known_provider_entries(state: &ServerState) -> Vec<KnownProviderEntry> 
 
     let mut providers: Vec<KnownProviderEntry> = models_data
         .into_iter()
-        .map(|(id, info)| KnownProviderEntry {
-            connected: connected_ids.contains(&id),
-            model_count: info.models.len(),
-            env: info.env,
-            name: info.name,
-            id,
+        .map(|(id, info)| {
+            let configured = configured_providers.get(&id);
+            let npm = configured
+                .and_then(|provider| provider.npm.clone())
+                .or(info.npm.clone());
+            let base_url = configured
+                .and_then(|provider| provider.base_url.clone())
+                .or(info.api.clone());
+            KnownProviderEntry {
+                connected: connected_ids.contains(&id),
+                model_count: info.models.len(),
+                env: info.env,
+                name: info.name,
+                id,
+                base_url,
+                protocol: npm.as_deref().and_then(npm_to_protocol).map(str::to_string),
+                npm,
+                supports_api_key_connect: true,
+            }
         })
         .collect();
     providers.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     providers
 }
 
-/// A lightweight provider entry for the "known providers" catalogue.
 #[derive(Debug, Serialize)]
+pub struct RefreshProviderCatalogResponse {
+    pub generation_before: u64,
+    pub generation_after: u64,
+    pub changed: bool,
+    pub status: CatalogRefreshStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+}
+
+async fn refresh_provider_catalog(
+    State(state): State<Arc<ServerState>>,
+) -> Result<Json<RefreshProviderCatalogResponse>> {
+    let before = state.catalog_authority.snapshot().await;
+    let after = state.catalog_authority.refresh_with_result(true).await;
+    if after.snapshot.generation != before.generation {
+        state.rebuild_providers().await;
+        crate::session_runtime::events::broadcast_config_updated(state.as_ref());
+    }
+
+    Ok(Json(RefreshProviderCatalogResponse {
+        generation_before: before.generation,
+        generation_after: after.snapshot.generation,
+        changed: after.snapshot.generation != before.generation,
+        status: after.status,
+        error_message: after.error_message,
+    }))
+}
+
+/// A lightweight provider entry for the "known providers" catalogue.
+#[derive(Debug, Clone, Serialize)]
 pub struct KnownProviderEntry {
     pub id: String,
     pub name: String,
     pub env: Vec<String>,
     pub model_count: usize,
     pub connected: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub npm: Option<String>,
+    #[serde(default)]
+    pub supports_api_key_connect: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -643,6 +806,21 @@ pub struct ProviderConnectSchemaResponse {
     pub protocols: Vec<ConnectProtocolOption>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ResolveProviderConnectRequest {
+    pub query: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResolveProviderConnectResponse {
+    pub query: String,
+    pub suggested_mode: ProviderConnectDraftMode,
+    pub exact_match: bool,
+    pub matches: Vec<KnownProviderEntry>,
+    pub draft: ProviderConnectDraft,
+    pub custom_draft: ProviderConnectDraft,
+}
+
 async fn get_provider_connect_schema(
     State(state): State<Arc<ServerState>>,
 ) -> Json<ProviderConnectSchemaResponse> {
@@ -657,6 +835,32 @@ async fn get_provider_connect_schema(
     Json(ProviderConnectSchemaResponse {
         providers,
         protocols,
+    })
+}
+
+async fn resolve_provider_connect(
+    State(state): State<Arc<ServerState>>,
+    Json(req): Json<ResolveProviderConnectRequest>,
+) -> Json<ResolveProviderConnectResponse> {
+    let query = req.query.trim().to_string();
+    let matches =
+        resolve_known_provider_matches(&known_provider_entries(state.as_ref()).await, &query);
+    let exact_match = matches
+        .first()
+        .map(|provider| provider.id.eq_ignore_ascii_case(&query))
+        .unwrap_or(false);
+    let draft = matches
+        .first()
+        .map(connect_draft_from_known_provider)
+        .unwrap_or_else(|| connect_draft_from_custom_query(&query));
+
+    Json(ResolveProviderConnectResponse {
+        query: query.clone(),
+        suggested_mode: draft.mode.clone(),
+        exact_match,
+        matches,
+        draft,
+        custom_draft: connect_draft_from_custom_query(&query),
     })
 }
 
@@ -948,4 +1152,138 @@ async fn register_custom_provider(
     Json(req): Json<ConnectProviderRequest>,
 ) -> Result<Json<bool>> {
     connect_provider(State(state), Json(req)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        connect_draft_from_custom_query, connect_draft_from_known_provider, npm_to_protocol,
+        protocol_to_npm, resolve_known_provider_matches, KnownProviderEntry,
+        ProviderConnectDraftMode, CONNECT_PROTOCOL_OPTIONS,
+    };
+
+    fn provider(
+        id: &str,
+        name: &str,
+        env: &[&str],
+        base_url: Option<&str>,
+        protocol: Option<&str>,
+    ) -> KnownProviderEntry {
+        KnownProviderEntry {
+            id: id.to_string(),
+            name: name.to_string(),
+            env: env.iter().map(|value| (*value).to_string()).collect(),
+            model_count: 0,
+            connected: false,
+            base_url: base_url.map(str::to_string),
+            protocol: protocol.map(str::to_string),
+            npm: None,
+            supports_api_key_connect: true,
+        }
+    }
+
+    #[test]
+    fn connect_schema_lists_openrouter_and_perplexity() {
+        assert!(CONNECT_PROTOCOL_OPTIONS
+            .iter()
+            .any(|(id, _)| *id == "openrouter"));
+        assert!(CONNECT_PROTOCOL_OPTIONS
+            .iter()
+            .any(|(id, _)| *id == "perplexity"));
+    }
+
+    #[test]
+    fn protocol_mapping_supports_openrouter_and_perplexity() {
+        assert_eq!(
+            protocol_to_npm("openrouter"),
+            Some("@openrouter/ai-sdk-provider")
+        );
+        assert_eq!(protocol_to_npm("perplexity"), Some("@ai-sdk/perplexity"));
+        assert_eq!(
+            npm_to_protocol("@openrouter/ai-sdk-provider"),
+            Some("openrouter")
+        );
+        assert_eq!(npm_to_protocol("@ai-sdk/perplexity"), Some("perplexity"));
+    }
+
+    #[test]
+    fn resolve_matches_prioritize_exact_then_prefix_then_contains_then_env() {
+        let providers = vec![
+            provider(
+                "openrouter",
+                "OpenRouter",
+                &["OPENROUTER_API_KEY"],
+                None,
+                None,
+            ),
+            provider("openai", "OpenAI", &["OPENAI_API_KEY"], None, None),
+            provider(
+                "routerstack",
+                "Router Stack",
+                &["ROUTERSTACK_KEY"],
+                None,
+                None,
+            ),
+            provider("anthropic", "Anthropic", &["OPENROUTER_TOKEN"], None, None),
+        ];
+
+        let matches = resolve_known_provider_matches(&providers, "openrouter");
+        assert_eq!(
+            matches
+                .iter()
+                .map(|provider| provider.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["openrouter", "anthropic"]
+        );
+
+        let matches = resolve_known_provider_matches(&providers, "open");
+        assert_eq!(
+            matches
+                .iter()
+                .map(|provider| provider.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["openai", "openrouter", "anthropic"]
+        );
+
+        let matches = resolve_known_provider_matches(&providers, "router");
+        assert_eq!(
+            matches
+                .iter()
+                .map(|provider| provider.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["routerstack", "openrouter", "anthropic"]
+        );
+    }
+
+    #[test]
+    fn custom_query_draft_defaults_to_openai_protocol() {
+        let draft = connect_draft_from_custom_query("  my-provider  ");
+        assert_eq!(draft.mode, ProviderConnectDraftMode::Custom);
+        assert_eq!(draft.provider_id, "my-provider");
+        assert_eq!(draft.protocol.as_deref(), Some("openai"));
+        assert!(draft.base_url.is_none());
+        assert!(draft.known_provider_id.is_none());
+    }
+
+    #[test]
+    fn known_provider_draft_preserves_overlay_fields() {
+        let provider = provider(
+            "openrouter",
+            "OpenRouter",
+            &["OPENROUTER_API_KEY"],
+            Some("https://openrouter.ai/api/v1"),
+            Some("openrouter"),
+        );
+
+        let draft = connect_draft_from_known_provider(&provider);
+        assert_eq!(draft.mode, ProviderConnectDraftMode::Known);
+        assert_eq!(draft.provider_id, "openrouter");
+        assert_eq!(draft.known_provider_id.as_deref(), Some("openrouter"));
+        assert_eq!(
+            draft.base_url.as_deref(),
+            Some("https://openrouter.ai/api/v1")
+        );
+        assert_eq!(draft.protocol.as_deref(), Some("openrouter"));
+        assert_eq!(draft.env, vec!["OPENROUTER_API_KEY".to_string()]);
+    }
 }

@@ -87,6 +87,7 @@ pub(crate) async fn handle_generate_command() -> anyhow::Result<()> {
         ("/session/{id}/prompt_async", "post", "sessionPromptAsync"),
         ("/session/{id}/diff", "get", "sessionDiff"),
         ("/provider/", "get", "providerList"),
+        ("/provider/refresh", "post", "providerRefresh"),
         ("/provider/auth", "get", "providerAuth"),
         (
             "/provider/{id}/oauth/authorize",

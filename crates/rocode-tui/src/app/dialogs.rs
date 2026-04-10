@@ -1,5 +1,6 @@
 use super::session_actions::TranscriptOptions;
 use super::*;
+use crate::components::ProviderConnectMode;
 
 impl App {
     pub(super) fn has_open_dialog_layer(&self) -> bool {
@@ -980,14 +981,44 @@ impl App {
             } else {
                 // Provider list selection mode
                 match key.code {
-                    KeyCode::Esc => self.provider_dialog.close(),
+                    KeyCode::Esc => {
+                        if self.provider_dialog.connect_mode == ProviderConnectMode::Known
+                            && !self.provider_dialog.search_query.trim().is_empty()
+                        {
+                            self.provider_dialog.clear_search();
+                        } else {
+                            self.provider_dialog.close();
+                        }
+                    }
                     KeyCode::Left => self.provider_dialog.toggle_mode_prev(),
                     KeyCode::Right => self.provider_dialog.toggle_mode_next(),
                     KeyCode::Tab => self.provider_dialog.toggle_mode_next(),
                     KeyCode::Up => self.provider_dialog.move_up(),
                     KeyCode::Down => self.provider_dialog.move_down(),
                     KeyCode::Enter => {
-                        self.provider_dialog.enter_input_mode();
+                        if self.provider_dialog.connect_mode == ProviderConnectMode::Custom {
+                            self.provider_dialog.enter_input_mode();
+                        } else {
+                            self.quick_connect_provider_dialog_selection();
+                        }
+                    }
+                    KeyCode::Char('a')
+                        if self.provider_dialog.connect_mode == ProviderConnectMode::Known =>
+                    {
+                        self.start_advanced_provider_dialog_selection();
+                    }
+                    KeyCode::Backspace
+                        if self.provider_dialog.connect_mode == ProviderConnectMode::Known =>
+                    {
+                        self.provider_dialog.pop_search_char();
+                        self.resolve_provider_dialog_search();
+                    }
+                    KeyCode::Char(c)
+                        if self.provider_dialog.connect_mode == ProviderConnectMode::Known
+                            && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        self.provider_dialog.push_search_char(c);
+                        self.resolve_provider_dialog_search();
                     }
                     _ => {}
                 }

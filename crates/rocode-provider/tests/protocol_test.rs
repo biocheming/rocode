@@ -26,6 +26,15 @@ fn test_protocol_from_npm_closeai_and_openai_aliases() {
 }
 
 #[test]
+fn test_protocol_from_npm_openrouter_and_perplexity() {
+    assert_eq!(
+        Protocol::from_npm("@openrouter/ai-sdk-provider"),
+        Protocol::OpenAI
+    );
+    assert_eq!(Protocol::from_npm("@ai-sdk/perplexity"), Protocol::OpenAI);
+}
+
+#[test]
 fn test_protocol_from_npm_unknown_defaults_to_openai() {
     let protocol = Protocol::from_npm("@custom/unknown-provider");
     assert_eq!(protocol, Protocol::OpenAI);

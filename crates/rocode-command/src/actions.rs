@@ -99,6 +99,7 @@ pub struct UiSlashCommandSpec {
 #[serde(rename_all = "snake_case")]
 pub enum UiCommandArgumentKind {
     None,
+    Text,
     SessionTarget,
     ModelRef,
     ThemeId,
@@ -126,6 +127,7 @@ impl UiCommandSpec {
 
 pub fn ui_command_argument_kind(action_id: UiActionId) -> UiCommandArgumentKind {
     match action_id {
+        UiActionId::ConnectProvider => UiCommandArgumentKind::Text,
         UiActionId::OpenSessionList => UiCommandArgumentKind::SessionTarget,
         UiActionId::OpenModelList => UiCommandArgumentKind::ModelRef,
         UiActionId::OpenModeList => UiCommandArgumentKind::ModeRef,

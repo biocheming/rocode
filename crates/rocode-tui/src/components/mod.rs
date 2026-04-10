@@ -26,14 +26,14 @@ mod tool_views;
 
 pub use dialog::Dialog;
 pub use dialogs::{
-    Agent, AgentSelectDialog, AlertDialog, CommandPalette, ConfirmDialog, CustomProviderState,
-    CustomProviderStep, ForkDialog, ForkEntry, HelpDialog, McpDialog, McpItem, ModeKind, Model,
-    ModelSelectDialog, PendingSubmit, PromptStashDialog, Provider, ProviderDialog, ProviderStatus,
-    RecoveryActionDialog, RecoveryActionItem, SessionDeleteState, SessionExportDialog, SessionItem,
-    SessionListDialog, SessionRenameDialog, SkillListDialog, StashItem, StatusDialog, StatusLine,
-    SubagentDialog, SubagentInfo, SubagentMessage, SubmitResult, Tag, TagDialog, ThemeListDialog,
-    ThemeOption, TimelineDialog, TimelineEntry, ToolCallCancelDialog, ToolCallItem,
-    VisibilityLabels,
+    provider_from_connect_draft, Agent, AgentSelectDialog, AlertDialog, CommandPalette,
+    ConfirmDialog, CustomProviderState, CustomProviderStep, ForkDialog, ForkEntry, HelpDialog,
+    McpDialog, McpItem, ModeKind, Model, ModelSelectDialog, PendingSubmit, PromptStashDialog,
+    Provider, ProviderConnectMode, ProviderDialog, ProviderStatus, RecoveryActionDialog,
+    RecoveryActionItem, SessionDeleteState, SessionExportDialog, SessionItem, SessionListDialog,
+    SessionRenameDialog, SkillListDialog, StashItem, StatusDialog, StatusLine, SubagentDialog,
+    SubagentInfo, SubagentMessage, SubmitResult, Tag, TagDialog, ThemeListDialog, ThemeOption,
+    TimelineDialog, TimelineEntry, ToolCallCancelDialog, ToolCallItem, VisibilityLabels,
 };
 pub use diff::{DiffLine, DiffLineType, DiffMode, DiffView};
 pub use home::HomeView;

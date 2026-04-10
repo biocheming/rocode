@@ -8,8 +8,10 @@ use crate::context::{ChildSessionInfo, KeybindRegistry, SessionContext};
 use crate::event::EventBus;
 use crate::router::Router;
 use crate::theme::Theme;
-use rocode_config::{Config as AppConfig, UiPreferencesConfig, UiRecentModelConfig};
+use rocode_config::{Config as AppConfig, UiPreferencesConfig};
 use rocode_core::process_registry::ProcessInfo;
+use rocode_runtime_context::ResolvedWorkspaceContext;
+use rocode_state::RecentModelEntry;
 
 #[derive(Clone)]
 pub struct ProviderInfo {
@@ -346,16 +348,31 @@ impl AppContext {
 
     pub fn save_recent_models(&self, recent: &[(String, String)]) {
         let updated = recent.to_vec();
-        {
-            *self.recent_models.write() = updated.clone();
+        *self.recent_models.write() = updated.clone();
+
+        let Some(client) = self.get_api_client() else {
+            tracing::warn!("failed to persist recent models: API client unavailable");
+            return;
+        };
+
+        let payload = updated
+            .iter()
+            .map(|(provider, model)| RecentModelEntry {
+                provider: provider.clone(),
+                model: model.clone(),
+            })
+            .collect::<Vec<_>>();
+        match client.put_recent_models(&payload) {
+            Ok(persisted) => {
+                *self.recent_models.write() = persisted
+                    .into_iter()
+                    .map(|entry| (entry.provider, entry.model))
+                    .collect();
+            }
+            Err(err) => {
+                tracing::warn!(%err, "failed to persist recent models");
+            }
         }
-        self.persist_ui_preferences(UiPreferencesConfig {
-            recent_models: updated
-                .into_iter()
-                .map(|(provider, model)| UiRecentModelConfig { provider, model })
-                .collect(),
-            ..Default::default()
-        });
     }
 
     pub fn toggle_theme_mode(&self) -> bool {
@@ -433,23 +450,35 @@ impl AppContext {
         *self.semantic_highlight.write() = ui
             .and_then(|prefs| prefs.semantic_highlight)
             .unwrap_or(false);
-        *self.recent_models.write() = ui
-            .map(|prefs| {
-                prefs
-                    .recent_models
-                    .iter()
-                    .map(|entry| (entry.provider.clone(), entry.model.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
+    }
+
+    pub fn apply_resolved_workspace_context(&self, context: &ResolvedWorkspaceContext) {
+        self.apply_config(&context.config);
+        let recent_models = if !context.recent_models.is_empty() {
+            context
+                .recent_models
+                .iter()
+                .map(|entry| (entry.provider.clone(), entry.model.clone()))
+                .collect()
+        } else {
+            legacy_recent_models_from_config(&context.config)
+        };
+        *self.recent_models.write() = recent_models;
     }
 
     pub fn sync_ui_preferences_from_server(&self) -> anyhow::Result<()> {
         let client = self
             .get_api_client()
             .ok_or_else(|| anyhow::anyhow!("API client unavailable"))?;
-        let config = client.get_config()?;
-        self.apply_config(&config);
+        match client.get_workspace_context() {
+            Ok(context) => self.apply_resolved_workspace_context(&context),
+            Err(error) => {
+                tracing::warn!(%error, "failed to fetch workspace context; falling back to config");
+                let config = client.get_config()?;
+                self.apply_config(&config);
+                *self.recent_models.write() = legacy_recent_models_from_config(&config);
+            }
+        }
         Ok(())
     }
 
@@ -603,6 +632,20 @@ fn detect_terminal_theme_mode() -> &'static str {
     }
 
     "dark"
+}
+
+fn legacy_recent_models_from_config(config: &AppConfig) -> Vec<(String, String)> {
+    config
+        .ui_preferences
+        .as_ref()
+        .map(|prefs| {
+            prefs
+                .recent_models
+                .iter()
+                .map(|entry| (entry.provider.clone(), entry.model.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn split_theme_variant(name: &str) -> Option<(&str, &str)> {

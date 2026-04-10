@@ -1114,7 +1114,7 @@ pub(super) async fn session_prompt(
                     .collect();
             }
             if profile_config.skill_list.is_empty() {
-                profile_config.skill_list = rocode_tool::skill::list_available_skills()
+                profile_config.skill_list = rocode_skill::list_available_skills()
                     .into_iter()
                     .map(|(name, _description)| name)
                     .collect();

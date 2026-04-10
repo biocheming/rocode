@@ -3,12 +3,18 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{
+        Block, Borders, Clear, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, Wrap,
+    },
     Frame,
 };
 use std::collections::HashSet;
 
-use crate::api::{ConnectProtocolOption, ProviderConnectSchemaResponse};
+use crate::api::{
+    ConnectProtocolOption, ProviderConnectDraft, ProviderConnectSchemaResponse,
+    ResolveProviderConnectResponse,
+};
 use crate::theme::Theme;
 
 #[derive(Clone, Debug)]
@@ -16,6 +22,9 @@ pub struct Provider {
     pub id: String,
     pub name: String,
     pub env_hint: String,
+    pub base_url: Option<String>,
+    pub protocol: Option<String>,
+    pub model_count: usize,
     pub status: ProviderStatus,
 }
 
@@ -75,6 +84,7 @@ pub enum ProviderConnectMode {
 
 pub struct ProviderDialog {
     pub providers: Vec<Provider>,
+    pub resolved_matches: Vec<Provider>,
     pub protocol_options: Vec<ConnectProtocolOption>,
     pub state: ListState,
     pub open: bool,
@@ -89,12 +99,15 @@ pub struct ProviderDialog {
     /// Index into the fixed protocol list during Protocol step.
     pub protocol_index: usize,
     pub connect_mode: ProviderConnectMode,
+    pub search_query: String,
+    pub resolve_error: Option<String>,
 }
 
 impl ProviderDialog {
     pub fn new() -> Self {
         Self {
             providers: Vec::new(),
+            resolved_matches: Vec::new(),
             protocol_options: Vec::new(),
             state: ListState::default(),
             open: false,
@@ -105,6 +118,8 @@ impl ProviderDialog {
             custom_state: None,
             protocol_index: 0,
             connect_mode: ProviderConnectMode::Known,
+            search_query: String::new(),
+            resolve_error: None,
         }
     }
 
@@ -130,6 +145,9 @@ impl ProviderDialog {
             .into_iter()
             .map(|e| Provider {
                 env_hint: e.env.first().cloned().unwrap_or_default(),
+                base_url: e.base_url,
+                protocol: e.protocol,
+                model_count: e.model_count,
                 status: if e.connected {
                     ProviderStatus::Connected
                 } else {
@@ -155,6 +173,7 @@ impl ProviderDialog {
         if self.protocol_index >= self.protocol_options.len() {
             self.protocol_index = 0;
         }
+        self.clear_resolution();
     }
 
     pub fn open(&mut self) {
@@ -166,7 +185,10 @@ impl ProviderDialog {
         self.protocol_index = 0;
         self.submit_result = None;
         self.connect_mode = ProviderConnectMode::Known;
-        self.state.select((!self.providers.is_empty()).then_some(0));
+        self.search_query.clear();
+        self.clear_resolution();
+        self.state
+            .select((!self.visible_providers().is_empty()).then_some(0));
     }
 
     pub fn close(&mut self) {
@@ -178,6 +200,8 @@ impl ProviderDialog {
         self.protocol_index = 0;
         self.submit_result = None;
         self.connect_mode = ProviderConnectMode::Known;
+        self.search_query.clear();
+        self.clear_resolution();
     }
 
     pub fn is_open(&self) -> bool {
@@ -194,14 +218,37 @@ impl ProviderDialog {
 
     pub fn set_providers(&mut self, providers: Vec<Provider>) {
         self.providers = providers;
-        if self.providers.is_empty() {
+        let visible_len = self.visible_providers().len();
+        if visible_len == 0 {
             self.state.select(None);
         } else if self.state.selected().is_none() {
             self.state.select(Some(0));
         } else if let Some(selected) = self.state.selected() {
             self.state
-                .select(Some(selected.min(self.providers.len().saturating_sub(1))));
+                .select(Some(selected.min(visible_len.saturating_sub(1))));
         }
+    }
+
+    fn visible_providers(&self) -> &[Provider] {
+        if self.search_query.trim().is_empty() {
+            &self.providers
+        } else {
+            &self.resolved_matches
+        }
+    }
+
+    fn sync_selection_to_visible(&mut self) {
+        let visible_len = self.visible_providers().len();
+        if visible_len == 0 {
+            self.state.select(None);
+            return;
+        }
+        let next = self
+            .state
+            .selected()
+            .unwrap_or(0)
+            .min(visible_len.saturating_sub(1));
+        self.state.select(Some(next));
     }
 
     pub fn move_up(&mut self) {
@@ -219,14 +266,17 @@ impl ProviderDialog {
             return;
         }
         if let Some(selected) = self.state.selected() {
-            let max = self.providers.len().saturating_sub(1);
+            let max = self.visible_providers().len().saturating_sub(1);
             let new = (selected + 1).min(max);
             self.state.select(Some(new));
         }
     }
 
-    pub fn selected_provider(&self) -> Option<&Provider> {
-        self.state.selected().and_then(|i| self.providers.get(i))
+    pub fn selected_provider(&self) -> Option<Provider> {
+        self.state
+            .selected()
+            .and_then(|index| self.visible_providers().get(index))
+            .cloned()
     }
 
     /// Enter input mode for the currently highlighted provider.
@@ -236,12 +286,16 @@ impl ProviderDialog {
             return;
         }
         // Known provider flow
-        if let Some(p) = self.selected_provider() {
-            self.selected_provider = Some(p.clone());
-            self.api_key_input.clear();
-            self.submit_result = None;
-            self.input_mode = true;
+        if let Some(provider) = self.selected_provider() {
+            self.enter_input_mode_for_provider(provider);
         }
+    }
+
+    pub fn enter_input_mode_for_provider(&mut self, provider: Provider) {
+        self.selected_provider = Some(provider);
+        self.api_key_input.clear();
+        self.submit_result = None;
+        self.input_mode = true;
     }
 
     /// Go back from input mode to the provider list.
@@ -276,19 +330,33 @@ impl ProviderDialog {
         self.connect_mode = mode;
         self.submit_result = None;
         if self.connect_mode == ProviderConnectMode::Known {
-            self.state.select((!self.providers.is_empty()).then_some(0));
+            self.sync_selection_to_visible();
         }
     }
 
     fn start_custom_flow(&mut self) {
+        self.start_custom_flow_with_prefill(String::new(), String::new(), String::new());
+    }
+
+    pub fn start_custom_flow_with_prefill(
+        &mut self,
+        provider_id: String,
+        base_url: String,
+        protocol: String,
+    ) {
+        let protocol_index = self
+            .protocol_options
+            .iter()
+            .position(|option| option.id == protocol)
+            .unwrap_or(0);
         self.custom_state = Some(CustomProviderState {
-            provider_id: String::new(),
-            base_url: String::new(),
-            protocol: String::new(),
+            provider_id,
+            base_url,
+            protocol,
             api_key: String::new(),
             step: CustomProviderStep::ProviderId,
         });
-        self.protocol_index = 0;
+        self.protocol_index = protocol_index;
         self.submit_result = None;
     }
 
@@ -421,6 +489,60 @@ impl ProviderDialog {
         self.submit_result = None;
     }
 
+    pub fn push_search_char(&mut self, c: char) {
+        self.search_query.push(c);
+        self.state.select(Some(0));
+        self.submit_result = None;
+        self.resolve_error = None;
+    }
+
+    pub fn pop_search_char(&mut self) {
+        self.search_query.pop();
+        if self.search_query.trim().is_empty() {
+            self.clear_resolution();
+        } else {
+            self.state.select(Some(0));
+        }
+        self.submit_result = None;
+        self.resolve_error = None;
+    }
+
+    pub fn clear_search(&mut self) {
+        self.search_query.clear();
+        self.clear_resolution();
+        self.submit_result = None;
+    }
+
+    pub fn clear_resolution(&mut self) {
+        self.resolved_matches.clear();
+        self.resolve_error = None;
+        if self.providers.is_empty() {
+            self.state.select(None);
+        } else {
+            self.state.select(Some(0));
+        }
+    }
+
+    pub fn apply_resolve_response(&mut self, response: ResolveProviderConnectResponse) {
+        self.resolved_matches = response
+            .matches
+            .into_iter()
+            .map(provider_from_draft_match)
+            .collect();
+        self.resolve_error = None;
+        if self.visible_providers().is_empty() {
+            self.state.select(None);
+        } else {
+            self.state.select(Some(0));
+        }
+    }
+
+    pub fn set_resolve_error(&mut self, error: String) {
+        self.resolved_matches.clear();
+        self.resolve_error = Some(error);
+        self.state.select(None);
+    }
+
     /// Returns the pending submit payload if ready.
     /// For known providers: checks input_mode and api_key_input.
     /// For custom providers: checks custom_state is at ApiKey step with non-empty key.
@@ -468,7 +590,10 @@ impl ProviderDialog {
             return;
         }
 
-        let height = 22u16.min(area.height.saturating_sub(4));
+        let visible_count = self.visible_providers().len().max(1) as u16;
+        let height = (visible_count + 8)
+            .clamp(12, 22)
+            .min(area.height.saturating_sub(4));
         let width = 56u16.min(area.width.saturating_sub(4));
         let popup_area = super::centered_rect(width, height, area);
         let block = Block::default()
@@ -476,6 +601,7 @@ impl ProviderDialog {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme.border));
         let content_area = super::dialog_inner(block.inner(popup_area));
+        frame.render_widget(Clear, popup_area);
 
         if self.custom_state.is_some() {
             self.render_custom_input_mode(frame, popup_area, content_area, block, theme);
@@ -504,6 +630,16 @@ impl ProviderDialog {
             .as_ref()
             .map(|p| p.env_hint.as_str())
             .unwrap_or("");
+        let base_url = self
+            .selected_provider
+            .as_ref()
+            .and_then(|p| p.base_url.as_deref())
+            .unwrap_or("");
+        let protocol = self
+            .selected_provider
+            .as_ref()
+            .and_then(|p| p.protocol.as_deref())
+            .unwrap_or("");
 
         // Mask the key: show first 4 chars then asterisks
         let masked = if self.api_key_input.len() > 4 {
@@ -522,6 +658,14 @@ impl ProviderDialog {
             Line::from(vec![
                 Span::styled("Env: ", Style::default().fg(theme.text_muted)),
                 Span::styled(env_hint, Style::default().fg(theme.warning)),
+            ]),
+            Line::from(vec![
+                Span::styled("Base URL: ", Style::default().fg(theme.text_muted)),
+                Span::styled(base_url, Style::default().fg(theme.text)),
+            ]),
+            Line::from(vec![
+                Span::styled("Protocol: ", Style::default().fg(theme.text_muted)),
+                Span::styled(protocol, Style::default().fg(theme.text)),
             ]),
             Line::from(""),
             Line::from(Span::styled(
@@ -594,7 +738,7 @@ impl ProviderDialog {
             .constraints([
                 Constraint::Length(3),
                 Constraint::Min(6),
-                Constraint::Length(2),
+                Constraint::Length(3),
             ])
             .split(content_area);
 
@@ -616,7 +760,9 @@ impl ProviderDialog {
         };
 
         let subtitle = match self.connect_mode {
-            ProviderConnectMode::Known => "Choose a known provider and add its API key.",
+            ProviderConnectMode::Known => {
+                "Search a known provider. Enter connects quickly; A opens advanced editing."
+            }
             ProviderConnectMode::Custom => {
                 "Create a custom provider with provider id, base URL, protocol and API key."
             }
@@ -633,6 +779,10 @@ impl ProviderDialog {
                     subtitle,
                     Style::default().fg(theme.text_muted),
                 )),
+                Line::from(Span::styled(
+                    format!("Search: {}", self.search_query),
+                    Style::default().fg(theme.text),
+                )),
             ])
             .wrap(Wrap { trim: false })
             .style(Style::default().bg(theme.background_panel)),
@@ -648,40 +798,117 @@ impl ProviderDialog {
                             .style(Style::default().fg(theme.text_muted).bg(theme.background_panel)),
                         sections[1],
                     );
+                } else if self.visible_providers().is_empty() {
+                    let message = if let Some(error) = &self.resolve_error {
+                        format!("Resolve failed: {}", error)
+                    } else if self.search_query.trim().is_empty() {
+                        "No known providers available.".to_string()
+                    } else {
+                        "No known match. Press Enter to use the current search text as a custom provider id."
+                            .to_string()
+                    };
+                    frame.render_widget(
+                        Paragraph::new(message).wrap(Wrap { trim: false }).style(
+                            Style::default()
+                                .fg(theme.text_muted)
+                                .bg(theme.background_panel),
+                        ),
+                        sections[1],
+                    );
                 } else {
-                    let items: Vec<ListItem> = self
-                        .providers
-                        .iter()
-                        .enumerate()
-                        .map(|(i, p)| {
-                            let status_icon = match p.status {
+                    let visible = self.visible_providers();
+                    let selected = self.state.selected().unwrap_or(0);
+                    let list_area = Rect {
+                        x: sections[1].x,
+                        y: sections[1].y,
+                        width: sections[1].width.saturating_sub(1),
+                        height: sections[1].height,
+                    };
+
+                    if list_area.height > 0 {
+                        let viewport = list_area.height as usize;
+                        let mut scroll = 0usize;
+                        if selected >= viewport {
+                            scroll = selected.saturating_sub(viewport.saturating_sub(1));
+                        }
+
+                        for (row, (index, provider)) in visible
+                            .iter()
+                            .enumerate()
+                            .skip(scroll)
+                            .take(viewport)
+                            .enumerate()
+                        {
+                            let is_selected = index == selected;
+                            let status_icon = match provider.status {
                                 ProviderStatus::Connected => "●",
                                 ProviderStatus::Disconnected => "◯",
                                 ProviderStatus::Error => "✗",
                             };
-                            let status_color = match p.status {
+                            let status_color = match provider.status {
                                 ProviderStatus::Connected => theme.success,
                                 ProviderStatus::Disconnected => theme.text_muted,
                                 ProviderStatus::Error => theme.error,
                             };
-                            let is_selected = self.state.selected() == Some(i);
-                            let name_style = if is_selected {
-                                Style::default()
-                                    .fg(theme.primary)
-                                    .bg(theme.background_element)
-                            } else {
-                                Style::default().fg(theme.text)
+                            let row_area = Rect {
+                                x: list_area.x,
+                                y: list_area.y + row as u16,
+                                width: list_area.width,
+                                height: 1,
                             };
-                            ListItem::new(Line::from(vec![
+                            let line = Line::from(vec![
                                 Span::styled(status_icon, Style::default().fg(status_color)),
                                 Span::raw(" "),
-                                Span::styled(&p.name, name_style),
-                            ]))
-                        })
-                        .collect();
+                                Span::styled(
+                                    &provider.name,
+                                    Style::default()
+                                        .fg(if is_selected {
+                                            theme.primary
+                                        } else {
+                                            theme.text
+                                        })
+                                        .bg(if is_selected {
+                                            theme.background_element
+                                        } else {
+                                            theme.background_panel
+                                        }),
+                                ),
+                                Span::styled(
+                                    format!(" · {}", provider.id),
+                                    Style::default().fg(theme.text_muted).bg(if is_selected {
+                                        theme.background_element
+                                    } else {
+                                        theme.background_panel
+                                    }),
+                                ),
+                            ]);
+                            frame.render_widget(Paragraph::new(line), row_area);
+                        }
 
-                    let list = List::new(items).highlight_style(Style::default().fg(theme.primary));
-                    frame.render_widget(list, sections[1]);
+                        if visible.len() > viewport {
+                            let scroll_area = Rect {
+                                x: list_area.x + list_area.width,
+                                y: list_area.y,
+                                width: 1,
+                                height: list_area.height,
+                            };
+                            let mut scrollbar_state = ScrollbarState::new(visible.len())
+                                .position(scroll)
+                                .viewport_content_length(viewport);
+                            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                                .begin_symbol(None)
+                                .end_symbol(None)
+                                .track_symbol(Some("│"))
+                                .track_style(Style::default().fg(theme.border_subtle))
+                                .thumb_symbol("█")
+                                .thumb_style(Style::default().fg(theme.primary));
+                            frame.render_stateful_widget(
+                                scrollbar,
+                                scroll_area,
+                                &mut scrollbar_state,
+                            );
+                        }
+                    }
                 }
             }
             ProviderConnectMode::Custom => {
@@ -722,11 +949,36 @@ impl ProviderDialog {
 
         let footer = match self.connect_mode {
             ProviderConnectMode::Known => {
-                "←/→ or Tab switch mode  ↑↓ select  Enter connect  Esc close"
+                let total = self.providers.len();
+                let visible = self.visible_providers().len();
+                let selected = self.state.selected().map(|index| index + 1).unwrap_or(0);
+                vec![
+                    Line::from(Span::styled(
+                        if self.search_query.trim().is_empty() {
+                            format!("{total} known providers · {selected}/{visible} selected")
+                        } else {
+                            format!(
+                                "{visible} matches · {selected}/{visible} selected · {total} total known"
+                            )
+                        },
+                        Style::default().fg(theme.text_muted),
+                    )),
+                    Line::from(Span::styled(
+                        "Type to search  ←/→ or Tab switch mode  ↑↓ select  Enter quick connect/custom fallback  A advanced  Esc clear/close",
+                        Style::default().fg(theme.text_muted),
+                    )),
+                ]
             }
-            ProviderConnectMode::Custom => {
-                "←/→ or Tab switch mode  Enter start custom setup  Esc close"
-            }
+            ProviderConnectMode::Custom => vec![
+                Line::from(Span::styled(
+                    "Manual provider setup",
+                    Style::default().fg(theme.text_muted),
+                )),
+                Line::from(Span::styled(
+                    "←/→ or Tab switch mode  Enter start custom setup  Esc close",
+                    Style::default().fg(theme.text_muted),
+                )),
+            ],
         };
         frame.render_widget(
             Paragraph::new(footer).wrap(Wrap { trim: false }).style(
@@ -884,5 +1136,40 @@ impl ProviderDialog {
 impl Default for ProviderDialog {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn provider_from_draft_match(entry: crate::api::KnownProviderEntry) -> Provider {
+    Provider {
+        env_hint: entry.env.first().cloned().unwrap_or_default(),
+        base_url: entry.base_url,
+        protocol: entry.protocol,
+        model_count: entry.model_count,
+        status: if entry.connected {
+            ProviderStatus::Connected
+        } else {
+            ProviderStatus::Disconnected
+        },
+        id: entry.id,
+        name: entry.name,
+    }
+}
+
+pub fn provider_from_connect_draft(draft: &ProviderConnectDraft) -> Provider {
+    Provider {
+        id: draft.provider_id.clone(),
+        name: draft
+            .name
+            .clone()
+            .unwrap_or_else(|| draft.provider_id.clone()),
+        env_hint: draft.env.first().cloned().unwrap_or_default(),
+        base_url: draft.base_url.clone(),
+        protocol: draft.protocol.clone(),
+        model_count: draft.model_count,
+        status: if draft.connected {
+            ProviderStatus::Connected
+        } else {
+            ProviderStatus::Disconnected
+        },
     }
 }

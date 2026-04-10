@@ -23,9 +23,11 @@ use rocode_provider::{
     unregister_custom_fetch_proxy, AuthInfo, AuthManager, BootstrapConfig,
     ConfigModel as BootstrapConfigModel, ConfigProvider as BootstrapConfigProvider,
     CustomFetchProxy, CustomFetchRequest, CustomFetchResponse, CustomFetchStreamResponse,
-    ProviderError, ProviderRegistry,
+    ModelCatalogAuthority, ProviderError, ProviderRegistry,
 };
+use rocode_runtime_context::{ResolvedWorkspaceContext, ResolvedWorkspaceContextAuthority};
 use rocode_session::{SessionManager, SessionPrompt, SessionStateManager};
+use rocode_state::UserStateAuthority;
 use rocode_storage::{Database, MessageRepository, SessionRepository};
 
 use crate::routes;
@@ -207,7 +209,11 @@ fn spawn_plugin_idle_monitor(loader: Arc<PluginLoader>) {
 pub struct ServerState {
     pub sessions: Mutex<SessionManager>,
     pub providers: tokio::sync::RwLock<ProviderRegistry>,
+    pub catalog_authority: Arc<ModelCatalogAuthority>,
+    pub resolved_context: tokio::sync::RwLock<ResolvedWorkspaceContext>,
     pub config_store: Arc<rocode_config::ConfigStore>,
+    pub user_state: Arc<UserStateAuthority>,
+    pub resolved_context_authority: Arc<ResolvedWorkspaceContextAuthority>,
     pub tool_registry: Arc<rocode_tool::ToolRegistry>,
     pub prompt_runner: Arc<SessionPrompt>,
     pub(crate) runtime_control: Arc<RuntimeControlRegistry>,
@@ -246,6 +252,14 @@ impl Default for ApiPerfCounters {
 
 impl ServerState {
     pub fn new() -> Self {
+        let config_store = Arc::new(rocode_config::ConfigStore::new(
+            rocode_config::Config::default(),
+        ));
+        let user_state = Arc::new(UserStateAuthority::from_config_store(&config_store));
+        let resolved_context_authority = Arc::new(ResolvedWorkspaceContextAuthority::new(
+            config_store.clone(),
+            user_state.clone(),
+        ));
         let (tx, _) = broadcast::channel(1024);
         let topology_tx = tx.clone();
         let stage_event_log = Arc::new(StageEventLog::new());
@@ -286,9 +300,11 @@ impl ServerState {
         Self {
             sessions: Mutex::new(SessionManager::new()),
             providers: tokio::sync::RwLock::new(ProviderRegistry::new()),
-            config_store: Arc::new(rocode_config::ConfigStore::new(
-                rocode_config::Config::default(),
-            )),
+            catalog_authority: rocode_provider::default_model_catalog_authority(),
+            resolved_context: tokio::sync::RwLock::new(ResolvedWorkspaceContext::empty()),
+            config_store,
+            user_state,
+            resolved_context_authority,
             tool_registry: Arc::new(rocode_tool::ToolRegistry::new()),
             prompt_runner: Arc::new(SessionPrompt::new(Arc::new(tokio::sync::RwLock::new(
                 SessionStateManager::new(),
@@ -326,6 +342,11 @@ impl ServerState {
                 ))
             }
         };
+        let user_state = Arc::new(UserStateAuthority::from_config_store(&config_store));
+        let resolved_context_authority = Arc::new(ResolvedWorkspaceContextAuthority::new(
+            config_store.clone(),
+            user_state.clone(),
+        ));
 
         // Plugin bootstrap needs config_store for refresh_agent_cache
         load_plugin_auth_store(&server_url, auth_manager.clone(), &config_store).await;
@@ -337,8 +358,9 @@ impl ServerState {
 
         // Ensure models.dev cache exists before bootstrap (which reads it synchronously).
         {
-            let registry = rocode_provider::ModelsRegistry::default();
-            match tokio::time::timeout(Duration::from_secs(10), registry.get()).await {
+            match tokio::time::timeout(Duration::from_secs(10), state.catalog_authority.data())
+                .await
+            {
                 Ok(data) => {
                     tracing::info!(providers = data.len(), "models.dev cache ready");
                 }
@@ -355,6 +377,9 @@ impl ServerState {
             &auth_store,
         ));
         state.config_store = config_store.clone();
+        state.user_state = user_state;
+        state.resolved_context_authority = resolved_context_authority.clone();
+        let _ = state.refresh_resolved_context().await;
 
         // Load task category registry from configured path
         let category_registry = if let Some(path) = config_store.resolved_task_category_path().await
@@ -413,8 +438,15 @@ impl ServerState {
         let config = self.config_store.config();
         let bootstrap_config = bootstrap_config_from_config(&config);
         let new_registry = create_registry_from_bootstrap_config(&bootstrap_config, &auth_store);
+        let _ = self.refresh_resolved_context().await;
 
         *self.providers.write().await = new_registry;
+    }
+
+    pub async fn refresh_resolved_context(&self) -> anyhow::Result<ResolvedWorkspaceContext> {
+        let resolved = self.resolved_context_authority.resolve().await?;
+        *self.resolved_context.write().await = resolved.clone();
+        Ok(resolved)
     }
 
     async fn load_sessions_from_storage(&self) -> anyhow::Result<()> {

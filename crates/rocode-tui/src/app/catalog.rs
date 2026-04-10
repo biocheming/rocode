@@ -7,11 +7,12 @@ impl App {
             return;
         };
 
-        let Ok(providers) = client.get_config_providers() else {
+        let Ok(providers) = client.get_all_providers() else {
             self.context.set_has_connected_provider(false);
             return;
         };
-        let has_connected_provider = providers.providers.iter().any(|p| !p.models.is_empty());
+        let connected_provider_ids = providers.connected.iter().cloned().collect::<HashSet<_>>();
+        let has_connected_provider = !connected_provider_ids.is_empty();
         self.context
             .set_has_connected_provider(has_connected_provider);
 
@@ -19,7 +20,7 @@ impl App {
         let mut variant_map: HashMap<String, Vec<String>> = HashMap::new();
         let mut models = Vec::new();
         let mut context_providers = Vec::new();
-        for provider in providers.providers {
+        for provider in providers.all {
             let provider_id = provider.id.clone();
             let provider_name = provider.name.clone();
             let mut provider_models = Vec::new();

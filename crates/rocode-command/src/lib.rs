@@ -959,6 +959,9 @@ mod tests {
         let sessions = registry
             .ui_slash_command("/session")
             .expect("session command");
+        let connect = registry
+            .ui_slash_command("/connect")
+            .expect("connect command");
         let copy = registry.ui_slash_command("/copy").expect("copy command");
 
         assert_eq!(model.argument_kind(), UiCommandArgumentKind::ModelRef);
@@ -967,6 +970,7 @@ mod tests {
             sessions.argument_kind(),
             UiCommandArgumentKind::SessionTarget
         );
+        assert_eq!(connect.argument_kind(), UiCommandArgumentKind::Text);
         assert_eq!(copy.argument_kind(), UiCommandArgumentKind::None);
     }
 
@@ -980,6 +984,13 @@ mod tests {
         assert_eq!(resolved.action_id, UiActionId::OpenModelList);
         assert_eq!(resolved.argument_kind, UiCommandArgumentKind::ModelRef);
         assert_eq!(resolved.argument.as_deref(), Some("openai/gpt-5"));
+
+        let resolved = registry
+            .resolve_ui_slash_input("/connect openrouter")
+            .expect("resolved connect command");
+        assert_eq!(resolved.action_id, UiActionId::ConnectProvider);
+        assert_eq!(resolved.argument_kind, UiCommandArgumentKind::Text);
+        assert_eq!(resolved.argument.as_deref(), Some("openrouter"));
     }
 
     #[test]

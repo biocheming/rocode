@@ -2941,8 +2941,10 @@ dependencies = [
  "rocode-permission",
  "rocode-plugin",
  "rocode-provider",
+ "rocode-runtime-context",
  "rocode-server",
  "rocode-session",
+ "rocode-skill",
  "rocode-storage",
  "rocode-tool",
  "rocode-tui",
@@ -3185,6 +3187,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocode-runtime-context"
+version = "2026.4.4"
+dependencies = [
+ "anyhow",
+ "rocode-config",
+ "rocode-state",
+ "serde",
+ "tokio",
+]
+
+[[package]]
 name = "rocode-server"
 version = "2026.4.4"
 dependencies = [
@@ -3208,7 +3221,10 @@ dependencies = [
  "rocode-permission",
  "rocode-plugin",
  "rocode-provider",
+ "rocode-runtime-context",
  "rocode-session",
+ "rocode-skill",
+ "rocode-state",
  "rocode-storage",
  "rocode-tool",
  "rocode-types",
@@ -3264,6 +3280,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocode-skill"
+version = "2026.4.4"
+dependencies = [
+ "dirs",
+ "rocode-config",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "walkdir",
+]
+
+[[package]]
+name = "rocode-state"
+version = "2026.4.4"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "rocode-config",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "rocode-storage"
 version = "2026.4.4"
 dependencies = [
@@ -3313,6 +3354,7 @@ dependencies = [
  "rocode-lsp",
  "rocode-permission",
  "rocode-plugin",
+ "rocode-skill",
  "rocode-util",
  "serde",
  "serde_json",
@@ -3355,7 +3397,9 @@ dependencies = [
  "rocode-mcp",
  "rocode-orchestrator",
  "rocode-provider",
+ "rocode-runtime-context",
  "rocode-session",
+ "rocode-state",
  "rocode-tool",
  "rocode-util",
  "serde",

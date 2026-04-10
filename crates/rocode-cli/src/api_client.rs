@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use crate::util::server_url;
 use rocode_config::Config;
+use rocode_runtime_context::ResolvedWorkspaceContext;
 
 // Re-export shared types from TUI api module so callers don't need to
 // depend on rocode_tui directly.
@@ -19,9 +20,9 @@ pub use rocode_tui::api::{
     ExecutionModeInfo, FullProviderListResponse, KnownProvidersResponse, McpAuthStartInfo,
     McpStatusInfo, MessageInfo, MessageTokensInfo, PendingCommandInvocation, PermissionRequestInfo,
     PromptPart, PromptRequest, PromptResponse, ProviderConnectSchemaResponse, ProviderListResponse,
-    QuestionInfo, RecoveryActionKind, RevertRequest, RevertResponse, SessionExecutionTopology,
-    SessionInfo, SessionRecoveryProtocol, SessionRuntimeState, SessionStatusInfo, ShareResponse,
-    UpdateSessionRequest,
+    QuestionInfo, RecoveryActionKind, RefreshProviderCatalogResponse, RevertRequest,
+    RevertResponse, SessionExecutionTopology, SessionInfo, SessionRecoveryProtocol,
+    SessionRuntimeState, SessionStatusInfo, ShareResponse, UpdateSessionRequest,
 };
 
 /// Async HTTP client for communicating with the ROCode server.
@@ -341,6 +342,12 @@ impl CliApiClient {
         Self::json_ok(resp, "get config").await
     }
 
+    pub async fn get_workspace_context(&self) -> anyhow::Result<ResolvedWorkspaceContext> {
+        let url = server_url(&self.base_url, "/workspace/context");
+        let resp = self.client.get(&url).send().await?;
+        Self::json_ok(resp, "get workspace context").await
+    }
+
     pub async fn get_config_providers(&self) -> anyhow::Result<ProviderListResponse> {
         let url = server_url(&self.base_url, "/config/providers");
         let resp = self.client.get(&url).send().await?;
@@ -365,6 +372,28 @@ impl CliApiClient {
         let url = server_url(&self.base_url, "/provider/connect/schema");
         let resp = self.client.get(&url).send().await?;
         Self::json_ok(resp, "get provider connect schema").await
+    }
+
+    pub async fn resolve_provider_connect(
+        &self,
+        query: &str,
+    ) -> anyhow::Result<rocode_tui::api::ResolveProviderConnectResponse> {
+        let url = server_url(&self.base_url, "/provider/connect/resolve");
+        let resp = self
+            .client
+            .post(&url)
+            .json(&rocode_tui::api::ResolveProviderConnectRequest {
+                query: query.to_string(),
+            })
+            .send()
+            .await?;
+        Self::json_ok(resp, "resolve provider connect").await
+    }
+
+    pub async fn refresh_provider_catalog(&self) -> anyhow::Result<RefreshProviderCatalogResponse> {
+        let url = server_url(&self.base_url, "/provider/refresh");
+        let resp = self.client.post(&url).send().await?;
+        Self::json_ok(resp, "refresh provider catalogue").await
     }
 
     pub async fn set_auth(&self, provider_id: &str, api_key: &str) -> anyhow::Result<()> {

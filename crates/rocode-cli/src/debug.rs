@@ -11,8 +11,8 @@ use rocode_config::{LspConfig, LspServerConfig as ConfigLspServerConfig};
 use rocode_grep::{FileSearchOptions, Ripgrep};
 use rocode_lsp::{LspClient, LspServerConfig};
 use rocode_session::snapshot::Snapshot;
+use rocode_skill::list_available_skills;
 use rocode_storage::{Database, SessionRepository};
-use rocode_tool::skill::list_available_skills;
 use rocode_tool::{registry::create_default_registry, ToolContext};
 
 use crate::cli::*;

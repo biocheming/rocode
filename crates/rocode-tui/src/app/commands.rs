@@ -53,6 +53,34 @@ impl App {
                 let Some(model_ref) = argument else {
                     return self.execute_ui_action(invocation.action_id);
                 };
+                if model_ref.eq_ignore_ascii_case("refresh") {
+                    let Some(client) = self.context.get_api_client() else {
+                        self.toast
+                            .show(ToastVariant::Error, "No API connection available.", 2200);
+                        return Ok(());
+                    };
+                    match client.refresh_provider_catalog() {
+                        Ok(result) => {
+                            let message = result.status_message();
+                            let _ = self.sync_config_from_server();
+                            self.populate_provider_dialog();
+                            let variant = if result.error_message.is_some() {
+                                ToastVariant::Error
+                            } else {
+                                ToastVariant::Success
+                            };
+                            self.toast.show(variant, &message, 3200);
+                        }
+                        Err(error) => {
+                            self.toast.show(
+                                ToastVariant::Error,
+                                &format!("Failed to refresh model catalogue: {}", error),
+                                3000,
+                            );
+                        }
+                    }
+                    return Ok(());
+                }
                 self.refresh_model_dialog();
                 let (model_key, _) = parse_model_ref_selection(
                     model_ref,
@@ -95,6 +123,15 @@ impl App {
                     &format!("Theme set to {}", theme_id),
                     1800,
                 );
+                Ok(())
+            }
+            UiActionId::ConnectProvider => {
+                self.populate_provider_dialog();
+                self.provider_dialog.open();
+                if let Some(query) = argument {
+                    self.provider_dialog.search_query = query.to_string();
+                    self.resolve_provider_dialog_search();
+                }
                 Ok(())
             }
             UiActionId::OpenAgentList | UiActionId::OpenPresetList | UiActionId::OpenModeList => {
@@ -480,6 +517,7 @@ impl App {
             | InteractiveCommand::ShowStatus
             | InteractiveCommand::ListModels
             | InteractiveCommand::ListProviders
+            | InteractiveCommand::ConnectProvider(_)
             | InteractiveCommand::ListThemes
             | InteractiveCommand::ListPresets
             | InteractiveCommand::ListSessions

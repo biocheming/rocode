@@ -83,7 +83,7 @@ pub struct ConfigProvidersResponse {
 async fn get_config_providers(
     State(state): State<Arc<ServerState>>,
 ) -> Json<ConfigProvidersResponse> {
-    let variant_lookup = crate::routes::provider::get_model_variant_lookup().await;
+    let variant_lookup = crate::routes::provider::get_model_variant_lookup(state.as_ref()).await;
     let models = state.providers.read().await.list_models();
     let mut provider_map: HashMap<String, Vec<crate::routes::provider::ModelInfo>> = HashMap::new();
     let mut provider_names: HashMap<String, String> = HashMap::new();
@@ -94,7 +94,7 @@ async fn get_config_providers(
             .entry(provider_id.clone())
             .or_insert_with(|| provider_id.clone());
         let variants =
-            crate::routes::provider::variants_for_model(variant_lookup, &provider_id, &model_id);
+            crate::routes::provider::variants_for_model(&variant_lookup, &provider_id, &model_id);
         provider_map.entry(provider_id.clone()).or_default().push(
             crate::routes::provider::ModelInfo {
                 id: model_id,
@@ -129,7 +129,7 @@ async fn get_config_providers(
                         .filter(|items| !items.is_empty())
                         .unwrap_or_else(|| {
                             crate::routes::provider::variants_for_model(
-                                variant_lookup,
+                                &variant_lookup,
                                 provider_id,
                                 &model_id,
                             )

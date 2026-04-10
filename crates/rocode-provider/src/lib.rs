@@ -2,6 +2,7 @@ pub mod auth;
 pub mod azure;
 pub mod bootstrap;
 pub mod bridge;
+pub mod catalog;
 pub mod custom_fetch;
 pub mod driver;
 pub mod error_classification;
@@ -32,6 +33,11 @@ pub use bootstrap::{
 pub use bridge::{
     bridge_streaming_events, driver_response_to_chat_response, streaming_event_to_stream_events,
     DriverBasedProtocol,
+};
+pub use catalog::{
+    default_catalog_metadata_path, default_catalog_snapshot_path, default_model_catalog_authority,
+    load_default_catalog_data_sync, CatalogMetadata, CatalogRefreshResult, CatalogRefreshStatus,
+    CatalogSnapshot, ModelCatalogAuthority,
 };
 pub use custom_fetch::*;
 pub use instance::*;

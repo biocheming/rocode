@@ -148,8 +148,12 @@ pub(crate) async fn run_non_interactive(options: RunNonInteractiveOptions) -> an
         discover_or_start_server(None).await?
     };
     let api_client = CliApiClient::new(base_url.clone());
-    let remote_config = api_client.get_config().await.ok();
-    let show_thinking = cli_resolve_show_thinking(thinking, remote_config.as_ref(), false);
+    let remote_context = api_client.get_workspace_context().await.ok();
+    let show_thinking = cli_resolve_show_thinking(
+        thinking,
+        remote_context.as_ref().map(|context| &context.config),
+        false,
+    );
 
     run_non_interactive_attach(RemoteAttachOptions {
         base_url,

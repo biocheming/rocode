@@ -1,0 +1,16 @@
+[package]
+name = "rocode-skill"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rocode-config = { path = "../rocode-config" }
+serde = { workspace = true }
+thiserror = { workspace = true }
+walkdir = { workspace = true }
+dirs = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

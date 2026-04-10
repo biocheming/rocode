@@ -208,8 +208,7 @@ pub(super) fn apply_post_load_transforms(config: &mut Config) {
 
 /// Loads config synchronously (without remote wellknown fetching).
 pub fn load_config<P: AsRef<Path>>(project_dir: P) -> Result<Config> {
-    let mut loader = ConfigLoader::new();
-    loader.load_all(project_dir)
+    super::ConfigAuthority::resolve(project_dir.as_ref()).map(|resolved| resolved.config)
 }
 
 /// Loads config including remote `.well-known/rocode` endpoints.

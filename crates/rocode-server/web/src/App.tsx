@@ -79,11 +79,40 @@ interface KnownProviderEntry {
   name: string;
   env: string[];
   connected: boolean;
+  model_count?: number;
+  base_url?: string | null;
+  protocol?: string | null;
+  npm?: string | null;
+  supports_api_key_connect?: boolean;
 }
 
 interface ConnectProtocolOption {
   id: string;
   name: string;
+}
+
+type ProviderConnectDraftMode = "known" | "custom";
+
+interface ProviderConnectDraft {
+  mode: ProviderConnectDraftMode;
+  provider_id: string;
+  known_provider_id?: string | null;
+  name?: string | null;
+  base_url?: string | null;
+  protocol?: string | null;
+  env: string[];
+  connected: boolean;
+  model_count: number;
+  supports_api_key_connect: boolean;
+}
+
+interface ResolveProviderConnectResponse {
+  query: string;
+  suggested_mode: ProviderConnectDraftMode;
+  exact_match: boolean;
+  matches: KnownProviderEntry[];
+  draft: ProviderConnectDraft;
+  custom_draft: ProviderConnectDraft;
 }
 
 interface ExecutionMode {
@@ -174,6 +203,20 @@ interface PathsResponse {
   home: string;
   config: string;
   data: string;
+}
+
+interface WorkspaceIdentity {
+  requested_dir: string;
+  workspace_root: string;
+  config_dir?: string | null;
+  workspace_key: string;
+}
+
+interface WorkspaceContext {
+  identity: WorkspaceIdentity;
+  mode: "shared" | "isolated";
+  config: Record<string, unknown>;
+  recent_models?: Array<{ provider: string; model: string }>;
 }
 
 interface UploadedFileRecord {
@@ -896,6 +939,16 @@ function applyPreferences(config: Record<string, unknown>) {
   };
 }
 
+function workspaceRootFromContext(context: WorkspaceContext | null): string {
+  return context?.identity?.workspace_root?.trim() || "";
+}
+
+function workspaceModeFromContext(
+  context: WorkspaceContext | null,
+): "shared" | "isolated" | null {
+  return context?.mode ?? null;
+}
+
 function flattenModels(providers: ProviderRecord[]) {
   return providers.flatMap((provider) =>
     (provider.models ?? []).map((model) => ({
@@ -927,14 +980,20 @@ export default function App() {
   const [knownProviders, setKnownProviders] = useState<KnownProviderEntry[]>([]);
   const [connectProtocols, setConnectProtocols] = useState<ConnectProtocolOption[]>([]);
   const [modes, setModes] = useState<ExecutionMode[]>([]);
+  const [workspaceContext, setWorkspaceContext] = useState<WorkspaceContext | null>(null);
   const [selectedModel, setSelectedModel] = useState("");
   const [selectedMode, setSelectedMode] = useState("");
+  const [connectQuery, setConnectQuery] = useState("");
   const [connectProviderId, setConnectProviderId] = useState("");
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true);
   const [connectProtocol, setConnectProtocol] = useState("");
   const [connectApiKey, setConnectApiKey] = useState("");
   const [connectBaseUrl, setConnectBaseUrl] = useState("");
+  const [connectResolution, setConnectResolution] =
+    useState<ResolveProviderConnectResponse | null>(null);
+  const [connectResolveBusy, setConnectResolveBusy] = useState(false);
+  const [connectResolveError, setConnectResolveError] = useState<string | null>(null);
   const [connectBusy, setConnectBusy] = useState(false);
   const [theme, setTheme] = useState<ThemeId>("daylight");
   const [showThinking, setShowThinking] = useState(false);
@@ -976,6 +1035,7 @@ export default function App() {
   const preferencesReadyRef = useRef(false);
   const selectedSessionRef = useRef<string | null>(null);
   const liveBlocksRef = useRef<SessionLiveBlockCache>({});
+  const connectResolveRequestRef = useRef(0);
 
   const modelOptions = useMemo(() => flattenModels(providers), [providers]);
   const settingsModeOptions = useMemo(
@@ -999,6 +1059,8 @@ export default function App() {
       null,
     [currentWorkspacePath, workspaceSummaries],
   );
+  const resolvedWorkspaceRootPath = workspaceRootFromContext(workspaceContext) || serviceRootPath;
+  const resolvedWorkspaceMode = workspaceModeFromContext(workspaceContext);
   const sessionTree = useMemo(
     () => buildSessionTree(sessions, currentWorkspaceSummary?.path ?? null),
     [currentWorkspaceSummary?.path, sessions],
@@ -1008,6 +1070,7 @@ export default function App() {
   const workspaceBasePath =
     currentSession?.directory?.trim() ||
     currentWorkspaceSummary?.path ||
+    workspaceRootFromContext(workspaceContext) ||
     workspaceRootPath ||
     serviceRootPath ||
     "";
@@ -1082,16 +1145,24 @@ export default function App() {
 
   const reloadCoreSettingsData = async () => {
     try {
-      const [providersData, modeData, connectSchema] = await Promise.all([
+      const [providersData, modeData, connectSchema, context] = await Promise.all([
         apiJson<{ providers?: ProviderRecord[]; all?: ProviderRecord[] }>("/config/providers"),
         apiJson<ExecutionMode[]>("/mode"),
         apiJson<{ providers: KnownProviderEntry[]; protocols: ConnectProtocolOption[] }>(
           "/provider/connect/schema",
         ),
+        apiJson<WorkspaceContext>("/workspace/context"),
       ]);
+      const prefs = applyPreferences(context.config ?? {});
       setProviders(providersData.providers ?? providersData.all ?? []);
       setKnownProviders(connectSchema.providers ?? []);
       setConnectProtocols(connectSchema.protocols ?? []);
+      setWorkspaceContext(context);
+      setServiceRootPath((current) => workspaceRootFromContext(context) || current);
+      setTheme(THEMES.some((item) => item.id === prefs.theme) ? prefs.theme : "daylight");
+      setSelectedMode(prefs.mode);
+      setSelectedModel(prefs.model);
+      setShowThinking(prefs.showThinking);
       setModes(
         (modeData ?? [])
           .filter((mode) => mode.hidden !== true)
@@ -1121,6 +1192,52 @@ export default function App() {
   }, [selectedSessionId]);
 
   useEffect(() => {
+    const query = connectQuery.trim();
+    if (!query) {
+      connectResolveRequestRef.current += 1;
+      setConnectResolveBusy(false);
+      setConnectResolveError(null);
+      setConnectResolution(null);
+      return;
+    }
+
+    const requestId = connectResolveRequestRef.current + 1;
+    connectResolveRequestRef.current = requestId;
+    const timer = window.setTimeout(() => {
+      setConnectResolveBusy(true);
+      setConnectResolveError(null);
+      void (async () => {
+        try {
+          const response = await apiJson<ResolveProviderConnectResponse>(
+            "/provider/connect/resolve",
+            {
+              method: "POST",
+              body: JSON.stringify({ query }),
+            },
+          );
+          if (connectResolveRequestRef.current !== requestId) return;
+          setConnectResolution(response);
+          setConnectProviderId(response.draft.provider_id);
+          setConnectBaseUrl(response.draft.base_url ?? "");
+          setConnectProtocol(
+            response.draft.protocol ?? connectProtocols[0]?.id ?? "openai",
+          );
+        } catch (error) {
+          if (connectResolveRequestRef.current !== requestId) return;
+          setConnectResolution(null);
+          setConnectResolveError(formatError(error));
+        } finally {
+          if (connectResolveRequestRef.current === requestId) {
+            setConnectResolveBusy(false);
+          }
+        }
+      })();
+    }, 120);
+
+    return () => window.clearTimeout(timer);
+  }, [apiJson, connectProtocols, connectQuery, knownProviders]);
+
+  useEffect(() => {
     const selectedWorkspace = currentSession?.directory?.trim();
     if (selectedWorkspace) {
       setCurrentWorkspacePath(selectedWorkspace);
@@ -1144,11 +1261,11 @@ export default function App() {
 
     const loadBootstrap = async () => {
       try {
-        const [sessionData, providersData, modeData, config, connectSchema, paths] = await Promise.all([
+        const [sessionData, providersData, modeData, context, connectSchema, paths] = await Promise.all([
           fetchSessions(),
           apiJson<{ providers?: ProviderRecord[]; all?: ProviderRecord[] }>("/config/providers"),
           apiJson<ExecutionMode[]>("/mode"),
-          apiJson<Record<string, unknown>>("/config"),
+          apiJson<WorkspaceContext>("/workspace/context"),
           apiJson<{ providers: KnownProviderEntry[]; protocols: ConnectProtocolOption[] }>(
             "/provider/connect/schema",
           ),
@@ -1161,19 +1278,20 @@ export default function App() {
         const nextModes = (modeData ?? [])
           .filter((mode) => mode.hidden !== true)
           .filter((mode) => mode.kind !== "agent" || mode.mode !== "subagent");
-        const prefs = applyPreferences(config);
+        const prefs = applyPreferences(context.config ?? {});
+        const workspaceRoot = workspaceRootFromContext(context);
 
-        setServiceRootPath(paths.cwd || "");
+        setServiceRootPath(workspaceRoot || paths.cwd || "");
         setSessions(sessionData);
         setProviders(nextProviders);
         setKnownProviders(connectSchema.providers ?? []);
         setConnectProtocols(connectSchema.protocols ?? []);
+        setWorkspaceContext(context);
         setModes(nextModes);
         setTheme(THEMES.some((item) => item.id === prefs.theme) ? prefs.theme : "daylight");
         setSelectedMode(prefs.mode);
         setSelectedModel(prefs.model);
         setShowThinking(prefs.showThinking);
-        setConnectProviderId((current) => current || connectSchema.providers?.[0]?.id || "");
         setConnectProtocol((current) => current || connectSchema.protocols?.[0]?.id || "");
         setSelectedSessionId((current) => current ?? sessionData[0]?.id ?? null);
         preferencesReadyRef.current = true;
@@ -1812,26 +1930,44 @@ export default function App() {
   };
 
   const connectProvider = async () => {
-    if (!connectProviderId.trim() || !connectApiKey.trim()) {
+    const providerId = connectProviderId.trim();
+    const apiKey = connectApiKey.trim();
+    if (!providerId || !apiKey) {
       setBanner("provider_id and api_key are required");
       return;
     }
 
+    const baseUrl = connectBaseUrl.trim();
+    const defaultProtocol = connectProtocols[0]?.id || "openai";
+    const protocol = connectProtocol.trim() || defaultProtocol;
+    const suggestedDraft = connectResolution?.draft ?? null;
+    const suggestedBaseUrl = suggestedDraft?.base_url?.trim() ?? "";
+    const suggestedProtocol = suggestedDraft?.protocol?.trim() || defaultProtocol;
+
     setConnectBusy(true);
     try {
+      const useKnownQuickConnect =
+        suggestedDraft?.mode === "known" &&
+        suggestedDraft.provider_id.toLowerCase() === providerId.toLowerCase() &&
+        ((baseUrl === suggestedBaseUrl && protocol === suggestedProtocol) || !baseUrl);
+      if (!useKnownQuickConnect && !baseUrl) {
+        setBanner("Custom or advanced provider connect requires a base URL.");
+        return;
+      }
+
       await api("/provider/connect", {
         method: "POST",
         body: JSON.stringify({
-          provider_id: connectProviderId.trim(),
-          api_key: connectApiKey.trim(),
-          base_url: connectBaseUrl.trim() || undefined,
-          protocol: connectBaseUrl.trim() ? connectProtocol.trim() || undefined : undefined,
+          provider_id: providerId,
+          api_key: apiKey,
+          base_url: useKnownQuickConnect ? undefined : baseUrl,
+          protocol: useKnownQuickConnect ? undefined : protocol,
         }),
       });
       setConnectApiKey("");
       setConnectBaseUrl("");
       await reloadCoreSettingsData();
-      setBanner(`Connected provider ${connectProviderId.trim()}`);
+      setBanner(`Connected provider ${providerId}`);
     } catch (error) {
       setBanner(`Provider connect failed: ${formatError(error)}`);
     } finally {
@@ -2141,7 +2277,8 @@ export default function App() {
               workspaces={workspaceSummaries}
               currentWorkspacePath={currentWorkspaceSummary?.path ?? null}
               currentWorkspaceLabel={currentWorkspaceSummary?.label ?? null}
-              currentWorkspaceRootPath={(currentWorkspaceSummary?.path ?? serviceRootPath) || null}
+              currentWorkspaceRootPath={resolvedWorkspaceRootPath || currentWorkspaceSummary?.path || null}
+              currentWorkspaceMode={resolvedWorkspaceMode}
               sessionTree={sessionTree}
               selectedSessionId={selectedSessionId}
               onCreateProject={(input) => {
@@ -2233,8 +2370,8 @@ export default function App() {
             <WorkspacePanel
               workspaceLoading={workspaceLoading}
               fileTree={fileTree}
-              workspaceRootPath={workspaceRootPath}
-              workspaceRootLabel={workspaceRootPath || currentSession?.directory || "project"}
+              workspaceRootPath={workspaceRootPath || resolvedWorkspaceRootPath}
+              workspaceRootLabel={workspaceRootPath || resolvedWorkspaceRootPath || currentSession?.directory || "project"}
               selectedWorkspacePath={selectedWorkspacePath}
               selectedWorkspaceType={selectedWorkspaceType}
               workspaceLinkLabel={workspaceLinkLabel}
@@ -2290,6 +2427,9 @@ export default function App() {
             theme={theme}
             themes={THEMES}
             onThemeChange={(nextTheme) => setTheme(nextTheme as ThemeId)}
+            workspaceMode={resolvedWorkspaceMode}
+            workspaceRootPath={resolvedWorkspaceRootPath}
+            workspaceConfigDir={workspaceContext?.identity?.config_dir ?? null}
             modeOptions={settingsModeOptions}
             selectedMode={selectedMode}
             onModeChange={setSelectedMode}
@@ -2301,6 +2441,11 @@ export default function App() {
             providers={providers}
             knownProviders={knownProviders}
             connectProtocols={connectProtocols}
+            connectQuery={connectQuery}
+            onConnectQueryChange={setConnectQuery}
+            connectResolution={connectResolution}
+            connectResolveBusy={connectResolveBusy}
+            connectResolveError={connectResolveError}
             connectProviderId={connectProviderId}
             onConnectProviderIdChange={setConnectProviderId}
             connectProtocol={connectProtocol}

@@ -192,6 +192,7 @@ pub fn sdk_key(npm: &str) -> Option<&'static str> {
         "@ai-sdk/google-vertex" | "@ai-sdk/google" => Some("google"),
         "@ai-sdk/gateway" => Some("gateway"),
         "@openrouter/ai-sdk-provider" => Some("openrouter"),
+        "@ai-sdk/perplexity" => Some("perplexity"),
         _ => None,
     }
 }

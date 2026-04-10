@@ -13,6 +13,7 @@ pub enum InteractiveCommand {
     ListModels,
     SelectModel(String),
     ListProviders,
+    ConnectProvider(Option<String>),
     ListThemes,
     ListPresets,
     SelectPreset(String),
@@ -53,6 +54,7 @@ impl InteractiveCommand {
             Self::ListModels => (UiActionId::OpenModelList, None),
             Self::SelectModel(model_ref) => (UiActionId::OpenModelList, Some(model_ref.clone())),
             Self::ListProviders => (UiActionId::ConnectProvider, None),
+            Self::ConnectProvider(query) => (UiActionId::ConnectProvider, query.clone()),
             Self::ListThemes => (UiActionId::OpenThemeList, None),
             Self::ListPresets => (UiActionId::OpenPresetList, None),
             Self::SelectPreset(name) => (UiActionId::OpenPresetList, Some(name.clone())),
@@ -133,6 +135,9 @@ pub fn parse_interactive_command(input: &str) -> Option<InteractiveCommand> {
             }
         }
         "providers" => Some(InteractiveCommand::ListProviders),
+        "provider" | "connect" => Some(InteractiveCommand::ConnectProvider(
+            (!arg.is_empty()).then_some(arg),
+        )),
         "theme" | "themes" => Some(InteractiveCommand::ListThemes),
         "preset" | "presets" => {
             if arg.is_empty() {
@@ -250,6 +255,16 @@ mod tests {
         assert_eq!(
             parse_interactive_command("/themes"),
             Some(InteractiveCommand::ListThemes)
+        );
+        assert_eq!(
+            parse_interactive_command("/connect"),
+            Some(InteractiveCommand::ConnectProvider(None))
+        );
+        assert_eq!(
+            parse_interactive_command("/connect openrouter"),
+            Some(InteractiveCommand::ConnectProvider(Some(
+                "openrouter".to_string()
+            )))
         );
         assert_eq!(
             parse_interactive_command("/preset"),
@@ -526,6 +541,14 @@ mod tests {
                 action_id: UiActionId::OpenPresetList,
                 argument_kind: UiCommandArgumentKind::PresetRef,
                 argument: Some("atlas".to_string()),
+            })
+        );
+        assert_eq!(
+            InteractiveCommand::ConnectProvider(Some("glm".to_string())).ui_action_invocation(),
+            Some(ResolvedUiCommand {
+                action_id: UiActionId::ConnectProvider,
+                argument_kind: UiCommandArgumentKind::Text,
+                argument: Some("glm".to_string()),
             })
         );
     }

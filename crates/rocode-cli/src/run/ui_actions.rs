@@ -468,19 +468,58 @@ async fn cli_execute_ui_action(
         }
         UiActionId::OpenModelList => {
             if let Some(model_ref) = argument.map(str::trim).filter(|value| !value.is_empty()) {
-                let normalized_model_ref = cli_normalize_model_ref(model_ref);
-                let mut exists = false;
-                for provider in provider_registry.list() {
-                    for model in provider.models() {
-                        if format!("{}/{}", provider.id(), model.id) == normalized_model_ref {
-                            exists = true;
-                            break;
+                if model_ref.eq_ignore_ascii_case("refresh") {
+                    match api_client.refresh_provider_catalog().await {
+                        Ok(result) => {
+                            let message = result.status_message();
+                            let _ = print_block(
+                                Some(runtime),
+                                OutputBlock::Status(if result.error_message.is_some() {
+                                    StatusBlock::error(message)
+                                } else {
+                                    StatusBlock::title(message)
+                                }),
+                                repl_style,
+                            );
+                        }
+                        Err(error) => {
+                            let _ = print_block(
+                                Some(runtime),
+                                OutputBlock::Status(StatusBlock::error(format!(
+                                    "Failed to refresh model catalogue: {}",
+                                    error
+                                ))),
+                                repl_style,
+                            );
                         }
                     }
-                    if exists {
-                        break;
-                    }
+                    return Ok(CliUiActionOutcome::Continue);
                 }
+
+                let normalized_model_ref = cli_normalize_model_ref(model_ref);
+                let exists = match api_client.get_all_providers().await {
+                    Ok(response) => response.all.into_iter().any(|provider| {
+                        provider.models.into_iter().any(|model| {
+                            format!("{}/{}", provider.id, model.id) == normalized_model_ref
+                        })
+                    }),
+                    Err(_) => {
+                        let mut fallback_exists = false;
+                        for provider in provider_registry.list() {
+                            for model in provider.models() {
+                                if format!("{}/{}", provider.id(), model.id) == normalized_model_ref
+                                {
+                                    fallback_exists = true;
+                                    break;
+                                }
+                            }
+                            if fallback_exists {
+                                break;
+                            }
+                        }
+                        fallback_exists
+                    }
+                };
                 if exists {
                     runtime.resolved_model_label = normalized_model_ref.clone();
                     let _ = print_block(
@@ -504,12 +543,30 @@ async fn cli_execute_ui_action(
                 return Ok(CliUiActionOutcome::Continue);
             }
             let style = CliStyle::detect();
-            let mut lines = Vec::new();
-            for p in provider_registry.list() {
-                for m in p.models() {
-                    lines.push(format!("{}/{}", p.id(), m.id));
+            let mut lines = match api_client.get_all_providers().await {
+                Ok(response) => response
+                    .all
+                    .into_iter()
+                    .flat_map(|provider| {
+                        let provider_id = provider.id;
+                        provider
+                            .models
+                            .into_iter()
+                            .map(move |model| format!("{}/{}", provider_id, model.id))
+                    })
+                    .collect::<Vec<_>>(),
+                Err(_) => {
+                    let mut fallback = Vec::new();
+                    for p in provider_registry.list() {
+                        for m in p.models() {
+                            fallback.push(format!("{}/{}", p.id(), m.id));
+                        }
+                    }
+                    fallback
                 }
-            }
+            };
+            lines.sort();
+            lines.dedup();
             let _ =
                 print_cli_list_on_surface(Some(runtime), "Available Models", None, &lines, &style);
             Ok(CliUiActionOutcome::Continue)
@@ -620,34 +677,164 @@ async fn cli_execute_ui_action(
                 }
             };
 
-            let mut options = schema
-                .providers
-                .iter()
-                .map(|provider| {
-                    let mut detail = provider.name.clone();
-                    if provider.connected {
-                        detail.push_str(" · connected");
-                    }
-                    if !provider.env.is_empty() {
-                        detail.push_str(&format!(" · {}", provider.env.join(", ")));
-                    }
-                    SelectOption {
-                        label: provider.id.clone(),
-                        description: Some(detail),
-                    }
-                })
-                .collect::<Vec<_>>();
-            options.sort_by(|a, b| a.label.cmp(&b.label));
-
-            let selected_provider = if let Some(raw) =
+            let query = if let Some(raw) =
                 argument.map(str::trim).filter(|value| !value.is_empty())
             {
                 raw.to_string()
             } else {
+                let Some(input) = cli_prompt_action_text(
+                    runtime,
+                    Some("connect provider"),
+                    "Search provider or type a custom provider id:",
+                )
+                .await?
+                else {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::warning(
+                            "Provider connect cancelled.",
+                        )),
+                        repl_style,
+                    );
+                    return Ok(CliUiActionOutcome::Continue);
+                };
+                input
+            };
+
+            let query = query.trim().to_string();
+            if query.is_empty() {
+                let _ = print_block(
+                    Some(runtime),
+                    OutputBlock::Status(StatusBlock::warning("Provider connect cancelled.")),
+                    repl_style,
+                );
+                return Ok(CliUiActionOutcome::Continue);
+            }
+
+            let mut resolved = match api_client.resolve_provider_connect(&query).await {
+                Ok(response) => response,
+                Err(error) => {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::error(format!(
+                            "Failed to resolve provider connect query: {}",
+                            error
+                        ))),
+                        repl_style,
+                    );
+                    return Ok(CliUiActionOutcome::Continue);
+                }
+            };
+
+            if resolved.matches.len() > 1 && !resolved.exact_match {
+                let mut options = resolved
+                    .matches
+                    .iter()
+                    .map(|provider| {
+                        let mut detail = provider.name.clone();
+                        if provider.connected {
+                            detail.push_str(" · connected");
+                        }
+                        if let Some(protocol) = provider.protocol.as_deref() {
+                            detail.push_str(&format!(" · {}", protocol));
+                        }
+                        if let Some(base_url) = provider.base_url.as_deref() {
+                            detail.push_str(&format!(" · {}", base_url));
+                        }
+                        if !provider.env.is_empty() {
+                            detail.push_str(&format!(" · {}", provider.env.join(", ")));
+                        }
+                        SelectOption {
+                            label: provider.id.clone(),
+                            description: Some(detail),
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                options.push(SelectOption {
+                    label: format!("custom:{}", query),
+                    description: Some(format!("Use `{}` as a custom provider id", query)),
+                });
+
                 let Some(selected) = cli_prompt_action_select(
                     runtime,
                     Some("connect provider"),
-                    "Select a provider to connect, or choose Other for a custom provider:",
+                    "Multiple known providers matched. Select one, or choose the custom draft:",
+                    options,
+                )
+                .await?
+                else {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::warning("Provider connect cancelled.")),
+                        repl_style,
+                    );
+                    return Ok(CliUiActionOutcome::Continue);
+                };
+
+                if selected == format!("custom:{}", query) {
+                    resolved.draft = resolved.custom_draft.clone();
+                } else {
+                    resolved = match api_client.resolve_provider_connect(&selected).await {
+                        Ok(response) => response,
+                        Err(error) => {
+                            let _ = print_block(
+                                Some(runtime),
+                                OutputBlock::Status(StatusBlock::error(format!(
+                                    "Failed to resolve provider connect query: {}",
+                                    error
+                                ))),
+                                repl_style,
+                            );
+                            return Ok(CliUiActionOutcome::Continue);
+                        }
+                    };
+                }
+            }
+
+            let mut draft = resolved.draft.clone();
+
+            let Some(api_key) = cli_prompt_action_text(
+                runtime,
+                Some("connect provider"),
+                &format!(
+                    "Enter API key for {}{}:",
+                    draft.provider_id,
+                    if draft.env.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", draft.env.join(", "))
+                    }
+                ),
+            )
+            .await?
+            else {
+                let _ = print_block(
+                    Some(runtime),
+                    OutputBlock::Status(StatusBlock::warning("Provider connect cancelled.")),
+                    repl_style,
+                );
+                return Ok(CliUiActionOutcome::Continue);
+            };
+
+            let wants_advanced = if draft.mode == rocode_tui::api::ProviderConnectDraftMode::Known {
+                let options = vec![
+                    SelectOption {
+                        label: "Use suggested settings".to_string(),
+                        description: Some("Connect with the known provider defaults".to_string()),
+                    },
+                    SelectOption {
+                        label: "Edit advanced fields".to_string(),
+                        description: Some("Adjust base URL and protocol before connecting".to_string()),
+                    },
+                    SelectOption {
+                        label: "Use custom provider id".to_string(),
+                        description: Some("Ignore the known match and use the custom draft".to_string()),
+                    },
+                ];
+                let Some(choice) = cli_prompt_action_select(
+                    runtime,
+                    Some("connect provider"),
+                    "Choose how to connect this provider:",
                     options,
                 )
                 .await?
@@ -661,144 +848,109 @@ async fn cli_execute_ui_action(
                     );
                     return Ok(CliUiActionOutcome::Continue);
                 };
-                selected
+                match choice.as_str() {
+                    "Use suggested settings" => false,
+                    "Edit advanced fields" => true,
+                    "Use custom provider id" => {
+                        draft = resolved.custom_draft.clone();
+                        true
+                    }
+                    _ => false,
+                }
+            } else {
+                true
             };
 
-            let known_provider = schema
-                .providers
-                .iter()
-                .find(|provider| provider.id == selected_provider);
-
-            if let Some(provider) = known_provider {
-                let Some(api_key) = cli_prompt_action_text(
+            let connect_result = if wants_advanced {
+                let Some(base_url_input) = cli_prompt_action_text(
                     runtime,
                     Some("connect provider"),
                     &format!(
-                        "Enter API key for {}{}:",
-                        provider.id,
-                        if provider.env.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" ({})", provider.env.join(", "))
-                        }
+                        "Enter provider base URL{}:",
+                        draft.base_url
+                            .as_deref()
+                            .map(|value| format!(" [{} leave empty to keep]", value))
+                            .unwrap_or_default()
                     ),
                 )
                 .await?
                 else {
                     let _ = print_block(
                         Some(runtime),
-                        OutputBlock::Status(StatusBlock::warning(
-                            "Provider connect cancelled.",
-                        )),
+                        OutputBlock::Status(StatusBlock::warning("Provider connect cancelled.")),
                         repl_style,
                     );
                     return Ok(CliUiActionOutcome::Continue);
                 };
 
-                match api_client.set_auth(&provider.id, api_key.trim()).await {
-                    Ok(()) => {
-                        let _ = print_block(
-                            Some(runtime),
-                            OutputBlock::Status(StatusBlock::title(format!(
-                                "Connected to {}",
-                                provider.id
-                            ))),
-                            repl_style,
-                        );
-                    }
-                    Err(error) => {
-                        let _ = print_block(
-                            Some(runtime),
-                            OutputBlock::Status(StatusBlock::error(format!(
-                                "Failed to connect provider `{}`: {}",
-                                provider.id, error
-                            ))),
-                            repl_style,
-                        );
-                    }
+                let base_url = if base_url_input.trim().is_empty() {
+                    draft.base_url.clone().unwrap_or_default()
+                } else {
+                    base_url_input.trim().to_string()
+                };
+                if base_url.trim().is_empty() {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::error(
+                            "Provider base URL is required for advanced connect.".to_string(),
+                        )),
+                        repl_style,
+                    );
+                    return Ok(CliUiActionOutcome::Continue);
                 }
-                return Ok(CliUiActionOutcome::Continue);
-            }
 
-            let provider_id = selected_provider.trim().to_string();
-            if provider_id.is_empty() {
-                let _ = print_block(
-                    Some(runtime),
-                    OutputBlock::Status(StatusBlock::warning("Provider connect cancelled.")),
-                    repl_style,
-                );
-                return Ok(CliUiActionOutcome::Continue);
-            }
-
-            let Some(base_url) = cli_prompt_action_text(
-                runtime,
-                Some("connect provider"),
-                "Enter the provider base URL:",
-            )
-            .await?
-            else {
-                let _ = print_block(
-                    Some(runtime),
-                    OutputBlock::Status(StatusBlock::warning("Provider connect cancelled.")),
-                    repl_style,
-                );
-                return Ok(CliUiActionOutcome::Continue);
-            };
-
-            let protocol_options = schema
-                .protocols
-                .iter()
-                .map(|protocol| SelectOption {
-                    label: protocol.id.clone(),
-                    description: Some(protocol.name.clone()),
-                })
-                .collect::<Vec<_>>();
-            let Some(protocol) = cli_prompt_action_select(
-                runtime,
-                Some("connect provider"),
-                "Select the upstream protocol family:",
-                protocol_options,
-            )
-            .await?
-            else {
-                let _ = print_block(
-                    Some(runtime),
-                    OutputBlock::Status(StatusBlock::warning("Provider connect cancelled.")),
-                    repl_style,
-                );
-                return Ok(CliUiActionOutcome::Continue);
-            };
-
-            let Some(api_key) = cli_prompt_action_text(
-                runtime,
-                Some("connect provider"),
-                &format!("Enter API key for {}:", provider_id),
-            )
-            .await?
-            else {
-                let _ = print_block(
-                    Some(runtime),
-                    OutputBlock::Status(StatusBlock::warning("Provider connect cancelled.")),
-                    repl_style,
-                );
-                return Ok(CliUiActionOutcome::Continue);
-            };
-
-            match api_client
-                .register_custom_provider(
-                    &provider_id,
-                    base_url.trim(),
-                    protocol.trim(),
-                    api_key.trim(),
+                let mut protocol_options = schema
+                    .protocols
+                    .iter()
+                    .map(|protocol| SelectOption {
+                        label: protocol.id.clone(),
+                        description: Some(protocol.name.clone()),
+                    })
+                    .collect::<Vec<_>>();
+                if let Some(current_protocol) = draft.protocol.as_deref() {
+                    protocol_options.sort_by_key(|option| {
+                        if option.label == current_protocol {
+                            0
+                        } else {
+                            1
+                        }
+                    });
+                }
+                let Some(protocol) = cli_prompt_action_select(
+                    runtime,
+                    Some("connect provider"),
+                    "Select the upstream protocol family:",
+                    protocol_options,
                 )
-                .await
-            {
+                .await?
+                else {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::warning("Provider connect cancelled.")),
+                        repl_style,
+                    );
+                    return Ok(CliUiActionOutcome::Continue);
+                };
+
+                api_client
+                    .connect_provider(
+                        &draft.provider_id,
+                        api_key.trim(),
+                        Some(base_url),
+                        Some(protocol.trim().to_string()),
+                    )
+                    .await
+            } else {
+                api_client.set_auth(&draft.provider_id, api_key.trim()).await
+            };
+
+            match connect_result {
                 Ok(()) => {
                     let _ = print_block(
                         Some(runtime),
                         OutputBlock::Status(StatusBlock::title(format!(
                             "Connected to {}",
-                            provider_id
+                            draft.provider_id
                         ))),
                         repl_style,
                     );
@@ -808,7 +960,7 @@ async fn cli_execute_ui_action(
                         Some(runtime),
                         OutputBlock::Status(StatusBlock::error(format!(
                             "Failed to connect provider `{}`: {}",
-                            provider_id, error
+                            draft.provider_id, error
                         ))),
                         repl_style,
                     );

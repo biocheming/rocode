@@ -2,6 +2,7 @@ mod discovery;
 mod file_ops;
 mod markdown_parser;
 mod transforms;
+mod workspace;
 
 #[cfg(test)]
 #[path = "tests.rs"]
@@ -18,6 +19,9 @@ pub(crate) use discovery::resolve_configured_path;
 pub use transforms::{
     deduplicate_plugins, get_plugin_name, load_config, load_config_with_remote, update_config,
     update_global_config, write_config,
+};
+pub use workspace::{
+    ConfigAuthority, ResolvedConfig, ResolvedConfigInputs, WorkspaceIdentity, WorkspaceMode,
 };
 
 use discovery::{

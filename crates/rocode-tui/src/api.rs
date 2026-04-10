@@ -1,11 +1,19 @@
 use reqwest::blocking::Client;
 use rocode_config::Config as AppConfig;
+use rocode_runtime_context::ResolvedWorkspaceContext;
+use rocode_state::RecentModelEntry;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 pub type PromptPart = rocode_session::prompt::PartInput;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct RecentModelsPayload {
+    #[serde(default)]
+    recent_models: Vec<RecentModelEntry>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
@@ -474,6 +482,14 @@ pub struct KnownProviderEntry {
     pub model_count: usize,
     #[serde(default)]
     pub connected: bool,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub protocol: Option<String>,
+    #[serde(default)]
+    pub npm: Option<String>,
+    #[serde(default)]
+    pub supports_api_key_connect: bool,
 }
 
 /// Response from `GET /provider/known`.
@@ -493,6 +509,90 @@ pub struct ProviderConnectSchemaResponse {
     pub providers: Vec<KnownProviderEntry>,
     #[serde(default)]
     pub protocols: Vec<ConnectProtocolOption>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderConnectDraftMode {
+    Known,
+    Custom,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderConnectDraft {
+    pub mode: ProviderConnectDraftMode,
+    pub provider_id: String,
+    #[serde(default)]
+    pub known_provider_id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub protocol: Option<String>,
+    #[serde(default)]
+    pub env: Vec<String>,
+    #[serde(default)]
+    pub connected: bool,
+    #[serde(default)]
+    pub model_count: usize,
+    #[serde(default)]
+    pub supports_api_key_connect: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolveProviderConnectRequest {
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolveProviderConnectResponse {
+    pub query: String,
+    pub suggested_mode: ProviderConnectDraftMode,
+    pub exact_match: bool,
+    #[serde(default)]
+    pub matches: Vec<KnownProviderEntry>,
+    pub draft: ProviderConnectDraft,
+    pub custom_draft: ProviderConnectDraft,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderCatalogRefreshStatus {
+    Updated,
+    NotModified,
+    FallbackCached,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefreshProviderCatalogResponse {
+    pub generation_before: u64,
+    pub generation_after: u64,
+    pub changed: bool,
+    pub status: ProviderCatalogRefreshStatus,
+    #[serde(default)]
+    pub error_message: Option<String>,
+}
+
+impl RefreshProviderCatalogResponse {
+    pub fn status_message(&self) -> String {
+        match self.status {
+            ProviderCatalogRefreshStatus::Updated => format!(
+                "Model catalogue refreshed (generation {} -> {}).",
+                self.generation_before, self.generation_after
+            ),
+            ProviderCatalogRefreshStatus::NotModified => format!(
+                "Model catalogue checked; no changes (generation {}).",
+                self.generation_after
+            ),
+            ProviderCatalogRefreshStatus::FallbackCached => format!(
+                "Model catalogue refresh failed; using cached snapshot: {}",
+                self.error_message
+                    .as_deref()
+                    .unwrap_or("Unknown refresh failure")
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1077,6 +1177,56 @@ impl ApiClient {
         Ok(response.json()?)
     }
 
+    pub fn get_workspace_context(&self) -> anyhow::Result<ResolvedWorkspaceContext> {
+        let url = format!("{}/workspace/context", self.base_url);
+        let response = self.client.get(&url).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to get workspace context: {} - {}", status, text);
+        }
+
+        Ok(response.json()?)
+    }
+
+    pub fn get_recent_models(&self) -> anyhow::Result<Vec<RecentModelEntry>> {
+        let url = format!("{}/workspace/recent-models", self.base_url);
+        let response = self.client.get(&url).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to get recent models: {} - {}", status, text);
+        }
+
+        let payload: RecentModelsPayload = response.json()?;
+        Ok(payload.recent_models)
+    }
+
+    pub fn put_recent_models(
+        &self,
+        recent_models: &[RecentModelEntry],
+    ) -> anyhow::Result<Vec<RecentModelEntry>> {
+        let url = format!("{}/workspace/recent-models", self.base_url);
+        let response = self
+            .client
+            .put(&url)
+            .json(&RecentModelsPayload {
+                recent_models: recent_models.to_vec(),
+            })
+            .send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to save recent models: {} - {}", status, text);
+        }
+
+        let payload: RecentModelsPayload = response.json()?;
+        Ok(payload.recent_models)
+    }
+
     pub fn patch_config(&self, patch: &serde_json::Value) -> anyhow::Result<AppConfig> {
         let url = format!("{}/config", self.base_url);
         let response = self.client.patch(&url).json(patch).send()?;
@@ -1124,6 +1274,45 @@ impl ApiClient {
             let text = response.text().unwrap_or_default();
             anyhow::bail!(
                 "Failed to get provider connect schema: {} - {}",
+                status,
+                text
+            );
+        }
+        Ok(response.json()?)
+    }
+
+    pub fn resolve_provider_connect(
+        &self,
+        query: &str,
+    ) -> anyhow::Result<ResolveProviderConnectResponse> {
+        let url = format!("{}/provider/connect/resolve", self.base_url);
+        let response = self
+            .client
+            .post(&url)
+            .json(&ResolveProviderConnectRequest {
+                query: query.to_string(),
+            })
+            .send()?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to resolve provider connect query: {} - {}",
+                status,
+                text
+            );
+        }
+        Ok(response.json()?)
+    }
+
+    pub fn refresh_provider_catalog(&self) -> anyhow::Result<RefreshProviderCatalogResponse> {
+        let url = format!("{}/provider/refresh", self.base_url);
+        let response = self.client.post(&url).send()?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to refresh provider catalogue: {} - {}",
                 status,
                 text
             );

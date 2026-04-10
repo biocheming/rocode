@@ -1,6 +1,7 @@
 use crate::azure::AzureProvider;
+use crate::catalog::load_default_catalog_data_sync;
 use crate::instance::ProviderInstance;
-use crate::models::{ModelsData, ProviderInfo as ModelsProviderInfo};
+use crate::models::ModelsData;
 use crate::protocol::{Protocol, ProviderConfig};
 use crate::protocol_loader::{ProtocolLoader, ProtocolManifest};
 use crate::protocol_validator::ProtocolValidator;
@@ -11,7 +12,6 @@ use crate::provider::{
 use crate::runtime::{Pipeline, ProtocolSource, ProviderRuntime, RuntimeConfig, RuntimeContext};
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::fs;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -743,46 +743,7 @@ pub(super) fn wrap_provider_for_state(
 }
 
 pub(super) fn load_models_dev_cache() -> ModelsData {
-    let cache_path = dirs::cache_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("rocode")
-        .join("models.json");
-
-    let Ok(raw) = fs::read_to_string(cache_path) else {
-        return HashMap::new();
-    };
-
-    if let Ok(parsed) = serde_json::from_str::<ModelsData>(&raw) {
-        return parsed;
-    }
-
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return HashMap::new();
-    };
-    let Some(map) = value.as_object() else {
-        return HashMap::new();
-    };
-
-    let mut data = HashMap::new();
-    for (provider_id, provider_value) in map {
-        match serde_json::from_value::<ModelsProviderInfo>(provider_value.clone()) {
-            Ok(mut provider) => {
-                if provider.id.trim().is_empty() {
-                    provider.id = provider_id.clone();
-                }
-                data.insert(provider_id.clone(), provider);
-            }
-            Err(error) => {
-                tracing::debug!(
-                    provider = provider_id,
-                    %error,
-                    "Skipping invalid provider entry from models.dev cache"
-                );
-            }
-        }
-    }
-
-    data
+    load_default_catalog_data_sync()
 }
 
 pub(super) fn register_fallback_env_providers(registry: &mut ProviderRegistry) {

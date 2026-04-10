@@ -14,6 +14,7 @@ mod session;
 mod stream;
 mod task;
 mod tui;
+mod workspace;
 
 // Re-export all pub items from sub-modules so `pub use routes::*` in lib.rs continues to work.
 use self::plugin_auth::{ensure_plugin_loader_active, plugin_auth_routes};
@@ -29,6 +30,7 @@ pub use provider::*;
 pub use pty::*;
 pub use session::*;
 pub use tui::*;
+pub use workspace::*;
 
 use axum::{
     extract::{Path, Query, State},
@@ -91,6 +93,7 @@ pub fn router() -> Router<Arc<ServerState>> {
         .nest("/tui", tui_routes())
         .nest("/process", process_routes())
         .nest("/task", task_routes())
+        .nest("/workspace", workspace_routes())
         .nest("/global", global_routes())
         .nest("/experimental", experimental_routes())
         .nest("/plugin", plugin_auth_routes());
@@ -893,7 +896,7 @@ async fn apply_plugin_config_hooks(loader: &Arc<PluginLoader>, config: &mut AppC
 }
 
 async fn list_skills() -> Result<Json<Vec<String>>> {
-    let mut names: Vec<String> = rocode_tool::skill::list_available_skills()
+    let mut names: Vec<String> = rocode_skill::list_available_skills()
         .into_iter()
         .map(|(name, _description)| name)
         .collect();

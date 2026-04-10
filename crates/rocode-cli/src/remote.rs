@@ -7,7 +7,7 @@ use rocode_command::output_blocks::{
     SessionEventField, StatusBlock, ToolBlock, ToolPhase,
 };
 use rocode_config::schema::ShareMode;
-use rocode_config::Config;
+use rocode_runtime_context::ResolvedWorkspaceContext;
 use serde::Deserialize;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,16 +45,20 @@ pub(crate) struct RemoteAttachOptions {
     pub show_thinking: bool,
 }
 
-fn remote_show_thinking_from_config(config: &Config) -> Option<bool> {
-    config
+fn remote_show_thinking_from_context(context: &ResolvedWorkspaceContext) -> Option<bool> {
+    context
+        .config
         .ui_preferences
         .as_ref()
         .and_then(|ui| ui.show_thinking)
 }
 
-async fn fetch_remote_config(client: &reqwest::Client, base_url: &str) -> anyhow::Result<Config> {
-    let config_endpoint = server_url(base_url, "/config");
-    parse_http_json(client.get(config_endpoint).send().await?).await
+async fn fetch_remote_workspace_context(
+    client: &reqwest::Client,
+    base_url: &str,
+) -> anyhow::Result<ResolvedWorkspaceContext> {
+    let context_endpoint = server_url(base_url, "/workspace/context");
+    parse_http_json(client.get(context_endpoint).send().await?).await
 }
 
 pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBlock> {
@@ -440,8 +444,8 @@ pub(crate) async fn maybe_share_remote_session(
         .ok()
         .map(|v| parse_bool_env(&v))
         .unwrap_or(false);
-    let config = fetch_remote_config(client, base_url).await?;
-    let config_auto = matches!(config.share, Some(ShareMode::Auto));
+    let context = fetch_remote_workspace_context(client, base_url).await?;
+    let config_auto = matches!(context.config.share, Some(ShareMode::Auto));
 
     if !(share_requested || auto_share_env || config_auto) {
         return Ok(());
@@ -544,8 +548,8 @@ async fn dispatch_remote_sse_event(
         .unwrap_or_else(|| "message".to_string());
 
     if event_type == "config.updated" {
-        if let Ok(config) = fetch_remote_config(client, base_url).await {
-            if let Some(enabled) = remote_show_thinking_from_config(&config) {
+        if let Ok(context) = fetch_remote_workspace_context(client, base_url).await {
+            if let Some(enabled) = remote_show_thinking_from_context(&context) {
                 show_thinking.store(enabled, Ordering::SeqCst);
             }
         }

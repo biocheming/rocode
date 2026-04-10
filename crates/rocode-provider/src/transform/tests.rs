@@ -142,6 +142,7 @@ fn test_sdk_key_mapping() {
     assert_eq!(sdk_key("@ai-sdk/google-vertex"), Some("google"));
     assert_eq!(sdk_key("@ai-sdk/amazon-bedrock"), Some("bedrock"));
     assert_eq!(sdk_key("@openrouter/ai-sdk-provider"), Some("openrouter"));
+    assert_eq!(sdk_key("@ai-sdk/perplexity"), Some("perplexity"));
     assert_eq!(sdk_key("unknown-package"), None);
 }
 
@@ -522,6 +523,46 @@ fn test_provider_options_map_gateway_closeai_alias() {
 
     let result = provider_options_map(&model, opts);
     assert!(result.contains_key("openai"));
+}
+
+#[test]
+fn test_provider_options_map_openrouter() {
+    use serde_json::json;
+    let model = models::ModelInfo {
+        id: "openrouter-model".to_string(),
+        provider: Some(models::ModelProvider {
+            npm: Some("@openrouter/ai-sdk-provider".to_string()),
+            api: Some("openai/gpt-5".to_string()),
+        }),
+        ..default_model_info()
+    };
+
+    let mut opts = HashMap::new();
+    opts.insert("reasoning".to_string(), json!({"effort": "high"}));
+    opts.insert("usage".to_string(), json!({"include": true}));
+
+    let result = provider_options_map(&model, opts);
+    assert!(result.contains_key("openrouter"));
+}
+
+#[test]
+fn test_provider_options_map_perplexity() {
+    use serde_json::json;
+    let model = models::ModelInfo {
+        id: "perplexity-model".to_string(),
+        provider: Some(models::ModelProvider {
+            npm: Some("@ai-sdk/perplexity".to_string()),
+            api: Some("sonar".to_string()),
+        }),
+        ..default_model_info()
+    };
+
+    let mut opts = HashMap::new();
+    opts.insert("return_images".to_string(), json!(true));
+    opts.insert("search_recency_filter".to_string(), json!("month"));
+
+    let result = provider_options_map(&model, opts);
+    assert!(result.contains_key("perplexity"));
 }
 
 #[test]

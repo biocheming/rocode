@@ -40,7 +40,7 @@ pub(super) async fn run_chat_session(
     let agent_registry_arc = Arc::new(AgentRegistry::from_config(&config));
     let server_url = discover_or_start_server(None).await?;
     let api_client = Arc::new(CliApiClient::new(server_url.clone()));
-    let server_config = api_client.get_config().await.ok();
+    let server_context = api_client.get_workspace_context().await.ok();
     let recent_session_info = cli_load_recent_session_info(&api_client, &current_dir).await;
 
     let (carry_model, carry_provider) = recent_session_info
@@ -68,7 +68,11 @@ pub(super) async fn run_chat_session(
         provider: provider.or(carry_provider),
         requested_agent,
         requested_scheduler_profile: requested_scheduler_profile.or(carry_preset),
-        show_thinking: cli_resolve_show_thinking(thinking_requested, server_config.as_ref(), false),
+        show_thinking: cli_resolve_show_thinking(
+            thinking_requested,
+            server_context.as_ref().map(|context| &context.config),
+            false,
+        ),
     };
 
     let mut runtime = build_cli_execution_runtime(CliRuntimeBuildInput {
@@ -480,6 +484,7 @@ pub(super) async fn run_chat_session(
                     | InteractiveCommand::ShowStatus
                     | InteractiveCommand::ListModels
                     | InteractiveCommand::ListProviders
+                    | InteractiveCommand::ConnectProvider(_)
                     | InteractiveCommand::ListThemes
                     | InteractiveCommand::ListPresets
                     | InteractiveCommand::ListSessions

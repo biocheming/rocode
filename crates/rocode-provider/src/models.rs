@@ -2,7 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+
+use crate::catalog::{
+    default_model_catalog_authority, metadata_path_for_snapshot, ModelCatalogAuthority,
+};
 
 pub const MODELS_DEV_URL: &str = "https://models.dev";
 
@@ -68,6 +71,13 @@ pub enum ModelInterleaved {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ModelExperimental {
+    Bool(bool),
+    Details(serde_json::Value),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInfo {
     pub id: String,
     pub name: String,
@@ -91,7 +101,7 @@ pub struct ModelInfo {
     #[serde(default)]
     pub modalities: Option<ModelModalities>,
     #[serde(default)]
-    pub experimental: Option<bool>,
+    pub experimental: Option<ModelExperimental>,
     #[serde(default)]
     pub status: Option<String>,
     #[serde(default)]
@@ -119,83 +129,25 @@ pub struct ProviderInfo {
 pub type ModelsData = HashMap<String, ProviderInfo>;
 
 pub struct ModelsRegistry {
-    data: Arc<RwLock<Option<ModelsData>>>,
-    cache_path: PathBuf,
+    authority: Arc<ModelCatalogAuthority>,
 }
 
 impl ModelsRegistry {
     pub fn new(cache_path: PathBuf) -> Self {
         Self {
-            data: Arc::new(RwLock::new(None)),
-            cache_path,
+            authority: Arc::new(ModelCatalogAuthority::new(
+                cache_path.clone(),
+                metadata_path_for_snapshot(&cache_path),
+            )),
         }
     }
 
     pub async fn get(&self) -> ModelsData {
-        let data = self.data.read().await;
-        if let Some(ref d) = *data {
-            return d.clone();
-        }
-        drop(data);
-
-        self.load().await
-    }
-
-    async fn load(&self) -> ModelsData {
-        if let Ok(content) = tokio::fs::read_to_string(&self.cache_path).await {
-            if let Ok(parsed) = serde_json::from_str::<ModelsData>(&content) {
-                let mut data = self.data.write().await;
-                *data = Some(parsed.clone());
-                return parsed;
-            }
-        }
-
-        self.fetch().await
-    }
-
-    async fn fetch(&self) -> ModelsData {
-        let url = format!("{}/api.json", MODELS_DEV_URL);
-
-        match reqwest::Client::new()
-            .get(&url)
-            .header("User-Agent", "rocode-rust")
-            .timeout(std::time::Duration::from_secs(10))
-            .send()
-            .await
-        {
-            Ok(response) if response.status().is_success() => {
-                if let Ok(text) = response.text().await {
-                    if let Ok(parsed) = serde_json::from_str::<ModelsData>(&text) {
-                        if let Some(parent) = self.cache_path.parent() {
-                            if let Err(error) = tokio::fs::create_dir_all(parent).await {
-                                tracing::debug!(
-                                    path = %parent.display(),
-                                    error = %error,
-                                    "Failed to create models cache directory"
-                                );
-                            }
-                        }
-                        if let Err(error) = tokio::fs::write(&self.cache_path, &text).await {
-                            tracing::debug!(
-                                path = %self.cache_path.display(),
-                                error = %error,
-                                "Failed to write models cache file"
-                            );
-                        }
-                        let mut data = self.data.write().await;
-                        *data = Some(parsed.clone());
-                        return parsed;
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        HashMap::new()
+        self.authority.data().await
     }
 
     pub async fn refresh(&self) {
-        self.fetch().await;
+        let _ = self.authority.refresh(true).await;
     }
 
     pub async fn get_provider(&self, provider_id: &str) -> Option<ProviderInfo> {
@@ -227,11 +179,9 @@ impl ModelsRegistry {
 
 impl Default for ModelsRegistry {
     fn default() -> Self {
-        let cache_path = dirs::cache_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("rocode")
-            .join("models.json");
-        Self::new(cache_path)
+        Self {
+            authority: default_model_catalog_authority(),
+        }
     }
 }
 
@@ -279,4 +229,72 @@ pub fn supports_function_calling(model_id: &str) -> bool {
     let lower = model_id.to_lowercase();
 
     !lower.contains("embedding") && !lower.contains("whisper") && !lower.contains("tts")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ModelExperimental, ModelsData};
+
+    #[test]
+    fn parses_models_dev_experimental_bool_and_object() {
+        let raw = r#"
+        {
+          "openai": {
+            "id": "openai",
+            "name": "OpenAI",
+            "env": ["OPENAI_API_KEY"],
+            "models": {
+              "gpt-stable": {
+                "id": "gpt-stable",
+                "name": "GPT Stable",
+                "attachment": false,
+                "reasoning": false,
+                "tool_call": true,
+                "temperature": true,
+                "experimental": true,
+                "limit": { "context": 128000, "output": 8192 }
+              },
+              "gpt-fast": {
+                "id": "gpt-fast",
+                "name": "GPT Fast",
+                "attachment": false,
+                "reasoning": false,
+                "tool_call": true,
+                "temperature": true,
+                "experimental": {
+                  "modes": {
+                    "fast": {
+                      "provider": {
+                        "body": {
+                          "service_tier": "priority"
+                        }
+                      }
+                    }
+                  }
+                },
+                "limit": { "context": 128000, "output": 8192 }
+              }
+            }
+          }
+        }
+        "#;
+
+        let parsed =
+            serde_json::from_str::<ModelsData>(raw).expect("models.dev payload should parse");
+        let provider = parsed.get("openai").expect("provider should exist");
+        assert!(matches!(
+            provider
+                .models
+                .get("gpt-stable")
+                .and_then(|model| model.experimental.as_ref()),
+            Some(ModelExperimental::Bool(true))
+        ));
+        assert!(matches!(
+            provider
+                .models
+                .get("gpt-fast")
+                .and_then(|model| model.experimental.as_ref()),
+            Some(ModelExperimental::Details(_))
+        ));
+    }
 }

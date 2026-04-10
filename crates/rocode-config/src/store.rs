@@ -1,7 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
-use crate::loader::{resolve_configured_path, update_config, write_config};
+use crate::loader::{
+    resolve_configured_path, update_config, write_config, ConfigAuthority, WorkspaceIdentity,
+    WorkspaceMode,
+};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -16,6 +19,8 @@ pub struct ConfigStore {
     base: ArcSwap<Config>,
     plugin_applied: tokio::sync::RwLock<Option<Arc<Config>>>,
     project_dir: RwLock<Option<PathBuf>>,
+    workspace_identity: RwLock<Option<WorkspaceIdentity>>,
+    workspace_mode: RwLock<WorkspaceMode>,
 }
 
 impl ConfigStore {
@@ -25,15 +30,25 @@ impl ConfigStore {
             base: ArcSwap::from_pointee(config),
             plugin_applied: tokio::sync::RwLock::new(None),
             project_dir: RwLock::new(None),
+            workspace_identity: RwLock::new(None),
+            workspace_mode: RwLock::new(WorkspaceMode::Shared),
         }
     }
 
     /// Create a ConfigStore by loading config from disk.
     pub fn from_project_dir(project_dir: &Path) -> anyhow::Result<Self> {
-        let config = crate::load_config(project_dir)?;
-        let store = Self::new(config);
-        let dir = project_dir.to_path_buf();
-        *store.project_dir.write().expect("project_dir poisoned") = Some(dir);
+        let resolved = ConfigAuthority::resolve(project_dir)?;
+        let store = Self::new(resolved.config);
+        *store.project_dir.write().expect("project_dir poisoned") =
+            Some(resolved.inputs.identity.workspace_root.clone());
+        *store
+            .workspace_identity
+            .write()
+            .expect("workspace_identity poisoned") = Some(resolved.inputs.identity);
+        *store
+            .workspace_mode
+            .write()
+            .expect("workspace_mode poisoned") = resolved.inputs.mode;
         Ok(store)
     }
 
@@ -163,9 +178,18 @@ impl ConfigStore {
         let project_dir = project_dir
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("no project directory set for config reload"))?;
-        let config = crate::load_config(project_dir)?;
+        let resolved = ConfigAuthority::resolve(project_dir)?;
+        let config = resolved.config;
         let new_arc = Arc::new(config);
         self.base.store(new_arc.clone());
+        *self
+            .workspace_identity
+            .write()
+            .expect("workspace_identity poisoned") = Some(resolved.inputs.identity);
+        *self
+            .workspace_mode
+            .write()
+            .expect("workspace_mode poisoned") = resolved.inputs.mode;
         self.invalidate_plugin_cache().await;
         Ok(new_arc)
     }
@@ -175,6 +199,17 @@ impl ConfigStore {
             .read()
             .expect("project_dir poisoned")
             .clone()
+    }
+
+    pub fn workspace_identity(&self) -> Option<WorkspaceIdentity> {
+        self.workspace_identity
+            .read()
+            .expect("workspace_identity poisoned")
+            .clone()
+    }
+
+    pub fn workspace_mode(&self) -> WorkspaceMode {
+        *self.workspace_mode.read().expect("workspace_mode poisoned")
     }
 }
 

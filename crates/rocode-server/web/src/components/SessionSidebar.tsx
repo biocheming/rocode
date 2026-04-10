@@ -42,6 +42,7 @@ interface SessionSidebarProps {
   currentWorkspacePath: string | null;
   currentWorkspaceLabel: string | null;
   currentWorkspaceRootPath: string | null;
+  currentWorkspaceMode: "shared" | "isolated" | null;
   sessionTree: SessionTreeNode[];
   selectedSessionId: string | null;
   onCreateProject: (input: { path: string; title?: string }) => void;
@@ -141,6 +142,7 @@ export function SessionSidebar({
   currentWorkspacePath,
   currentWorkspaceLabel,
   currentWorkspaceRootPath,
+  currentWorkspaceMode,
   sessionTree,
   selectedSessionId,
   onCreateProject,
@@ -196,10 +198,10 @@ export function SessionSidebar({
 
   return (
     <aside
-      className="flex h-full min-h-0 flex-col border-r border-border bg-sidebar/70"
+      className="h-full overflow-y-auto border-r border-border bg-sidebar/70"
       data-testid="session-sidebar"
     >
-      <div className="flex min-h-[320px] basis-[44%] shrink-0 flex-col gap-4 border-b border-border/70 px-4 py-4">
+      <div className="space-y-4 px-4 py-4">
         <div className="rounded-[24px] border border-border/70 bg-background/90 p-4 shadow-sm">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 space-y-1">
@@ -209,13 +211,37 @@ export function SessionSidebar({
               <h2 className="truncate text-sm font-semibold text-foreground">
                 {currentWorkspaceLabel || "Projects"}
               </h2>
-              <p className="truncate text-xs text-muted-foreground">
+              <p className="break-all text-xs text-muted-foreground">
                 {currentWorkspaceRootPath || "Create or switch project workspaces here."}
               </p>
             </div>
             <div className="rounded-full border border-border/70 bg-muted/30 p-2 text-muted-foreground">
               <LayoutGrid className="h-4 w-4" />
             </div>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="rounded-full border border-border/60 bg-card/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              {currentWorkspaceMode === "isolated" ? "Isolated Sandbox" : "Shared Workspace"}
+            </span>
+            {currentWorkspaceRootPath ? (
+              <span className="max-w-full break-all rounded-full border border-border/60 bg-muted/20 px-3 py-1 text-[11px] text-muted-foreground">
+                root {currentWorkspaceRootPath}
+              </span>
+            ) : null}
+          </div>
+
+          <div
+            className={cn(
+              "mt-3 rounded-2xl border px-3 py-2.5 text-xs leading-relaxed",
+              currentWorkspaceMode === "isolated"
+                ? "border-amber-300/70 bg-amber-50/70 text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-200"
+                : "border-border/60 bg-muted/20 text-muted-foreground",
+            )}
+          >
+            {currentWorkspaceMode === "isolated"
+              ? "Isolated sandbox active. This workspace only uses its local .rocode authority and does not inherit global config."
+              : "Shared workspace active. Runtime settings may incorporate global config together with workspace-local state."}
           </div>
 
           <div className="mt-4 grid grid-cols-2 gap-2">
@@ -279,8 +305,7 @@ export function SessionSidebar({
             </a>
           </div>
         </div>
-
-        <div className="flex min-h-0 flex-1 flex-col rounded-[24px] border border-border/70 bg-background/85 p-3 shadow-sm">
+        <div className="grid min-h-[16rem] max-h-[22rem] grid-rows-[auto_minmax(0,1fr)] rounded-[24px] border border-border/70 bg-background/85 p-3 shadow-sm">
           <div className="mb-3 space-y-3">
             <div className="flex items-center justify-between gap-2">
               <div>
@@ -305,7 +330,7 @@ export function SessionSidebar({
             </div>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+          <div className="min-h-0 overflow-y-auto pr-1">
             <div className="flex flex-col gap-2">
               {filteredWorkspaces.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-border bg-muted/10 px-3 py-4 text-sm text-muted-foreground">
@@ -344,11 +369,10 @@ export function SessionSidebar({
             </div>
           </div>
         </div>
-
-      </div>
-
-      <div className="flex min-h-0 flex-1 flex-col px-4 py-4" data-testid="session-list">
-        <div className="flex min-h-0 flex-1 flex-col rounded-[24px] border border-border/70 bg-background/90 p-3 shadow-sm">
+        <div
+          className="grid min-h-[18rem] max-h-[28rem] grid-rows-[auto_auto_minmax(0,1fr)] rounded-[24px] border border-border/70 bg-background/90 p-3 shadow-sm"
+          data-testid="session-list"
+        >
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
               <p className="text-[11px] font-medium tracking-[0.18em] text-muted-foreground uppercase">
@@ -376,7 +400,7 @@ export function SessionSidebar({
             This tree only shows sessions under the selected workspace.
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+          <div className="min-h-0 overflow-y-auto pr-1">
             {sessionTree.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-border bg-muted/10 px-3 py-4 text-sm text-muted-foreground">
                 No sessions in this workspace yet.

@@ -400,6 +400,7 @@ pub(crate) fn render_help(style: &CliStyle) -> String {
         fmt("/clear", "Clear screen"),
         fmt("/status", "Show session status"),
         fmt("/models", "List all available models"),
+        fmt("/models refresh", "Refresh the shared model catalogue"),
         fmt("/model <id>", "Switch to a specific model"),
         fmt("/agents", "List available agents"),
         fmt("/agent <name>", "Switch to a specific agent"),

@@ -32,11 +32,40 @@ interface ProviderRecordLike {
 interface KnownProviderEntryLike {
   id: string;
   name: string;
+  env?: string[];
+  connected?: boolean;
+  model_count?: number;
+  base_url?: string | null;
+  protocol?: string | null;
 }
 
 interface ConnectProtocolOptionLike {
   id: string;
   name: string;
+}
+
+type ProviderConnectDraftModeLike = "known" | "custom";
+
+interface ProviderConnectDraftLike {
+  mode: ProviderConnectDraftModeLike;
+  provider_id: string;
+  known_provider_id?: string | null;
+  name?: string | null;
+  base_url?: string | null;
+  protocol?: string | null;
+  env?: string[];
+  connected?: boolean;
+  model_count?: number;
+  supports_api_key_connect?: boolean;
+}
+
+interface ResolveProviderConnectResponseLike {
+  query: string;
+  suggested_mode: ProviderConnectDraftModeLike;
+  exact_match: boolean;
+  matches: KnownProviderEntryLike[];
+  draft: ProviderConnectDraftLike;
+  custom_draft: ProviderConnectDraftLike;
 }
 
 interface ManagedProviderInfo {
@@ -93,6 +122,14 @@ interface FormatterStatus {
   formatters: string[];
 }
 
+interface RefreshProviderCatalogueResponse {
+  changed: boolean;
+  generation_before: number;
+  generation_after: number;
+  status: "updated" | "not_modified" | "fallback_cached";
+  error_message?: string | null;
+}
+
 interface AppConfigSnapshot extends Record<string, unknown> {
   provider?: Record<string, unknown>;
   plugin?: Record<string, unknown>;
@@ -105,6 +142,9 @@ interface SettingsDrawerProps {
   theme: string;
   themes: ThemeOption[];
   onThemeChange: (themeId: string) => void;
+  workspaceMode: "shared" | "isolated" | null;
+  workspaceRootPath: string;
+  workspaceConfigDir?: string | null;
   modeOptions: ModeOption[];
   selectedMode: string;
   onModeChange: (mode: string) => void;
@@ -116,6 +156,11 @@ interface SettingsDrawerProps {
   providers: ProviderRecordLike[];
   knownProviders: KnownProviderEntryLike[];
   connectProtocols: ConnectProtocolOptionLike[];
+  connectQuery: string;
+  onConnectQueryChange: (value: string) => void;
+  connectResolution: ResolveProviderConnectResponseLike | null;
+  connectResolveBusy: boolean;
+  connectResolveError: string | null;
   connectProviderId: string;
   onConnectProviderIdChange: (value: string) => void;
   connectProtocol: string;
@@ -140,6 +185,23 @@ const SETTINGS_TABS: Array<{ id: SettingsTabId; label: string }> = [
   { id: "plugins", label: "Plugins" },
   { id: "lsp", label: "LSP" },
 ];
+
+function isolatedWorkspaceNotice(tab: SettingsTabId): string | null {
+  switch (tab) {
+    case "general":
+      return "These settings are still persisted to global config. In isolated mode, that persisted global copy does not become the current sandbox runtime unless you switch back to a shared workspace.";
+    case "providers":
+      return "Provider and model changes made here target global config or shared provider state. The current isolated sandbox will not inherit those global config changes unless the same intent is expressed inside this workspace's .rocode.";
+    case "scheduler":
+      return "Scheduler edits here write global config. The active isolated sandbox will continue resolving scheduler behavior from its local workspace authority until you switch to shared mode or add matching workspace-local config.";
+    case "mcp":
+      return "MCP config saved here is global. An isolated workspace does not automatically inherit that global config into its current sandbox runtime.";
+    case "plugins":
+      return "Plugin config saved here is global. The current isolated sandbox will not inherit those global config changes unless they are mirrored into this workspace's .rocode authority.";
+    default:
+      return null;
+  }
+}
 
 function formatError(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -190,6 +252,9 @@ export function SettingsDrawer({
   theme,
   themes,
   onThemeChange,
+  workspaceMode,
+  workspaceRootPath,
+  workspaceConfigDir,
   modeOptions,
   selectedMode,
   onModeChange,
@@ -201,6 +266,11 @@ export function SettingsDrawer({
   providers,
   knownProviders,
   connectProtocols,
+  connectQuery,
+  onConnectQueryChange,
+  connectResolution,
+  connectResolveBusy,
+  connectResolveError,
   connectProviderId,
   onConnectProviderIdChange,
   connectProtocol,
@@ -245,6 +315,9 @@ export function SettingsDrawer({
     () => objectRecord(configSnapshot?.plugin),
     [configSnapshot?.plugin],
   );
+  const isolatedNotice = workspaceMode === "isolated" ? isolatedWorkspaceNotice(activeTab) : null;
+  const connectMatches = connectResolution?.matches ?? [];
+  const exactKnownProvider = connectResolution?.exact_match ? connectResolution.draft : null;
 
   const reloadSettingsData = useCallback(async () => {
     setRefreshing(true);
@@ -386,6 +459,33 @@ export function SettingsDrawer({
     );
   };
 
+  const refreshProviderCatalogue = async () => {
+    setBusyKey("provider:refresh");
+    setFeedback(null);
+    try {
+      const response = await apiJson<RefreshProviderCatalogueResponse>("/provider/refresh", {
+        method: "POST",
+      });
+      await Promise.all([reloadSettingsData(), onReloadCoreData()]);
+      const message =
+        response.status === "updated"
+          ? `Provider catalogue refreshed (generation ${response.generation_before} -> ${response.generation_after}).`
+          : response.status === "not_modified"
+            ? `Provider catalogue checked; no changes (generation ${response.generation_after}).`
+            : `Provider catalogue refresh failed; using cached snapshot: ${response.error_message ?? "Unknown refresh failure"}`;
+      setFeedback(message);
+      if (response.status === "fallback_cached") {
+        onBanner(message);
+      }
+    } catch (error) {
+      const message = formatError(error);
+      setFeedback(message);
+      onBanner(message);
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
   const runMcpAction = async (name: string, action: "connect" | "disconnect" | "restart") => {
     await runMutation(
       `mcp:${action}:${name}`,
@@ -397,6 +497,9 @@ export function SettingsDrawer({
   };
 
   const providerSummary = `${providers.length} connected / ${knownProviders.length} known`;
+  const chooseKnownProvider = (provider: KnownProviderEntryLike) => {
+    onConnectQueryChange(provider.id);
+  };
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-start justify-end" data-testid="settings-overlay" onClick={onClose}>
@@ -443,6 +546,11 @@ export function SettingsDrawer({
 
         <div className="flex flex-col gap-6 flex-1 min-h-0">
           {loading ? <div className="flex flex-col items-center justify-center gap-3 text-muted-foreground py-8">Loading settings...</div> : null}
+          {!loading && isolatedNotice ? (
+            <div className="rounded-2xl border border-amber-300 bg-amber-50/80 px-5 py-3 text-sm leading-relaxed text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200">
+              {isolatedNotice}
+            </div>
+          ) : null}
 
           {!loading && activeTab === "general" ? (
             <div className="grid gap-6">
@@ -505,6 +613,37 @@ export function SettingsDrawer({
                 </label>
               </div>
 
+              <div className="grid gap-3">
+                <label>Workspace Authority</label>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-2xl border border-border bg-card/80 p-4 grid gap-2">
+                    <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Workspace Mode</span>
+                    <strong>{workspaceMode === "isolated" ? "isolated sandbox" : "shared workspace"}</strong>
+                  </div>
+                  <div className="rounded-2xl border border-border bg-card/80 p-4 grid gap-2">
+                    <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Workspace Root</span>
+                    <strong className="break-all text-sm">{workspaceRootPath || "--"}</strong>
+                  </div>
+                </div>
+                {workspaceConfigDir ? (
+                  <p className="m-0 text-xs leading-relaxed text-muted-foreground">
+                    Isolated config dir: <code>{workspaceConfigDir}</code>
+                  </p>
+                ) : null}
+                <div
+                  className={cn(
+                    "rounded-2xl border px-4 py-3 text-sm leading-relaxed",
+                    workspaceMode === "isolated"
+                      ? "border-amber-300 bg-amber-50/80 text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200"
+                      : "border-border bg-muted/20 text-muted-foreground",
+                  )}
+                >
+                  {workspaceMode === "isolated"
+                    ? "This workspace runs as an isolated sandbox. It will not inherit global config, managed home config, or shared workspace overrides outside this .rocode root."
+                    : "This workspace runs in shared mode. Global config can still participate in the resolved runtime context alongside workspace-local settings."}
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <div className="rounded-2xl border border-border bg-card/80 p-4 grid gap-2">
                   <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Providers</span>
@@ -538,19 +677,70 @@ export function SettingsDrawer({
                   })();
                 }}
               >
-                <label htmlFor="settings-provider-connect-select">Connect Provider</label>
-                <select
-                  id="settings-provider-connect-select"
+                <label htmlFor="settings-provider-connect-query">Connect Provider</label>
+                <input
+                  id="settings-provider-connect-query"
+                  type="text"
+                  placeholder="Search provider or enter custom id"
+                  value={connectQuery}
+                  onChange={(event) => onConnectQueryChange(event.target.value)}
+                />
+                {connectQuery.trim() ? (
+                  <div className="grid gap-2 rounded-xl border border-border bg-card/50 p-3">
+                    {connectResolveBusy ? (
+                      <p className="m-0 text-sm text-muted-foreground">
+                        Resolving provider defaults...
+                      </p>
+                    ) : connectResolveError ? (
+                      <p className="m-0 text-sm text-red-600 dark:text-red-300">
+                        Failed to resolve provider defaults: {connectResolveError}
+                      </p>
+                    ) : connectMatches.length > 0 ? (
+                      connectMatches.map((provider) => (
+                        <button
+                          key={provider.id}
+                          type="button"
+                          className="rounded-xl border border-border bg-card/70 px-3 py-2 text-left text-sm transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                          onClick={() => chooseKnownProvider(provider)}
+                        >
+                          <strong>{provider.name}</strong>
+                          <span className="block text-muted-foreground">
+                            {provider.id}
+                            {provider.protocol ? ` · ${provider.protocol}` : ""}
+                            {provider.base_url ? ` · ${provider.base_url}` : ""}
+                          </span>
+                        </button>
+                      ))
+                    ) : (
+                      <p className="m-0 text-sm text-muted-foreground">
+                        No known provider match. This query will fall back to custom provider id{" "}
+                        <code>{connectResolution?.custom_draft.provider_id || connectQuery.trim()}</code>.
+                      </p>
+                    )}
+                  </div>
+                ) : null}
+                <input
+                  type="text"
+                  placeholder="Provider id"
                   value={connectProviderId}
                   onChange={(event) => onConnectProviderIdChange(event.target.value)}
-                >
-                  <option value="">select provider</option>
-                  {knownProviders.map((provider) => (
-                    <option key={provider.id} value={provider.id}>
-                      {provider.name}
-                    </option>
-                  ))}
-                </select>
+                />
+                {exactKnownProvider ? (
+                  <p className="m-0 text-xs text-muted-foreground">
+                    Known provider match.
+                    {exactKnownProvider.env?.length
+                      ? ` Expected env: ${exactKnownProvider.env.join(", ")}.`
+                      : ""}
+                    {exactKnownProvider.model_count
+                      ? ` ${exactKnownProvider.model_count} models in catalogue.`
+                      : ""}
+                  </p>
+                ) : connectResolution?.draft.mode === "custom" ? (
+                  <p className="m-0 text-xs text-muted-foreground">
+                    No known provider matched. You can keep the suggested custom draft or edit the
+                    provider id, base URL and protocol below.
+                  </p>
+                ) : null}
                 <input
                   type="password"
                   placeholder="API key"
@@ -581,7 +771,17 @@ export function SettingsDrawer({
               <div className="grid gap-3">
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Configured Providers</p>
-                  <span>{providerSummary}</span>
+                  <div className="flex items-center gap-2">
+                    <span>{providerSummary}</span>
+                    <button
+                      className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                      type="button"
+                      disabled={busyKey === "provider:refresh"}
+                      onClick={() => void refreshProviderCatalogue()}
+                    >
+                      {busyKey === "provider:refresh" ? "Refreshing..." : "Refresh Catalogue"}
+                    </button>
+                  </div>
                 </div>
                 {providers.map((provider) => (
                   <div key={provider.id} className="rounded-xl border border-border bg-card/70 p-4 flex items-start justify-between gap-4">
