@@ -13,6 +13,7 @@ pub mod snapshot;
 pub mod status;
 pub mod summary;
 pub mod system;
+pub mod telemetry;
 pub mod todo;
 
 pub use compaction::*;
@@ -26,8 +27,16 @@ pub use session::*;
 pub use status::*;
 pub use summary::*;
 pub use system::*;
+pub use telemetry::*;
 pub use todo::*;
 
+pub use rocode_types::SessionTime as SessionListTime;
+pub use rocode_types::{
+    PermissionRulesetInfo, PersistedStageTelemetrySummary, SessionInfo, SessionListContract,
+    SessionListHints, SessionListItem, SessionListResponse, SessionListSummary, SessionRevertInfo,
+    SessionShareInfo, SessionSummaryInfo, SessionTelemetrySnapshot,
+    SessionTelemetrySnapshotVersion, SessionTimeInfo,
+};
 pub use session::{
     BusyError, FileDiff, PermissionRuleset, RunStatus, Session, SessionError, SessionEvent,
     SessionFilter, SessionManager, SessionRevert, SessionRow, SessionShare, SessionStateEvent,

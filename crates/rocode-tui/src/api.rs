@@ -1,7 +1,15 @@
 use reqwest::blocking::Client;
+use rocode_command::stage_protocol::{StageEvent, StageSummary};
 use rocode_config::Config as AppConfig;
 use rocode_runtime_context::ResolvedWorkspaceContext;
+pub use rocode_session::{
+    PermissionRulesetInfo, SessionInfo, SessionListContract, SessionListHints, SessionListItem,
+    SessionListResponse, SessionListTime, SessionRevertInfo, SessionShareInfo, SessionSummaryInfo,
+    SessionTimeInfo,
+};
+use rocode_session::{SessionTelemetrySnapshot as PersistedSessionTelemetrySnapshot, SessionUsage};
 use rocode_state::RecentModelEntry;
+pub use rocode_types::SessionStatusInfo;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -9,26 +17,117 @@ use tokio::sync::RwLock;
 
 pub type PromptPart = rocode_session::prompt::PartInput;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillCatalogEntry {
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub category: Option<String>,
+    pub location: String,
+    #[serde(default)]
+    pub writable: bool,
+    #[serde(default)]
+    pub supporting_files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillFileRef {
+    pub relative_path: String,
+    pub location: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillDetailMeta {
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub category: Option<String>,
+    pub location: String,
+    #[serde(default)]
+    pub supporting_files: Vec<SkillFileRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillDetailSkill {
+    pub meta: SkillDetailMeta,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillDetailResponse {
+    pub skill: SkillDetailSkill,
+    pub source: String,
+    pub writable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillManageAction {
+    Create,
+    Patch,
+    Edit,
+    WriteFile,
+    RemoveFile,
+    Delete,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillManageRequest {
+    pub session_id: String,
+    pub action: SkillManageAction,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub new_name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub directory_name: Option<String>,
+    #[serde(default)]
+    pub file_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillManageResult {
+    pub action: String,
+    pub skill_name: String,
+    pub location: String,
+    #[serde(default)]
+    pub supporting_file: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillManageResponse {
+    #[serde(flatten)]
+    pub result: SkillManageResult,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SkillCatalogQuery {
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub stage: Option<String>,
+    #[serde(default)]
+    pub tool_policy: Option<String>,
+    #[serde(default)]
+    pub tools: Vec<String>,
+    #[serde(default)]
+    pub toolsets: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct RecentModelsPayload {
     #[serde(default)]
     recent_models: Vec<RecentModelEntry>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionInfo {
-    pub id: String,
-    pub slug: String,
-    pub project_id: String,
-    pub directory: String,
-    pub parent_id: Option<String>,
-    pub title: String,
-    pub version: String,
-    pub time: SessionTimeInfo,
-    #[serde(default)]
-    pub revert: Option<SessionRevertInfo>,
-    #[serde(default)]
-    pub metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -57,38 +156,6 @@ pub struct PendingCommandInvocation {
     pub scheduler_profile: Option<String>,
     #[serde(rename = "questionId", default)]
     pub question_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionTimeInfo {
-    pub created: i64,
-    pub updated: i64,
-    pub compacting: Option<i64>,
-    pub archived: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionRevertInfo {
-    pub message_id: String,
-    #[serde(default)]
-    pub part_id: Option<String>,
-    #[serde(default)]
-    pub snapshot: Option<String>,
-    #[serde(default)]
-    pub diff: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionStatusInfo {
-    pub status: String,
-    pub idle: bool,
-    pub busy: bool,
-    #[serde(default)]
-    pub attempt: Option<u32>,
-    #[serde(default)]
-    pub message: Option<String>,
-    #[serde(default)]
-    pub next: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -163,6 +230,12 @@ pub struct SessionRuntimeState {
     #[serde(default)]
     pub current_message_id: Option<String>,
     #[serde(default)]
+    pub usage: Option<SessionUsage>,
+    #[serde(default)]
+    pub active_stage_id: Option<String>,
+    #[serde(default)]
+    pub active_stage_count: u32,
+    #[serde(default)]
     pub active_tools: Vec<ActiveToolSummary>,
     #[serde(default)]
     pub pending_question: Option<PendingQuestionSummary>,
@@ -210,6 +283,44 @@ pub struct PendingPermissionSummary {
 pub struct ChildSessionSummary {
     pub child_id: String,
     pub parent_id: String,
+}
+
+/// Aggregated runtime/activity snapshot for a single session.
+///
+/// This is the client-side mirror of `GET /session/{id}/telemetry`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionTelemetrySnapshot {
+    pub runtime: SessionRuntimeState,
+    #[serde(default)]
+    pub stages: Vec<StageSummary>,
+    pub topology: SessionExecutionTopology,
+    pub usage: SessionUsage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionInsightsResponse {
+    pub id: String,
+    pub title: String,
+    pub directory: String,
+    pub updated: i64,
+    #[serde(default)]
+    pub telemetry: Option<PersistedSessionTelemetrySnapshot>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionEventsQuery {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -778,7 +889,7 @@ impl ApiClient {
         Ok(session)
     }
 
-    pub fn list_sessions(&self) -> anyhow::Result<Vec<SessionInfo>> {
+    pub fn list_sessions(&self) -> anyhow::Result<Vec<SessionListItem>> {
         self.list_sessions_filtered(None, None)
     }
 
@@ -786,7 +897,7 @@ impl ApiClient {
         &self,
         search: Option<&str>,
         limit: Option<usize>,
-    ) -> anyhow::Result<Vec<SessionInfo>> {
+    ) -> anyhow::Result<Vec<SessionListItem>> {
         let url = format!("{}/session", self.base_url);
         let mut params: Vec<(&str, String)> = Vec::new();
         if let Some(search) = search.map(str::trim).filter(|s| !s.is_empty()) {
@@ -809,8 +920,8 @@ impl ApiClient {
             anyhow::bail!("Failed to list sessions: {} - {}", status, text);
         }
 
-        let sessions: Vec<SessionInfo> = response.json()?;
-        Ok(sessions)
+        let sessions: SessionListResponse = response.json()?;
+        Ok(sessions.items)
     }
 
     pub fn get_session_status(&self) -> anyhow::Result<HashMap<String, SessionStatusInfo>> {
@@ -847,6 +958,49 @@ impl ApiClient {
             anyhow::bail!("Failed to get session runtime: {} - {}", status, text);
         }
         Ok(response.json::<SessionRuntimeState>()?)
+    }
+
+    pub fn get_session_telemetry(
+        &self,
+        session_id: &str,
+    ) -> anyhow::Result<SessionTelemetrySnapshot> {
+        let url = format!("{}/session/{}/telemetry", self.base_url, session_id);
+        let response = self.client.get(&url).send()?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to get session telemetry: {} - {}", status, text);
+        }
+        Ok(response.json::<SessionTelemetrySnapshot>()?)
+    }
+
+    pub fn get_session_insights(
+        &self,
+        session_id: &str,
+    ) -> anyhow::Result<SessionInsightsResponse> {
+        let url = format!("{}/session/{}/insights", self.base_url, session_id);
+        let response = self.client.get(&url).send()?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to get session insights: {} - {}", status, text);
+        }
+        Ok(response.json::<SessionInsightsResponse>()?)
+    }
+
+    pub fn get_session_events(
+        &self,
+        session_id: &str,
+        query: &SessionEventsQuery,
+    ) -> anyhow::Result<Vec<StageEvent>> {
+        let url = format!("{}/session/{}/events", self.base_url, session_id);
+        let response = self.client.get(&url).query(query).send()?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to get session events: {} - {}", status, text);
+        }
+        Ok(response.json::<Vec<StageEvent>>()?)
     }
 
     pub fn get_session_todos(&self, session_id: &str) -> anyhow::Result<Vec<ApiTodoItem>> {
@@ -1392,9 +1546,15 @@ impl ApiClient {
         Ok(modes)
     }
 
-    pub fn list_skills(&self) -> anyhow::Result<Vec<String>> {
-        let url = format!("{}/skill", self.base_url);
-        let response = self.client.get(&url).send()?;
+    pub fn list_skills(
+        &self,
+        query: Option<&SkillCatalogQuery>,
+    ) -> anyhow::Result<Vec<SkillCatalogEntry>> {
+        let url = format!("{}/skill/catalog", self.base_url);
+        let response = match query {
+            Some(query) => self.client.get(&url).query(query).send()?,
+            None => self.client.get(&url).send()?,
+        };
 
         if !response.status().is_success() {
             let status = response.status();
@@ -1402,7 +1562,38 @@ impl ApiClient {
             anyhow::bail!("Failed to list skills: {} - {}", status, text);
         }
 
-        Ok(response.json::<Vec<String>>()?)
+        Ok(response.json::<Vec<SkillCatalogEntry>>()?)
+    }
+
+    pub fn get_skill_detail(&self, name: &str) -> anyhow::Result<SkillDetailResponse> {
+        let url = format!("{}/skill/detail", self.base_url);
+        let response = self.client.get(&url).query(&[("name", name)]).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to fetch skill detail `{}`: {} - {}",
+                name,
+                status,
+                text
+            );
+        }
+
+        Ok(response.json::<SkillDetailResponse>()?)
+    }
+
+    pub fn manage_skill(&self, req: &SkillManageRequest) -> anyhow::Result<SkillManageResponse> {
+        let url = format!("{}/skill/manage", self.base_url);
+        let response = self.client.post(&url).json(req).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to manage skill: {} - {}", status, text);
+        }
+
+        Ok(response.json::<SkillManageResponse>()?)
     }
 
     pub fn get_mcp_status(&self) -> anyhow::Result<Vec<McpStatusInfo>> {

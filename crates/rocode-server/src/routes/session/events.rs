@@ -47,7 +47,10 @@ pub(super) async fn get_session_events(
         limit: query.limit,
         offset: query.offset,
     };
-    let events = state.stage_event_log.query(&session_id, &filter).await;
+    let events = state
+        .runtime_telemetry
+        .query_stage_events(&session_id, &filter)
+        .await;
     Ok(Json(events))
 }
 
@@ -56,6 +59,6 @@ pub(super) async fn get_session_event_stages(
     State(state): State<Arc<ServerState>>,
     Path(session_id): Path<String>,
 ) -> Result<Json<Vec<String>>> {
-    let ids = state.stage_event_log.stage_ids(&session_id).await;
+    let ids = state.runtime_telemetry.list_stage_ids(&session_id).await;
     Ok(Json(ids))
 }

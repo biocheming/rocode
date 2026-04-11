@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 
+const SKILL_TREE_TRUNCATION_MARKER: &str = "[... skill tree truncated ...]";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillTreeNode {
     pub node_id: String,
@@ -58,12 +60,44 @@ pub enum SkillTreeCompileError {
 #[derive(Debug, Clone)]
 pub struct SkillTreeCompiler {
     context_separator: String,
+    token_budget: Option<usize>,
+    truncation_strategy: SkillTreeTruncationStrategy,
 }
 
 impl Default for SkillTreeCompiler {
     fn default() -> Self {
         Self {
             context_separator: "\n\n---\n\n".to_string(),
+            token_budget: None,
+            truncation_strategy: SkillTreeTruncationStrategy::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SkillTreeTruncationStrategy {
+    Head,
+    Tail,
+    #[default]
+    HeadTail,
+}
+
+impl SkillTreeTruncationStrategy {
+    pub fn from_label(value: &str) -> Option<Self> {
+        match value.trim() {
+            "head" => Some(Self::Head),
+            "tail" => Some(Self::Tail),
+            "head-tail" => Some(Self::HeadTail),
+            _ => None,
+        }
+    }
+
+    pub fn as_label(self) -> &'static str {
+        match self {
+            Self::Head => "head",
+            Self::Tail => "tail",
+            Self::HeadTail => "head-tail",
         }
     }
 }
@@ -75,6 +109,19 @@ impl SkillTreeCompiler {
 
     pub fn with_separator(mut self, separator: impl Into<String>) -> Self {
         self.context_separator = separator.into();
+        self
+    }
+
+    pub fn with_token_budget(mut self, token_budget: Option<usize>) -> Self {
+        self.token_budget = token_budget;
+        self
+    }
+
+    pub fn with_truncation_strategy(
+        mut self,
+        truncation_strategy: SkillTreeTruncationStrategy,
+    ) -> Self {
+        self.truncation_strategy = truncation_strategy;
         self
     }
 
@@ -129,7 +176,11 @@ impl SkillTreeCompiler {
         traversal.inherited_paths.push(node.markdown_path.clone());
         traversal.inherited_segments.push(markdown);
 
-        let context_markdown = traversal.inherited_segments.join(&self.context_separator);
+        let context_markdown = truncate_skill_tree_context(
+            &traversal.inherited_segments.join(&self.context_separator),
+            self.token_budget,
+            self.truncation_strategy,
+        );
         traversal.out.push(CompiledSkillNode {
             node_id: node.node_id.clone(),
             parent_id: parent_id.map(str::to_string),
@@ -164,6 +215,18 @@ struct SkillTreeTraversal<'a> {
 pub struct SkillTreeRequestPlan {
     #[serde(alias = "contextMarkdown")]
     pub context_markdown: String,
+    #[serde(
+        default,
+        alias = "tokenBudget",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub token_budget: Option<usize>,
+    #[serde(
+        default,
+        alias = "truncationStrategy",
+        skip_serializing_if = "skill_tree_truncation_strategy_is_default"
+    )]
+    pub truncation_strategy: SkillTreeTruncationStrategy,
 }
 
 impl SkillTreeRequestPlan {
@@ -173,7 +236,7 @@ impl SkillTreeRequestPlan {
         root: &SkillTreeNode,
         markdown_repo: &HashMap<String, String>,
     ) -> Result<Option<Self>, SkillTreeCompileError> {
-        Self::from_tree_with_separator(root, markdown_repo, None)
+        Self::from_tree_with_options(root, markdown_repo, None, None, None)
     }
 
     pub fn from_tree_with_separator(
@@ -181,15 +244,40 @@ impl SkillTreeRequestPlan {
         markdown_repo: &HashMap<String, String>,
         separator: Option<&str>,
     ) -> Result<Option<Self>, SkillTreeCompileError> {
-        let compiler = match separator {
-            Some(separator) => SkillTreeCompiler::new().with_separator(separator.to_string()),
-            None => SkillTreeCompiler::new(),
-        };
+        Self::from_tree_with_options(root, markdown_repo, separator, None, None)
+    }
+
+    pub fn from_tree_with_options(
+        root: &SkillTreeNode,
+        markdown_repo: &HashMap<String, String>,
+        separator: Option<&str>,
+        token_budget: Option<usize>,
+        truncation_strategy: Option<SkillTreeTruncationStrategy>,
+    ) -> Result<Option<Self>, SkillTreeCompileError> {
+        let mut compiler = SkillTreeCompiler::new().with_token_budget(token_budget);
+        if let Some(separator) = separator {
+            compiler = compiler.with_separator(separator.to_string());
+        }
+        if let Some(truncation_strategy) = truncation_strategy {
+            compiler = compiler.with_truncation_strategy(truncation_strategy);
+        }
         let compiled = compiler.compile(root, markdown_repo)?;
-        Ok(Self::from_compiled(compiled))
+        Ok(Self::from_compiled_with_options(
+            compiled,
+            token_budget,
+            truncation_strategy.unwrap_or_default(),
+        ))
     }
 
     pub fn from_compiled(compiled: CompiledSkillTree) -> Option<Self> {
+        Self::from_compiled_with_options(compiled, None, SkillTreeTruncationStrategy::default())
+    }
+
+    pub fn from_compiled_with_options(
+        compiled: CompiledSkillTree,
+        token_budget: Option<usize>,
+        truncation_strategy: SkillTreeTruncationStrategy,
+    ) -> Option<Self> {
         let root = compiled
             .nodes
             .iter()
@@ -199,8 +287,27 @@ impl SkillTreeRequestPlan {
         if context_markdown.is_empty() {
             None
         } else {
-            Some(Self { context_markdown })
+            Some(Self {
+                context_markdown,
+                token_budget,
+                truncation_strategy,
+            })
         }
+    }
+
+    pub fn append_context(&mut self, context: &str) {
+        let context = context.trim();
+        if context.is_empty() {
+            return;
+        }
+
+        let combined = if self.context_markdown.trim().is_empty() {
+            context.to_string()
+        } else {
+            format!("{}\n\n{}", self.context_markdown.trim_end(), context)
+        };
+        self.context_markdown =
+            truncate_skill_tree_context(&combined, self.token_budget, self.truncation_strategy);
     }
 
     pub fn compose_system_prompt(&self, base: Option<&str>) -> Option<String> {
@@ -238,6 +345,88 @@ impl SkillTreeRequestPlan {
         messages.insert(0, Message::system(system_prompt));
         messages
     }
+
+    pub fn estimated_tokens(&self) -> usize {
+        let char_count = self.context_markdown.trim().chars().count();
+        char_count.saturating_add(3) / 4
+    }
+
+    pub fn is_truncated(&self) -> bool {
+        self.context_markdown.contains(SKILL_TREE_TRUNCATION_MARKER)
+    }
+}
+
+fn skill_tree_truncation_strategy_is_default(strategy: &SkillTreeTruncationStrategy) -> bool {
+    *strategy == SkillTreeTruncationStrategy::default()
+}
+
+fn truncate_skill_tree_context(
+    markdown: &str,
+    token_budget: Option<usize>,
+    truncation_strategy: SkillTreeTruncationStrategy,
+) -> String {
+    let trimmed = markdown.trim();
+    let Some(token_budget) = token_budget else {
+        return trimmed.to_string();
+    };
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if token_budget == 0 {
+        return String::new();
+    }
+
+    let char_budget = token_budget.saturating_mul(4);
+    let total_chars = trimmed.chars().count();
+    if total_chars <= char_budget {
+        return trimmed.to_string();
+    }
+
+    let marker_chars = SKILL_TREE_TRUNCATION_MARKER.chars().count();
+    if char_budget <= marker_chars {
+        return first_chars(SKILL_TREE_TRUNCATION_MARKER, char_budget);
+    }
+
+    let remaining = char_budget.saturating_sub(marker_chars);
+    let truncated = match truncation_strategy {
+        SkillTreeTruncationStrategy::Head => format!(
+            "{}{}",
+            first_chars(trimmed, remaining).trim_end(),
+            SKILL_TREE_TRUNCATION_MARKER
+        ),
+        SkillTreeTruncationStrategy::Tail => format!(
+            "{}{}",
+            SKILL_TREE_TRUNCATION_MARKER,
+            last_chars(trimmed, remaining).trim_start()
+        ),
+        SkillTreeTruncationStrategy::HeadTail => {
+            let head_chars = remaining / 2;
+            let tail_chars = remaining.saturating_sub(head_chars);
+            let head = first_chars(trimmed, head_chars).trim_end().to_string();
+            let tail = last_chars(trimmed, tail_chars).trim_start().to_string();
+            if head.is_empty() {
+                format!("{}{}", SKILL_TREE_TRUNCATION_MARKER, tail)
+            } else if tail.is_empty() {
+                format!("{}{}", head, SKILL_TREE_TRUNCATION_MARKER)
+            } else {
+                format!("{head}{SKILL_TREE_TRUNCATION_MARKER}{tail}")
+            }
+        }
+    };
+
+    truncated.trim().to_string()
+}
+
+fn first_chars(input: &str, count: usize) -> String {
+    input.chars().take(count).collect()
+}
+
+fn last_chars(input: &str, count: usize) -> String {
+    let total = input.chars().count();
+    if count >= total {
+        return input.to_string();
+    }
+    input.chars().skip(total - count).collect()
 }
 
 pub fn resolve_skill_markdown_repo(
@@ -282,6 +471,8 @@ mod tests {
     fn request_plan_composes_system_prompt() {
         let plan = SkillTreeRequestPlan {
             context_markdown: "ROOT".to_string(),
+            token_budget: None,
+            truncation_strategy: SkillTreeTruncationStrategy::default(),
         };
 
         assert_eq!(
@@ -298,6 +489,8 @@ mod tests {
     fn request_plan_applies_to_messages() {
         let plan = SkillTreeRequestPlan {
             context_markdown: "ROOT".to_string(),
+            token_budget: None,
+            truncation_strategy: SkillTreeTruncationStrategy::default(),
         };
 
         let messages = plan.apply_to_messages(vec![Message::user("hello")]);
@@ -420,5 +613,71 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn compile_applies_head_tail_token_budget() {
+        let root = SkillTreeNode::new("root", "docs/root.md")
+            .with_children(vec![SkillTreeNode::new("leaf", "docs/leaf.md")]);
+        let tree = SkillTreeCompiler::new()
+            .with_token_budget(Some(10))
+            .compile(
+                &root,
+                &repo(&[
+                    ("docs/root.md", "ROOT-ROOT-ROOT-ROOT"),
+                    ("docs/leaf.md", "LEAF-LEAF-LEAF-LEAF"),
+                ]),
+            )
+            .unwrap();
+
+        let leaf = tree.node("leaf").expect("leaf should compile");
+        assert!(leaf.context_markdown.contains("skill tree truncated"));
+        assert!(leaf.context_markdown.starts_with("ROOT"));
+        assert!(leaf.context_markdown.ends_with("LEAF"));
+    }
+
+    #[test]
+    fn request_plan_append_context_reapplies_token_budget() {
+        let mut plan = SkillTreeRequestPlan {
+            context_markdown: "AAAAAAAAAAAAAAAAAAAA".to_string(),
+            token_budget: Some(10),
+            truncation_strategy: SkillTreeTruncationStrategy::Tail,
+        };
+
+        plan.append_context("BBBBBBBBBBBBBBBBBBBB");
+
+        assert!(plan.context_markdown.contains("skill tree truncated"));
+        assert!(plan.context_markdown.ends_with("BBBBBBBBBB"));
+    }
+
+    #[test]
+    fn from_tree_with_options_preserves_budget_metadata() {
+        let root = SkillTreeNode::new("root", "docs/root.md");
+        let plan = SkillTreeRequestPlan::from_tree_with_options(
+            &root,
+            &repo(&[("docs/root.md", "ROOT")]),
+            Some("\n--\n"),
+            Some(128),
+            Some(SkillTreeTruncationStrategy::Head),
+        )
+        .unwrap()
+        .expect("plan should compile");
+
+        assert_eq!(plan.context_markdown, "ROOT");
+        assert_eq!(plan.token_budget, Some(128));
+        assert_eq!(plan.truncation_strategy, SkillTreeTruncationStrategy::Head);
+    }
+
+    #[test]
+    fn request_plan_reports_observability_fields() {
+        let plan = SkillTreeRequestPlan {
+            context_markdown: format!("ROOT{SKILL_TREE_TRUNCATION_MARKER}TAIL"),
+            token_budget: Some(64),
+            truncation_strategy: SkillTreeTruncationStrategy::Tail,
+        };
+
+        assert_eq!(plan.estimated_tokens(), 10);
+        assert!(plan.is_truncated());
+        assert_eq!(plan.truncation_strategy.as_label(), "tail");
     }
 }

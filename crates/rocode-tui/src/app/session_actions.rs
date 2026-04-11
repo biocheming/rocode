@@ -90,7 +90,7 @@ impl App {
                     2500,
                 );
                 if self.status_dialog.is_open() {
-                    self.refresh_status_dialog();
+                    self.refresh_active_status_dialog();
                 }
             }
             Err(error) => {
@@ -165,6 +165,7 @@ impl App {
             self.alert_dialog.open();
         }
         self.skill_list_dialog.open();
+        let _ = self.refresh_skill_list_detail();
     }
 
     pub(super) fn handle_share_session(&mut self) {

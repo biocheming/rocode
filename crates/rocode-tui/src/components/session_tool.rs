@@ -48,7 +48,7 @@ fn is_block_tool(name: &str, result: Option<&TerminalToolResultInfo>) -> bool {
     match normalized.as_str() {
         "bash" | "shell" | "apply_patch" | "batch" | "question" | "task" | "todowrite"
         | "todo_write" => return true,
-        "skill" => return false,
+        "skill" | "skills_list" | "skill_view" => return false,
         _ => {}
     }
     // edit/write tools with diff metadata are block-level

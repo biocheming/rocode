@@ -26,6 +26,58 @@ export interface SessionExecutionTopologyRecord {
   roots: ExecutionNodeRecord[];
 }
 
+export interface SessionUsageRecord {
+  input_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  cache_write_tokens: number;
+  cache_read_tokens: number;
+  total_cost: number;
+}
+
+export interface StageSummaryRecord {
+  stage_id: string;
+  stage_name: string;
+  index?: number | null;
+  total?: number | null;
+  step?: number | null;
+  step_total?: number | null;
+  status: string;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  reasoning_tokens?: number | null;
+  cache_read_tokens?: number | null;
+  cache_write_tokens?: number | null;
+  focus?: string | null;
+  last_event?: string | null;
+  waiting_on?: string | null;
+  estimated_context_tokens?: number | null;
+  skill_tree_budget?: number | null;
+  skill_tree_truncation_strategy?: string | null;
+  skill_tree_truncated?: boolean | null;
+  retry_attempt?: number | null;
+  active_agent_count: number;
+  active_tool_count: number;
+  child_session_count: number;
+  primary_child_session_id?: string | null;
+}
+
+export interface SessionRuntimeRecord {
+  session_id: string;
+  run_status: string;
+  current_message_id?: string | null;
+  usage?: SessionUsageRecord | null;
+  active_stage_id?: string | null;
+  active_stage_count?: number;
+}
+
+export interface SessionTelemetrySnapshotRecord {
+  runtime: SessionRuntimeRecord;
+  stages: StageSummaryRecord[];
+  topology: SessionExecutionTopologyRecord;
+  usage: SessionUsageRecord;
+}
+
 export interface ActivityEventRecord {
   event_id?: string;
   scope?: string;
@@ -42,6 +94,8 @@ export interface ActivityFilters {
   executionId: string;
   eventType: string;
 }
+
+const ACTIVITY_PAGE_SIZE = 24;
 
 interface UseExecutionActivityOptions {
   selectedSessionId: string | null;
@@ -61,9 +115,10 @@ function formatError(error: unknown): string {
   return "Unknown error";
 }
 
-function executionActivityQuery(filters: ActivityFilters) {
+function executionActivityQuery(filters: ActivityFilters, page: number) {
   const search = new URLSearchParams();
-  search.set("limit", "24");
+  search.set("limit", String(ACTIVITY_PAGE_SIZE));
+  search.set("offset", String(Math.max(0, page - 1) * ACTIVITY_PAGE_SIZE));
   if (filters.stageId) search.set("stage_id", filters.stageId);
   if (filters.executionId) search.set("execution_id", filters.executionId);
   if (filters.eventType) search.set("event_type", filters.eventType);
@@ -73,14 +128,15 @@ function executionActivityQuery(filters: ActivityFilters) {
 async function loadExecutionActivityData(
   selectedSessionId: string,
   filters: ActivityFilters,
+  page: number,
   apiJson: <T>(path: string, options?: RequestInit) => Promise<T>,
 ) {
-  const query = executionActivityQuery(filters);
-  const [topology, events] = await Promise.all([
-    apiJson<SessionExecutionTopologyRecord>(`/session/${selectedSessionId}/executions`),
+  const query = executionActivityQuery(filters, page);
+  const [telemetry, events] = await Promise.all([
+    apiJson<SessionTelemetrySnapshotRecord>(`/session/${selectedSessionId}/telemetry`),
     apiJson<ActivityEventRecord[]>(`/session/${selectedSessionId}/events?${query}`),
   ]);
-  return { topology, events };
+  return { telemetry, events };
 }
 
 function flattenExecutionNodes(nodes: ExecutionNodeRecord[]): ExecutionNodeRecord[] {
@@ -105,10 +161,11 @@ export function useExecutionActivity({
   onError,
   onInfo,
 }: UseExecutionActivityOptions) {
-  const [executionTopology, setExecutionTopology] = useState<SessionExecutionTopologyRecord | null>(null);
+  const [telemetry, setTelemetry] = useState<SessionTelemetrySnapshotRecord | null>(null);
   const [activityEvents, setActivityEvents] = useState<ActivityEventRecord[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityFilters, setActivityFilters] = useState<ActivityFilters>(DEFAULT_FILTERS);
+  const [activityPage, setActivityPage] = useState(1);
   const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [knownEventTypes, setKnownEventTypes] = useState<string[]>([]);
@@ -116,6 +173,7 @@ export function useExecutionActivity({
   const sessionRef = useRef<string | null>(selectedSessionId);
   const previousSessionRef = useRef<string | null>(selectedSessionId);
   const filtersRef = useRef<ActivityFilters>(DEFAULT_FILTERS);
+  const pageRef = useRef(1);
 
   useEffect(() => {
     sessionRef.current = selectedSessionId;
@@ -125,6 +183,7 @@ export function useExecutionActivity({
     if (previousSessionRef.current === selectedSessionId) return;
     previousSessionRef.current = selectedSessionId;
     setActivityFilters(DEFAULT_FILTERS);
+    setActivityPage(1);
     setSelectedExecutionId(null);
     setSelectedEventId(null);
     setKnownEventTypes([]);
@@ -134,11 +193,16 @@ export function useExecutionActivity({
     filtersRef.current = activityFilters;
   }, [activityFilters]);
 
+  useEffect(() => {
+    pageRef.current = activityPage;
+  }, [activityPage]);
+
   const resetExecutionActivity = useCallback(() => {
-    setExecutionTopology(null);
+    setTelemetry(null);
     setActivityEvents([]);
     setActivityLoading(false);
     setActivityFilters(DEFAULT_FILTERS);
+    setActivityPage(1);
     setSelectedExecutionId(null);
     setSelectedEventId(null);
     setKnownEventTypes([]);
@@ -146,7 +210,7 @@ export function useExecutionActivity({
   }, []);
 
   const refreshExecutionActivity = useCallback(
-    async (sessionId = sessionRef.current, filters = filtersRef.current) => {
+    async (sessionId = sessionRef.current, filters = filtersRef.current, page = pageRef.current) => {
       if (!sessionId) {
         resetExecutionActivity();
         return;
@@ -154,9 +218,14 @@ export function useExecutionActivity({
 
       setActivityLoading(true);
       try {
-        const { topology, events } = await loadExecutionActivityData(sessionId, filters, apiJson);
+        const { telemetry, events } = await loadExecutionActivityData(
+          sessionId,
+          filters,
+          page,
+          apiJson,
+        );
         if (sessionRef.current !== sessionId) return;
-        setExecutionTopology(topology);
+        setTelemetry(telemetry);
         setActivityEvents(events);
         setKnownEventTypes((current) =>
           uniqStrings([...current, ...events.map((event) => event.event_type)]).sort(),
@@ -179,8 +248,10 @@ export function useExecutionActivity({
       resetExecutionActivity();
       return;
     }
-    void refreshExecutionActivity(selectedSessionId, activityFilters);
-  }, [activityFilters, refreshExecutionActivity, resetExecutionActivity, selectedSessionId]);
+    void refreshExecutionActivity(selectedSessionId, activityFilters, activityPage);
+  }, [activityFilters, activityPage, refreshExecutionActivity, resetExecutionActivity, selectedSessionId]);
+
+  const executionTopology = telemetry?.topology ?? null;
 
   const executionNodes = useMemo(
     () => flattenExecutionNodes(executionTopology?.roots ?? []),
@@ -196,6 +267,19 @@ export function useExecutionActivity({
     () => activityEvents.find((event) => event.event_id === selectedEventId) ?? null,
     [activityEvents, selectedEventId],
   );
+
+  const activeStageSummary = useMemo(() => {
+    if (!telemetry) return null;
+    const activeStageId = telemetry.runtime.active_stage_id;
+    if (activeStageId) {
+      return telemetry.stages.find((stage) => stage.stage_id === activeStageId) ?? null;
+    }
+    return (
+      telemetry.stages.find((stage) =>
+        ["running", "waiting", "retrying", "blocked", "cancelling"].includes(stage.status),
+      ) ?? null
+    );
+  }, [telemetry]);
 
   const stageOptions = useMemo(
     () =>
@@ -223,6 +307,7 @@ export function useExecutionActivity({
 
   const patchActivityFilters = useCallback((patch: Partial<ActivityFilters>) => {
     setSelectedEventId(null);
+    setActivityPage(1);
     setActivityFilters((current) => {
       const next = { ...current, ...patch };
       return sameActivityFilters(current, next) ? current : next;
@@ -231,9 +316,33 @@ export function useExecutionActivity({
 
   const clearActivityFilters = useCallback(() => {
     setSelectedEventId(null);
+    setActivityPage(1);
     setActivityFilters((current) =>
       sameActivityFilters(current, DEFAULT_FILTERS) ? current : DEFAULT_FILTERS,
     );
+  }, []);
+
+  const goToActivityPage = useCallback((page: number) => {
+    setSelectedEventId(null);
+    setActivityPage((current) => {
+      const next = Math.max(1, Math.trunc(page) || 1);
+      return current === next ? current : next;
+    });
+  }, []);
+
+  const nextActivityPage = useCallback(() => {
+    setSelectedEventId(null);
+    setActivityPage((current) => current + 1);
+  }, []);
+
+  const previousActivityPage = useCallback(() => {
+    setSelectedEventId(null);
+    setActivityPage((current) => Math.max(1, current - 1));
+  }, []);
+
+  const firstActivityPage = useCallback(() => {
+    setSelectedEventId(null);
+    setActivityPage(1);
   }, []);
 
   const cancelExecution = useCallback(
@@ -249,7 +358,7 @@ export function useExecutionActivity({
           throw new Error(response.error || "execution not found");
         }
         onInfo(`Cancelling ${executionId}`);
-        await refreshExecutionActivity(sessionId);
+        await refreshExecutionActivity(sessionId, filtersRef.current, pageRef.current);
       } catch (error) {
         onError(`Failed to cancel execution: ${formatError(error)}`);
       } finally {
@@ -260,10 +369,19 @@ export function useExecutionActivity({
   );
 
   return {
+    telemetry,
+    sessionRuntime: telemetry?.runtime ?? null,
+    sessionUsage: telemetry?.usage ?? null,
+    stageSummaries: telemetry?.stages ?? [],
+    activeStageSummary,
     executionTopology,
     activityEvents,
     activityLoading,
     activityFilters,
+    activityPage,
+    activityPageSize: ACTIVITY_PAGE_SIZE,
+    activityHasPreviousPage: activityPage > 1,
+    activityHasNextPage: activityEvents.length >= ACTIVITY_PAGE_SIZE,
     knownEventTypes,
     stageOptions,
     executionNodes,
@@ -276,6 +394,10 @@ export function useExecutionActivity({
     setSelectedEventId,
     patchActivityFilters,
     clearActivityFilters,
+    goToActivityPage,
+    nextActivityPage,
+    previousActivityPage,
+    firstActivityPage,
     cancelExecution,
     refreshExecutionActivity,
   };

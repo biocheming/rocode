@@ -18,11 +18,13 @@ use rocode_runtime_context::ResolvedWorkspaceContext;
 pub use rocode_tui::api::{
     AgentInfo, CompactResponse, CreateSessionRequest, ExecuteRecoveryRequest, ExecuteShellRequest,
     ExecutionModeInfo, FullProviderListResponse, KnownProvidersResponse, McpAuthStartInfo,
-    McpStatusInfo, MessageInfo, MessageTokensInfo, PendingCommandInvocation, PermissionRequestInfo,
-    PromptPart, PromptRequest, PromptResponse, ProviderConnectSchemaResponse, ProviderListResponse,
+    McpStatusInfo, MessageInfo, PendingCommandInvocation, PermissionRequestInfo, PromptPart,
+    PromptRequest, PromptResponse, ProviderConnectSchemaResponse, ProviderListResponse,
     QuestionInfo, RecoveryActionKind, RefreshProviderCatalogResponse, RevertRequest,
-    RevertResponse, SessionExecutionTopology, SessionInfo, SessionRecoveryProtocol,
-    SessionRuntimeState, SessionStatusInfo, ShareResponse, UpdateSessionRequest,
+    RevertResponse, SessionEventsQuery, SessionExecutionTopology, SessionInfo,
+    SessionInsightsResponse, SessionListItem, SessionListResponse, SessionRecoveryProtocol,
+    SessionRunStatusKind, SessionRuntimeState, SessionStatusInfo, SessionTelemetrySnapshot,
+    ShareResponse, SkillCatalogEntry, SkillCatalogQuery, SkillDetailResponse, UpdateSessionRequest,
 };
 
 /// Async HTTP client for communicating with the ROCode server.
@@ -72,7 +74,7 @@ impl CliApiClient {
         &self,
         search: Option<&str>,
         limit: Option<usize>,
-    ) -> anyhow::Result<Vec<SessionInfo>> {
+    ) -> anyhow::Result<Vec<SessionListItem>> {
         let url = server_url(&self.base_url, "/session");
         let mut params: Vec<(&str, String)> = Vec::new();
         if let Some(s) = search.map(str::trim).filter(|s| !s.is_empty()) {
@@ -87,7 +89,8 @@ impl CliApiClient {
             self.client.get(&url).query(&params)
         };
         let resp = req.send().await?;
-        Self::json_ok(resp, "list sessions").await
+        let response: SessionListResponse = Self::json_ok(resp, "list sessions").await?;
+        Ok(response.items)
     }
 
     pub async fn get_session_status(
@@ -297,6 +300,37 @@ impl CliApiClient {
         Self::json_ok(resp, "get session runtime").await
     }
 
+    pub async fn get_session_telemetry(
+        &self,
+        session_id: &str,
+    ) -> anyhow::Result<SessionTelemetrySnapshot> {
+        let url = server_url(
+            &self.base_url,
+            &format!("/session/{}/telemetry", session_id),
+        );
+        let resp = self.client.get(&url).send().await?;
+        Self::json_ok(resp, "get session telemetry").await
+    }
+
+    pub async fn get_session_insights(
+        &self,
+        session_id: &str,
+    ) -> anyhow::Result<SessionInsightsResponse> {
+        let url = server_url(&self.base_url, &format!("/session/{}/insights", session_id));
+        let resp = self.client.get(&url).send().await?;
+        Self::json_ok(resp, "get session insights").await
+    }
+
+    pub async fn get_session_events(
+        &self,
+        session_id: &str,
+        query: &SessionEventsQuery,
+    ) -> anyhow::Result<Vec<rocode_command::stage_protocol::StageEvent>> {
+        let url = server_url(&self.base_url, &format!("/session/{}/events", session_id));
+        let resp = self.client.get(&url).query(query).send().await?;
+        Self::json_ok(resp, "get session events").await
+    }
+
     pub async fn get_session_recovery(
         &self,
         session_id: &str,
@@ -450,10 +484,27 @@ impl CliApiClient {
         Self::json_ok(resp, "list execution modes").await
     }
 
-    pub async fn list_skills(&self) -> anyhow::Result<Vec<String>> {
-        let url = server_url(&self.base_url, "/skill");
-        let resp = self.client.get(&url).send().await?;
+    pub async fn list_skills(
+        &self,
+        query: Option<&SkillCatalogQuery>,
+    ) -> anyhow::Result<Vec<SkillCatalogEntry>> {
+        let url = server_url(&self.base_url, "/skill/catalog");
+        let resp = match query {
+            Some(query) => self.client.get(&url).query(query).send().await?,
+            None => self.client.get(&url).send().await?,
+        };
         Self::json_ok(resp, "list skills").await
+    }
+
+    pub async fn get_skill_detail(&self, name: &str) -> anyhow::Result<SkillDetailResponse> {
+        let url = server_url(&self.base_url, "/skill/detail");
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[("name", name)])
+            .send()
+            .await?;
+        Self::json_ok(resp, &format!("get skill detail `{}`", name)).await
     }
 
     // ── MCP ──────────────────────────────────────────────────────────

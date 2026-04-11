@@ -1,4 +1,5 @@
 use super::*;
+use crate::scheduler::prompt_support::render_skill_catalog;
 
 pub(in crate::scheduler) struct RetryComposeRequest<'a> {
     pub(in crate::scheduler) original_input: &'a str,
@@ -40,11 +41,16 @@ request-analysis"
             }
         }
 
-        if !self.plan.skill_list.is_empty() {
+        let effective_skill_list = self
+            .plan
+            .effective_skill_list(Some(SchedulerStageKind::RequestAnalysis));
+        if !effective_skill_list.is_empty() {
             sections.push(format!(
-                "## Active Skills
-{}",
-                markdown_list(&self.plan.skill_list)
+                "## Skills
+{}
+
+Use `skill_view(name)` to inspect a relevant skill before relying on it.",
+                render_skill_catalog(effective_skill_list)
             ));
         }
 
@@ -103,7 +109,7 @@ Choose the best request-scoped orchestration path across ROCode presets, then re
         let capabilities = build_capabilities_summary(
             &plan.available_agents,
             &plan.available_categories,
-            &plan.skill_list,
+            plan.effective_skill_list(Some(SchedulerStageKind::Route)),
         );
         if !capabilities.is_empty() {
             sections.push(format!("## System Capabilities\n{capabilities}"));
@@ -204,7 +210,7 @@ Resolve discoverable unknowns with read-only inspection first. Ask only when a r
             skill_tree_context: skill_tree_context(plan),
             available_agents: &plan.available_agents,
             available_categories: &plan.available_categories,
-            skill_list: &plan.skill_list,
+            skill_list: plan.effective_skill_list(Some(SchedulerStageKind::Plan)),
         }) {
             return composed;
         }
@@ -252,7 +258,7 @@ plan"
         let capabilities = build_capabilities_summary(
             &plan.available_agents,
             &plan.available_categories,
-            &plan.skill_list,
+            plan.effective_skill_list(Some(SchedulerStageKind::Plan)),
         );
         if !capabilities.is_empty() {
             sections.push(format!(
@@ -324,8 +330,9 @@ Produce a concrete execution plan only. No file edits, no claims that work is al
         state: &SchedulerProfileState,
         plan: &SchedulerProfilePlan,
     ) -> String {
-        let active_skills_markdown =
-            (!plan.skill_list.is_empty()).then(|| markdown_list(&plan.skill_list));
+        let review_skill_list = plan.effective_skill_list(Some(SchedulerStageKind::Review));
+        let skills_index_markdown =
+            (!review_skill_list.is_empty()).then(|| render_skill_catalog(review_skill_list));
         if let Some(composed) = plan.compose_review_stage_input(SchedulerReviewStageInput {
             original_request: original_input,
             request_brief: &state.route.request_brief,
@@ -340,7 +347,7 @@ Produce a concrete execution plan only. No file edits, no claims that work is al
             advisory_review: state.preset_runtime.advisory_review.as_deref(),
             approval_feedback: state.preset_runtime.approval_review.as_deref(),
             saved_planning_artifact: state.preset_runtime.planning_artifact_path.as_deref(),
-            active_skills_markdown: active_skills_markdown.as_deref(),
+            skills_index_markdown: skills_index_markdown.as_deref(),
             delegation_output: state
                 .execution
                 .delegated
@@ -372,11 +379,13 @@ review"
                 route_decision.rationale_summary
             ));
         }
-        if !plan.skill_list.is_empty() {
+        if !review_skill_list.is_empty() {
             sections.push(format!(
-                "## Active Skills
-{}",
-                markdown_list(&plan.skill_list)
+                "## Skills
+{}
+
+Use `skill_view(name)` to inspect a relevant skill before relying on it.",
+                render_skill_catalog(review_skill_list)
             ));
         }
         if let Some(delegated) = &state.execution.delegated {

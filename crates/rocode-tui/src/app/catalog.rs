@@ -1,6 +1,124 @@
 use super::*;
 
 impl App {
+    pub(super) fn submit_skill_create(&mut self) -> anyhow::Result<String> {
+        let Some(session_id) = self.current_session_id() else {
+            anyhow::bail!("Select or create a session before managing skills.");
+        };
+        let Some(client) = self.context.get_api_client() else {
+            anyhow::bail!("No active API client.");
+        };
+        let Some((name, description, category, body)) = self.skill_list_dialog.create_payload()
+        else {
+            anyhow::bail!("Skill create draft is not active.");
+        };
+        if name.trim().is_empty() || description.trim().is_empty() || body.trim().is_empty() {
+            anyhow::bail!("Name, description, and body are required.");
+        }
+
+        let response = client.manage_skill(&crate::api::SkillManageRequest {
+            session_id,
+            action: crate::api::SkillManageAction::Create,
+            name: Some(name.clone()),
+            new_name: None,
+            description: Some(description),
+            body: Some(body),
+            content: None,
+            category,
+            directory_name: None,
+            file_path: None,
+        })?;
+        self.skill_list_dialog.cancel_manage_mode();
+        self.refresh_skill_list_dialog()?;
+        Ok(format!("Created skill {}.", response.result.skill_name))
+    }
+
+    pub(super) fn submit_skill_edit(&mut self) -> anyhow::Result<String> {
+        let Some(session_id) = self.current_session_id() else {
+            anyhow::bail!("Select or create a session before managing skills.");
+        };
+        let Some(client) = self.context.get_api_client() else {
+            anyhow::bail!("No active API client.");
+        };
+        let Some((name, content)) = self.skill_list_dialog.edit_payload() else {
+            anyhow::bail!("Skill edit draft is not active.");
+        };
+        if content.trim().is_empty() {
+            anyhow::bail!("Skill source cannot be empty.");
+        }
+
+        let response = client.manage_skill(&crate::api::SkillManageRequest {
+            session_id,
+            action: crate::api::SkillManageAction::Edit,
+            name: Some(name.clone()),
+            new_name: None,
+            description: None,
+            body: None,
+            content: Some(content),
+            category: None,
+            directory_name: None,
+            file_path: None,
+        })?;
+        self.skill_list_dialog.cancel_manage_mode();
+        self.refresh_skill_list_dialog()?;
+        Ok(format!("Saved skill {}.", response.result.skill_name))
+    }
+
+    pub(super) fn submit_skill_delete(&mut self) -> anyhow::Result<String> {
+        let Some(session_id) = self.current_session_id() else {
+            anyhow::bail!("Select or create a session before managing skills.");
+        };
+        let Some(client) = self.context.get_api_client() else {
+            anyhow::bail!("No active API client.");
+        };
+        let Some(name) = self.skill_list_dialog.delete_payload() else {
+            anyhow::bail!("Skill delete confirmation is not active.");
+        };
+
+        let response = client.manage_skill(&crate::api::SkillManageRequest {
+            session_id,
+            action: crate::api::SkillManageAction::Delete,
+            name: Some(name),
+            new_name: None,
+            description: None,
+            body: None,
+            content: None,
+            category: None,
+            directory_name: None,
+            file_path: None,
+        })?;
+        self.skill_list_dialog.cancel_manage_mode();
+        self.refresh_skill_list_dialog()?;
+        Ok(format!("Deleted skill {}.", response.result.skill_name))
+    }
+
+    pub(super) fn refresh_skill_list_detail(&mut self) -> anyhow::Result<()> {
+        let Some(client) = self.context.get_api_client() else {
+            self.skill_list_dialog.clear_detail();
+            return Ok(());
+        };
+        let Some(skill_name) = self
+            .skill_list_dialog
+            .selected_skill()
+            .map(|value| value.to_string())
+        else {
+            self.skill_list_dialog.clear_detail();
+            return Ok(());
+        };
+
+        match client.get_skill_detail(&skill_name) {
+            Ok(detail) => {
+                self.skill_list_dialog.set_skill_detail(detail);
+                Ok(())
+            }
+            Err(error) => {
+                self.skill_list_dialog
+                    .set_skill_detail_error(format!("Failed to load `{}`: {}", skill_name, error));
+                Err(error)
+            }
+        }
+    }
+
     pub(super) fn refresh_model_dialog(&mut self) {
         let Some(client) = self.context.get_api_client() else {
             self.context.set_has_connected_provider(false);
@@ -252,11 +370,18 @@ impl App {
 
     pub(super) fn refresh_skill_list_dialog(&mut self) -> anyhow::Result<()> {
         let Some(client) = self.context.get_api_client() else {
+            self.skill_list_dialog.clear_detail();
             return Ok(());
         };
-        let skills = client.list_skills()?;
-        self.skill_list_dialog.set_skills(skills.clone());
-        self.prompt.set_skill_suggestions(skills);
+        let query = crate::api::SkillCatalogQuery {
+            session_id: self.current_session_id(),
+            ..Default::default()
+        };
+        let skills = client.list_skills(Some(&query))?;
+        let suggestions = skills.iter().map(|skill| skill.name.clone()).collect();
+        self.skill_list_dialog.set_skills(skills);
+        self.prompt.set_skill_suggestions(suggestions);
+        let _ = self.refresh_skill_list_detail();
         Ok(())
     }
 

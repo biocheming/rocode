@@ -453,19 +453,29 @@ pub(super) async fn run_chat_session(
                             &repl_style,
                         );
                     }
-                    InteractiveCommand::InspectStage(stage_filter) => {
-                        let _ = print_block(
-                            Some(&runtime),
-                            OutputBlock::Status(StatusBlock::title(
-                                if let Some(ref sid) = stage_filter {
-                                    format!("Stage inspect: {} (use Web UI for full details)", sid)
-                                } else {
-                                    "Stage inspect: use Web UI at /session/{{id}}/events for full details"
-                                .to_string()
-                                },
-                            )),
+                    InteractiveCommand::ShowRuntime => {
+                        cli_print_runtime_snapshot(&runtime, &api_client, &repl_style).await;
+                    }
+                    InteractiveCommand::ShowUsage => {
+                        cli_print_usage_snapshot(&runtime, &api_client, &repl_style).await;
+                    }
+                    InteractiveCommand::ShowEvents(raw_filter) => {
+                        cli_print_session_events(
+                            &runtime,
+                            &api_client,
                             &repl_style,
-                        );
+                            raw_filter.as_deref(),
+                        )
+                        .await;
+                    }
+                    InteractiveCommand::InspectStage(stage_filter) => {
+                        cli_print_session_events(
+                            &runtime,
+                            &api_client,
+                            &repl_style,
+                            stage_filter.as_deref(),
+                        )
+                        .await;
                     }
                     InteractiveCommand::Unknown(name) => {
                         let _ = print_block(

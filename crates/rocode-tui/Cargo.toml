@@ -13,12 +13,14 @@ rocode-util = { path = "../rocode-util" }
 rocode-config = { path = "../rocode-config" }
 rocode-provider = { path = "../rocode-provider" }
 rocode-session = { path = "../rocode-session" }
+rocode-skill = { path = "../rocode-skill" }
 rocode-agent = { path = "../rocode-agent" }
 rocode-tool = { path = "../rocode-tool" }
 rocode-mcp = { path = "../rocode-mcp" }
 rocode-command = { path = "../rocode-command" }
 rocode-runtime-context = { path = "../rocode-runtime-context" }
 rocode-state = { path = "../rocode-state" }
+rocode-types = { path = "../rocode-types" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

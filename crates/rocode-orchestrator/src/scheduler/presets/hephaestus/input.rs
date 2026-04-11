@@ -218,7 +218,8 @@ mod tests {
         assert!(composed.contains("substantively complete, verified, and proven"));
         assert!(composed.contains("Completion Guarantee (NON-NEGOTIABLE)"));
         assert!(composed.contains("`explore` agent — **CHEAP**"));
-        assert!(composed.contains("**Active Skills**: debug"));
+        assert!(composed.contains("<available_skills>"));
+        assert!(composed.contains("- debug"));
     }
 
     #[test]

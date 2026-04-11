@@ -6,6 +6,8 @@ mod prompt;
 mod recovery;
 mod scheduler;
 mod session_crud;
+mod stages;
+mod telemetry;
 
 use std::sync::Arc;
 
@@ -44,6 +46,8 @@ use self::session_crud::{
     set_session_summary, set_session_title, share_session, start_compaction, unshare_session,
     update_part, update_session,
 };
+use self::stages::get_session_stages;
+use self::telemetry::{get_session_insights, get_session_telemetry};
 
 use super::stream::stream_message;
 
@@ -60,6 +64,9 @@ pub(crate) fn session_routes() -> Router<Arc<ServerState>> {
         )
         .route("/{id}/children", get(get_session_children))
         .route("/{id}/runtime", get(get_session_runtime))
+        .route("/{id}/telemetry", get(get_session_telemetry))
+        .route("/{id}/insights", get(get_session_insights))
+        .route("/{id}/stages", get(get_session_stages))
         .route("/{id}/executions", get(get_session_executions))
         .route(
             "/{id}/executions/{execution_id}/cancel",
@@ -352,15 +359,15 @@ mod tests {
     #[test]
     fn active_tool_execution_records_attach_to_active_stage() {
         let mut session = Session::new("proj", "/tmp");
-        session.id = "ses_tools".to_string();
-        let mut assistant = rocode_session::SessionMessage::assistant(session.id.clone());
+        let session_id = session.id.clone();
+        let mut assistant = rocode_session::SessionMessage::assistant(session_id.clone());
         assistant.add_tool_call("call_1", "bash", serde_json::json!({"command": "echo hi"}));
-        session.messages.push(assistant);
+        session.push_message(assistant);
 
         let records = vec![
             crate::runtime_control::ExecutionRecord {
-                id: "prompt:ses_tools".to_string(),
-                session_id: session.id.clone(),
+                id: format!("prompt:{session_id}"),
+                session_id: session_id.clone(),
                 kind: crate::runtime_control::ExecutionKind::PromptRun,
                 status: crate::runtime_control::ExecutionStatus::Running,
                 label: Some("Prompt run".to_string()),
@@ -373,12 +380,12 @@ mod tests {
                 metadata: None,
             },
             crate::runtime_control::ExecutionRecord {
-                id: "scheduler:ses_tools".to_string(),
-                session_id: session.id.clone(),
+                id: format!("scheduler:{session_id}"),
+                session_id: session_id.clone(),
                 kind: crate::runtime_control::ExecutionKind::SchedulerRun,
                 status: crate::runtime_control::ExecutionStatus::Running,
                 label: Some("Scheduler run".to_string()),
-                parent_id: Some("prompt:ses_tools".to_string()),
+                parent_id: Some(format!("prompt:{session_id}")),
                 stage_id: None,
                 waiting_on: None,
                 recent_event: None,

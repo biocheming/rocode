@@ -56,11 +56,11 @@ pub(super) async fn abort_session_execution(
 ) -> serde_json::Value {
     let mut prompt_running = false;
     let scheduler_running = state
-        .runtime_control
+        .runtime_telemetry
         .request_scheduler_cancel(session_id)
         .await;
 
-    if !scheduler_stage_only && state.runtime_control.has_prompt_run(session_id).await {
+    if !scheduler_stage_only && state.runtime_telemetry.has_prompt_run(session_id).await {
         prompt_running = true;
         state.prompt_runner.cancel(session_id).await;
     }

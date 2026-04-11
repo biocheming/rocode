@@ -23,27 +23,37 @@ pub(super) async fn get_session_executions(
             .cloned()
             .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?
     };
-    let mut records = state
-        .runtime_control
-        .list_session_execution_records(&session_id)
-        .await;
-    let tool_records = collect_active_tool_execution_records(&session, &records);
-    records.extend(tool_records);
-    records.extend(collect_active_agent_task_execution_records(
-        &session_id,
-        &records,
-    ));
     Ok(Json(
-        crate::runtime_control::build_session_execution_topology(session_id, records),
+        build_session_execution_topology_snapshot(&state, &session_id, &session).await,
     ))
+}
+
+pub(super) async fn build_session_execution_topology_snapshot(
+    state: &Arc<ServerState>,
+    session_id: &str,
+    session: &Session,
+) -> SessionExecutionTopology {
+    let base_records = state
+        .runtime_telemetry
+        .list_session_execution_records(session_id)
+        .await;
+    let mut extra_records = collect_active_tool_execution_records(session, &base_records);
+    extra_records.extend(collect_active_agent_task_execution_records(
+        session_id,
+        &base_records,
+    ));
+    state
+        .runtime_telemetry
+        .build_session_execution_topology(session_id.to_string(), extra_records)
+        .await
 }
 
 /// Global enumeration: list all active execution records across all sessions.
 pub(super) async fn list_all_executions(
     State(state): State<Arc<ServerState>>,
 ) -> Result<Json<serde_json::Value>> {
-    let records = state.runtime_control.list_all_executions().await;
-    let session_ids = state.runtime_control.list_active_session_ids().await;
+    let records = state.runtime_telemetry.list_all_executions().await;
+    let session_ids = state.runtime_telemetry.list_active_session_ids().await;
     Ok(Json(serde_json::json!({
         "active_count": records.len(),
         "active_session_ids": session_ids,
@@ -55,7 +65,10 @@ pub(super) async fn cancel_session_execution(
     State(state): State<Arc<ServerState>>,
     Path((_session_id, execution_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>> {
-    let result = state.runtime_control.cancel_execution(&execution_id).await;
+    let result = state
+        .runtime_telemetry
+        .cancel_execution(&execution_id)
+        .await;
     match result {
         Some(kind) => {
             // For AgentTask, also cancel via the global task registry.
@@ -80,6 +93,7 @@ pub(super) fn collect_active_tool_execution_records(
     session: &Session,
     existing_records: &[crate::runtime_control::ExecutionRecord],
 ) -> Vec<crate::runtime_control::ExecutionRecord> {
+    let session_record = session.record();
     let parent_id = select_active_tool_parent_id(existing_records);
     // Resolve stage_id from the parent record.
     let stage_id = parent_id.as_ref().and_then(|pid| {
@@ -99,7 +113,7 @@ pub(super) fn collect_active_tool_execution_records(
 
     let mut records = Vec::new();
 
-    for message in &session.messages {
+    for message in &session_record.messages {
         for part in &message.parts {
             let PartType::ToolCall {
                 id,
@@ -142,7 +156,7 @@ pub(super) fn collect_active_tool_execution_records(
 
             records.push(crate::runtime_control::ExecutionRecord {
                 id: format!("tool_call:{id}"),
-                session_id: session.id.clone(),
+                session_id: session_record.id.clone(),
                 kind: crate::runtime_control::ExecutionKind::ToolCall,
                 status: execution_status,
                 label: Some(format!("Tool: {name}")),

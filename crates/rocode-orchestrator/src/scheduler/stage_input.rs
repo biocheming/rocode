@@ -1,4 +1,5 @@
 use crate::scheduler::prompt_context::{AvailableAgentMeta, AvailableCategoryMeta};
+use crate::scheduler::SchedulerSkillRef;
 
 pub struct SchedulerDraftArtifactInput<'a> {
     pub original_request: &'a str,
@@ -47,7 +48,7 @@ pub struct SchedulerPlanStageInput<'a> {
     pub skill_tree_context: Option<&'a str>,
     pub available_agents: &'a [AvailableAgentMeta],
     pub available_categories: &'a [AvailableCategoryMeta],
-    pub skill_list: &'a [String],
+    pub skill_list: &'a [SchedulerSkillRef],
 }
 
 pub struct SchedulerExecutionOrchestrationStageInput<'a> {
@@ -59,7 +60,7 @@ pub struct SchedulerExecutionOrchestrationStageInput<'a> {
     pub skill_tree_context: Option<&'a str>,
     pub available_agents: &'a [AvailableAgentMeta],
     pub available_categories: &'a [AvailableCategoryMeta],
-    pub skill_list: &'a [String],
+    pub skill_list: &'a [SchedulerSkillRef],
 }
 
 pub struct SchedulerSynthesisStageInput<'a> {
@@ -135,7 +136,7 @@ pub struct SchedulerReviewStageInput<'a> {
     pub advisory_review: Option<&'a str>,
     pub approval_feedback: Option<&'a str>,
     pub saved_planning_artifact: Option<&'a str>,
-    pub active_skills_markdown: Option<&'a str>,
+    pub skills_index_markdown: Option<&'a str>,
     pub delegation_output: Option<&'a str>,
 }
 

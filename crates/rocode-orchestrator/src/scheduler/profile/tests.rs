@@ -2343,7 +2343,7 @@ fn stage_capabilities_override_projects_stage_agents_and_skills() {
             session_projection: None,
             agent_tree: None,
             agents: vec!["planner".to_string(), "researcher".to_string()],
-            skill_list: vec!["pubmed".to_string(), "github-research".to_string()],
+            skill_list: vec!["pubmed".into(), "github-research".into()],
         },
     );
 
@@ -2373,9 +2373,9 @@ fn stage_capabilities_override_projects_stage_agents_and_skills() {
         description: String::new(),
     }];
     plan.skill_list = vec![
-        "pubmed".to_string(),
-        "github-research".to_string(),
-        "irrelevant".to_string(),
+        "pubmed".into(),
+        "github-research".into(),
+        "irrelevant".into(),
     ];
     plan.stage_overrides = overrides;
 
@@ -2386,8 +2386,33 @@ fn stage_capabilities_override_projects_stage_agents_and_skills() {
         .expect("stage capabilities should exist");
 
     assert_eq!(capabilities.agents, vec!["planner", "researcher"]);
-    assert_eq!(capabilities.skill_list, vec!["pubmed", "github-research"]);
+    assert_eq!(
+        capabilities.skill_list,
+        vec!["pubmed".into(), "github-research".into()]
+    );
     assert_eq!(capabilities.categories, vec!["literature"]);
+}
+
+#[test]
+fn effective_skill_list_prefers_stage_scoped_catalog_when_present() {
+    let mut plan = planner_only_plan();
+    plan.skill_list = vec!["global-skill".into()];
+    plan.stage_skill_lists.insert(
+        SchedulerStageKind::Review,
+        vec!["review-skill".into(), "review-evidence".into()],
+    );
+
+    assert_eq!(
+        plan.effective_skill_list(Some(SchedulerStageKind::Review)),
+        &[
+            SchedulerSkillRef::from("review-skill"),
+            SchedulerSkillRef::from("review-evidence"),
+        ]
+    );
+    assert_eq!(
+        plan.effective_skill_list(Some(SchedulerStageKind::Plan)),
+        &[SchedulerSkillRef::from("global-skill")]
+    );
 }
 
 #[test]
@@ -2544,7 +2569,7 @@ fn stage_graph_merges_capabilities_from_override() {
             session_projection: None,
             agent_tree: None,
             agents: vec!["specialist".to_string()],
-            skill_list: vec!["code-review".to_string()],
+            skill_list: vec!["code-review".into()],
         },
     );
 
@@ -2563,7 +2588,7 @@ fn stage_graph_merges_capabilities_from_override() {
             cost: String::new(),
         },
     ];
-    plan.skill_list = vec!["code-review".to_string(), "testing".to_string()];
+    plan.skill_list = vec!["code-review".into(), "testing".into()];
     plan.stage_overrides = overrides;
 
     let capabilities = plan
@@ -2575,5 +2600,5 @@ fn stage_graph_merges_capabilities_from_override() {
     // Override narrows to specialist only, not generalist.
     assert_eq!(capabilities.agents, vec!["specialist"]);
     // Override narrows to code-review only, not testing.
-    assert_eq!(capabilities.skill_list, vec!["code-review"]);
+    assert_eq!(capabilities.skill_list, vec!["code-review".into()]);
 }

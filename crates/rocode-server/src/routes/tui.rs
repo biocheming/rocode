@@ -12,7 +12,7 @@ use tokio::sync::{Mutex, Notify};
 
 pub(crate) use crate::runtime_control::QuestionInfo;
 use crate::runtime_control::QuestionReply;
-use crate::session_runtime::events::{broadcast_server_event, ServerEvent};
+use crate::session_runtime::events::ServerEvent;
 use crate::{ApiError, Result, ServerState};
 
 pub(crate) fn question_routes() -> Router<Arc<ServerState>> {
@@ -61,7 +61,7 @@ pub(crate) async fn request_question_answers_with_hook(
     }
 
     let (question_info, rx) = state
-        .runtime_control
+        .runtime_telemetry
         .register_question(session_id.clone(), questions.clone())
         .await;
     let request_id = question_info.id.clone();
@@ -72,17 +72,6 @@ pub(crate) async fn request_question_answers_with_hook(
         questions: serde_json::to_value(&questions)
             .unwrap_or_else(|_| serde_json::Value::Array(vec![])),
     };
-    broadcast_server_event(state.as_ref(), &created_event);
-
-    // Update aggregated runtime state: pending question.
-    state
-        .runtime_state
-        .question_created(
-            &session_id,
-            &question_info.id,
-            serde_json::to_value(&questions).unwrap_or_else(|_| serde_json::Value::Array(vec![])),
-        )
-        .await;
     if let Some(hook) = event_hook.as_ref() {
         if let Some(payload) = created_event.to_json_value() {
             hook(payload);
@@ -91,10 +80,10 @@ pub(crate) async fn request_question_answers_with_hook(
 
     let wait_result = tokio::time::timeout(Duration::from_secs(300), rx).await;
 
-    state.runtime_control.drop_question(&question_info.id).await;
-
-    // Clear pending question from aggregated runtime state.
-    state.runtime_state.question_resolved(&session_id).await;
+    state
+        .runtime_telemetry
+        .drop_question(&session_id, &question_info.id)
+        .await;
 
     match wait_result {
         Ok(Ok(QuestionReply::Answers(answers))) => {
@@ -166,32 +155,17 @@ pub(crate) async fn cancel_questions_for_session(
     session_id: &str,
 ) -> usize {
     let cancelled = state
-        .runtime_control
+        .runtime_telemetry
         .cancel_questions_for_session(session_id)
         .await;
     if cancelled.is_empty() {
         return 0;
     }
-
-    for question in &cancelled {
-        broadcast_server_event(
-            state.as_ref(),
-            &ServerEvent::QuestionResolved {
-                session_id: question.session_id.clone(),
-                request_id: question.id.clone(),
-                resolution: Some(crate::session_runtime::events::QuestionResolutionKind::Cancelled),
-                answers: None,
-                reason: Some("cancelled".to_string()),
-            },
-        );
-    }
-    state.runtime_state.question_resolved(session_id).await;
-
     cancelled.len()
 }
 
 async fn list_questions(State(state): State<Arc<ServerState>>) -> Json<Vec<QuestionInfo>> {
-    Json(state.runtime_control.list_questions().await)
+    Json(state.runtime_telemetry.list_questions().await)
 }
 
 pub(crate) async fn list_questions_for_session(
@@ -199,7 +173,7 @@ pub(crate) async fn list_questions_for_session(
     session_id: &str,
 ) -> Vec<QuestionInfo> {
     state
-        .runtime_control
+        .runtime_telemetry
         .list_questions_for_session(session_id)
         .await
 }
@@ -215,25 +189,11 @@ async fn reply_question(
     Json(req): Json<ReplyQuestionRequest>,
 ) -> Result<Json<bool>> {
     let question = state
-        .runtime_control
+        .runtime_telemetry
         .answer_question(&id, req.answers.clone())
         .await
         .ok_or_else(|| ApiError::NotFound(format!("Question request not found: {}", id)))?;
-    state
-        .runtime_state
-        .question_resolved(&question.session_id)
-        .await;
-
-    broadcast_server_event(
-        state.as_ref(),
-        &ServerEvent::QuestionResolved {
-            session_id: question.session_id,
-            request_id: id,
-            resolution: Some(crate::session_runtime::events::QuestionResolutionKind::Answered),
-            answers: Some(serde_json::to_value(&req.answers).unwrap_or(serde_json::Value::Null)),
-            reason: None,
-        },
-    );
+    let _ = question;
     Ok(Json(true))
 }
 
@@ -242,25 +202,11 @@ async fn reject_question(
     Path(id): Path<String>,
 ) -> Result<Json<bool>> {
     let question = state
-        .runtime_control
+        .runtime_telemetry
         .reject_question(&id)
         .await
         .ok_or_else(|| ApiError::NotFound(format!("Question request not found: {}", id)))?;
-    state
-        .runtime_state
-        .question_resolved(&question.session_id)
-        .await;
-
-    broadcast_server_event(
-        state.as_ref(),
-        &ServerEvent::QuestionResolved {
-            session_id: question.session_id,
-            request_id: id,
-            resolution: Some(crate::session_runtime::events::QuestionResolutionKind::Rejected),
-            answers: None,
-            reason: None,
-        },
-    );
+    let _ = question;
     Ok(Json(true))
 }
 

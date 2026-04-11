@@ -114,7 +114,7 @@ fn prometheus_review_input_enforces_review_shape() {
         advisory_review: Some("- Guardrail 1"),
         approval_feedback: Some("- Fix missing acceptance criteria"),
         saved_planning_artifact: Some(".sisyphus/plans/scheduler.md"),
-        active_skills_markdown: None,
+        skills_index_markdown: None,
         delegation_output: None,
     });
 

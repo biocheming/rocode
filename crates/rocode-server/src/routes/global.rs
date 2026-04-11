@@ -208,6 +208,8 @@ async fn list_tool_ids() -> Json<Vec<String>> {
         "todowrite".to_string(),
         "codesearch".to_string(),
         "apply_patch".to_string(),
+        "skills_list".to_string(),
+        "skill_view".to_string(),
         "skill".to_string(),
         "multiedit".to_string(),
     ])
@@ -234,6 +236,21 @@ async fn list_tools(Query(_params): Query<HashMap<String, String>>) -> Json<Vec<
             id: "bash".to_string(),
             name: "Bash".to_string(),
             description: "Execute commands".to_string(),
+        },
+        ToolInfo {
+            id: "skills_list".to_string(),
+            name: "Skills List".to_string(),
+            description: "List available skills".to_string(),
+        },
+        ToolInfo {
+            id: "skill_view".to_string(),
+            name: "Skill View".to_string(),
+            description: "Load a skill or one of its supporting files".to_string(),
+        },
+        ToolInfo {
+            id: "skill".to_string(),
+            name: "Skill".to_string(),
+            description: "Deprecated compatibility wrapper around skill_view".to_string(),
         },
     ])
 }

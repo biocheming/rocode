@@ -355,6 +355,11 @@ pub(crate) enum DebugCommands {
     Config,
     #[command(about = "List all available skills")]
     Skill,
+    #[command(about = "Skill catalog debugging utilities")]
+    Skills {
+        #[command(subcommand)]
+        action: DebugSkillsCommands,
+    },
     #[command(about = "List all known projects")]
     Scrap,
     #[command(about = "Wait indefinitely (for debugging)")]
@@ -392,6 +397,17 @@ pub(crate) enum DebugCommands {
         tool: Option<String>,
         #[arg(long)]
         params: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum DebugSkillsCommands {
+    #[command(about = "List the resolved skill catalog")]
+    List,
+    #[command(about = "Show raw detail for one resolved skill")]
+    View {
+        #[arg(value_name = "NAME")]
+        name: String,
     },
 }
 

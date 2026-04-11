@@ -11,11 +11,12 @@ use rocode_config::{LspConfig, LspServerConfig as ConfigLspServerConfig};
 use rocode_grep::{FileSearchOptions, Ripgrep};
 use rocode_lsp::{LspClient, LspServerConfig};
 use rocode_session::snapshot::Snapshot;
-use rocode_skill::list_available_skills;
 use rocode_storage::{Database, SessionRepository};
 use rocode_tool::{registry::create_default_registry, ToolContext};
 
+use crate::api_client::CliApiClient;
 use crate::cli::*;
+use crate::server_lifecycle::discover_or_start_server;
 
 fn resolve_document_input_to_path(input: &str) -> anyhow::Result<PathBuf> {
     if input.starts_with("file://") {
@@ -161,6 +162,28 @@ fn resolve_context_docs_registry_path_from_config() -> anyhow::Result<PathBuf> {
     }
 }
 
+async fn resolve_server_skill_catalog() -> anyhow::Result<Vec<serde_json::Value>> {
+    let base_url = discover_or_start_server(None).await?;
+    let client = CliApiClient::new(base_url);
+    let mut skills = client.list_skills(None).await?;
+    skills.sort_by(|left, right| {
+        left.name
+            .to_ascii_lowercase()
+            .cmp(&right.name.to_ascii_lowercase())
+    });
+    Ok(skills
+        .into_iter()
+        .map(|skill| serde_json::json!(skill))
+        .collect())
+}
+
+async fn resolve_server_skill_detail(name: &str) -> anyhow::Result<serde_json::Value> {
+    let base_url = discover_or_start_server(None).await?;
+    let client = CliApiClient::new(base_url);
+    let detail = client.get_skill_detail(name).await?;
+    Ok(serde_json::json!(detail))
+}
+
 pub(crate) async fn handle_debug_command(action: DebugCommands) -> anyhow::Result<()> {
     match action {
         DebugCommands::Paths => {
@@ -202,18 +225,19 @@ pub(crate) async fn handle_debug_command(action: DebugCommands) -> anyhow::Resul
             println!("{}", serde_json::to_string_pretty(&config)?);
         }
         DebugCommands::Skill => {
-            let skills = list_available_skills();
-            let list: Vec<_> = skills
-                .into_iter()
-                .map(|(name, description)| {
-                    serde_json::json!({
-                        "name": name,
-                        "description": description
-                    })
-                })
-                .collect();
+            let list = resolve_server_skill_catalog().await?;
             println!("{}", serde_json::to_string_pretty(&list)?);
         }
+        DebugCommands::Skills { action } => match action {
+            DebugSkillsCommands::List => {
+                let list = resolve_server_skill_catalog().await?;
+                println!("{}", serde_json::to_string_pretty(&list)?);
+            }
+            DebugSkillsCommands::View { name } => {
+                let detail = resolve_server_skill_detail(&name).await?;
+                println!("{}", serde_json::to_string_pretty(&detail)?);
+            }
+        },
         DebugCommands::Scrap => {
             let db = Database::new().await?;
             let session_repo = SessionRepository::new(db.pool().clone());

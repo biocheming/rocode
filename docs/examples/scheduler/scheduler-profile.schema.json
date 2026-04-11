@@ -306,6 +306,18 @@
       "properties": {
         "contextMarkdown": {
           "type": "string"
+        },
+        "tokenBudget": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncationStrategy": {
+          "type": "string",
+          "enum": [
+            "head",
+            "tail",
+            "head-tail"
+          ]
         }
       }
     }

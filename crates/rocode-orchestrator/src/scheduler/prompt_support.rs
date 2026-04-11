@@ -1,4 +1,6 @@
 use super::prompt_context::{AvailableAgentMeta, AvailableCategoryMeta};
+use super::SchedulerSkillRef;
+use std::collections::BTreeMap;
 
 pub(crate) const TONE_AND_STYLE: &str = r#"<Tone_and_Style>
 ## Communication Style
@@ -57,7 +59,7 @@ pub(crate) const SOFT_GUIDELINES: &str = r#"## Soft Guidelines
 
 pub(crate) fn build_tool_selection_table(
     agents: &[AvailableAgentMeta],
-    skill_list: &[String],
+    _skill_list: &[SchedulerSkillRef],
 ) -> String {
     // PLACEHOLDER_TOOL_SELECTION_BODY
     let mut rows = Vec::new();
@@ -86,11 +88,6 @@ pub(crate) fn build_tool_selection_table(
             "- `{}` agent — **{}** — {}",
             agent.name, agent.cost, short_desc
         ));
-    }
-
-    if !skill_list.is_empty() {
-        rows.push(String::new());
-        rows.push(format!("**Active Skills**: {}", skill_list.join(", ")));
     }
 
     rows.push(String::new());
@@ -146,7 +143,7 @@ Use it when the task needs **external documentation or best practices**, not jus
 
 pub(crate) fn build_category_skills_guide(
     categories: &[AvailableCategoryMeta],
-    skill_list: &[String],
+    skill_list: &[SchedulerSkillRef],
 ) -> String {
     if categories.is_empty() && skill_list.is_empty() {
         return String::new();
@@ -172,12 +169,10 @@ pub(crate) fn build_category_skills_guide(
         lines.push(String::new());
         lines.push("#### Available Skills".to_string());
         lines.push(String::new());
-        for skill in skill_list {
-            lines.push(format!("- `{skill}`"));
-        }
+        lines.push(render_skill_catalog(skill_list));
         lines.push(String::new());
         lines.push(
-            "> Full skill descriptions → use the `skill` tool to check before EVERY delegation."
+            "> Read this index first, then use `skill_view(name)` before EVERY delegation. If a skill exposes supporting files, continue with `skill_view(name, file_path)`."
                 .to_string(),
         );
     }
@@ -316,7 +311,7 @@ pub(crate) fn build_task_management_section() -> String {
 pub(crate) fn build_capabilities_summary(
     agents: &[AvailableAgentMeta],
     categories: &[AvailableCategoryMeta],
-    skill_list: &[String],
+    skill_list: &[SchedulerSkillRef],
 ) -> String {
     if agents.is_empty() && categories.is_empty() && skill_list.is_empty() {
         return String::new();
@@ -348,10 +343,47 @@ pub(crate) fn build_capabilities_summary(
 
     if !skill_list.is_empty() {
         sections.push(String::new());
-        sections.push(format!("**Skills:** {}", skill_list.join(", ")));
+        sections.push("**Skills:**".to_string());
+        sections.push(render_skill_catalog(skill_list));
+        sections.push(
+            "Use `skill_view(name)` to inspect any relevant skill before relying on it."
+                .to_string(),
+        );
     }
 
     sections.join("\n")
+}
+
+pub(crate) fn render_skill_catalog(skill_list: &[SchedulerSkillRef]) -> String {
+    if skill_list.is_empty() {
+        return "<available_skills />".to_string();
+    }
+
+    let mut grouped = BTreeMap::<String, Vec<&SchedulerSkillRef>>::new();
+    for skill in skill_list {
+        let category = skill
+            .category
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("general")
+            .to_string();
+        grouped.entry(category).or_default().push(skill);
+    }
+
+    let mut output = String::from("<available_skills>\n");
+    for (category, skills) in grouped {
+        output.push_str(&format!("  {}:\n", category));
+        for skill in skills {
+            if skill.description.trim().is_empty() {
+                output.push_str(&format!("    - {}\n", skill.name));
+            } else {
+                output.push_str(&format!("    - {}: {}\n", skill.name, skill.description));
+            }
+        }
+    }
+    output.push_str("</available_skills>");
+    output
 }
 
 // ===========================================================================

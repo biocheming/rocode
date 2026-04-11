@@ -3230,6 +3230,7 @@ dependencies = [
  "rocode-types",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -3286,8 +3287,10 @@ dependencies = [
  "dirs",
  "rocode-config",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.18",
+ "tracing",
  "walkdir",
 ]
 
@@ -3399,8 +3402,10 @@ dependencies = [
  "rocode-provider",
  "rocode-runtime-context",
  "rocode-session",
+ "rocode-skill",
  "rocode-state",
  "rocode-tool",
+ "rocode-types",
  "rocode-util",
  "serde",
  "serde_json",
@@ -3421,6 +3426,7 @@ version = "2026.4.4"
 dependencies = [
  "anyhow",
  "chrono",
+ "rocode-content",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

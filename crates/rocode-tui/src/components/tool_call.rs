@@ -25,9 +25,8 @@ pub struct ToolCall {
 impl ToolCall {
     pub fn render_mode(&self) -> ToolRenderMode {
         match self.name.as_str() {
-            "glob" | "grep" | "list" | "webfetch" | "websearch" | "skill" | "read" => {
-                ToolRenderMode::Inline
-            }
+            "glob" | "grep" | "list" | "webfetch" | "websearch" | "skill" | "skills_list"
+            | "skill_view" | "read" => ToolRenderMode::Inline,
             "bash" | "write" | "edit" | "apply_patch" | "task" | "todowrite" | "question" => {
                 ToolRenderMode::Block
             }

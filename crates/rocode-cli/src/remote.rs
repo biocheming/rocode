@@ -253,6 +253,18 @@ pub(crate) fn parse_output_block(payload: &serde_json::Value) -> Option<OutputBl
                 .get("waiting_on")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
+            estimated_context_tokens: payload
+                .get("estimated_context_tokens")
+                .and_then(|v| v.as_u64()),
+            skill_tree_budget: payload.get("skill_tree_budget").and_then(|v| v.as_u64()),
+            skill_tree_truncation_strategy: payload
+                .get("skill_tree_truncation_strategy")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            skill_tree_truncated: payload
+                .get("skill_tree_truncated")
+                .and_then(|v| v.as_bool()),
+            retry_attempt: payload.get("retry_attempt").and_then(|v| v.as_u64()),
             activity: payload
                 .get("activity")
                 .and_then(|v| v.as_str())

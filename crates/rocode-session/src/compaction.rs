@@ -21,7 +21,7 @@ const COMPACTION_BUFFER: u64 = 20_000;
 const PRUNE_MINIMUM: u64 = 20_000;
 const PRUNE_PROTECT: u64 = 40_000;
 
-const PRUNE_PROTECTED_TOOLS: &[&str] = &["skill"];
+const PRUNE_PROTECTED_TOOLS: &[&str] = &["skill", "skills_list", "skill_view"];
 
 fn new_compaction_model_caller(
     provider: Arc<dyn Provider>,

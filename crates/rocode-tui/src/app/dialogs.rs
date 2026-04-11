@@ -126,10 +126,19 @@ impl App {
             return;
         }
         if self.skill_list_dialog.is_open() {
-            if up {
-                self.skill_list_dialog.move_up();
+            if self.skill_list_dialog.is_create_mode() || self.skill_list_dialog.is_edit_mode() {
+                if up {
+                    self.skill_list_dialog.handle_manage_page_up();
+                } else {
+                    self.skill_list_dialog.handle_manage_page_down();
+                }
             } else {
-                self.skill_list_dialog.move_down();
+                if up {
+                    self.skill_list_dialog.move_up();
+                } else {
+                    self.skill_list_dialog.move_down();
+                }
+                let _ = self.refresh_skill_list_detail();
             }
             return;
         }
@@ -298,9 +307,7 @@ impl App {
             return Ok(true);
         }
         if self.status_dialog.is_open() {
-            if matches!(key.code, KeyCode::Esc | KeyCode::Enter) {
-                self.status_dialog.close();
-            }
+            self.handle_status_dialog_key(key);
             return Ok(true);
         }
         if self.session_rename_dialog.is_open() {
@@ -483,15 +490,112 @@ impl App {
             return Ok(true);
         }
         if self.skill_list_dialog.is_open() {
+            if self.skill_list_dialog.is_create_mode() || self.skill_list_dialog.is_edit_mode() {
+                match key.code {
+                    KeyCode::Esc => self.skill_list_dialog.cancel_manage_mode(),
+                    KeyCode::Tab => self.skill_list_dialog.handle_manage_tab(false),
+                    KeyCode::BackTab => self.skill_list_dialog.handle_manage_tab(true),
+                    KeyCode::Left => self.skill_list_dialog.handle_manage_left(),
+                    KeyCode::Right => self.skill_list_dialog.handle_manage_right(),
+                    KeyCode::Home => self.skill_list_dialog.handle_manage_home(),
+                    KeyCode::End => self.skill_list_dialog.handle_manage_end(),
+                    KeyCode::PageUp => self.skill_list_dialog.handle_manage_page_up(),
+                    KeyCode::PageDown => self.skill_list_dialog.handle_manage_page_down(),
+                    KeyCode::Backspace => self.skill_list_dialog.handle_manage_backspace(),
+                    KeyCode::Delete => self.skill_list_dialog.handle_manage_delete(),
+                    KeyCode::Enter => self.skill_list_dialog.handle_manage_enter(),
+                    KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        let result = if self.skill_list_dialog.is_create_mode() {
+                            self.submit_skill_create()
+                        } else {
+                            self.submit_skill_edit()
+                        };
+                        match result {
+                            Ok(message) => {
+                                self.alert_dialog.set_message(&message);
+                                self.alert_dialog.open();
+                            }
+                            Err(error) => {
+                                self.alert_dialog
+                                    .set_message(&format!("Failed to save skill:\n{}", error));
+                                self.alert_dialog.open();
+                            }
+                        }
+                    }
+                    KeyCode::Char(c)
+                        if !key.modifiers.contains(KeyModifiers::CONTROL)
+                            && !key.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        self.skill_list_dialog.handle_manage_char(c);
+                    }
+                    _ => {}
+                }
+                return Ok(true);
+            }
+            if self.skill_list_dialog.is_delete_confirm_mode() {
+                match key.code {
+                    KeyCode::Esc => self.skill_list_dialog.cancel_manage_mode(),
+                    KeyCode::Enter => match self.submit_skill_delete() {
+                        Ok(message) => {
+                            self.alert_dialog.set_message(&message);
+                            self.alert_dialog.open();
+                        }
+                        Err(error) => {
+                            self.alert_dialog
+                                .set_message(&format!("Failed to delete skill:\n{}", error));
+                            self.alert_dialog.open();
+                        }
+                    },
+                    _ => {}
+                }
+                return Ok(true);
+            }
             match key.code {
                 KeyCode::Esc => self.skill_list_dialog.close(),
-                KeyCode::Up => self.skill_list_dialog.move_up(),
-                KeyCode::Down => self.skill_list_dialog.move_down(),
-                KeyCode::Backspace => self.skill_list_dialog.handle_backspace(),
+                KeyCode::Up => {
+                    self.skill_list_dialog.move_up();
+                    let _ = self.refresh_skill_list_detail();
+                }
+                KeyCode::Down => {
+                    self.skill_list_dialog.move_down();
+                    let _ = self.refresh_skill_list_detail();
+                }
+                KeyCode::PageUp => self.skill_list_dialog.preview_scroll_up(),
+                KeyCode::PageDown => self.skill_list_dialog.preview_scroll_down(),
+                KeyCode::Backspace => {
+                    self.skill_list_dialog.handle_backspace();
+                    let _ = self.refresh_skill_list_detail();
+                }
                 KeyCode::Enter => {
                     if let Some(skill) = self.skill_list_dialog.selected_skill() {
                         self.prompt.set_input(format!("/{} ", skill));
                         self.skill_list_dialog.close();
+                    }
+                }
+                KeyCode::Char('c')
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    self.skill_list_dialog.begin_create();
+                }
+                KeyCode::Char('e')
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    if let Err(error) = self.skill_list_dialog.begin_edit() {
+                        self.alert_dialog
+                            .set_message(&format!("Cannot edit skill:\n{}", error));
+                        self.alert_dialog.open();
+                    }
+                }
+                KeyCode::Char('d')
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    if let Err(error) = self.skill_list_dialog.begin_delete() {
+                        self.alert_dialog
+                            .set_message(&format!("Cannot delete skill:\n{}", error));
+                        self.alert_dialog.open();
                     }
                 }
                 KeyCode::Char(c)
@@ -499,6 +603,7 @@ impl App {
                         && !key.modifiers.contains(KeyModifiers::ALT) =>
                 {
                     self.skill_list_dialog.handle_input(c);
+                    let _ = self.refresh_skill_list_detail();
                 }
                 _ => {}
             }

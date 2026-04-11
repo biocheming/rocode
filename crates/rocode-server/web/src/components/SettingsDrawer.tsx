@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 
-type SettingsTabId = "general" | "providers" | "scheduler" | "mcp" | "plugins" | "lsp";
+type SettingsTabId =
+  | "general"
+  | "providers"
+  | "scheduler"
+  | "skills"
+  | "mcp"
+  | "plugins"
+  | "lsp";
 
 interface ThemeOption {
   id: string;
@@ -122,6 +129,48 @@ interface FormatterStatus {
   formatters: string[];
 }
 
+interface SkillCatalogEntry {
+  name: string;
+  description: string;
+  category?: string | null;
+  location: string;
+  writable: boolean;
+  supporting_files: string[];
+}
+
+interface SkillFileRefLike {
+  relative_path: string;
+  location: string;
+}
+
+interface LoadedSkillMetaLike {
+  name: string;
+  description: string;
+  category?: string | null;
+  location: string;
+  supporting_files: SkillFileRefLike[];
+}
+
+interface LoadedSkillLike {
+  meta: LoadedSkillMetaLike;
+  content: string;
+}
+
+interface SkillDetailResponse {
+  skill: LoadedSkillLike;
+  source: string;
+  writable: boolean;
+}
+
+interface SkillManageResponseLike {
+  result: {
+    action: string;
+    skill_name: string;
+    location: string;
+    supporting_file?: string | null;
+  };
+}
+
 interface RefreshProviderCatalogueResponse {
   changed: boolean;
   generation_before: number;
@@ -145,6 +194,7 @@ interface SettingsDrawerProps {
   workspaceMode: "shared" | "isolated" | null;
   workspaceRootPath: string;
   workspaceConfigDir?: string | null;
+  selectedSessionId: string | null;
   modeOptions: ModeOption[];
   selectedMode: string;
   onModeChange: (mode: string) => void;
@@ -181,6 +231,7 @@ const SETTINGS_TABS: Array<{ id: SettingsTabId; label: string }> = [
   { id: "general", label: "General" },
   { id: "providers", label: "Providers" },
   { id: "scheduler", label: "Scheduler" },
+  { id: "skills", label: "Skills" },
   { id: "mcp", label: "MCP" },
   { id: "plugins", label: "Plugins" },
   { id: "lsp", label: "LSP" },
@@ -194,6 +245,8 @@ function isolatedWorkspaceNotice(tab: SettingsTabId): string | null {
       return "Provider and model changes made here target global config or shared provider state. The current isolated sandbox will not inherit those global config changes unless the same intent is expressed inside this workspace's .rocode.";
     case "scheduler":
       return "Scheduler edits here write global config. The active isolated sandbox will continue resolving scheduler behavior from its local workspace authority until you switch to shared mode or add matching workspace-local config.";
+    case "skills":
+      return "Skill mutations here always target this workspace's .rocode/skills. In isolated mode, that means the current sandbox stays local and does not inherit or modify global skill config.";
     case "mcp":
       return "MCP config saved here is global. An isolated workspace does not automatically inherit that global config into its current sandbox runtime.";
     case "plugins":
@@ -255,6 +308,7 @@ export function SettingsDrawer({
   workspaceMode,
   workspaceRootPath,
   workspaceConfigDir,
+  selectedSessionId,
   modeOptions,
   selectedMode,
   onModeChange,
@@ -306,6 +360,15 @@ export function SettingsDrawer({
   const [newPluginDraft, setNewPluginDraft] = useState("{\n  \"command\": \"\",\n  \"args\": []\n}");
   const [lspStatus, setLspStatus] = useState<LspStatus | null>(null);
   const [formatterStatus, setFormatterStatus] = useState<FormatterStatus | null>(null);
+  const [skillCatalog, setSkillCatalog] = useState<SkillCatalogEntry[]>([]);
+  const [selectedSkillName, setSelectedSkillName] = useState<string | null>(null);
+  const [skillDetail, setSkillDetail] = useState<SkillDetailResponse | null>(null);
+  const [skillDetailLoading, setSkillDetailLoading] = useState(false);
+  const [skillEditorContent, setSkillEditorContent] = useState("");
+  const [newSkillName, setNewSkillName] = useState("");
+  const [newSkillDescription, setNewSkillDescription] = useState("");
+  const [newSkillCategory, setNewSkillCategory] = useState("");
+  const [newSkillBody, setNewSkillBody] = useState("");
 
   const mcpConfigs = useMemo(
     () => objectRecord(configSnapshot?.mcp),
@@ -318,20 +381,39 @@ export function SettingsDrawer({
   const isolatedNotice = workspaceMode === "isolated" ? isolatedWorkspaceNotice(activeTab) : null;
   const connectMatches = connectResolution?.matches ?? [];
   const exactKnownProvider = connectResolution?.exact_match ? connectResolution.draft : null;
+  const selectedSkillEntry = useMemo(
+    () =>
+      skillCatalog.find(
+        (skill) =>
+          skill.name.trim().toLowerCase() === (selectedSkillName ?? "").trim().toLowerCase(),
+      ) ?? null,
+    [selectedSkillName, skillCatalog],
+  );
+  const skillWorkspaceRoot = useMemo(() => {
+    const trimmed = workspaceRootPath.trim();
+    if (!trimmed) return ".rocode/skills";
+    return `${trimmed.replace(/\/+$/, "")}/.rocode/skills`;
+  }, [workspaceRootPath]);
+  const skillsMutationsEnabled = Boolean(selectedSessionId);
 
   const reloadSettingsData = useCallback(async () => {
     setRefreshing(true);
     setFeedback(null);
     try {
-      const [config, managed, scheduler, mcp, plugins, lsp, formatter] = await Promise.all([
-        apiJson<AppConfigSnapshot>("/config"),
-        apiJson<{ providers: ManagedProviderInfo[] }>("/provider/managed"),
-        apiJson<SchedulerConfigResponse>("/config/scheduler"),
-        apiJson<Record<string, McpStatusInfo>>("/mcp"),
-        apiJson<PluginAuthProviderInfo[]>("/plugin/auth").catch(() => []),
-        apiJson<LspStatus>("/lsp"),
-        apiJson<FormatterStatus>("/formatter"),
-      ]);
+      const skillCatalogPath = selectedSessionId
+        ? `/skill/catalog?session_id=${encodeURIComponent(selectedSessionId)}`
+        : "/skill/catalog";
+      const [config, managed, scheduler, mcp, plugins, lsp, formatter, skills] =
+        await Promise.all([
+          apiJson<AppConfigSnapshot>("/config"),
+          apiJson<{ providers: ManagedProviderInfo[] }>("/provider/managed"),
+          apiJson<SchedulerConfigResponse>("/config/scheduler"),
+          apiJson<Record<string, McpStatusInfo>>("/mcp"),
+          apiJson<PluginAuthProviderInfo[]>("/plugin/auth").catch(() => []),
+          apiJson<LspStatus>("/lsp"),
+          apiJson<FormatterStatus>("/formatter"),
+          apiJson<SkillCatalogEntry[]>(skillCatalogPath),
+        ]);
       setConfigSnapshot(config);
       setManagedProviders(managed.providers ?? []);
       setSchedulerConfig(scheduler);
@@ -351,6 +433,7 @@ export function SettingsDrawer({
       );
       setLspStatus(lsp);
       setFormatterStatus(formatter);
+      setSkillCatalog(skills ?? []);
     } catch (error) {
       const message = `Failed to load settings data: ${formatError(error)}`;
       setFeedback(message);
@@ -359,11 +442,70 @@ export function SettingsDrawer({
       setLoading(false);
       setRefreshing(false);
     }
-  }, [apiJson, onBanner]);
+  }, [apiJson, onBanner, selectedSessionId]);
 
   useEffect(() => {
     void reloadSettingsData();
   }, [reloadSettingsData]);
+
+  useEffect(() => {
+    if (skillCatalog.length === 0) {
+      setSelectedSkillName(null);
+      setSkillDetail(null);
+      setSkillDetailLoading(false);
+      setSkillEditorContent("");
+      return;
+    }
+
+    const current = (selectedSkillName ?? "").trim().toLowerCase();
+    const matched = current
+      ? skillCatalog.find((skill) => skill.name.trim().toLowerCase() === current)
+      : null;
+
+    if (matched) {
+      return;
+    }
+
+    setSelectedSkillName(skillCatalog[0].name);
+  }, [selectedSkillName, skillCatalog]);
+
+  useEffect(() => {
+    if (!selectedSkillName) {
+      setSkillDetail(null);
+      setSkillDetailLoading(false);
+      setSkillEditorContent("");
+      return;
+    }
+
+    let cancelled = false;
+    setSkillDetailLoading(true);
+
+    void (async () => {
+      try {
+        const detail = await apiJson<SkillDetailResponse>(
+          `/skill/detail?name=${encodeURIComponent(selectedSkillName)}`,
+        );
+        if (cancelled) return;
+        setSkillDetail(detail);
+        setSkillEditorContent(detail.source ?? "");
+      } catch (error) {
+        if (cancelled) return;
+        const message = `Failed to load skill ${selectedSkillName}: ${formatError(error)}`;
+        setSkillDetail(null);
+        setSkillEditorContent("");
+        setFeedback(message);
+        onBanner(message);
+      } finally {
+        if (!cancelled) {
+          setSkillDetailLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apiJson, onBanner, selectedSkillName]);
 
   const runMutation = useCallback(
     async (key: string, action: () => Promise<void>, success: string) => {
@@ -496,6 +638,71 @@ export function SettingsDrawer({
     );
   };
 
+  const createSkill = async () => {
+    if (!selectedSessionId) return;
+    await runMutation(
+      `skill:create:${newSkillName.trim() || "new"}`,
+      async () => {
+        const response = await apiJson<SkillManageResponseLike>("/skill/manage", {
+          method: "POST",
+          body: JSON.stringify({
+            session_id: selectedSessionId,
+            action: "create",
+            name: newSkillName,
+            description: newSkillDescription,
+            category: newSkillCategory.trim() || undefined,
+            body: newSkillBody,
+          }),
+        });
+        setSelectedSkillName(response.result.skill_name);
+        setNewSkillName("");
+        setNewSkillDescription("");
+        setNewSkillCategory("");
+        setNewSkillBody("");
+      },
+      `Created skill ${newSkillName.trim()}.`,
+    );
+  };
+
+  const saveSelectedSkill = async () => {
+    if (!selectedSessionId || !selectedSkillName) return;
+    await runMutation(
+      `skill:edit:${selectedSkillName}`,
+      async () => {
+        await apiJson<SkillManageResponseLike>("/skill/manage", {
+          method: "POST",
+          body: JSON.stringify({
+            session_id: selectedSessionId,
+            action: "edit",
+            name: selectedSkillName,
+            content: skillEditorContent,
+          }),
+        });
+      },
+      `Saved skill ${selectedSkillName}.`,
+    );
+  };
+
+  const deleteSelectedSkill = async () => {
+    if (!selectedSessionId || !selectedSkillName) return;
+    const deletedSkillName = selectedSkillName;
+    await runMutation(
+      `skill:delete:${deletedSkillName}`,
+      async () => {
+        await apiJson<SkillManageResponseLike>("/skill/manage", {
+          method: "POST",
+          body: JSON.stringify({
+            session_id: selectedSessionId,
+            action: "delete",
+            name: deletedSkillName,
+          }),
+        });
+        setSelectedSkillName(null);
+      },
+      `Deleted skill ${deletedSkillName}.`,
+    );
+  };
+
   const providerSummary = `${providers.length} connected / ${knownProviders.length} known`;
   const chooseKnownProvider = (provider: KnownProviderEntryLike) => {
     onConnectQueryChange(provider.id);
@@ -511,7 +718,7 @@ export function SettingsDrawer({
         <header className="flex items-start justify-between gap-4">
           <div>
             <p className="m-0 mb-1.5 text-xs tracking-widest uppercase text-amber-700 font-bold">Settings</p>
-            <h2>General, providers, scheduler, MCP, plugins, LSP</h2>
+            <h2>General, providers, scheduler, skills, MCP, plugins, LSP</h2>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -894,6 +1101,246 @@ export function SettingsDrawer({
                 ) : (
                   <p className="flex flex-col items-center justify-center gap-3 text-muted-foreground py-8">No scheduler profiles parsed yet.</p>
                 )}
+              </div>
+            </div>
+          ) : null}
+
+          {!loading && activeTab === "skills" ? (
+            <div className="grid gap-6">
+              <div className="grid gap-3">
+                <label>Workspace Skill Authority</label>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-2xl border border-border bg-card/80 p-4 grid gap-2">
+                    <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Workspace Root</span>
+                    <strong className="break-all text-sm">{workspaceRootPath || "--"}</strong>
+                  </div>
+                  <div className="rounded-2xl border border-border bg-card/80 p-4 grid gap-2">
+                    <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Writable Skill Root</span>
+                    <strong className="break-all text-sm">{skillWorkspaceRoot}</strong>
+                  </div>
+                  <div className="rounded-2xl border border-border bg-card/80 p-4 grid gap-2">
+                    <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Discovered Skills</span>
+                    <strong>{skillCatalog.length}</strong>
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-border bg-muted/20 px-4 py-3 text-sm leading-relaxed text-muted-foreground">
+                  Writes from this panel go through <code>/skill/manage</code> and land only in the
+                  current workspace authority at <code>{skillWorkspaceRoot}</code>. Global config and
+                  external skill roots stay read-only here.
+                </div>
+                {selectedSessionId ? (
+                  <div className="rounded-2xl border border-border bg-card/70 px-4 py-3 text-sm leading-relaxed text-muted-foreground">
+                    Catalog reads now go through <code>/skill/catalog?session_id=...</code>, so the
+                    visible skill set follows the active session's scheduler stage when a stage is
+                    currently constraining tools.
+                  </div>
+                ) : null}
+                {!skillsMutationsEnabled ? (
+                  <div className="rounded-2xl border border-amber-300 bg-amber-50/80 px-4 py-3 text-sm leading-relaxed text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200">
+                    Select or create a session before managing skills so permission prompts can be
+                    routed to the active session.
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+                <div className="grid gap-3 content-start">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Catalog</p>
+                    <span>{skillCatalog.length} skills</span>
+                  </div>
+                  {skillCatalog.length ? (
+                    skillCatalog.map((skill) => {
+                      const selected = selectedSkillEntry?.name === skill.name;
+                      return (
+                        <button
+                          key={skill.name}
+                          type="button"
+                          className={cn(
+                            "rounded-2xl border p-4 text-left transition-all duration-150",
+                            selected
+                              ? "border-foreground bg-accent"
+                              : "border-border bg-card/70 hover:-translate-y-px hover:bg-accent",
+                          )}
+                          onClick={() => setSelectedSkillName(skill.name)}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="grid gap-1">
+                              <strong>{skill.name}</strong>
+                              <span className="text-sm text-muted-foreground">{skill.description}</span>
+                            </div>
+                            <span
+                              className={cn(
+                                "rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide",
+                                skill.writable
+                                  ? "border-green-300 bg-green-50 text-green-800 dark:border-green-700 dark:bg-green-950 dark:text-green-300"
+                                  : "border-border bg-muted text-muted-foreground",
+                              )}
+                            >
+                              {skill.writable ? "workspace" : "read only"}
+                            </span>
+                          </div>
+                          <p className="m-0 mt-2 text-xs leading-relaxed text-muted-foreground">
+                            {skill.category ? `${skill.category} · ` : ""}
+                            {skill.supporting_files.length} supporting files
+                          </p>
+                          <p className="m-0 mt-2 break-all text-xs leading-relaxed text-muted-foreground">
+                            {skill.location}
+                          </p>
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <p className="rounded-2xl border border-border bg-card/70 px-4 py-6 text-sm text-muted-foreground">
+                      No skills discovered yet.
+                    </p>
+                  )}
+                </div>
+
+                <div className="grid gap-6 content-start">
+                  <div className="grid gap-3 rounded-2xl border border-border bg-card/70 p-5">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="m-0 text-xs tracking-widest uppercase text-muted-foreground font-semibold">Create Skill</p>
+                        <h3 className="m-0 mt-1">New workspace skill</h3>
+                      </div>
+                    </div>
+                    <input
+                      type="text"
+                      placeholder="skill name"
+                      value={newSkillName}
+                      onChange={(event) => setNewSkillName(event.target.value)}
+                    />
+                    <input
+                      type="text"
+                      placeholder="description"
+                      value={newSkillDescription}
+                      onChange={(event) => setNewSkillDescription(event.target.value)}
+                    />
+                    <input
+                      type="text"
+                      placeholder="category (optional)"
+                      value={newSkillCategory}
+                      onChange={(event) => setNewSkillCategory(event.target.value)}
+                    />
+                    <textarea
+                      className="min-h-40 w-full resize-y rounded-2xl border border-border bg-card/80 p-3.5 text-foreground leading-relaxed font-mono text-sm"
+                      placeholder="Skill body"
+                      value={newSkillBody}
+                      onChange={(event) => setNewSkillBody(event.target.value)}
+                      spellCheck={false}
+                    />
+                    <div className="flex items-center gap-2">
+                      <button
+                        className="min-h-[36px] rounded-full px-5 bg-foreground border-foreground text-background text-sm font-semibold inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px"
+                        type="button"
+                        disabled={
+                          !skillsMutationsEnabled ||
+                          !newSkillName.trim() ||
+                          !newSkillDescription.trim() ||
+                          !newSkillBody.trim() ||
+                          busyKey === `skill:create:${newSkillName.trim() || "new"}`
+                        }
+                        onClick={() => void createSkill()}
+                      >
+                        {busyKey === `skill:create:${newSkillName.trim() || "new"}`
+                          ? "Creating..."
+                          : "Create Skill"}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 rounded-2xl border border-border bg-card/70 p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="m-0 text-xs tracking-widest uppercase text-muted-foreground font-semibold">Edit Skill</p>
+                        <h3 className="m-0 mt-1">{selectedSkillEntry?.name || "Select a skill"}</h3>
+                      </div>
+                      {selectedSkillEntry ? (
+                        <span
+                          className={cn(
+                            "rounded-full border px-3 py-1.5 text-xs font-semibold",
+                            selectedSkillEntry.writable
+                              ? "border-green-300 bg-green-50 text-green-800 dark:border-green-700 dark:bg-green-950 dark:text-green-300"
+                              : "border-border bg-muted text-muted-foreground",
+                          )}
+                        >
+                          {selectedSkillEntry.writable ? "Workspace writable" : "Read only"}
+                        </span>
+                      ) : null}
+                    </div>
+
+                    {selectedSkillEntry ? (
+                      <>
+                        <div className="grid gap-2 rounded-xl border border-border bg-muted/10 p-3 text-sm text-muted-foreground">
+                          <div className="break-all">
+                            <strong>Location:</strong> {selectedSkillEntry.location}
+                          </div>
+                          <div>
+                            <strong>Category:</strong> {selectedSkillEntry.category || "--"}
+                          </div>
+                          <div>
+                            <strong>Supporting files:</strong>{" "}
+                            {selectedSkillEntry.supporting_files.length
+                              ? selectedSkillEntry.supporting_files.join(", ")
+                              : "none"}
+                          </div>
+                          {!selectedSkillEntry.writable ? (
+                            <div className="text-amber-700 dark:text-amber-300">
+                              This skill was discovered outside the workspace skill root. You can
+                              inspect it here, but edits and deletes stay disabled because the
+                              governed write path only targets <code>{skillWorkspaceRoot}</code>.
+                            </div>
+                          ) : null}
+                        </div>
+
+                        {skillDetailLoading ? (
+                          <p className="m-0 text-sm text-muted-foreground">Loading skill source...</p>
+                        ) : (
+                          <textarea
+                            className="min-h-[26rem] w-full resize-y rounded-2xl border border-border bg-card/80 p-3.5 text-foreground leading-relaxed font-mono text-sm"
+                            value={skillEditorContent}
+                            onChange={(event) => setSkillEditorContent(event.target.value)}
+                            spellCheck={false}
+                            readOnly={!selectedSkillEntry.writable}
+                          />
+                        )}
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            className="min-h-[36px] rounded-full px-5 bg-foreground border-foreground text-background text-sm font-semibold inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px disabled:cursor-not-allowed disabled:opacity-60"
+                            type="button"
+                            disabled={
+                              !skillsMutationsEnabled ||
+                              !selectedSkillEntry.writable ||
+                              skillDetailLoading ||
+                              busyKey === `skill:edit:${selectedSkillEntry.name}`
+                            }
+                            onClick={() => void saveSelectedSkill()}
+                          >
+                            {busyKey === `skill:edit:${selectedSkillEntry.name}` ? "Saving..." : "Save Skill"}
+                          </button>
+                          <button
+                            className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                            type="button"
+                            disabled={
+                              !skillsMutationsEnabled ||
+                              !selectedSkillEntry.writable ||
+                              busyKey === `skill:delete:${selectedSkillEntry.name}`
+                            }
+                            onClick={() => void deleteSelectedSkill()}
+                          >
+                            {busyKey === `skill:delete:${selectedSkillEntry.name}` ? "Deleting..." : "Delete Skill"}
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <p className="rounded-2xl border border-border bg-muted/10 px-4 py-6 text-sm text-muted-foreground">
+                        Select a skill from the catalog to inspect or edit its raw <code>SKILL.md</code>.
+                      </p>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           ) : null}

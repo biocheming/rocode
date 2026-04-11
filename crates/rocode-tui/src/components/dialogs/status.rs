@@ -71,6 +71,8 @@ impl StatusLine {
 pub struct StatusDialog {
     lines: Vec<StatusLine>,
     open: bool,
+    title: String,
+    footer_hint: Option<String>,
 }
 
 impl StatusDialog {
@@ -78,6 +80,8 @@ impl StatusDialog {
         Self {
             lines: Vec::new(),
             open: false,
+            title: "Status".to_string(),
+            footer_hint: None,
         }
     }
 
@@ -87,6 +91,19 @@ impl StatusDialog {
 
     pub fn set_status_lines(&mut self, lines: Vec<StatusLine>) {
         self.lines = lines;
+    }
+
+    pub fn set_title(&mut self, title: impl Into<String>) {
+        self.title = title.into();
+    }
+
+    pub fn set_footer_hint(&mut self, hint: Option<String>) {
+        self.footer_hint = hint;
+    }
+
+    pub fn reset_chrome(&mut self) {
+        self.title = "Status".to_string();
+        self.footer_hint = None;
     }
 
     pub fn open(&mut self) {
@@ -111,7 +128,7 @@ impl StatusDialog {
 
         let block = Block::default()
             .title(Span::styled(
-                " Status ",
+                format!(" {} ", self.title.trim()),
                 Style::default()
                     .fg(theme.primary)
                     .add_modifier(Modifier::BOLD),
@@ -152,11 +169,12 @@ impl StatusDialog {
         };
         frame.render_widget(Paragraph::new(lines), layout[0]);
 
+        let footer = self.footer_hint.as_deref().unwrap_or("Esc close");
         frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled("Esc", Style::default().fg(theme.primary)),
-                Span::styled(" close", Style::default().fg(theme.text_muted)),
-            ])),
+            Paragraph::new(Line::from(Span::styled(
+                footer,
+                Style::default().fg(theme.text_muted),
+            ))),
             layout[1],
         );
     }

@@ -651,6 +651,18 @@ pub struct SkillTreeConfig {
     pub root: Option<SkillTreeNodeConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub separator: Option<String>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        rename = "tokenBudget",
+        alias = "token_budget"
+    )]
+    pub token_budget: Option<usize>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        rename = "truncationStrategy",
+        alias = "truncation_strategy"
+    )]
+    pub truncation_strategy: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

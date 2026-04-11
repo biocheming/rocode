@@ -16,7 +16,7 @@ use crate::tool_runner::ToolRunner;
 use crate::traits::Orchestrator;
 use crate::{
     ModelRef, OrchestratorContext, OrchestratorError, OrchestratorOutput, SchedulerProfileConfig,
-    SchedulerStageOverride, StageToolPolicyOverride,
+    SchedulerSkillRef, SchedulerStageOverride, StageToolPolicyOverride,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -29,8 +29,8 @@ pub use self::parsing::{normalize_execution_gate_decision, parse_execution_gate_
 #[cfg(test)]
 use self::presentation::render_stage_sequence;
 use self::presentation::{
-    markdown_list, parse_loop_budget, parse_session_projection, profile_prompt_suffix,
-    render_plan_snapshot, skill_tree_context,
+    parse_loop_budget, parse_session_projection, profile_prompt_suffix, render_plan_snapshot,
+    skill_tree_context,
 };
 
 use super::execution::SchedulerExecutionService;
@@ -136,13 +136,15 @@ pub struct SchedulerProfilePlan {
     pub description: Option<String>,
     pub model: Option<ModelRef>,
     pub stages: Vec<SchedulerStageKind>,
-    pub skill_list: Vec<String>,
+    pub skill_list: Vec<SchedulerSkillRef>,
     pub agent_tree: Option<AgentTreeNode>,
     pub skill_graph: Option<SkillGraphDefinition>,
     pub skill_tree: Option<SkillTreeRequestPlan>,
     pub workflow: Option<IterativeWorkflowConfig>,
     pub available_agents: Vec<AvailableAgentMeta>,
     pub available_categories: Vec<AvailableCategoryMeta>,
+    /// Stage-scoped skill catalog views resolved outside the static profile JSON.
+    pub stage_skill_lists: HashMap<SchedulerStageKind, Vec<SchedulerSkillRef>>,
     /// Per-stage policy overrides from JSON config.
     pub stage_overrides: HashMap<SchedulerStageKind, SchedulerStageOverride>,
 }
@@ -162,6 +164,7 @@ impl SchedulerProfilePlan {
             workflow: None,
             available_agents: Vec::new(),
             available_categories: Vec::new(),
+            stage_skill_lists: HashMap::new(),
             stage_overrides: HashMap::new(),
         }
     }
@@ -200,6 +203,7 @@ impl SchedulerProfilePlan {
             workflow: profile.workflow().cloned(),
             available_agents: profile.available_agents.clone(),
             available_categories: profile.available_categories.clone(),
+            stage_skill_lists: HashMap::new(),
             stage_overrides,
         }
     }
@@ -214,7 +218,7 @@ impl SchedulerProfilePlan {
         self
     }
 
-    pub fn with_skill_list(mut self, skill_list: Vec<String>) -> Self {
+    pub fn with_skill_list(mut self, skill_list: Vec<SchedulerSkillRef>) -> Self {
         self.skill_list = skill_list;
         self
     }
@@ -277,6 +281,21 @@ impl SchedulerProfilePlan {
         Some(capabilities)
     }
 
+    pub fn effective_skill_list(&self, stage: Option<SchedulerStageKind>) -> &[SchedulerSkillRef] {
+        if let Some(stage) = stage {
+            if let Some(skill_list) = self.stage_skill_lists.get(&stage) {
+                return skill_list.as_slice();
+            }
+            if let Some(overrides) = self.stage_overrides.get(&stage) {
+                if !overrides.skill_list.is_empty() {
+                    return overrides.skill_list.as_slice();
+                }
+            }
+        }
+
+        self.skill_list.as_slice()
+    }
+
     pub fn has_execution_path(&self) -> bool {
         self.agent_tree.is_some()
             || self.skill_graph.is_some()
@@ -314,7 +333,7 @@ impl SchedulerProfilePlan {
         }
     }
 
-    pub(super) fn stage_policy(&self, stage: SchedulerStageKind) -> SchedulerStagePolicy {
+    pub fn stage_policy(&self, stage: SchedulerStageKind) -> SchedulerStagePolicy {
         // Start from preset → hardcoded default chain.
         let mut policy = self
             .preset_definition()

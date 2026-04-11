@@ -1,14 +1,8 @@
-use super::super::prompt_support::build_capabilities_summary;
+use super::super::prompt_support::{build_capabilities_summary, render_skill_catalog};
+use super::super::SchedulerSkillRef;
 use super::super::{SchedulerLoopBudget, SchedulerSessionProjection};
 use super::{SchedulerProfilePlan, SchedulerStageKind};
-
-pub(super) fn markdown_list(values: &[String]) -> String {
-    values
-        .iter()
-        .map(|value| format!("- {value}"))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
+use crate::skill_tree::SkillTreeRequestPlan;
 
 pub(in crate::scheduler) fn skill_tree_context(plan: &SchedulerProfilePlan) -> Option<&str> {
     plan.skill_tree
@@ -35,7 +29,14 @@ pub(in crate::scheduler) fn render_plan_snapshot(plan: &SchedulerProfilePlan) ->
     }
     lines.push(format!("stages: {}", render_stage_sequence(&plan.stages)));
     if !plan.skill_list.is_empty() {
-        lines.push(format!("skills: {}", plan.skill_list.join(", ")));
+        lines.push(format!(
+            "skills: {}",
+            plan.skill_list
+                .iter()
+                .map(SchedulerSkillRef::display_text)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
     if let Some(agent_tree) = &plan.agent_tree {
         lines.push(format!("root-agent: {}", agent_tree.agent.name));
@@ -43,7 +44,39 @@ pub(in crate::scheduler) fn render_plan_snapshot(plan: &SchedulerProfilePlan) ->
     if plan.skill_graph.is_some() {
         lines.push("review-graph: enabled".to_string());
     }
+    if let Some(skill_tree) = &plan.skill_tree {
+        lines.extend(render_skill_tree_snapshot_lines(skill_tree));
+    }
     lines.join("\n")
+}
+
+fn render_skill_tree_snapshot_lines(skill_tree: &SkillTreeRequestPlan) -> Vec<String> {
+    let mut lines = vec!["skill-tree: enabled".to_string()];
+    lines.push(format!(
+        "skill-tree-estimated-tokens: ~{}",
+        skill_tree.estimated_tokens()
+    ));
+    match skill_tree.token_budget {
+        Some(token_budget) => {
+            lines.push(format!("skill-tree-budget: {token_budget}"));
+            lines.push(format!(
+                "skill-tree-truncation: {}",
+                skill_tree.truncation_strategy.as_label()
+            ));
+            lines.push(format!(
+                "skill-tree-truncated: {}",
+                if skill_tree.is_truncated() {
+                    "yes"
+                } else {
+                    "no"
+                }
+            ));
+        }
+        None => {
+            lines.push("skill-tree-budget: unbounded".to_string());
+        }
+    }
+    lines
 }
 
 pub(super) fn render_stage_sequence(stages: &[SchedulerStageKind]) -> String {
@@ -98,10 +131,7 @@ pub(in crate::scheduler) fn profile_prompt_suffix(
     }
 
     let stage_caps = stage.and_then(|stage| plan.stage_capabilities_override(stage));
-    let effective_skill_list = stage_caps
-        .as_ref()
-        .map(|caps| caps.skill_list.as_slice())
-        .unwrap_or(&plan.skill_list);
+    let effective_skill_list = plan.effective_skill_list(stage);
     let effective_agents = stage_caps
         .as_ref()
         .map(|caps| caps.agents.as_slice())
@@ -109,8 +139,8 @@ pub(in crate::scheduler) fn profile_prompt_suffix(
 
     if !effective_skill_list.is_empty() {
         sections.push(format!(
-            "Active Skills:\n{}",
-            markdown_list(effective_skill_list)
+            "Skills:\n{}\nUse `skill_view(name)` to inspect a skill before using it.",
+            render_skill_catalog(effective_skill_list)
         ));
     }
 
@@ -157,5 +187,47 @@ pub(super) fn parse_session_projection(s: &str) -> SchedulerSessionProjection {
     match s {
         "hidden" => SchedulerSessionProjection::Hidden,
         _ => SchedulerSessionProjection::Transcript,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_plan_snapshot;
+    use crate::scheduler::{SchedulerProfilePlan, SchedulerStageKind};
+    use crate::skill_tree::{SkillTreeRequestPlan, SkillTreeTruncationStrategy};
+
+    #[test]
+    fn render_plan_snapshot_exposes_skill_tree_budget_observability() {
+        let plan = SchedulerProfilePlan::new(vec![SchedulerStageKind::Plan]).with_skill_tree(
+            SkillTreeRequestPlan {
+                context_markdown: format!("ROOT{}TAIL", "[... skill tree truncated ...]"),
+                token_budget: Some(64),
+                truncation_strategy: SkillTreeTruncationStrategy::Tail,
+            },
+        );
+
+        let snapshot = render_plan_snapshot(&plan);
+
+        assert!(snapshot.contains("skill-tree: enabled"));
+        assert!(snapshot.contains("skill-tree-estimated-tokens: ~10"));
+        assert!(snapshot.contains("skill-tree-budget: 64"));
+        assert!(snapshot.contains("skill-tree-truncation: tail"));
+        assert!(snapshot.contains("skill-tree-truncated: yes"));
+    }
+
+    #[test]
+    fn render_plan_snapshot_marks_unbounded_skill_tree_budget() {
+        let plan = SchedulerProfilePlan::new(vec![SchedulerStageKind::Plan]).with_skill_tree(
+            SkillTreeRequestPlan {
+                context_markdown: "ROOT".to_string(),
+                token_budget: None,
+                truncation_strategy: SkillTreeTruncationStrategy::default(),
+            },
+        );
+
+        let snapshot = render_plan_snapshot(&plan);
+
+        assert!(snapshot.contains("skill-tree-budget: unbounded"));
+        assert!(!snapshot.contains("skill-tree-truncated:"));
     }
 }

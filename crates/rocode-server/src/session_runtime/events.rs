@@ -4,6 +4,7 @@ use std::sync::Arc;
 use axum::response::sse::Event;
 use rocode_command::agent_presenter::output_block_to_web;
 use rocode_command::output_blocks::OutputBlock;
+use rocode_command::stage_protocol::{telemetry_event_names, StageEvent};
 use rocode_session::prompt::{OutputBlockEvent, OutputBlockHook};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -73,7 +74,7 @@ pub enum ServerEvent {
     SessionStatus {
         #[serde(rename = "sessionID")]
         session_id: String,
-        status: String,
+        status: serde_json::Value,
     },
     #[serde(rename = "question.created")]
     QuestionCreated {
@@ -245,6 +246,128 @@ impl ServerEvent {
             .json_data(self)
             .ok()
     }
+
+    pub(crate) fn from_stage_event(event: &StageEvent) -> Option<Self> {
+        match event.event_type.as_str() {
+            telemetry_event_names::SESSION_UPDATED => Some(Self::SessionUpdated {
+                session_id: event.payload.get("sessionID")?.as_str()?.to_string(),
+                source: event.payload.get("source")?.as_str()?.to_string(),
+            }),
+            telemetry_event_names::SESSION_STATUS => Some(Self::SessionStatus {
+                session_id: event.payload.get("sessionID")?.as_str()?.to_string(),
+                status: event.payload.get("status")?.clone(),
+            }),
+            telemetry_event_names::SESSION_USAGE => Some(Self::Usage {
+                session_id: event
+                    .payload
+                    .get("sessionID")
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned),
+                prompt_tokens: event.payload.get("prompt_tokens")?.as_u64()?,
+                completion_tokens: event.payload.get("completion_tokens")?.as_u64()?,
+                message_id: event
+                    .payload
+                    .get("message_id")
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned),
+            }),
+            telemetry_event_names::SESSION_ERROR => Some(Self::Error {
+                session_id: event
+                    .payload
+                    .get("sessionID")
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned),
+                error: event.payload.get("error")?.as_str()?.to_string(),
+                message_id: event
+                    .payload
+                    .get("message_id")
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned),
+                done: event.payload.get("done").and_then(|value| value.as_bool()),
+            }),
+            telemetry_event_names::QUESTION_CREATED => Some(Self::QuestionCreated {
+                session_id: event.payload.get("sessionID")?.as_str()?.to_string(),
+                request_id: event.payload.get("requestID")?.as_str()?.to_string(),
+                questions: event.payload.get("questions")?.clone(),
+            }),
+            telemetry_event_names::QUESTION_RESOLVED => Some(Self::QuestionResolved {
+                session_id: event.payload.get("sessionID")?.as_str()?.to_string(),
+                request_id: event.payload.get("requestID")?.as_str()?.to_string(),
+                resolution: event
+                    .payload
+                    .get("resolution")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok()),
+                answers: event.payload.get("answers").cloned(),
+                reason: event
+                    .payload
+                    .get("reason")
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned),
+            }),
+            telemetry_event_names::PERMISSION_REQUESTED => Some(Self::PermissionRequested {
+                session_id: event.payload.get("sessionID")?.as_str()?.to_string(),
+                permission_id: event.payload.get("permissionID")?.as_str()?.to_string(),
+                info: event.payload.get("info")?.clone(),
+            }),
+            telemetry_event_names::PERMISSION_RESOLVED => Some(Self::PermissionResolved {
+                session_id: event.payload.get("sessionID")?.as_str()?.to_string(),
+                permission_id: event.payload.get("permissionID")?.as_str()?.to_string(),
+                reply: event.payload.get("reply")?.as_str()?.to_string(),
+                message: event
+                    .payload
+                    .get("message")
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned),
+            }),
+            telemetry_event_names::TOOL_STARTED => Some(Self::ToolCallLifecycle {
+                session_id: event.payload.get("sessionID")?.as_str()?.to_string(),
+                tool_call_id: event.payload.get("toolCallId")?.as_str()?.to_string(),
+                phase: ToolCallPhase::Start,
+                tool_name: event
+                    .payload
+                    .get("toolName")
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned),
+            }),
+            telemetry_event_names::TOOL_COMPLETED => Some(Self::ToolCallLifecycle {
+                session_id: event.payload.get("sessionID")?.as_str()?.to_string(),
+                tool_call_id: event.payload.get("toolCallId")?.as_str()?.to_string(),
+                phase: ToolCallPhase::Complete,
+                tool_name: event
+                    .payload
+                    .get("toolName")
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned),
+            }),
+            telemetry_event_names::EXECUTION_TOPOLOGY_CHANGED => Some(Self::TopologyChanged {
+                session_id: event.payload.get("sessionID")?.as_str()?.to_string(),
+                execution_id: event
+                    .payload
+                    .get("executionID")
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned),
+                stage_id: event
+                    .payload
+                    .get("stageID")
+                    .and_then(|value| value.as_str())
+                    .map(ToOwned::to_owned),
+            }),
+            telemetry_event_names::DIFF_UPDATED => Some(Self::DiffUpdated {
+                session_id: event.payload.get("sessionID")?.as_str()?.to_string(),
+                diff: serde_json::from_value(event.payload.get("diff")?.clone()).ok()?,
+            }),
+            telemetry_event_names::CHILD_SESSION_ATTACHED => Some(Self::ChildSessionAttached {
+                parent_id: event.payload.get("parentID")?.as_str()?.to_string(),
+                child_id: event.payload.get("childID")?.as_str()?.to_string(),
+            }),
+            telemetry_event_names::CHILD_SESSION_DETACHED => Some(Self::ChildSessionDetached {
+                parent_id: event.payload.get("parentID")?.as_str()?.to_string(),
+                child_id: event.payload.get("childID")?.as_str()?.to_string(),
+            }),
+            _ => None,
+        }
+    }
 }
 
 pub(crate) fn server_output_block_event(event: &OutputBlockEvent) -> ServerEvent {
@@ -312,19 +435,19 @@ pub(crate) fn broadcast_session_updated(
     session_id: impl Into<String>,
     source: impl Into<String>,
 ) {
-    broadcast_server_event(
-        state,
-        &ServerEvent::SessionUpdated {
-            session_id: session_id.into(),
-            source: source.into(),
-        },
-    );
+    let telemetry = state.runtime_telemetry.clone();
+    let session_id = session_id.into();
+    let source = source.into();
+    tokio::spawn(async move {
+        telemetry.record_session_updated(&session_id, &source).await;
+    });
 }
 
 pub(crate) fn broadcast_config_updated(state: &ServerState) {
     broadcast_server_event(state, &ServerEvent::ConfigUpdated);
 }
 
+#[allow(dead_code)]
 pub(crate) fn broadcast_child_session_attached(
     state: &ServerState,
     parent_id: impl Into<String>,
@@ -339,6 +462,7 @@ pub(crate) fn broadcast_child_session_attached(
     );
 }
 
+#[allow(dead_code)]
 pub(crate) fn broadcast_child_session_detached(
     state: &ServerState,
     parent_id: impl Into<String>,
@@ -357,6 +481,7 @@ pub(crate) fn broadcast_child_session_detached(
 mod tests {
     use super::{DiffEntry, QuestionResolutionKind, ServerEvent, ToolCallPhase};
     use rocode_command::output_blocks::{OutputBlock, StatusBlock};
+    use rocode_command::stage_protocol::{telemetry_event_names, StageEvent};
 
     #[test]
     fn server_event_serializes_output_block_wrapper() {
@@ -427,6 +552,122 @@ mod tests {
         assert_eq!(value["type"], "tool_call.lifecycle");
         assert_eq!(value["phase"], "start");
         assert_eq!(value["toolName"], "shell");
+    }
+
+    #[test]
+    fn stage_event_maps_tool_started_to_transport_event() {
+        let event = StageEvent {
+            event_id: "evt_1".to_string(),
+            scope: rocode_command::stage_protocol::EventScope::Stage,
+            stage_id: Some("stage_1".to_string()),
+            execution_id: Some("tool_call:tool-1".to_string()),
+            event_type: telemetry_event_names::TOOL_STARTED.to_string(),
+            ts: 1,
+            payload: serde_json::json!({
+                "sessionID": "session-1",
+                "toolCallId": "tool-1",
+                "toolName": "shell",
+            }),
+        };
+
+        let mapped = ServerEvent::from_stage_event(&event).expect("mapped event");
+        let value = mapped.to_json_value().expect("event json");
+        assert_eq!(value["type"], "tool_call.lifecycle");
+        assert_eq!(value["phase"], "start");
+        assert_eq!(value["toolName"], "shell");
+    }
+
+    #[test]
+    fn stage_event_maps_session_status_to_transport_event() {
+        let event = StageEvent {
+            event_id: "evt_1".to_string(),
+            scope: rocode_command::stage_protocol::EventScope::Session,
+            stage_id: None,
+            execution_id: None,
+            event_type: telemetry_event_names::SESSION_STATUS.to_string(),
+            ts: 1,
+            payload: serde_json::json!({
+                "sessionID": "session-1",
+                "status": { "type": "retry", "attempt": 2, "message": "wait", "next": 123 }
+            }),
+        };
+
+        let mapped = ServerEvent::from_stage_event(&event).expect("mapped event");
+        let value = mapped.to_json_value().expect("event json");
+        assert_eq!(value["type"], "session.status");
+        assert_eq!(value["status"]["type"], "retry");
+        assert_eq!(value["status"]["attempt"], 2);
+    }
+
+    #[test]
+    fn stage_event_maps_session_updated_to_transport_event() {
+        let event = StageEvent {
+            event_id: "evt_1".to_string(),
+            scope: rocode_command::stage_protocol::EventScope::Session,
+            stage_id: None,
+            execution_id: None,
+            event_type: telemetry_event_names::SESSION_UPDATED.to_string(),
+            ts: 1,
+            payload: serde_json::json!({
+                "sessionID": "session-1",
+                "source": "prompt.completed",
+            }),
+        };
+
+        let mapped = ServerEvent::from_stage_event(&event).expect("mapped event");
+        let value = mapped.to_json_value().expect("event json");
+        assert_eq!(value["type"], "session.updated");
+        assert_eq!(value["source"], "prompt.completed");
+    }
+
+    #[test]
+    fn stage_event_maps_session_usage_to_transport_event() {
+        let event = StageEvent {
+            event_id: "evt_1".to_string(),
+            scope: rocode_command::stage_protocol::EventScope::Session,
+            stage_id: None,
+            execution_id: None,
+            event_type: telemetry_event_names::SESSION_USAGE.to_string(),
+            ts: 1,
+            payload: serde_json::json!({
+                "sessionID": "session-1",
+                "message_id": "msg-1",
+                "prompt_tokens": 12,
+                "completion_tokens": 34,
+                "reasoning_tokens": 5,
+            }),
+        };
+
+        let mapped = ServerEvent::from_stage_event(&event).expect("mapped event");
+        let value = mapped.to_json_value().expect("event json");
+        assert_eq!(value["type"], "usage");
+        assert_eq!(value["sessionID"], "session-1");
+        assert_eq!(value["prompt_tokens"], 12);
+        assert_eq!(value["completion_tokens"], 34);
+    }
+
+    #[test]
+    fn stage_event_maps_session_error_to_transport_event() {
+        let event = StageEvent {
+            event_id: "evt_1".to_string(),
+            scope: rocode_command::stage_protocol::EventScope::Session,
+            stage_id: None,
+            execution_id: None,
+            event_type: telemetry_event_names::SESSION_ERROR.to_string(),
+            ts: 1,
+            payload: serde_json::json!({
+                "sessionID": "session-1",
+                "message_id": "msg-1",
+                "done": true,
+                "error": "boom",
+            }),
+        };
+
+        let mapped = ServerEvent::from_stage_event(&event).expect("mapped event");
+        let value = mapped.to_json_value().expect("event json");
+        assert_eq!(value["type"], "error");
+        assert_eq!(value["message_id"], "msg-1");
+        assert_eq!(value["done"], true);
     }
 
     #[test]

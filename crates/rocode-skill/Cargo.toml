@@ -8,7 +8,9 @@ license.workspace = true
 [dependencies]
 rocode-config = { path = "../rocode-config" }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 walkdir = { workspace = true }
 dirs = { workspace = true }
 

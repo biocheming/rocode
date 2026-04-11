@@ -10,18 +10,20 @@ use rocode_config::{Config as AppConfig, SkillTreeNodeConfig};
 use rocode_execution_types::{CompiledExecutionRequest, ExecutionRequestContext};
 use rocode_orchestrator::output_metadata::output_usage;
 use rocode_orchestrator::{
-    resolve_skill_markdown_repo, scheduler_orchestrator_from_profile, scheduler_plan_from_profile,
-    scheduler_request_defaults_from_file, scheduler_request_defaults_from_plan, AgentResolver,
-    AvailableAgentMeta, AvailableCategoryMeta, ExecutionContext as OrchestratorExecutionContext,
+    resolve_skill_markdown_repo, scheduler_orchestrator_from_plan, scheduler_plan_from_profile,
+    scheduler_request_defaults_from_file, scheduler_request_defaults_from_plan,
+    stage_policy_available_tools, stage_policy_from_label, AgentResolver, AvailableAgentMeta,
+    AvailableCategoryMeta, ExecutionContext as OrchestratorExecutionContext,
     ModelRef as OrchestratorModelRef, ModelResolver, Orchestrator, OrchestratorContext,
     OrchestratorError, SchedulerConfig, SchedulerPresetKind, SchedulerProfileConfig,
-    SchedulerRequestDefaults, SkillTreeNode, SkillTreeRequestPlan,
+    SchedulerRequestDefaults, SkillTreeNode, SkillTreeRequestPlan, SkillTreeTruncationStrategy,
     ToolExecError as OrchestratorToolExecError, ToolExecutor as OrchestratorToolExecutor,
     ToolOutput as OrchestratorToolOutput, ToolRunner,
 };
 use tokio_util::sync::CancellationToken;
 
 use crate::request_options::{resolve_compiled_execution_request, ExecutionResolutionContext};
+use crate::routes::skill_catalog::enrich_scheduler_plan_skills;
 use crate::runtime_control::SessionRunStatus;
 use crate::session_runtime::events::{
     broadcast_session_updated, emit_output_block_via_hook, server_output_block_hook,
@@ -40,6 +42,7 @@ use super::cancel::is_scheduler_cancellation_error;
 use super::messages::resolve_provider_and_model;
 use super::prompt::{create_scheduler_user_message, SchedulerUserMessageContext};
 use super::session_crud::{resolved_session_directory, set_session_run_status};
+use super::telemetry::persist_session_telemetry_metadata;
 
 use super::cancel::abort_session_execution;
 
@@ -463,7 +466,7 @@ impl rocode_orchestrator::runtime::events::CancelToken for SchedulerRunCancelTok
 }
 
 impl SessionSchedulerToolExecutor {
-    fn build_tool_context(
+    async fn build_tool_context(
         &self,
         exec_ctx: &OrchestratorExecutionContext,
     ) -> rocode_tool::ToolContext {
@@ -535,6 +538,34 @@ impl SessionSchedulerToolExecutor {
             .and_then(|value| value.as_str())
             .map(str::to_string);
         base_ctx.extra = exec_ctx.metadata.clone();
+        let inventory = self.state.tool_registry.list_ids().await;
+        let available_tools = base_ctx
+            .extra
+            .get("scheduler_stage_tool_policy")
+            .and_then(|value| value.as_str())
+            .and_then(stage_policy_from_label)
+            .map(|policy| stage_policy_available_tools(policy, &inventory))
+            .unwrap_or_else(|| {
+                inventory
+                    .iter()
+                    .map(|tool| tool.to_ascii_lowercase())
+                    .collect()
+            });
+        let mut available_tool_ids = available_tools.into_iter().collect::<Vec<_>>();
+        available_tool_ids.sort();
+        let mut available_toolsets =
+            rocode_skill::infer_toolsets_from_tools(available_tool_ids.iter().map(String::as_str))
+                .into_iter()
+                .collect::<Vec<_>>();
+        available_toolsets.sort();
+        base_ctx.extra.insert(
+            "available_tool_ids".to_string(),
+            serde_json::json!(available_tool_ids),
+        );
+        base_ctx.extra.insert(
+            "available_toolsets".to_string(),
+            serde_json::json!(available_toolsets),
+        );
         Self::with_agent_task_publish_bus(base_ctx, self.state.clone())
     }
 
@@ -559,12 +590,12 @@ impl SessionSchedulerToolExecutor {
                         );
                         // Resolve stage_id from the parent execution's record.
                         let stage_id = if let Some(ref pid) = parent_tool_call_id {
-                            state.runtime_control.resolve_stage_id(pid).await
+                            state.runtime_telemetry.resolve_stage_id(pid).await
                         } else {
                             None
                         };
                         state
-                            .runtime_control
+                            .runtime_telemetry
                             .register_agent_task(
                                 task_id,
                                 &session_id,
@@ -585,8 +616,8 @@ impl SessionSchedulerToolExecutor {
                             crate::runtime_control::RuntimeControlRegistry::agent_task_execution_id(
                                 task_id,
                             );
-                        let stage_id = state.runtime_control.resolve_stage_id(&exec_id).await;
-                        state.runtime_control.finish_agent_task(task_id).await;
+                        let stage_id = state.runtime_telemetry.resolve_stage_id(&exec_id).await;
+                        state.runtime_telemetry.finish_agent_task(task_id).await;
                         // Update agent counts on the stage message.
                         if let Some(ref sid) = stage_id {
                             update_stage_agent_counts(&state, &session_id, sid).await;
@@ -606,12 +637,13 @@ async fn update_stage_agent_counts(
     session_id: &str,
     stage_id: &str,
 ) {
-    let (done, total) = state.runtime_control.count_stage_agents(stage_id).await;
+    let (done, total) = state.runtime_telemetry.count_stage_agents(stage_id).await;
     let mut sessions = state.sessions.lock().await;
     let Some(mut session) = sessions.get(session_id).cloned() else {
         return;
     };
     // The stage_id is also used as the message_id for the stage message.
+    let mut message_snapshot = None;
     if let Some(message) = session.get_message_mut(stage_id) {
         message.metadata.insert(
             "scheduler_stage_done_agent_count".to_string(),
@@ -621,8 +653,17 @@ async fn update_stage_agent_counts(
             "scheduler_stage_total_agent_count".to_string(),
             serde_json::json!(total),
         );
-        session.touch();
-        sessions.update(session);
+        message_snapshot = Some(message.clone());
+    }
+    session.touch();
+    sessions.update(session);
+    drop(sessions);
+
+    if let Some(message) = message_snapshot.as_ref() {
+        let _ = state
+            .runtime_telemetry
+            .refresh_stage_summary_from_message(session_id, message)
+            .await;
     }
 }
 
@@ -634,7 +675,7 @@ impl OrchestratorToolExecutor for SessionSchedulerToolExecutor {
         arguments: serde_json::Value,
         exec_ctx: &OrchestratorExecutionContext,
     ) -> std::result::Result<OrchestratorToolOutput, OrchestratorToolExecError> {
-        let ctx = self.build_tool_context(exec_ctx);
+        let ctx = self.build_tool_context(exec_ctx).await;
         let result = self
             .state
             .tool_registry
@@ -719,11 +760,26 @@ pub(crate) fn resolve_request_skill_tree_plan(
     let root = skill_tree.root.as_ref()?;
     let root = to_orchestrator_skill_tree(root);
     let markdown_repo = resolve_skill_markdown_repo(&config.skill_paths);
+    let truncation_strategy = skill_tree
+        .truncation_strategy
+        .as_deref()
+        .and_then(SkillTreeTruncationStrategy::from_label);
+    if skill_tree.truncation_strategy.is_some() && truncation_strategy.is_none() {
+        tracing::warn!(
+            strategy = skill_tree
+                .truncation_strategy
+                .as_deref()
+                .unwrap_or_default(),
+            "unknown skill tree truncation strategy; using default head-tail"
+        );
+    }
 
-    match SkillTreeRequestPlan::from_tree_with_separator(
+    match SkillTreeRequestPlan::from_tree_with_options(
         &root,
         &markdown_repo,
         skill_tree.separator.as_deref(),
+        skill_tree.token_budget,
+        truncation_strategy,
     ) {
         Ok(plan) => plan,
         Err(error) => {
@@ -738,6 +794,7 @@ pub(crate) struct ResolvedPromptRequestConfig {
     pub scheduler_profile_name: Option<String>,
     pub scheduler_root_agent: Option<String>,
     pub scheduler_skill_tree_applied: bool,
+    pub request_skill_tree_plan: Option<SkillTreeRequestPlan>,
     pub resolved_agent: Option<AgentInfo>,
     pub provider: Arc<dyn rocode_provider::Provider>,
     pub provider_id: String,
@@ -933,6 +990,7 @@ pub(crate) async fn resolve_prompt_request_config(
         scheduler_profile_name,
         scheduler_root_agent,
         scheduler_skill_tree_applied,
+        request_skill_tree_plan,
         resolved_agent,
         provider,
         provider_id,
@@ -940,6 +998,33 @@ pub(crate) async fn resolve_prompt_request_config(
         agent_system_prompt,
         compiled_request,
     })
+}
+
+pub(crate) fn apply_skill_tree_telemetry_metadata(
+    metadata: &mut std::collections::HashMap<String, serde_json::Value>,
+    plan: Option<&SkillTreeRequestPlan>,
+) {
+    let Some(plan) = plan else {
+        return;
+    };
+    metadata.insert(
+        "scheduler_stage_estimated_context_tokens".to_string(),
+        serde_json::json!(plan.estimated_tokens() as u64),
+    );
+    if let Some(token_budget) = plan.token_budget {
+        metadata.insert(
+            "scheduler_stage_skill_tree_budget".to_string(),
+            serde_json::json!(token_budget as u64),
+        );
+    }
+    metadata.insert(
+        "scheduler_stage_skill_tree_truncation_strategy".to_string(),
+        serde_json::json!(plan.truncation_strategy.as_label()),
+    );
+    metadata.insert(
+        "scheduler_stage_skill_tree_truncated".to_string(),
+        serde_json::json!(plan.is_truncated()),
+    );
 }
 
 #[derive(Debug, Clone)]
@@ -989,12 +1074,11 @@ pub async fn run_local_scheduler_prompt(
             .as_deref()
             .and_then(|id| sessions.get(id).cloned())
         {
-            Some(existing) => existing.id,
-            None => {
-                sessions
-                    .create("rocode-cli", resolved_session_directory(&req.directory))
-                    .id
-            }
+            Some(existing) => existing.id.clone(),
+            None => sessions
+                .create("rocode-cli", resolved_session_directory(&req.directory))
+                .id
+                .clone(),
         }
     };
     let request_config = resolve_prompt_request_config(PromptRequestConfigInput {
@@ -1014,6 +1098,7 @@ pub async fn run_local_scheduler_prompt(
         .scheduler_profile_name
         .clone()
         .ok_or_else(|| anyhow::anyhow!("scheduler profile was not resolved"))?;
+    let request_skill_tree_plan = request_config.request_skill_tree_plan.clone();
     let mut profile_config = resolve_scheduler_profile_config(&config, Some(&profile_name))
         .map(|(_, profile)| profile)
         .ok_or_else(|| anyhow::anyhow!("scheduler profile config not found: {}", profile_name))?;
@@ -1025,9 +1110,9 @@ pub async fn run_local_scheduler_prompt(
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("failed to initialize local scheduler session"))?
     };
-    let normalized_directory = resolved_session_directory(&session.directory);
-    if session.directory != normalized_directory {
-        session.directory = normalized_directory;
+    let normalized_directory = resolved_session_directory(session.record().directory.as_str());
+    if session.record().directory != normalized_directory {
+        session.set_directory(normalized_directory);
     }
 
     let scheduler_applied = request_config.scheduler_applied;
@@ -1050,38 +1135,28 @@ pub async fn run_local_scheduler_prompt(
 
     set_session_run_status(&state, &session_id, SessionRunStatus::Busy).await;
 
-    session.metadata.insert(
-        "model_provider".to_string(),
-        serde_json::json!(&provider_id),
-    );
-    session
-        .metadata
-        .insert("model_id".to_string(), serde_json::json!(&model_id));
-    session.metadata.insert(
-        "scheduler_applied".to_string(),
-        serde_json::json!(scheduler_applied),
-    );
-    session.metadata.insert(
-        "scheduler_skill_tree_applied".to_string(),
+    session.insert_metadata("model_provider", serde_json::json!(&provider_id));
+    session.insert_metadata("model_id", serde_json::json!(&model_id));
+    session.insert_metadata("scheduler_applied", serde_json::json!(scheduler_applied));
+    session.insert_metadata(
+        "scheduler_skill_tree_applied",
         serde_json::json!(scheduler_skill_tree_applied),
     );
-    session.metadata.insert(
-        "scheduler_profile".to_string(),
-        serde_json::json!(profile_name.clone()),
-    );
+    session.insert_metadata("scheduler_profile", serde_json::json!(profile_name.clone()));
     if let Some(root_agent) = scheduler_root_agent.as_deref() {
-        session.metadata.insert(
-            "scheduler_root_agent".to_string(),
-            serde_json::json!(root_agent),
-        );
+        session.insert_metadata("scheduler_root_agent", serde_json::json!(root_agent));
     } else {
-        session.metadata.remove("scheduler_root_agent");
+        session.remove_metadata("scheduler_root_agent");
     }
 
     let mode_kind = scheduler_mode_kind(&profile_name);
     let resolved_system_prompt = scheduler_system_prompt_preview(&profile_name, &profile_config);
-    let prompt_parts =
-        resolve_local_scheduler_prompt_parts(&req.prompt_text, &session.directory, &config).await;
+    let prompt_parts = resolve_local_scheduler_prompt_parts(
+        &req.prompt_text,
+        session.record().directory.as_str(),
+        &config,
+    )
+    .await;
     let scheduler_input = rocode_session::PromptInput {
         session_id: session_id.clone(),
         message_id: None,
@@ -1154,17 +1229,11 @@ pub async fn run_local_scheduler_prompt(
             .map(|(name, description)| AvailableCategoryMeta { name, description })
             .collect();
     }
-    if profile_config.skill_list.is_empty() {
-        profile_config.skill_list = rocode_skill::list_available_skills()
-            .into_iter()
-            .map(|(name, _description)| name)
-            .collect();
-    }
 
     let current_model = Some(format!("{}:{}", provider_id, model_id));
     let scheduler_abort_token = CancellationToken::new();
     state
-        .runtime_control
+        .runtime_telemetry
         .register_scheduler_run(
             &session_id,
             scheduler_abort_token.clone(),
@@ -1175,7 +1244,7 @@ pub async fn run_local_scheduler_prompt(
         state: state.clone(),
         session_id: session_id.clone(),
         message_id: assistant_message_id.clone(),
-        directory: session.directory.clone(),
+        directory: session.record().directory.clone(),
         abort_token: scheduler_abort_token.clone(),
         current_model,
         tool_runtime_config: rocode_tool::ToolRuntimeConfig::from_config(&config),
@@ -1188,24 +1257,26 @@ pub async fn run_local_scheduler_prompt(
         fallback_model_id: model_id.clone(),
         fallback_request: fallback_request.clone(),
     });
+    let mut exec_metadata = std::collections::HashMap::from([
+        (
+            "message_id".to_string(),
+            serde_json::json!(assistant_message_id.clone()),
+        ),
+        (
+            "user_message_id".to_string(),
+            serde_json::json!(user_message_id.clone()),
+        ),
+        (
+            "scheduler_profile".to_string(),
+            serde_json::json!(profile_name.clone()),
+        ),
+    ]);
+    apply_skill_tree_telemetry_metadata(&mut exec_metadata, request_skill_tree_plan.as_ref());
     let exec_ctx = OrchestratorExecutionContext {
         session_id: session_id.clone(),
-        workdir: session.directory.clone(),
+        workdir: session.record().directory.clone(),
         agent_name: profile_name.clone(),
-        metadata: std::collections::HashMap::from([
-            (
-                "message_id".to_string(),
-                serde_json::json!(assistant_message_id.clone()),
-            ),
-            (
-                "user_message_id".to_string(),
-                serde_json::json!(user_message_id.clone()),
-            ),
-            (
-                "scheduler_profile".to_string(),
-                serde_json::json!(profile_name.clone()),
-            ),
-        ]),
+        metadata: exec_metadata,
     };
     let model_pricing = {
         let providers = state.providers.read().await;
@@ -1230,17 +1301,15 @@ pub async fn run_local_scheduler_prompt(
         }),
         exec_ctx,
     };
+    let mut plan = scheduler_plan_from_profile(Some(profile_name.clone()), &profile_config)
+        .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    enrich_scheduler_plan_skills(&state, &mut plan).await?;
 
-    let orchestrator_result = match scheduler_orchestrator_from_profile(
-        Some(profile_name.clone()),
-        &profile_config,
-        tool_runner,
-    ) {
-        Ok(mut orchestrator) => orchestrator.execute(&req.prompt_text, &ctx).await,
-        Err(error) => Err(OrchestratorError::Other(error.to_string())),
-    };
+    let orchestrator_result = scheduler_orchestrator_from_plan(plan, tool_runner)
+        .execute(&req.prompt_text, &ctx)
+        .await;
     state
-        .runtime_control
+        .runtime_telemetry
         .finish_scheduler_run(&session_id)
         .await;
 
@@ -1352,9 +1421,18 @@ pub async fn run_local_scheduler_prompt(
         .map(assistant_visible_text)
         .unwrap_or_default();
 
+    let _ = state
+        .runtime_telemetry
+        .record_session_usage(
+            &session_id,
+            Some(&assistant_message_id),
+            session.get_usage(),
+        )
+        .await;
+    persist_session_telemetry_metadata(&state, &mut session).await;
     {
         let mut sessions = state.sessions.lock().await;
-        sessions.update(session);
+        sessions.update(session.clone());
     }
     broadcast_session_updated(state.as_ref(), session_id.clone(), "prompt.completed");
     set_session_run_status(&state, &session_id, SessionRunStatus::Idle).await;

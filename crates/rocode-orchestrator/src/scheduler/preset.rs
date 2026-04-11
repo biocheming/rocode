@@ -238,6 +238,13 @@ pub fn scheduler_orchestrator_from_profile(
     )
 }
 
+pub fn scheduler_orchestrator_from_plan(
+    plan: SchedulerProfilePlan,
+    tool_runner: ToolRunner,
+) -> SchedulerProfileOrchestrator {
+    SchedulerProfileOrchestrator::new(plan, tool_runner)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -4,6 +4,7 @@ use crate::scheduler::prompt_support::{
     build_oracle_section, build_task_management_section, build_tool_selection_table, ANTI_PATTERNS,
     HARD_BLOCKS, SOFT_GUIDELINES,
 };
+use crate::scheduler::SchedulerSkillRef;
 
 pub fn hephaestus_system_prompt_preview() -> &'static str {
     "You are Hephaestus — autonomous deep worker.\nBias: run EXPLORE -> PLAN -> DECIDE -> EXECUTE -> VERIFY in one continuous loop.\nBoundary: ask only as a last resort and finish only with verification evidence."
@@ -83,7 +84,7 @@ Return JSON only, never prose outside JSON."#
 pub fn build_hephaestus_dynamic_prompt(
     available_agents: &[AvailableAgentMeta],
     available_categories: &[AvailableCategoryMeta],
-    skill_list: &[String],
+    skill_list: &[SchedulerSkillRef],
 ) -> String {
     let tool_selection = build_tool_selection_table(available_agents, skill_list);
     let explore_section = build_explore_section(available_agents);
@@ -272,7 +273,9 @@ mod tests {
         assert!(prompt.contains("Level 3: Escalate"));
         assert!(prompt.contains("CONSULT"));
         assert!(prompt.contains("`explore` agent — **CHEAP**"));
-        assert!(prompt.contains("**Active Skills**: debug"));
+        assert!(prompt.contains("<available_skills>"));
+        assert!(prompt.contains("- debug"));
+        assert!(prompt.contains("use `skill_view(name)` before EVERY delegation"));
     }
 
     #[test]

@@ -23,6 +23,13 @@ fn cli_set_root_server_session(runtime: &mut CliExecutionRuntime, session_id: St
     if let Ok(mut focused) = runtime.focused_session_id.lock() {
         *focused = None;
     }
+    if let Ok(mut projection) = runtime.frontend_projection.lock() {
+        projection.session_runtime = None;
+        projection.stage_summaries.clear();
+        projection.telemetry_topology = None;
+        projection.events_browser = None;
+        projection.token_stats = CliSessionTokenStats::default();
+    }
     cli_set_view_label(runtime, None);
 }
 
@@ -191,6 +198,44 @@ fn cli_short_session_id(session_id: &str) -> &str {
     &session_id[..session_id.len().min(8)]
 }
 
+trait CliStageStatusLabel {
+    fn as_ref_label(&self) -> &'static str;
+}
+
+impl CliStageStatusLabel for rocode_command::stage_protocol::StageStatus {
+    fn as_ref_label(&self) -> &'static str {
+        match self {
+            rocode_command::stage_protocol::StageStatus::Running => "running",
+            rocode_command::stage_protocol::StageStatus::Waiting => "waiting",
+            rocode_command::stage_protocol::StageStatus::Done => "done",
+            rocode_command::stage_protocol::StageStatus::Cancelled => "cancelled",
+            rocode_command::stage_protocol::StageStatus::Cancelling => "cancelling",
+            rocode_command::stage_protocol::StageStatus::Blocked => "blocked",
+            rocode_command::stage_protocol::StageStatus::Retrying => "retrying",
+        }
+    }
+}
+
+trait CliRunStatusLabel {
+    fn as_ref_label(&self) -> &'static str;
+}
+
+impl CliRunStatusLabel for crate::api_client::SessionRunStatusKind {
+    fn as_ref_label(&self) -> &'static str {
+        match self {
+            crate::api_client::SessionRunStatusKind::Idle => "idle",
+            crate::api_client::SessionRunStatusKind::Running => "running",
+            crate::api_client::SessionRunStatusKind::WaitingOnTool => "waiting_on_tool",
+            crate::api_client::SessionRunStatusKind::WaitingOnUser => "waiting_on_user",
+            crate::api_client::SessionRunStatusKind::Cancelling => "cancelling",
+        }
+    }
+}
+
+fn cli_current_observed_session_id(runtime: &CliExecutionRuntime) -> Option<String> {
+    cli_focused_session_id(runtime).or_else(|| runtime.server_session_id.clone())
+}
+
 fn cli_set_view_label(runtime: &CliExecutionRuntime, label: Option<String>) {
     if let Ok(mut projection) = runtime.frontend_projection.lock() {
         projection.view_label = label;
@@ -282,6 +327,596 @@ fn cli_list_child_sessions(runtime: &CliExecutionRuntime) {
         &lines,
         &style,
     );
+}
+
+fn cli_format_stage_summary_brief(stage: &rocode_command::stage_protocol::StageSummary) -> String {
+    let mut parts = vec![format!("{} [{}]", stage.stage_name, stage.status.as_ref_label())];
+    if let (Some(index), Some(total)) = (stage.index, stage.total) {
+        parts.push(format!("{}/{}", index, total));
+    }
+    if let (Some(step), Some(step_total)) = (stage.step, stage.step_total) {
+        parts.push(format!("step {}/{}", step, step_total));
+    }
+    if let Some(waiting_on) = stage.waiting_on.as_deref() {
+        parts.push(format!("waiting {}", waiting_on));
+    }
+    parts.join(" · ")
+}
+
+fn cli_stage_runtime_line(stage: &rocode_command::stage_protocol::StageSummary) -> String {
+    let mut parts = vec![format!("{} [{}]", stage.stage_name, stage.status.as_ref_label())];
+    if let (Some(index), Some(total)) = (stage.index, stage.total) {
+        parts.push(format!("{}/{}", index, total));
+    }
+    if let (Some(step), Some(step_total)) = (stage.step, stage.step_total) {
+        parts.push(format!("step {}/{}", step, step_total));
+    }
+    if let Some(waiting_on) = stage.waiting_on.as_deref() {
+        parts.push(format!("waiting {}", waiting_on));
+    }
+    if let Some(retry_attempt) = stage.retry_attempt {
+        parts.push(format!("retry {}", retry_attempt));
+    }
+    if stage.active_agent_count > 0 {
+        parts.push(format!("agents {}", stage.active_agent_count));
+    }
+    if stage.active_tool_count > 0 {
+        parts.push(format!("tools {}", stage.active_tool_count));
+    }
+    if stage.child_session_count > 0 {
+        parts.push(format!("child {}", stage.child_session_count));
+    }
+    if let Some(budget) = stage.skill_tree_budget {
+        let truncated = if stage.skill_tree_truncated.unwrap_or(false) {
+            " truncated"
+        } else {
+            ""
+        };
+        parts.push(format!("budget {}{}", format_token_count(budget), truncated));
+    }
+    if let Some(context_tokens) = stage.estimated_context_tokens {
+        parts.push(format!("ctx {}", format_token_count(context_tokens)));
+    }
+    parts.join(" · ")
+}
+
+fn cli_stage_usage_line(stage: &rocode_command::stage_protocol::StageSummary) -> String {
+    let mut parts = vec![format!("{} [{}]", stage.stage_name, stage.status.as_ref_label())];
+    if let Some(prompt_tokens) = stage.prompt_tokens {
+        parts.push(format!("in {}", format_token_count(prompt_tokens)));
+    }
+    if let Some(completion_tokens) = stage.completion_tokens {
+        parts.push(format!("out {}", format_token_count(completion_tokens)));
+    }
+    if let Some(reasoning_tokens) = stage.reasoning_tokens.filter(|value| *value > 0) {
+        parts.push(format!("reason {}", format_token_count(reasoning_tokens)));
+    }
+    if let Some(cache_read_tokens) = stage.cache_read_tokens.filter(|value| *value > 0) {
+        parts.push(format!("cache-r {}", format_token_count(cache_read_tokens)));
+    }
+    if let Some(cache_write_tokens) = stage.cache_write_tokens.filter(|value| *value > 0) {
+        parts.push(format!("cache-w {}", format_token_count(cache_write_tokens)));
+    }
+    if let Some(budget) = stage.skill_tree_budget {
+        let truncated = if stage.skill_tree_truncated.unwrap_or(false) {
+            " truncated"
+        } else {
+            ""
+        };
+        parts.push(format!("budget {}{}", format_token_count(budget), truncated));
+    }
+    if let Some(waiting_on) = stage.waiting_on.as_deref() {
+        parts.push(format!("waiting {}", waiting_on));
+    }
+    if let Some(retry_attempt) = stage.retry_attempt {
+        parts.push(format!("retry {}", retry_attempt));
+    }
+    parts.join(" · ")
+}
+
+fn cli_active_stage_summary<'a>(
+    telemetry: &'a crate::api_client::SessionTelemetrySnapshot,
+) -> Option<&'a rocode_command::stage_protocol::StageSummary> {
+    if let Some(active_stage_id) = telemetry.runtime.active_stage_id.as_deref() {
+        return telemetry
+            .stages
+            .iter()
+            .find(|stage| stage.stage_id == active_stage_id);
+    }
+
+    telemetry.stages.iter().find(|stage| {
+        matches!(
+            stage.status,
+            rocode_command::stage_protocol::StageStatus::Running
+                | rocode_command::stage_protocol::StageStatus::Waiting
+                | rocode_command::stage_protocol::StageStatus::Retrying
+                | rocode_command::stage_protocol::StageStatus::Blocked
+                | rocode_command::stage_protocol::StageStatus::Cancelling
+        )
+    })
+}
+
+fn cli_runtime_snapshot_lines(
+    session_id: &str,
+    telemetry: &crate::api_client::SessionTelemetrySnapshot,
+) -> Vec<String> {
+    let runtime = &telemetry.runtime;
+    let topology = &telemetry.topology;
+    let mut lines = vec![
+        format!("Session: {}", session_id),
+        format!("Run status: {}", runtime.run_status.as_ref_label()),
+        format!(
+            "Topology: active {} · running {} · waiting {} · cancelling {} · retry {} · done {}",
+            topology.active_count,
+            topology.running_count,
+            topology.waiting_count,
+            topology.cancelling_count,
+            topology.retry_count,
+            topology.done_count
+        ),
+        format!("Stages observed: {}", telemetry.stages.len()),
+    ];
+
+    if let Some(current_message_id) = runtime.current_message_id.as_deref() {
+        lines.push(format!("Current message: {}", current_message_id));
+    }
+
+    if let Some(stage) = cli_active_stage_summary(telemetry) {
+        lines.push(String::new());
+        lines.push(format!("Active stage: {}", cli_format_stage_summary_brief(stage)));
+        if let Some(last_event) = stage.last_event.as_deref() {
+            lines.push(format!("Last event: {}", last_event));
+        }
+        if let Some(focus) = stage.focus.as_deref() {
+            lines.push(format!("Focus: {}", focus));
+        }
+        if let Some(context_tokens) = stage.estimated_context_tokens {
+            lines.push(format!(
+                "Estimated context: {}",
+                format_token_count(context_tokens)
+            ));
+        }
+        if let Some(strategy) = stage.skill_tree_truncation_strategy.as_deref() {
+            let truncated = if stage.skill_tree_truncated.unwrap_or(false) {
+                "yes"
+            } else {
+                "no"
+            };
+            lines.push(format!("Skill tree truncation: {} ({})", strategy, truncated));
+        }
+    }
+
+    if !telemetry.stages.is_empty() {
+        lines.push(String::new());
+        lines.push(format!("Stage summaries ({})", telemetry.stages.len()));
+        for stage in &telemetry.stages {
+            lines.push(format!("  {}", cli_stage_runtime_line(stage)));
+            if let Some(last_event) = stage.last_event.as_deref() {
+                lines.push(format!("    last-event {}", last_event));
+            }
+            if let Some(focus) = stage.focus.as_deref() {
+                lines.push(format!("    focus {}", focus));
+            }
+        }
+    }
+
+    lines.push(String::new());
+    if runtime.active_tools.is_empty() {
+        lines.push("Active tools: none".to_string());
+    } else {
+        lines.push(format!("Active tools ({})", runtime.active_tools.len()));
+        for tool in &runtime.active_tools {
+            lines.push(format!("  {} · {}", tool.tool_name, tool.tool_call_id));
+        }
+    }
+
+    if let Some(question) = runtime.pending_question.as_ref() {
+        lines.push(String::new());
+        lines.push(format!("Pending question: {}", question.request_id));
+    }
+    if let Some(permission) = runtime.pending_permission.as_ref() {
+        lines.push(format!("Pending permission: {}", permission.permission_id));
+    }
+
+    if runtime.child_sessions.is_empty() {
+        lines.push(String::new());
+        lines.push("Child sessions: none".to_string());
+    } else {
+        lines.push(String::new());
+        lines.push(format!("Child sessions ({})", runtime.child_sessions.len()));
+        for child in &runtime.child_sessions {
+            lines.push(format!("  {} ← {}", child.child_id, child.parent_id));
+        }
+    }
+
+    lines
+}
+
+fn cli_usage_snapshot_lines(
+    session_id: &str,
+    telemetry: &crate::api_client::SessionTelemetrySnapshot,
+) -> Vec<String> {
+    let usage = &telemetry.usage;
+    let mut lines = vec![
+        format!("Session: {}", session_id),
+        format!("Input tokens: {}", format_token_count(usage.input_tokens)),
+        format!("Output tokens: {}", format_token_count(usage.output_tokens)),
+        format!(
+            "Reasoning tokens: {}",
+            format_token_count(usage.reasoning_tokens)
+        ),
+        format!(
+            "Cache read tokens: {}",
+            format_token_count(usage.cache_read_tokens)
+        ),
+        format!(
+            "Cache write tokens: {}",
+            format_token_count(usage.cache_write_tokens)
+        ),
+        format!("Total cost: ${:.4}", usage.total_cost),
+    ];
+
+    if !telemetry.stages.is_empty() {
+        lines.push(String::new());
+        lines.push(format!("Stage usage ({})", telemetry.stages.len()));
+        for stage in &telemetry.stages {
+            lines.push(format!("  {}", cli_stage_usage_line(stage)));
+        }
+    }
+
+    lines
+}
+
+type CliEventsQueryInput = rocode_command::interactive::InteractiveEventsQuery;
+type CliEventsCommandInput = rocode_command::interactive::InteractiveEventsCommand;
+
+#[cfg(test)]
+const CLI_EVENTS_DEFAULT_PAGE_SIZE: usize =
+    rocode_command::interactive::EVENTS_BROWSER_DEFAULT_PAGE_SIZE;
+
+fn cli_default_events_query_input() -> CliEventsQueryInput {
+    rocode_command::interactive::default_events_browser_query()
+}
+
+#[derive(Debug, Clone, Default)]
+struct CliEventsBrowserState {
+    session_id: String,
+    filter: CliEventsQueryInput,
+    offset: usize,
+}
+
+fn cli_parse_events_command_input(raw: Option<&str>) -> CliEventsCommandInput {
+    rocode_command::interactive::parse_events_browser_command(raw)
+}
+
+#[cfg(test)]
+fn cli_parse_events_query_input(raw: Option<&str>) -> CliEventsQueryInput {
+    rocode_command::interactive::parse_events_browser_query(raw)
+}
+
+fn cli_events_query(
+    input: &CliEventsQueryInput,
+    offset: usize,
+) -> crate::api_client::SessionEventsQuery {
+    crate::api_client::SessionEventsQuery {
+        stage_id: input.stage_id.clone(),
+        execution_id: input.execution_id.clone(),
+        event_type: input.event_type.clone(),
+        since: input.since,
+        limit: input.limit,
+        offset: Some(offset),
+    }
+}
+
+fn cli_events_page_size(input: &CliEventsQueryInput) -> usize {
+    rocode_command::interactive::events_browser_page_size(input)
+}
+
+fn cli_events_offset_for_page(input: &CliEventsQueryInput, page: usize) -> usize {
+    rocode_command::interactive::events_browser_offset_for_page(input, page)
+}
+
+fn cli_events_page_for_offset(input: &CliEventsQueryInput, offset: usize) -> usize {
+    rocode_command::interactive::events_browser_page_for_offset(input, offset)
+}
+
+fn cli_events_filter_label(input: &CliEventsQueryInput) -> String {
+    let mut parts = Vec::new();
+    if let Some(stage_id) = input.stage_id.as_deref() {
+        parts.push(format!("stage={stage_id}"));
+    }
+    if let Some(execution_id) = input.execution_id.as_deref() {
+        parts.push(format!("exec={execution_id}"));
+    }
+    if let Some(event_type) = input.event_type.as_deref() {
+        parts.push(format!("type={event_type}"));
+    }
+    if let Some(since) = input.since {
+        parts.push(format!("since={since}"));
+    }
+    parts.push(format!("limit={}", cli_events_page_size(input)));
+    parts.join(" · ")
+}
+
+fn cli_events_window_label(offset: usize, count: usize) -> String {
+    if count == 0 {
+        return "items 0".to_string();
+    }
+    format!("items {}-{}", offset + 1, offset + count)
+}
+
+fn cli_event_payload_summary(payload: &serde_json::Value) -> Option<String> {
+    match payload {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(text) => Some(text.trim().to_string()),
+        value => serde_json::to_string(value).ok(),
+    }
+    .filter(|text| !text.is_empty())
+    .map(|text| truncate_text(&text.replace('\n', " "), 120))
+}
+
+fn cli_event_lines(
+    events: &[rocode_command::stage_protocol::StageEvent],
+    style: &CliStyle,
+) -> Vec<String> {
+    if events.is_empty() {
+        return vec![style.dim("no matching events")];
+    }
+
+    let mut lines = Vec::new();
+    for event in events {
+        let ts = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(event.ts)
+            .map(|value| value.with_timezone(&chrono::Local))
+            .map(|value| value.format("%H:%M:%S").to_string())
+            .unwrap_or_else(|| event.ts.to_string());
+        let mut headline = format!("{} · {} · {:?}", ts, event.event_type, event.scope);
+        if let Some(stage_id) = event.stage_id.as_deref() {
+            headline.push_str(&format!(" · stage {}", stage_id));
+        }
+        if let Some(execution_id) = event.execution_id.as_deref() {
+            headline.push_str(&format!(" · exec {}", execution_id));
+        }
+        lines.push(headline);
+        if let Some(payload) = cli_event_payload_summary(&event.payload) {
+            lines.push(format!("  {}", payload));
+        }
+    }
+    lines
+}
+
+async fn cli_print_runtime_snapshot(
+    runtime: &CliExecutionRuntime,
+    api_client: &CliApiClient,
+    style: &CliStyle,
+) {
+    let Some(session_id) = cli_current_observed_session_id(runtime) else {
+        let _ = print_block(
+            Some(runtime),
+            OutputBlock::Status(StatusBlock::warning("No active session available for /runtime.")),
+            style,
+        );
+        return;
+    };
+
+    match api_client.get_session_telemetry(&session_id).await {
+        Ok(telemetry) => {
+            let lines = cli_runtime_snapshot_lines(&session_id, &telemetry);
+            let footer = "Source: /session/{id}/telemetry · use /events [stage=<id>] for raw event log";
+            let _ = print_cli_list_on_surface(
+                Some(runtime),
+                "Runtime Telemetry",
+                Some(footer),
+                &lines,
+                style,
+            );
+        }
+        Err(error) => {
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::error(format!(
+                    "Failed to load runtime telemetry: {}",
+                    error
+                ))),
+                style,
+            );
+        }
+    }
+}
+
+async fn cli_print_usage_snapshot(
+    runtime: &CliExecutionRuntime,
+    api_client: &CliApiClient,
+    style: &CliStyle,
+) {
+    let Some(session_id) = cli_current_observed_session_id(runtime) else {
+        let _ = print_block(
+            Some(runtime),
+            OutputBlock::Status(StatusBlock::warning("No active session available for /usage.")),
+            style,
+        );
+        return;
+    };
+
+    match api_client.get_session_telemetry(&session_id).await {
+        Ok(telemetry) => {
+            let lines = cli_usage_snapshot_lines(&session_id, &telemetry);
+            let footer =
+                "Source: /session/{id}/telemetry · stage totals come from authority summaries";
+            let _ = print_cli_list_on_surface(Some(runtime), "Session Usage", Some(footer), &lines, style);
+        }
+        Err(error) => {
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::error(format!(
+                    "Failed to load session usage: {}",
+                    error
+                ))),
+                style,
+            );
+        }
+    }
+}
+
+async fn cli_print_session_events(
+    runtime: &CliExecutionRuntime,
+    api_client: &CliApiClient,
+    style: &CliStyle,
+    raw_filter: Option<&str>,
+) {
+    let Some(session_id) = cli_current_observed_session_id(runtime) else {
+        let _ = print_block(
+            Some(runtime),
+            OutputBlock::Status(StatusBlock::warning("No active session available for /events.")),
+            style,
+        );
+        return;
+    };
+
+    let command = cli_parse_events_command_input(raw_filter);
+    let remembered = runtime
+        .frontend_projection
+        .lock()
+        .ok()
+        .and_then(|projection| projection.events_browser.clone())
+        .filter(|state| state.session_id == session_id);
+
+    let (filter, offset, preserve_previous_state, empty_page_message) = match command {
+        CliEventsCommandInput::ShowCurrent => {
+            if let Some(state) = remembered.as_ref() {
+                (state.filter.clone(), state.offset, false, None)
+            } else {
+                (cli_default_events_query_input(), 0, false, None)
+            }
+        }
+        CliEventsCommandInput::ShowFiltered { filter, page } => (
+            filter.clone(),
+            cli_events_offset_for_page(&filter, page),
+            false,
+            (page > 1).then(|| {
+                format!(
+                    "Requested page {} has no events for the current filter. Use /events first, /events prev, or reduce page.",
+                    page
+                )
+            }),
+        ),
+        CliEventsCommandInput::JumpPage(page) => {
+            let filter = remembered
+                .as_ref()
+                .map(|state| state.filter.clone())
+                .unwrap_or_else(cli_default_events_query_input);
+            (
+                filter.clone(),
+                cli_events_offset_for_page(&filter, page),
+                false,
+                (page > 1).then(|| {
+                    format!(
+                        "Requested page {} has no events for the current filter. Use /events first, /events prev, or change filters.",
+                        page
+                    )
+                }),
+            )
+        }
+        CliEventsCommandInput::NextPage => {
+            if let Some(state) = remembered.as_ref() {
+                let next_offset = state.offset.saturating_add(cli_events_page_size(&state.filter));
+                (state.filter.clone(), next_offset, true, None)
+            } else {
+                (cli_default_events_query_input(), 0, false, None)
+            }
+        }
+        CliEventsCommandInput::PreviousPage => {
+            if let Some(state) = remembered.as_ref() {
+                let step = cli_events_page_size(&state.filter);
+                (
+                    state.filter.clone(),
+                    state.offset.saturating_sub(step),
+                    false,
+                    None,
+                )
+            } else {
+                (cli_default_events_query_input(), 0, false, None)
+            }
+        }
+        CliEventsCommandInput::FirstPage => {
+            if let Some(state) = remembered.as_ref() {
+                (state.filter.clone(), 0, false, None)
+            } else {
+                (cli_default_events_query_input(), 0, false, None)
+            }
+        }
+        CliEventsCommandInput::Clear => (cli_default_events_query_input(), 0, false, None),
+    };
+
+    let query = cli_events_query(&filter, offset);
+    match api_client.get_session_events(&session_id, &query).await {
+        Ok(events) => {
+            if events.is_empty() && offset > 0 {
+                let _ = print_block(
+                    Some(runtime),
+                    OutputBlock::Status(StatusBlock::warning(empty_page_message.unwrap_or_else(
+                        || {
+                            if preserve_previous_state {
+                                "No more events for the current filter. Use /events prev or change filters."
+                                    .to_string()
+                            } else {
+                                "That event page is empty for the current filter. Use /events first, /events prev, or adjust filters."
+                                    .to_string()
+                            }
+                        },
+                    ))),
+                    style,
+                );
+                return;
+            }
+
+            let page_size = cli_events_page_size(&filter);
+            let page_index = cli_events_page_for_offset(&filter, offset);
+            let can_go_prev = offset > 0;
+            let can_go_next = events.len() >= page_size;
+            let mut lines = vec![format!("Session: {}", session_id)];
+            lines.extend(cli_event_lines(&events, style));
+            let footer = format!(
+                "Page {} · {} · {} · {}{}{}{}{}",
+                page_index,
+                cli_events_window_label(offset, events.len()),
+                cli_events_filter_label(&filter),
+                if can_go_prev {
+                    "/events prev"
+                } else {
+                    "first page"
+                },
+                if can_go_next { " · /events next" } else { "" },
+                " · /events page <n>",
+                " · /events clear",
+                if page_index > 1 { " · /events first" } else { "" }
+            );
+
+            if let Ok(mut projection) = runtime.frontend_projection.lock() {
+                projection.events_browser = Some(CliEventsBrowserState {
+                    session_id: session_id.clone(),
+                    filter: filter.clone(),
+                    offset,
+                });
+            }
+            let _ = print_cli_list_on_surface(
+                Some(runtime),
+                "Session Events",
+                Some(&footer),
+                &lines,
+                style,
+            );
+        }
+        Err(error) => {
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::error(format!(
+                    "Failed to load session events: {}",
+                    error
+                ))),
+                style,
+            );
+        }
+    }
 }
 
 fn cli_focus_child_session(runtime: &CliExecutionRuntime, requested_id: &str) -> io::Result<bool> {
@@ -515,10 +1150,6 @@ async fn cli_execute_new_session_action(
             let new_sid = new_session.id.clone();
             cli_set_root_server_session(runtime, new_sid.clone());
 
-            if let Ok(mut proj) = runtime.frontend_projection.lock() {
-                proj.token_stats = CliSessionTokenStats::default();
-            }
-
             let _ = print_block(
                 Some(runtime),
                 OutputBlock::Status(StatusBlock::title(format!(
@@ -603,6 +1234,10 @@ async fn cli_execute_compact_session_action(
                 repl_style,
             );
             if let Ok(mut proj) = runtime.frontend_projection.lock() {
+                proj.session_runtime = None;
+                proj.stage_summaries.clear();
+                proj.telemetry_topology = None;
+                proj.events_browser = None;
                 proj.token_stats = CliSessionTokenStats::default();
             }
             cli_refresh_server_info(api_client, &runtime.frontend_projection, Some(&session_id))
@@ -964,8 +1599,10 @@ fn cli_sidebar_lines(
 
     lines.push(String::new());
     lines.push("/help · /model · /preset".to_string());
-    lines.push("/child · /abort · /sidebar".to_string());
-    lines.push("/status · /compact · /new".to_string());
+    lines.push("/runtime · /usage · /events".to_string());
+    lines.push("/events next · /events prev · /events page <n>".to_string());
+    lines.push("/events first · /events clear".to_string());
+    lines.push("/child · /abort · /status".to_string());
     lines
 }
 
@@ -1212,4 +1849,92 @@ fn cli_render_retained_layout(
     }
 
     screen
+}
+
+#[cfg(test)]
+mod session_projection_tests {
+    use super::{
+        cli_default_events_query_input, cli_parse_events_command_input,
+        cli_parse_events_query_input, CliEventsCommandInput, CliEventsQueryInput,
+        CLI_EVENTS_DEFAULT_PAGE_SIZE,
+    };
+
+    #[test]
+    fn parses_default_events_query_input() {
+        assert_eq!(cli_parse_events_query_input(None), cli_default_events_query_input());
+    }
+
+    #[test]
+    fn parses_stage_alias_events_query_input() {
+        assert_eq!(
+            cli_parse_events_query_input(Some("stg_123")),
+            CliEventsQueryInput {
+                stage_id: Some("stg_123".to_string()),
+                limit: Some(CLI_EVENTS_DEFAULT_PAGE_SIZE),
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn parses_structured_events_query_input() {
+        assert_eq!(
+            cli_parse_events_query_input(Some(
+                "stage=stg_1 exec=exe_2 type=session.updated limit=10 since=42"
+            )),
+            CliEventsQueryInput {
+                stage_id: Some("stg_1".to_string()),
+                execution_id: Some("exe_2".to_string()),
+                event_type: Some("session.updated".to_string()),
+                since: Some(42),
+                limit: Some(10),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_events_navigation_commands() {
+        assert_eq!(
+            cli_parse_events_command_input(Some("next")),
+            CliEventsCommandInput::NextPage
+        );
+        assert_eq!(
+            cli_parse_events_command_input(Some("prev")),
+            CliEventsCommandInput::PreviousPage
+        );
+        assert_eq!(
+            cli_parse_events_command_input(Some("clear")),
+            CliEventsCommandInput::Clear
+        );
+        assert_eq!(
+            cli_parse_events_command_input(Some("first")),
+            CliEventsCommandInput::FirstPage
+        );
+        assert_eq!(
+            cli_parse_events_command_input(Some("page 3")),
+            CliEventsCommandInput::JumpPage(3)
+        );
+        assert_eq!(
+            cli_parse_events_command_input(Some("stage=stg_1 limit=10")),
+            CliEventsCommandInput::ShowFiltered {
+                filter: CliEventsQueryInput {
+                    stage_id: Some("stg_1".to_string()),
+                    limit: Some(10),
+                    ..Default::default()
+                },
+                page: 1,
+            }
+        );
+        assert_eq!(
+            cli_parse_events_command_input(Some("stage=stg_1 limit=10 page=2")),
+            CliEventsCommandInput::ShowFiltered {
+                filter: CliEventsQueryInput {
+                    stage_id: Some("stg_1".to_string()),
+                    limit: Some(10),
+                    ..Default::default()
+                },
+                page: 2,
+            }
+        );
+    }
 }

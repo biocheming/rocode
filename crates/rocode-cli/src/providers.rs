@@ -399,6 +399,22 @@ pub(crate) fn render_help(style: &CliStyle) -> String {
         fmt("/new", "Start a new session"),
         fmt("/clear", "Clear screen"),
         fmt("/status", "Show session status"),
+        fmt("/runtime", "Show current runtime telemetry"),
+        fmt("/usage", "Show authority-backed session usage"),
+        fmt("/events [filters]", "Show runtime event log"),
+        fmt(
+            "/events next|prev|first|clear",
+            "Page or reset the current event view",
+        ),
+        fmt(
+            "/events page <n>",
+            "Jump to a specific page for the current filter",
+        ),
+        fmt(
+            "/events stage=<id> type=<kind> limit=<n> [page=<n>]",
+            "Filter events with structured query terms",
+        ),
+        fmt("/inspect [stage_id]", "Alias for /events with stage filter"),
         fmt("/models", "List all available models"),
         fmt("/models refresh", "Refresh the shared model catalogue"),
         fmt("/model <id>", "Switch to a specific model"),

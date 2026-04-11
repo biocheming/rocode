@@ -1,8 +1,121 @@
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::de::{self, MapAccess, Visitor};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt;
 
 use super::{SchedulerStageKind, StageToolPolicy};
 use crate::OrchestratorError;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SchedulerSkillRef {
+    pub name: String,
+    pub description: String,
+    pub category: Option<String>,
+}
+
+impl SchedulerSkillRef {
+    pub fn display_text(&self) -> String {
+        if self.description.trim().is_empty() {
+            self.name.clone()
+        } else {
+            format!("{}: {}", self.name, self.description)
+        }
+    }
+}
+
+impl From<&str> for SchedulerSkillRef {
+    fn from(value: &str) -> Self {
+        Self {
+            name: value.to_string(),
+            description: String::new(),
+            category: None,
+        }
+    }
+}
+
+impl From<String> for SchedulerSkillRef {
+    fn from(value: String) -> Self {
+        Self {
+            name: value,
+            description: String::new(),
+            category: None,
+        }
+    }
+}
+
+impl Serialize for SchedulerSkillRef {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("SchedulerSkillRef", 3)?;
+        state.serialize_field("name", &self.name)?;
+        state.serialize_field("description", &self.description)?;
+        state.serialize_field("category", &self.category)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for SchedulerSkillRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct SchedulerSkillRefVisitor;
+
+        impl<'de> Visitor<'de> for SchedulerSkillRefVisitor {
+            type Value = SchedulerSkillRef;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a skill name string or a skill metadata object")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(SchedulerSkillRef::from(value))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(SchedulerSkillRef::from(value))
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut name: Option<String> = None;
+                let mut description: Option<String> = None;
+                let mut category: Option<Option<String>> = None;
+
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "name" => name = Some(map.next_value()?),
+                        "description" => description = Some(map.next_value()?),
+                        "category" => category = Some(map.next_value()?),
+                        _ => {
+                            let _: serde_json::Value = map.next_value()?;
+                        }
+                    }
+                }
+
+                let name = name.ok_or_else(|| de::Error::missing_field("name"))?;
+                Ok(SchedulerSkillRef {
+                    name,
+                    description: description.unwrap_or_default(),
+                    category: category.unwrap_or(None),
+                })
+            }
+        }
+
+        deserializer.deserialize_any(SchedulerSkillRefVisitor)
+    }
+}
 
 /// Per-stage capability descriptor: which skills, agents, and categories
 /// this stage has access to. `None` means the stage does not delegate work
@@ -10,7 +123,7 @@ use crate::OrchestratorError;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct SchedulerStageCapabilities {
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub skill_list: Vec<String>,
+    pub skill_list: Vec<SchedulerSkillRef>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub agents: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]

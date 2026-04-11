@@ -32,7 +32,7 @@ use rocode_storage::{Database, MessageRepository, SessionRepository};
 
 use crate::routes;
 use crate::runtime_control::RuntimeControlRegistry;
-use crate::session_runtime::events::ServerEvent;
+use crate::session_runtime::telemetry::RuntimeTelemetryAuthority;
 use crate::stage_event_log::StageEventLog;
 
 const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:4096";
@@ -216,7 +216,11 @@ pub struct ServerState {
     pub resolved_context_authority: Arc<ResolvedWorkspaceContextAuthority>,
     pub tool_registry: Arc<rocode_tool::ToolRegistry>,
     pub prompt_runner: Arc<SessionPrompt>,
+    pub(crate) runtime_telemetry: Arc<RuntimeTelemetryAuthority>,
+    // Legacy compatibility fields. Phase 1 keeps them so existing write paths
+    // can keep compiling while read paths start going through the authority.
     pub(crate) runtime_control: Arc<RuntimeControlRegistry>,
+    #[allow(dead_code)]
     pub(crate) stage_event_log: Arc<StageEventLog>,
     pub auth_manager: Arc<AuthManager>,
     pub event_bus: broadcast::Sender<String>,
@@ -225,6 +229,7 @@ pub struct ServerState {
     pub(crate) message_repo: Option<MessageRepository>,
     pub category_registry: Arc<rocode_config::CategoryRegistry>,
     pub(crate) todo_manager: rocode_session::TodoManager,
+    #[allow(dead_code)]
     pub(crate) runtime_state: Arc<crate::session_runtime::state::RuntimeStateStore>,
 }
 
@@ -261,42 +266,10 @@ impl ServerState {
             user_state.clone(),
         ));
         let (tx, _) = broadcast::channel(1024);
-        let topology_tx = tx.clone();
-        let stage_event_log = Arc::new(StageEventLog::new());
-        let event_log_for_callback = stage_event_log.clone();
-        let runtime_control = Arc::new(RuntimeControlRegistry::with_topology_callback(Arc::new(
-            move |ctx: &crate::runtime_control::TopologyChangeContext| {
-                if let Some(payload) = (ServerEvent::TopologyChanged {
-                    session_id: ctx.session_id.clone(),
-                    execution_id: Some(ctx.execution_id.clone()),
-                    stage_id: ctx.stage_id.clone(),
-                })
-                .to_json_string()
-                {
-                    let _ = topology_tx.send(payload);
-                }
-                // Record a StageEvent into the stage event log.
-                let event = rocode_command::stage_protocol::StageEvent {
-                    event_id: format!("evt_{}", uuid::Uuid::new_v4().simple()),
-                    scope: rocode_command::stage_protocol::EventScope::Stage,
-                    stage_id: ctx.stage_id.clone(),
-                    execution_id: Some(ctx.execution_id.clone()),
-                    event_type: "execution.topology.changed".to_string(),
-                    ts: chrono::Utc::now().timestamp_millis(),
-                    payload: serde_json::json!({
-                        "sessionID": ctx.session_id,
-                        "executionID": ctx.execution_id,
-                        "stageID": ctx.stage_id,
-                    }),
-                };
-                let log = event_log_for_callback.clone();
-                let session_id = ctx.session_id.clone();
-                // Spawn a task to record asynchronously since the callback is sync.
-                tokio::spawn(async move {
-                    log.record(&session_id, event).await;
-                });
-            },
-        )));
+        let runtime_telemetry = Arc::new(RuntimeTelemetryAuthority::new(tx.clone()));
+        let runtime_control = runtime_telemetry.runtime_control();
+        let stage_event_log = runtime_telemetry.stage_event_log();
+        let runtime_state = runtime_telemetry.runtime_state();
         Self {
             sessions: Mutex::new(SessionManager::new()),
             providers: tokio::sync::RwLock::new(ProviderRegistry::new()),
@@ -309,6 +282,7 @@ impl ServerState {
             prompt_runner: Arc::new(SessionPrompt::new(Arc::new(tokio::sync::RwLock::new(
                 SessionStateManager::new(),
             )))),
+            runtime_telemetry,
             runtime_control,
             stage_event_log,
             auth_manager: Arc::new(AuthManager::new()),
@@ -318,7 +292,7 @@ impl ServerState {
             message_repo: None,
             category_registry: Arc::new(rocode_config::CategoryRegistry::empty()),
             todo_manager: rocode_session::TodoManager::new(),
-            runtime_state: Arc::new(crate::session_runtime::state::RuntimeStateStore::new()),
+            runtime_state,
         }
     }
 
@@ -947,7 +921,7 @@ mod tests {
         );
         let session_id = {
             let mut manager = state.sessions.lock().await;
-            manager.create("default", ".").id
+            manager.create("default", ".").id.clone()
         };
 
         state

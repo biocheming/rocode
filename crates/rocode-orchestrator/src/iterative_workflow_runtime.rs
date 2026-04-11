@@ -2716,6 +2716,7 @@ fn now_nanos() -> u128 {
 mod tests {
     use super::*;
     use crate::traits::ToolExecutor;
+    use crate::workflow_artifacts::WorkflowModeArtifactEntry;
     use crate::{ToolExecError, ToolOutput};
     use async_trait::async_trait;
     use serde_json::json;

@@ -27,14 +27,14 @@ fn mode_matches_action_argument(mode: &Agent, action_id: UiActionId, value: &str
         || format!("{mode_kind}:{}", mode.name).eq_ignore_ascii_case(&needle)
 }
 
-fn session_matches_target(session: &crate::api::SessionInfo, target: &str) -> bool {
+fn session_matches_target(id: &str, title: &str, target: &str) -> bool {
     let needle = target.trim().to_ascii_lowercase();
     if needle.is_empty() {
         return false;
     }
-    session.id.eq_ignore_ascii_case(&needle)
-        || session.id.to_ascii_lowercase().starts_with(&needle)
-        || session.title.to_ascii_lowercase().contains(&needle)
+    id.eq_ignore_ascii_case(&needle)
+        || id.to_ascii_lowercase().starts_with(&needle)
+        || title.to_ascii_lowercase().contains(&needle)
 }
 
 impl App {
@@ -229,10 +229,9 @@ impl App {
                         };
                         match client.list_sessions_filtered(Some(target), Some(30)) {
                             Ok(sessions) => {
-                                let Some(session) = sessions
-                                    .into_iter()
-                                    .find(|session| session_matches_target(session, target))
-                                else {
+                                let Some(session) = sessions.into_iter().find(|session| {
+                                    session_matches_target(&session.id, &session.title, target)
+                                }) else {
                                     self.toast.show(
                                         ToastVariant::Warning,
                                         &format!("Session not found: {}", target),
@@ -354,8 +353,7 @@ impl App {
                 let _ = self.context.toggle_theme_mode();
             }
             UiActionId::ViewStatus => {
-                self.refresh_status_dialog();
-                self.status_dialog.open();
+                self.open_overview_status_dialog();
             }
             UiActionId::ToggleMcp => {
                 let _ = self.refresh_mcp_dialog();
@@ -446,8 +444,7 @@ impl App {
                 self.open_skill_list_dialog();
             }
             UiActionId::ShowStatus => {
-                self.refresh_status_dialog();
-                self.status_dialog.open();
+                self.open_overview_status_dialog();
             }
             UiActionId::OpenMcpList => {
                 let _ = self.refresh_mcp_dialog();
@@ -501,8 +498,17 @@ impl App {
             | InteractiveCommand::ScrollBottom => {
                 // Layout toggling / scrolling not applicable in TUI — TUI has its own layout
             }
-            InteractiveCommand::InspectStage(_stage_id) => {
-                // Stage inspection not yet wired in TUI — planned for inspector panel
+            InteractiveCommand::ShowRuntime => {
+                let _ = self.open_runtime_status_dialog();
+            }
+            InteractiveCommand::ShowUsage => {
+                let _ = self.open_usage_status_dialog();
+            }
+            InteractiveCommand::ShowEvents(raw_filter) => {
+                let _ = self.open_events_status_dialog(raw_filter.as_deref());
+            }
+            InteractiveCommand::InspectStage(stage_filter) => {
+                let _ = self.open_events_status_dialog(stage_filter.as_deref());
             }
             InteractiveCommand::Unknown(_) => {
                 // Forward unknown slash commands to the server-side command registry
@@ -607,13 +613,33 @@ mod tests {
                 compacting: None,
                 archived: None,
             },
+            summary: None,
+            share: None,
+            permission: None,
             revert: None,
+            telemetry: None,
             metadata: None,
         };
 
-        assert!(session_matches_target(&session, "sess_abc123"));
-        assert!(session_matches_target(&session, "sess_abc"));
-        assert!(session_matches_target(&session, "planning"));
-        assert!(!session_matches_target(&session, "oracle"));
+        assert!(session_matches_target(
+            &session.id,
+            &session.title,
+            "sess_abc123"
+        ));
+        assert!(session_matches_target(
+            &session.id,
+            &session.title,
+            "sess_abc"
+        ));
+        assert!(session_matches_target(
+            &session.id,
+            &session.title,
+            "planning"
+        ));
+        assert!(!session_matches_target(
+            &session.id,
+            &session.title,
+            "oracle"
+        ));
     }
 }

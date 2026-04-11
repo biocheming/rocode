@@ -65,6 +65,41 @@ impl StageToolPolicy {
     }
 }
 
+pub fn stage_policy_from_label(label: &str) -> Option<StageToolPolicy> {
+    match label.trim() {
+        "allow-all" => Some(StageToolPolicy::AllowAll),
+        "allow-read-only" => Some(StageToolPolicy::AllowReadOnly),
+        "disable-all" => Some(StageToolPolicy::DisableAll),
+        _ => None,
+    }
+}
+
+pub fn stage_policy_available_tools(
+    policy: StageToolPolicy,
+    tool_inventory: &[String],
+) -> HashSet<String> {
+    let inventory = tool_inventory
+        .iter()
+        .map(|tool| tool.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+
+    match policy {
+        StageToolPolicy::AllowAll => inventory,
+        StageToolPolicy::AllowReadOnly => READ_ONLY_STAGE_TOOLS
+            .iter()
+            .map(|tool| (*tool).to_string())
+            .filter(|tool| inventory.contains(tool))
+            .collect(),
+        StageToolPolicy::Restricted(constraint) => constraint
+            .allowed_tools
+            .iter()
+            .map(|tool| (*tool).to_string())
+            .filter(|tool| inventory.contains(tool))
+            .collect(),
+        StageToolPolicy::DisableAll => HashSet::new(),
+    }
+}
+
 pub fn stage_agent(name: &str, system_prompt: String, max_steps: u32) -> AgentDescriptor {
     stage_agent_with_limit(name, system_prompt, Some(max_steps))
 }
@@ -106,12 +141,27 @@ pub async fn execute_stage_agent_with_exec_ctx(
     stage_context: Option<(String, u32)>,
     exec_ctx_override: Option<crate::ExecutionContext>,
 ) -> Result<OrchestratorOutput, OrchestratorError> {
+    let mut effective_exec_ctx = exec_ctx_override.unwrap_or_else(|| ctx.exec_ctx.clone());
+    if let Some((stage_name, stage_index)) = stage_context.as_ref() {
+        effective_exec_ctx
+            .metadata
+            .insert("scheduler_stage".to_string(), serde_json::json!(stage_name));
+        effective_exec_ctx.metadata.insert(
+            "scheduler_stage_index".to_string(),
+            serde_json::json!(*stage_index),
+        );
+        effective_exec_ctx.metadata.insert(
+            "scheduler_stage_tool_policy".to_string(),
+            serde_json::json!(policy.label()),
+        );
+    }
+
     let loop_policy = LoopPolicy {
         max_steps: agent.max_steps,
         tool_dedup: ToolDedupScope::PerStep,
         ..Default::default()
     };
-    let (stage_ctx, runner) = filtered_stage_context(ctx, policy, exec_ctx_override);
+    let (stage_ctx, runner) = filtered_stage_context(ctx, policy, Some(effective_exec_ctx));
     let mut orchestrator = SkillListOrchestrator::new(agent, runner).with_loop_policy(loop_policy);
     if let Some((stage_name, stage_index)) = stage_context {
         orchestrator.set_stage_context(stage_name, stage_index);

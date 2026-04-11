@@ -1,14 +1,13 @@
 pub(crate) mod events;
+pub(crate) mod stage_summary;
 pub(crate) mod state;
+pub(crate) mod telemetry;
 
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use self::events::{
-    broadcast_child_session_attached, broadcast_child_session_detached, broadcast_server_event,
-    broadcast_session_updated, emit_output_block_via_hook, DiffEntry, ServerEvent,
-};
+use self::events::{broadcast_session_updated, emit_output_block_via_hook, DiffEntry};
 use crate::runtime_control::{ExecutionPatch, ExecutionStatus, FieldUpdate};
 use crate::ServerState;
 use rocode_command::output_blocks::{
@@ -217,6 +216,11 @@ impl SessionSchedulerLifecycleHook {
     }
 
     async fn emit_stage_block(&self, message: &SessionMessage) {
+        let _ = self
+            .state
+            .runtime_telemetry
+            .refresh_stage_summary_from_message(&self.session_id, message)
+            .await;
         if let Some(block) = scheduler_stage_block_from_message(message) {
             self.emit_realtime_block(OutputBlockEvent {
                 session_id: self.session_id.clone(),
@@ -319,7 +323,7 @@ pub(crate) async fn request_active_scheduler_stage_abort(
     .await;
     if let Some(execution_id) = info.as_ref().and_then(|info| info.execution_id.as_deref()) {
         state
-            .runtime_control
+            .runtime_telemetry
             .mark_scheduler_stage_cancelling(execution_id)
             .await;
     }
@@ -355,7 +359,7 @@ pub(crate) async fn finalize_active_scheduler_stage_cancelled(
     .await;
     if let Some(execution_id) = info.as_ref().and_then(|info| info.execution_id.as_deref()) {
         state
-            .runtime_control
+            .runtime_telemetry
             .finish_scheduler_stage(execution_id)
             .await;
     }
@@ -375,16 +379,21 @@ where
     let mut session = sessions.get(session_id).cloned()?;
     let message = find_active_scheduler_stage_message_mut(&mut session)?;
     let result = update(message)?;
+    let message_snapshot = message.clone();
     session.touch();
     sessions.update(session);
     drop(sessions);
 
+    let _ = state
+        .runtime_telemetry
+        .refresh_stage_summary_from_message(session_id, &message_snapshot)
+        .await;
     broadcast_session_updated(state, session_id.to_string(), source.to_string());
     Some(result)
 }
 
 fn find_active_scheduler_stage_message_mut(session: &mut Session) -> Option<&mut SessionMessage> {
-    session.messages.iter_mut().rev().find(|message| {
+    session.messages_mut().iter_mut().rev().find(|message| {
         message.role == MessageRole::Assistant
             && message
                 .metadata
@@ -576,20 +585,14 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
             (pid, sid)
         };
         self.state
-            .runtime_control
+            .runtime_telemetry
             .register_tool_call(
-                tool_call_id,
                 &self.session_id,
+                tool_call_id,
                 tool_name,
                 parent_id,
                 stage_id,
             )
-            .await;
-
-        // Update aggregated runtime state.
-        self.state
-            .runtime_state
-            .tool_started(&self.session_id, tool_call_id, tool_name)
             .await;
 
         self.update_active_stage_message(
@@ -666,14 +669,8 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
     ) {
         // Remove tool call from RuntimeControlRegistry.
         self.state
-            .runtime_control
-            .finish_tool_call(tool_call_id)
-            .await;
-
-        // Update aggregated runtime state.
-        self.state
-            .runtime_state
-            .tool_ended(&self.session_id, tool_call_id)
+            .runtime_telemetry
+            .finish_tool_call(&self.session_id, tool_call_id)
             .await;
 
         self.update_active_stage_message(
@@ -736,14 +733,15 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
         let result: Option<()> = async {
             let sessions_guard = state.sessions.lock().await;
             let session = sessions_guard.get(&session_id)?;
-            let worktree = session.directory.clone();
+            let session_record = session.record();
+            let worktree = session_record.directory.clone();
 
             // Find the earliest step_start_snapshot and latest step_finish_snapshot
             // across all messages in the session.
             let mut from_snapshot: Option<String> = None;
             let mut to_snapshot: Option<String> = None;
 
-            for msg in &session.messages {
+            for msg in &session_record.messages {
                 if from_snapshot.is_none() {
                     if let Some(s) = msg
                         .metadata
@@ -822,12 +820,11 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
             sessions_guard.update(session);
             drop(sessions_guard);
 
-            // Broadcast canonical diff-updated event for SSE consumers.
-            broadcast_server_event(
-                state.as_ref(),
-                &ServerEvent::DiffUpdated {
-                    session_id: session_id.clone(),
-                    diff: summary_diffs
+            state
+                .runtime_telemetry
+                .diff_updated(
+                    &session_id,
+                    summary_diffs
                         .iter()
                         .map(|d| DiffEntry {
                             path: d.file.clone(),
@@ -835,8 +832,8 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                             deletions: d.deletions,
                         })
                         .collect(),
-                },
-            );
+                )
+                .await;
 
             Some(())
         }
@@ -868,11 +865,11 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
         // ── Create child session if requested ──
         let (child_session_id, child_message_id) = if wants_child_session {
             let mut child = Session::child(&session);
-            child.title = format!(
+            child.set_title(format!(
                 "Stage: {} — {}",
                 pretty_scheduler_stage_name(stage_name),
                 &self.scheduler_profile
-            );
+            ));
             let child_id = child.id.clone();
             let child_msg = child.add_assistant_message();
             let child_msg_id = child_msg.id.clone();
@@ -886,14 +883,8 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
         if let (Some(child_sid), Some(child_mid)) =
             (child_session_id.as_ref(), child_message_id.as_ref())
         {
-            broadcast_child_session_attached(
-                &self.state,
-                self.session_id.clone(),
-                child_sid.clone(),
-            );
-            // Update aggregated runtime state.
             self.state
-                .runtime_state
+                .runtime_telemetry
                 .child_attached(&self.session_id, child_sid)
                 .await;
             self.emit_output_block(
@@ -954,6 +945,7 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
             "scheduler_stage_waiting_on".to_string(),
             serde_json::json!("model"),
         );
+        apply_exec_ctx_stage_telemetry_metadata(message, exec_ctx);
         if let Some(observability) =
             scheduler_stage_observability(&self.scheduler_profile, stage_name)
         {
@@ -1024,7 +1016,7 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
         }
 
         self.state
-            .runtime_control
+            .runtime_telemetry
             .register_scheduler_stage(
                 &self.session_id,
                 execution_id.clone(),
@@ -1384,14 +1376,8 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                         Some(child_mid.clone()),
                     )
                     .await;
-                    broadcast_child_session_detached(
-                        &self.state,
-                        self.session_id.clone(),
-                        child_sid.clone(),
-                    );
-                    // Update aggregated runtime state.
                     self.state
-                        .runtime_state
+                        .runtime_telemetry
                         .child_detached(&self.session_id, &child_sid)
                         .await;
                 } else {
@@ -1406,7 +1392,7 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                     }
                 }
                 self.state
-                    .runtime_control
+                    .runtime_telemetry
                     .finish_scheduler_stage(&active.execution_id)
                     .await;
             }
@@ -1458,6 +1444,23 @@ fn runtime_execution_status_from_stage_status(value: &str) -> Option<ExecutionSt
     }
 }
 
+fn apply_exec_ctx_stage_telemetry_metadata(
+    message: &mut SessionMessage,
+    exec_ctx: &OrchestratorExecutionContext,
+) {
+    for key in [
+        "scheduler_stage_estimated_context_tokens",
+        "scheduler_stage_skill_tree_budget",
+        "scheduler_stage_skill_tree_truncation_strategy",
+        "scheduler_stage_skill_tree_truncated",
+        "scheduler_stage_retry_attempt",
+    ] {
+        if let Some(value) = exec_ctx.metadata.get(key).cloned() {
+            message.metadata.insert(key.to_string(), value);
+        }
+    }
+}
+
 fn scheduler_stage_runtime_metadata(message: &SessionMessage) -> serde_json::Value {
     let mut metadata = serde_json::Map::new();
     for key in [
@@ -1472,6 +1475,11 @@ fn scheduler_stage_runtime_metadata(message: &SessionMessage) -> serde_json::Val
         "scheduler_stage_projection",
         "scheduler_stage_tool_policy",
         "scheduler_stage_loop_budget",
+        "scheduler_stage_estimated_context_tokens",
+        "scheduler_stage_skill_tree_budget",
+        "scheduler_stage_skill_tree_truncation_strategy",
+        "scheduler_stage_skill_tree_truncated",
+        "scheduler_stage_retry_attempt",
         "scheduler_stage_activity",
         "scheduler_stage_available_skill_count",
         "scheduler_stage_available_agent_count",
@@ -1545,7 +1553,8 @@ fn summarize_tool_activity(tool_name: &str, tool_args: &serde_json::Value) -> Op
         }
         "lsp" => summarize_lsp_args(tool_args),
         "batch" => summarize_batch_args(tool_args),
-        "skill" => summarize_skill_args(tool_args),
+        "skill" | "skill_view" => summarize_skill_args(tool_args),
+        "skills_list" => summarize_skills_list_args(tool_args),
         "apply_patch" | "applypatch" => Some("Apply Patch".to_string()),
         "list" | "ls" | "listdir" | "list_dir" | "list_directory" => summarize_list_args(tool_args),
         "notebook_edit" | "notebookedit" => summarize_notebook_edit_args(tool_args),
@@ -1959,6 +1968,14 @@ fn summarize_batch_args(tool_args: &serde_json::Value) -> Option<String> {
 fn summarize_skill_args(tool_args: &serde_json::Value) -> Option<String> {
     let name = activity_extract_string(tool_args, &["name", "skill"])?;
     Some(format!("Skill → \"{}\"", name))
+}
+
+fn summarize_skills_list_args(tool_args: &serde_json::Value) -> Option<String> {
+    let category = activity_extract_string(tool_args, &["category"]);
+    Some(match category {
+        Some(category) => format!("Skills List → [{}]", category),
+        None => "Skills List".to_string(),
+    })
 }
 
 fn summarize_list_args(tool_args: &serde_json::Value) -> Option<String> {
@@ -2535,6 +2552,10 @@ pub(crate) async fn emit_scheduler_stage_message(input: SchedulerStageMessageInp
     sessions.update(session);
     drop(sessions);
 
+    let _ = state
+        .runtime_telemetry
+        .refresh_stage_summary_from_message(session_id, &message_snapshot)
+        .await;
     if let Some(block) = scheduler_stage_block_from_message(&message_snapshot) {
         emit_output_block_via_hook(
             output_hook,
@@ -2828,6 +2849,7 @@ fn pretty_scheduler_stage_title(
 
 pub(crate) fn first_user_message_text(session: &Session) -> Option<String> {
     session
+        .record()
         .messages
         .iter()
         .find(|message| matches!(message.role, MessageRole::User))
@@ -2845,7 +2867,9 @@ pub(crate) async fn ensure_default_session_title(
         return;
     };
 
-    if !session.allows_auto_title_regeneration() && session.title.trim() != fallback.trim() {
+    let old_session_id = session.record().id.clone();
+    let old_session_title = session.record().title.clone();
+    if !session.allows_auto_title_regeneration() && old_session_title.trim() != fallback.trim() {
         return;
     }
 
@@ -2853,8 +2877,8 @@ pub(crate) async fn ensure_default_session_title(
         rocode_session::generate_session_title_for_session(session, provider, model_id).await;
     if !generated_title.trim().is_empty() {
         tracing::info!(
-            session_id = %session.id,
-            old_title = %session.title,
+            session_id = %old_session_id,
+            old_title = %old_session_title,
             new_title = %generated_title,
             "Session title refined by LLM"
         );
@@ -2948,7 +2972,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project", ".").id.clone()
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -2972,7 +2996,11 @@ mod tests {
 
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
-        let message = session.messages.last().expect("stage message should exist");
+        let message = session
+            .record()
+            .messages
+            .last()
+            .expect("stage message should exist");
         assert_eq!(message.get_text(), "## Plan\n- step");
         assert_eq!(
             message
@@ -2995,6 +3023,17 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("unbounded")
         );
+
+        let summaries = state
+            .runtime_telemetry
+            .list_stage_summaries(&session_id)
+            .await;
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].stage_name, "plan");
+        assert_eq!(
+            summaries[0].status,
+            rocode_command::stage_protocol::StageStatus::Done
+        );
     }
 
     #[tokio::test]
@@ -3002,7 +3041,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project", ".").id.clone()
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3026,7 +3065,11 @@ mod tests {
 
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
-        let message = session.messages.last().expect("stage message should exist");
+        let message = session
+            .record()
+            .messages
+            .last()
+            .expect("stage message should exist");
         assert_eq!(
             message.get_text(),
             "## Coordination Verification\n\nMissing proof for task B."
@@ -3046,7 +3089,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project", ".").id.clone()
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3101,7 +3144,11 @@ mod tests {
 
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
-        let message = session.messages.last().expect("stage message should exist");
+        let message = session
+            .record()
+            .messages
+            .last()
+            .expect("stage message should exist");
         assert_eq!(
             message
                 .metadata
@@ -3144,6 +3191,19 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("Answered (1)\n- Proceed with schema migration?: Yes")
         );
+
+        let summaries = state
+            .runtime_telemetry
+            .list_stage_summaries(&session_id)
+            .await;
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].stage_name, "plan");
+        assert_eq!(summaries[0].step, Some(1));
+        assert_eq!(
+            summaries[0].status,
+            rocode_command::stage_protocol::StageStatus::Done
+        );
+        assert_eq!(summaries[0].active_tool_count, 0);
     }
 
     #[tokio::test]
@@ -3151,7 +3211,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project", ".").id.clone()
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3198,7 +3258,11 @@ mod tests {
 
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
-        let message = session.messages.last().expect("stage message should exist");
+        let message = session
+            .record()
+            .messages
+            .last()
+            .expect("stage message should exist");
         assert_eq!(
             message
                 .metadata
@@ -3228,7 +3292,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project", ".").id.clone()
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3265,7 +3329,11 @@ mod tests {
 
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
-        let message = session.messages.last().expect("stage message should exist");
+        let message = session
+            .record()
+            .messages
+            .last()
+            .expect("stage message should exist");
         let usage = message.usage.as_ref().expect("usage should exist");
         // Expected: 3.0 * 1M/1M + 15.0 * 100K/1M + 0.30 * 500K/1M + 3.75 * 200K/1M
         //         = 3.0     + 1.5      + 0.15       + 0.75
@@ -3284,7 +3352,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project", ".").id.clone()
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3331,7 +3399,11 @@ mod tests {
 
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
-        let message = session.messages.last().expect("stage message should exist");
+        let message = session
+            .record()
+            .messages
+            .last()
+            .expect("stage message should exist");
         assert_eq!(
             message
                 .metadata
@@ -3359,7 +3431,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project", ".").id.clone()
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3378,7 +3450,10 @@ mod tests {
             "execution-orchestration",
             2,
             Some(&SchedulerStageCapabilities {
-                skill_list: vec!["debug".to_string(), "frontend-ui-ux".to_string()],
+                skill_list: vec![
+                    "debug".to_string().into(),
+                    "frontend-ui-ux".to_string().into(),
+                ],
                 agents: vec!["build".to_string(), "explore".to_string()],
                 categories: vec!["frontend".to_string()],
                 child_session: false,
@@ -3403,7 +3478,11 @@ mod tests {
 
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
-        let message = session.messages.last().expect("stage message should exist");
+        let message = session
+            .record()
+            .messages
+            .last()
+            .expect("stage message should exist");
         assert_eq!(
             message
                 .metadata
@@ -3459,7 +3538,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project", ".").id.clone()
         };
         let emitted = Arc::new(StdMutex::new(Vec::<OutputBlockEvent>::new()));
         let emitted_hook = emitted.clone();
@@ -3525,7 +3604,11 @@ mod tests {
         let parent = sessions
             .get(&session_id)
             .expect("parent session should exist");
-        let parent_stage_message = parent.messages.last().expect("parent stage message");
+        let parent_stage_message = parent
+            .record()
+            .messages
+            .last()
+            .expect("parent stage message");
         let child_session_id = parent_stage_message
             .metadata
             .get("scheduler_stage_child_session_id")
@@ -3536,7 +3619,11 @@ mod tests {
         let child = sessions
             .get(&child_session_id)
             .expect("child session should exist");
-        let child_message = child.messages.last().expect("child assistant message");
+        let child_message = child
+            .record()
+            .messages
+            .last()
+            .expect("child assistant message");
         assert_eq!(child_message.get_text(), "child session streamed content");
         assert_eq!(child_message.finish.as_deref(), Some("end_turn"));
         assert_eq!(child.parent_id.as_deref(), Some(session_id.as_str()));
@@ -3578,7 +3665,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project", ".").id.clone()
         };
         let emitted = Arc::new(StdMutex::new(Vec::<OutputBlockEvent>::new()));
         let emitted_hook = emitted.clone();
@@ -3666,7 +3753,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project", ".").id.clone()
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3685,7 +3772,10 @@ mod tests {
             "execution-orchestration",
             2,
             Some(&SchedulerStageCapabilities {
-                skill_list: vec!["debug".to_string(), "frontend-ui-ux".to_string()],
+                skill_list: vec![
+                    "debug".to_string().into(),
+                    "frontend-ui-ux".to_string().into(),
+                ],
                 agents: vec!["build".to_string(), "explore".to_string()],
                 categories: vec!["frontend".to_string()],
                 child_session: false,
@@ -3715,7 +3805,11 @@ mod tests {
 
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
-        let message = session.messages.last().expect("stage message should exist");
+        let message = session
+            .record()
+            .messages
+            .last()
+            .expect("stage message should exist");
         assert_eq!(
             message
                 .metadata
@@ -3741,7 +3835,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project", ".").id.clone()
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3765,7 +3859,11 @@ mod tests {
 
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
-        let message = session.messages.last().expect("stage message should exist");
+        let message = session
+            .record()
+            .messages
+            .last()
+            .expect("stage message should exist");
         assert_eq!(
             message
                 .metadata
@@ -3780,7 +3878,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project", ".").id.clone()
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3804,7 +3902,11 @@ mod tests {
 
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
-        let message = session.messages.last().expect("stage message should exist");
+        let message = session
+            .record()
+            .messages
+            .last()
+            .expect("stage message should exist");
         assert_eq!(
             message
                 .metadata
@@ -3820,7 +3922,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project", ".").id.clone()
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3848,7 +3950,11 @@ mod tests {
 
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
-        let message = session.messages.last().expect("stage message should exist");
+        let message = session
+            .record()
+            .messages
+            .last()
+            .expect("stage message should exist");
         assert_eq!(
             message
                 .metadata
@@ -3872,7 +3978,7 @@ mod tests {
         let state = Arc::new(ServerState::new());
         let session_id = {
             let mut sessions = state.sessions.lock().await;
-            sessions.create("project", ".").id
+            sessions.create("project", ".").id.clone()
         };
         let exec_ctx = OrchestratorExecutionContext {
             session_id: session_id.clone(),
@@ -3900,7 +4006,11 @@ mod tests {
 
         let sessions = state.sessions.lock().await;
         let session = sessions.get(&session_id).expect("session should exist");
-        let message = session.messages.last().expect("stage message should exist");
+        let message = session
+            .record()
+            .messages
+            .last()
+            .expect("stage message should exist");
         assert_eq!(
             message
                 .metadata
@@ -3936,7 +4046,7 @@ mod tests {
             "mock-model",
         )
         .await;
-        assert_eq!(session.title, "Scheduler Event Flow");
+        assert_eq!(session.record().title, "Scheduler Event Flow");
 
         let mut auto_named = Session::new("project", ".");
         auto_named.add_user_message("Fix the scheduler event flow");

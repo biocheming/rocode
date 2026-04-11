@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use rocode_core::agent_task_registry::{global_task_registry, AgentTaskStatus};
 
+use crate::skill_support::load_skills_prompt_context;
 use crate::{
     Metadata, PermissionRequest, TaskAgentInfo, TaskAgentModel, Tool, ToolContext, ToolError,
     ToolResult,
@@ -314,22 +315,22 @@ impl Tool for TaskTool {
         };
 
         let title = input.description.clone();
-        let (skills_context, loaded_skill_names) = match input.load_skills.as_ref() {
-            Some(names) => rocode_skill::render_loaded_skills_context_with_config_store(
-                Path::new(&ctx.directory),
-                names,
-                ctx.config_store.as_deref(),
-            )
-            .map_err(|err| ToolError::InvalidArguments(err.to_string()))?,
-            None => (String::new(), Vec::new()),
-        };
-        let subtask_prompt = if skills_context.is_empty() {
+        let loaded_skills_context = load_skills_prompt_context(
+            Path::new(&ctx.directory),
+            ctx.config_store.clone(),
+            input.load_skills.as_deref(),
+        )?;
+        let loaded_skill_names = loaded_skills_context.loaded_skill_names();
+        let subtask_prompt = if loaded_skills_context.is_empty() {
             match prompt_suffix {
                 Some(ref suffix) => format!("{}\n\n{}", input.prompt, suffix),
                 None => input.prompt.clone(),
             }
         } else {
-            let base = format!("{skills_context}\n\n## Delegated Task\n\n{}", input.prompt);
+            let base = format!(
+                "{}\n\n## Delegated Task\n\n{}",
+                loaded_skills_context.prompt_context, input.prompt
+            );
             match prompt_suffix {
                 Some(ref suffix) => format!("{}\n\n{}", base, suffix),
                 None => base,
@@ -416,6 +417,10 @@ impl Tool for TaskTool {
             metadata.insert(
                 "loadedSkillCount".into(),
                 serde_json::json!(loaded_skill_names.len()),
+            );
+            metadata.insert(
+                "loadedSkillViews".into(),
+                serde_json::json!(loaded_skills_context.loaded_skills),
             );
         }
 
@@ -1089,6 +1094,14 @@ Use clear visual hierarchy.
         assert_eq!(
             result.metadata.get("loadedSkillCount"),
             Some(&serde_json::json!(1))
+        );
+        assert_eq!(
+            result.metadata.get("loadedSkillViews"),
+            Some(&serde_json::json!([{
+                "name": "frontend-ui-ux",
+                "description": "frontend",
+                "category": serde_json::Value::Null,
+            }]))
         );
     }
 }

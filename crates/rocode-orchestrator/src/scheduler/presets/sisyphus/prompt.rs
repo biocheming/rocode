@@ -4,6 +4,7 @@ use crate::scheduler::prompt_support::{
     build_librarian_section, build_oracle_section, build_task_management_section,
     build_tool_selection_table, ANTI_PATTERNS, HARD_BLOCKS, SOFT_GUIDELINES, TONE_AND_STYLE,
 };
+use crate::scheduler::SchedulerSkillRef;
 
 pub fn sisyphus_system_prompt_preview() -> &'static str {
     "You are Sisyphus — delegation-first execution orchestrator.\nBias: classify intent fast, delegate aggressively, and parallelize independent work.\nBoundary: do not become the primary implementer for non-trivial multi-step work."
@@ -40,7 +41,7 @@ Classify the request before acting:
 pub fn build_sisyphus_dynamic_prompt(
     available_agents: &[AvailableAgentMeta],
     available_categories: &[AvailableCategoryMeta],
-    skill_list: &[String],
+    skill_list: &[SchedulerSkillRef],
 ) -> String {
     let tool_selection = build_tool_selection_table(available_agents, skill_list);
     let explore_section = build_explore_section(available_agents);
@@ -413,9 +414,14 @@ mod tests {
 
     #[test]
     fn skills_appear_in_prompt() {
-        let skills = vec!["commit".to_string(), "review-pr".to_string()];
+        let skills = vec![
+            SchedulerSkillRef::from("commit"),
+            SchedulerSkillRef::from("review-pr"),
+        ];
         let prompt = build_sisyphus_dynamic_prompt(&[], &[], &skills);
-        assert!(prompt.contains("**Active Skills**: commit, review-pr"));
+        assert!(prompt.contains("<available_skills>"));
+        assert!(prompt.contains("- commit"));
+        assert!(prompt.contains("- review-pr"));
     }
 
     #[test]

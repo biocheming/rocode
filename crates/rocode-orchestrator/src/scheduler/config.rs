@@ -1,4 +1,4 @@
-use super::SchedulerStageKind;
+use super::{SchedulerSkillRef, SchedulerStageKind};
 use crate::agent_tree::AgentTreeNode;
 use crate::iterative_workflow::{IterativeWorkflowConfig, IterativeWorkflowSource};
 use crate::scheduler::{AvailableAgentMeta, AvailableCategoryMeta};
@@ -130,7 +130,7 @@ pub struct SchedulerStageOverride {
     pub agents: Vec<String>,
 
     #[serde(default, alias = "skillList", skip_serializing_if = "Vec::is_empty")]
-    pub skill_list: Vec<String>,
+    pub skill_list: Vec<SchedulerSkillRef>,
 }
 
 /// JSON-friendly tool-policy values.
@@ -354,7 +354,7 @@ pub struct SchedulerProfileConfig {
     pub model: Option<ModelRef>,
 
     #[serde(default, alias = "skillList", skip_serializing_if = "Vec::is_empty")]
-    pub skill_list: Vec<String>,
+    pub skill_list: Vec<SchedulerSkillRef>,
 
     /// Stage sequence. Each entry is either a plain stage-kind string
     /// (`"plan"`) or an object with per-stage overrides.
@@ -433,7 +433,9 @@ mod tests {
               "skillList": ["request-analysis", "plan", "delegation"],
               "stages": ["request-analysis", "plan", "delegation", "review", "synthesis"],
               "skillTree": {
-                "contextMarkdown": "Article 1: one execution kernel"
+                "contextMarkdown": "Article 1: one execution kernel",
+                "tokenBudget": 256,
+                "truncationStrategy": "tail"
               },
               "agentTree": {
                 "agent": { "name": "deep-worker" }
@@ -476,6 +478,20 @@ mod tests {
                 .as_ref()
                 .map(|tree| tree.context_markdown.as_str()),
             Some("Article 1: one execution kernel")
+        );
+        assert_eq!(
+            profile
+                .skill_tree
+                .as_ref()
+                .and_then(|tree| tree.token_budget),
+            Some(256)
+        );
+        assert_eq!(
+            profile
+                .skill_tree
+                .as_ref()
+                .map(|tree| tree.truncation_strategy),
+            Some(crate::skill_tree::SkillTreeTruncationStrategy::Tail)
         );
     }
 

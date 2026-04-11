@@ -4,12 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct TodoInfo {
-    pub content: String,
-    pub status: String,
-    pub priority: String,
-}
+pub use rocode_types::TodoInfo;
 
 pub struct TodoManager {
     state: Arc<RwLock<HashMap<String, Vec<TodoInfo>>>>,

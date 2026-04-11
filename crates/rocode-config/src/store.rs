@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
 
 use crate::loader::{
@@ -21,6 +22,7 @@ pub struct ConfigStore {
     project_dir: RwLock<Option<PathBuf>>,
     workspace_identity: RwLock<Option<WorkspaceIdentity>>,
     workspace_mode: RwLock<WorkspaceMode>,
+    revision: AtomicU64,
 }
 
 impl ConfigStore {
@@ -32,6 +34,7 @@ impl ConfigStore {
             project_dir: RwLock::new(None),
             workspace_identity: RwLock::new(None),
             workspace_mode: RwLock::new(WorkspaceMode::Shared),
+            revision: AtomicU64::new(0),
         }
     }
 
@@ -75,6 +78,7 @@ impl ConfigStore {
 
         let new_arc = Arc::new(updated);
         self.base.store(new_arc.clone());
+        self.revision.fetch_add(1, Ordering::Relaxed);
 
         // Invalidate plugin cache synchronously (best-effort)
         if let Ok(mut guard) = self.plugin_applied.try_write() {
@@ -103,6 +107,7 @@ impl ConfigStore {
 
         let new_arc = Arc::new(updated);
         self.base.store(new_arc.clone());
+        self.revision.fetch_add(1, Ordering::Relaxed);
 
         if let Ok(mut guard) = self.plugin_applied.try_write() {
             *guard = None;
@@ -182,6 +187,7 @@ impl ConfigStore {
         let config = resolved.config;
         let new_arc = Arc::new(config);
         self.base.store(new_arc.clone());
+        self.revision.fetch_add(1, Ordering::Relaxed);
         *self
             .workspace_identity
             .write()
@@ -210,6 +216,10 @@ impl ConfigStore {
 
     pub fn workspace_mode(&self) -> WorkspaceMode {
         *self.workspace_mode.read().expect("workspace_mode poisoned")
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision.load(Ordering::Relaxed)
     }
 }
 

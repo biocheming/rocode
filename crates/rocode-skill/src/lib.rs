@@ -1,363 +1,52 @@
-use rocode_config::{Config, ConfigStore};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::fs;
-use std::path::{Path, PathBuf};
+mod authority;
+mod catalog;
+mod discovery;
+mod errors;
+mod types;
+mod write;
+
+pub use authority::{infer_toolsets_from_tools, SkillAuthority, SkillFilter};
+pub use catalog::{
+    SkillCatalogCache, SkillCatalogSnapshot, SkillDirectorySignature, SkillFileSignature,
+    SkillRoot, SkillRootSignature,
+};
+pub use errors::SkillError;
+pub use types::{
+    LoadedSkill, LoadedSkillFile, SkillConditions, SkillFileRef, SkillMeta, SkillMetaView,
+    SkillSummary,
+};
+pub use write::{
+    CreateSkillRequest, DeleteSkillRequest, EditSkillRequest, PatchSkillRequest,
+    RemoveSkillFileRequest, SkillWriteAction, SkillWriteResult, WriteSkillFileRequest,
+};
+
+use rocode_config::ConfigStore;
+use std::path::PathBuf;
 use std::sync::Arc;
-use walkdir::WalkDir;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SkillDefinition {
-    pub name: String,
-    pub description: String,
-    pub content: String,
-    pub location: PathBuf,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SkillSummary {
-    pub name: String,
-    pub description: String,
-    pub location: PathBuf,
-}
-
-#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
-pub enum SkillError {
-    #[error("Unknown skill: {requested}. Available skills: {available}")]
-    UnknownSkill {
-        requested: String,
-        available: String,
-    },
-}
-
-/// Skill domain authority. This crate owns discovery, parsing, and skill
-/// context rendering so adapters do not duplicate skill semantics.
-#[derive(Clone)]
-pub struct SkillAuthority {
-    base: PathBuf,
-    config_store: Option<Arc<ConfigStore>>,
-}
-
-impl SkillAuthority {
-    pub fn new(base: impl Into<PathBuf>, config_store: Option<Arc<ConfigStore>>) -> Self {
-        Self {
-            base: base.into(),
-            config_store,
-        }
-    }
-
-    pub fn list_skills(&self) -> Vec<SkillSummary> {
-        self.discover_skills()
-            .into_iter()
-            .map(|skill| SkillSummary {
-                name: skill.name,
-                description: skill.description,
-                location: skill.location,
-            })
-            .collect()
-    }
-
-    pub fn discover_skills(&self) -> Vec<SkillDefinition> {
-        discover_skills_with_config_store(&self.base, self.config_store.as_deref())
-    }
-
-    pub fn find_skill_by_name_ci(&self, name: &str) -> Result<SkillDefinition, SkillError> {
-        let skills = self.discover_skills();
-        find_skill_by_name_ci(&skills, name)
-            .cloned()
-            .ok_or_else(|| unknown_skill_error(name, &skills))
-    }
-
-    pub fn render_loaded_skills_context(
-        &self,
-        requested_names: &[String],
-    ) -> Result<(String, Vec<String>), SkillError> {
-        render_loaded_skills_context_with_config_store(
-            &self.base,
-            requested_names,
-            self.config_store.as_deref(),
-        )
-    }
-}
-
-fn resolve_skill_path(base: &Path, raw: &str) -> PathBuf {
-    if let Some(stripped) = raw.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(stripped);
-        }
-    }
-
-    let path = PathBuf::from(raw);
-    if path.is_absolute() {
-        path
-    } else {
-        base.join(path)
-    }
-}
-
-fn configured_skill_roots(base: &Path, config: &Config) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(skills) = &config.skills {
-        for raw in &skills.paths {
-            roots.push(resolve_skill_path(base, raw));
-        }
-    }
-
-    let mut names: Vec<&String> = config.skill_paths.keys().collect();
-    names.sort();
-    for name in names {
-        if let Some(raw) = config.skill_paths.get(name) {
-            roots.push(resolve_skill_path(base, raw));
-        }
-    }
-
-    roots
-}
-
-fn collect_skill_roots(base: &Path, config: Option<&Config>) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(config_dir) = dirs::config_dir() {
-        roots.push(config_dir.join("rocode/skill"));
-        roots.push(config_dir.join("rocode/skills"));
-    }
-
-    if let Some(home) = dirs::home_dir() {
-        roots.push(home.join(".rocode/skill"));
-        roots.push(home.join(".rocode/skills"));
-        roots.push(home.join(".agents/skills"));
-        roots.push(home.join(".claude/skills"));
-    }
-
-    roots.push(base.join(".rocode/skill"));
-    roots.push(base.join(".rocode/skills"));
-    roots.push(base.join(".agents/skills"));
-    roots.push(base.join(".claude/skills"));
-
-    if let Some(config) = config {
-        roots.extend(configured_skill_roots(base, config));
-    }
-
-    let mut deduped = Vec::new();
-    for root in roots {
-        if !deduped.contains(&root) {
-            deduped.push(root);
-        }
-    }
-    deduped
-}
-
-fn config_for_skill_discovery(
-    base: &Path,
-    config_store: Option<&ConfigStore>,
-) -> Option<Arc<Config>> {
-    config_store.map(ConfigStore::config).or_else(|| {
-        ConfigStore::from_project_dir(base)
-            .ok()
-            .map(|store| store.config())
-    })
-}
-
-fn parse_frontmatter_value(frontmatter: &str, key: &str) -> Option<String> {
-    for line in frontmatter.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        if let Some(value) = trimmed.strip_prefix(&format!("{key}:")) {
-            let value = value.trim();
-            if value.len() >= 2
-                && ((value.starts_with('"') && value.ends_with('"'))
-                    || (value.starts_with('\'') && value.ends_with('\'')))
-            {
-                return Some(value[1..value.len() - 1].to_string());
-            }
-            return Some(value.to_string());
-        }
-    }
-    None
-}
-
-fn parse_skill_file(path: &Path) -> Option<SkillDefinition> {
-    let raw = fs::read_to_string(path).ok()?;
-    let normalized = raw.replace("\r\n", "\n");
-    let mut lines = normalized.lines();
-
-    if lines.next()?.trim() != "---" {
-        return None;
-    }
-
-    let mut frontmatter_lines = Vec::new();
-    let mut closed = false;
-    for line in lines.by_ref() {
-        if line.trim() == "---" {
-            closed = true;
-            break;
-        }
-        frontmatter_lines.push(line);
-    }
-    if !closed {
-        return None;
-    }
-
-    let frontmatter = frontmatter_lines.join("\n");
-    let content = lines.collect::<Vec<_>>().join("\n");
-    let name = parse_frontmatter_value(&frontmatter, "name")?;
-    let description = parse_frontmatter_value(&frontmatter, "description")?;
-
-    Some(SkillDefinition {
-        name,
-        description,
-        content: content.trim().to_string(),
-        location: path.to_path_buf(),
-    })
-}
-
-fn scan_skill_root(root: &Path) -> Vec<SkillDefinition> {
-    if !root.exists() || !root.is_dir() {
-        return Vec::new();
-    }
-
-    let mut skill_files: Vec<PathBuf> = WalkDir::new(root)
-        .follow_links(true)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file())
-        .map(|entry| entry.path().to_path_buf())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .map(|name| name == "SKILL.md")
-                .unwrap_or(false)
-        })
-        .collect();
-    skill_files.sort();
-
-    skill_files
-        .into_iter()
-        .filter_map(|path| parse_skill_file(&path))
-        .collect()
-}
-
-fn discover_skills_with_config_store(
-    base: &Path,
-    config_store: Option<&ConfigStore>,
-) -> Vec<SkillDefinition> {
-    let mut by_name: HashMap<String, SkillDefinition> = HashMap::new();
-    let config = config_for_skill_discovery(base, config_store);
-    for root in collect_skill_roots(base, config.as_deref()) {
-        for skill in scan_skill_root(&root) {
-            by_name.insert(skill.name.clone(), skill);
-        }
-    }
-
-    let mut skills: Vec<SkillDefinition> = by_name.into_values().collect();
-    skills.sort_by(|a, b| a.name.cmp(&b.name));
-    skills
-}
-
-fn normalize_requested_skill_names(raw_names: &[String]) -> Vec<String> {
-    let mut out = Vec::new();
-    for raw in raw_names {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if !out
-            .iter()
-            .any(|seen: &String| seen.eq_ignore_ascii_case(trimmed))
-        {
-            out.push(trimmed.to_string());
-        }
-    }
-    out
-}
-
-fn find_skill_by_name_ci<'a>(
-    skills: &'a [SkillDefinition],
-    name: &str,
-) -> Option<&'a SkillDefinition> {
-    skills.iter().find(|s| s.name.eq_ignore_ascii_case(name))
-}
-
-fn unknown_skill_error(requested: &str, skills: &[SkillDefinition]) -> SkillError {
-    let available = skills
-        .iter()
-        .map(|s| s.name.clone())
-        .collect::<Vec<_>>()
-        .join(", ");
-    SkillError::UnknownSkill {
-        requested: requested.to_string(),
-        available,
-    }
-}
-
-pub fn render_loaded_skills_context(
-    base: &Path,
-    requested_names: &[String],
-) -> Result<(String, Vec<String>), SkillError> {
-    render_loaded_skills_context_with_config_store(base, requested_names, None)
-}
-
-pub fn render_loaded_skills_context_with_config_store(
-    base: &Path,
-    requested_names: &[String],
-    config_store: Option<&ConfigStore>,
-) -> Result<(String, Vec<String>), SkillError> {
-    let requested = normalize_requested_skill_names(requested_names);
-    if requested.is_empty() {
-        return Ok((String::new(), Vec::new()));
-    }
-
-    let skills = discover_skills_with_config_store(base, config_store);
-    let mut selected: Vec<&SkillDefinition> = Vec::new();
-
-    for name in &requested {
-        let Some(skill) = find_skill_by_name_ci(&skills, name) else {
-            return Err(unknown_skill_error(name, &skills));
-        };
-        selected.push(skill);
-    }
-
-    let mut context = String::new();
-    context.push_str("<loaded_skills>\n");
-    for skill in &selected {
-        context.push_str(&format!("<skill name=\"{}\">\n\n", skill.name));
-        context.push_str(&format!("# Skill: {}\n\n", skill.name));
-        context.push_str(&skill.content);
-        context.push_str("\n\n");
-        context.push_str(&format!(
-            "Base directory: {}\n",
-            skill.location.parent().unwrap_or(base).to_string_lossy()
-        ));
-        context.push_str("</skill>\n");
-    }
-    context.push_str("</loaded_skills>");
-
-    Ok((
-        context,
-        selected.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
-    ))
-}
-
-pub fn list_available_skills() -> Vec<(String, String)> {
+pub fn list_available_skill_views() -> Vec<SkillMetaView> {
     let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let config_store = ConfigStore::from_project_dir(&base).ok().map(Arc::new);
-    SkillAuthority::new(base, config_store)
-        .list_skills()
-        .into_iter()
-        .map(|skill| (skill.name, skill.description))
-        .collect()
+    let authority = SkillAuthority::new(base, config_store);
+    authority.list_skill_meta(None).unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::{
+        snapshot_path, StoredSkillCatalogSnapshot, SKILL_CATALOG_SNAPSHOT_SCHEMA,
+        SKILL_CATALOG_SNAPSHOT_VERSION,
+    };
+    use rocode_config::Config;
+    use std::fs;
     use tempfile::tempdir;
 
     #[test]
-    fn parse_skill_file_reads_frontmatter_and_body() {
+    fn load_skill_reads_frontmatter_and_body() {
         let dir = tempdir().unwrap();
-        let skill_path = dir.path().join("SKILL.md");
+        let skill_path = dir.path().join(".rocode/skills/reviewer/SKILL.md");
+        fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
         fs::write(
             &skill_path,
             r#"---
@@ -372,9 +61,10 @@ Do a thorough review.
         )
         .unwrap();
 
-        let parsed = parse_skill_file(&skill_path).unwrap();
-        assert_eq!(parsed.name, "reviewer");
-        assert_eq!(parsed.description, "Review code changes");
+        let authority = SkillAuthority::new(dir.path(), None);
+        let parsed = authority.load_skill("reviewer", None).unwrap();
+        assert_eq!(parsed.meta.name, "reviewer");
+        assert_eq!(parsed.meta.description, "Review code changes");
         assert!(parsed.content.contains("Do a thorough review."));
     }
 
@@ -428,7 +118,7 @@ custom content
             .skill_paths
             .insert("custom".to_string(), "custom-skills".to_string());
         let authority = SkillAuthority::new(root, Some(Arc::new(ConfigStore::new(config))));
-        let discovered = authority.discover_skills();
+        let discovered = authority.list_skill_meta(None).unwrap();
         let names: Vec<String> = discovered.into_iter().map(|s| s.name).collect();
 
         assert!(names.contains(&"local-skill".to_string()));
@@ -454,24 +144,271 @@ Check correctness first.
         )
         .unwrap();
 
-        let (context, loaded) = render_loaded_skills_context(
-            root,
-            &[
+        let authority = SkillAuthority::new(root, None);
+        let (context, loaded) = authority
+            .render_loaded_skills_context(&[
                 "rocode-test-review-skill".to_string(),
                 "ROCODE-TEST-REVIEW-SKILL".to_string(),
-            ],
-        )
-        .unwrap();
+            ])
+            .unwrap();
         assert_eq!(loaded, vec!["rocode-test-review-skill".to_string()]);
         assert!(context.contains("<loaded_skills>"));
         assert!(context.contains("Check correctness first."));
     }
 
     #[test]
-    fn render_loaded_skills_context_returns_error_for_unknown_skill() {
+    fn load_skill_file_rejects_missing_or_escaping_paths() {
         let dir = tempdir().unwrap();
-        let err =
-            render_loaded_skills_context(dir.path(), &["missing-skill".to_string()]).unwrap_err();
-        assert!(err.to_string().contains("Unknown skill"));
+        let root = dir.path();
+        let skill_path = root.join(".rocode/skills/review/SKILL.md");
+        fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+
+        fs::write(
+            &skill_path,
+            r#"---
+name: review-skill
+description: review
+---
+Check correctness first.
+"#,
+        )
+        .unwrap();
+
+        let authority = SkillAuthority::new(root, None);
+        let err = authority
+            .load_skill_file("review-skill", "../outside.md")
+            .unwrap_err();
+        assert!(err.to_string().contains("invalid skill file path"));
+    }
+
+    #[test]
+    fn refresh_persists_skill_catalog_snapshot_to_disk() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let skill_path = root.join(".rocode/skills/review/SKILL.md");
+        fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+        fs::write(
+            &skill_path,
+            r#"---
+name: review-snapshot
+description: review
+---
+Snapshot me.
+"#,
+        )
+        .unwrap();
+
+        let authority = SkillAuthority::new(root, None);
+        let snapshot = authority.refresh().unwrap();
+        let cache_path = snapshot_path(root);
+
+        assert!(cache_path.exists());
+        let persisted: StoredSkillCatalogSnapshot =
+            serde_json::from_str(&fs::read_to_string(cache_path).unwrap()).unwrap();
+        assert_eq!(persisted.schema, SKILL_CATALOG_SNAPSHOT_SCHEMA);
+        assert_eq!(persisted.version, SKILL_CATALOG_SNAPSHOT_VERSION);
+        assert!(persisted
+            .snapshot
+            .skills
+            .iter()
+            .any(|skill| skill.name == "review-snapshot"));
+        assert!(snapshot
+            .skills
+            .iter()
+            .any(|skill| skill.name == "review-snapshot"));
+    }
+
+    #[test]
+    fn load_skill_cache_reloads_when_file_changes() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let skill_path = root.join(".rocode/skills/review/SKILL.md");
+        fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+        fs::write(
+            &skill_path,
+            r#"---
+name: review-cache
+description: review
+---
+First body.
+"#,
+        )
+        .unwrap();
+
+        let authority = SkillAuthority::new(root, None);
+        let first = authority.load_skill("review-cache", None).unwrap();
+        assert!(first.content.contains("First body."));
+
+        fs::write(
+            &skill_path,
+            r#"---
+name: review-cache
+description: review
+---
+Second body.
+"#,
+        )
+        .unwrap();
+
+        let second = authority.load_skill("review-cache", None).unwrap();
+        assert!(second.content.contains("Second body."));
+    }
+
+    #[test]
+    fn config_store_revision_invalidates_skill_roots() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+
+        let skill_a = root.join("skills-a/alpha/SKILL.md");
+        fs::create_dir_all(skill_a.parent().unwrap()).unwrap();
+        fs::write(
+            &skill_a,
+            r#"---
+name: alpha-skill
+description: alpha
+---
+Alpha.
+"#,
+        )
+        .unwrap();
+
+        let skill_b = root.join("skills-b/beta/SKILL.md");
+        fs::create_dir_all(skill_b.parent().unwrap()).unwrap();
+        fs::write(
+            &skill_b,
+            r#"---
+name: beta-skill
+description: beta
+---
+Beta.
+"#,
+        )
+        .unwrap();
+
+        let mut config = Config::default();
+        config
+            .skill_paths
+            .insert("custom".to_string(), "skills-a".to_string());
+        let store = Arc::new(ConfigStore::new(config));
+        let authority = SkillAuthority::new(root, Some(store.clone()));
+
+        let first = authority.list_skill_meta(None).unwrap();
+        assert!(first.iter().any(|skill| skill.name == "alpha-skill"));
+        assert!(!first.iter().any(|skill| skill.name == "beta-skill"));
+
+        store
+            .replace_with(|config| {
+                config
+                    .skill_paths
+                    .insert("custom".to_string(), "skills-b".to_string());
+                Ok(())
+            })
+            .unwrap();
+
+        let second = authority.list_skill_meta(None).unwrap();
+        assert!(!second.iter().any(|skill| skill.name == "alpha-skill"));
+        assert!(second.iter().any(|skill| skill.name == "beta-skill"));
+    }
+
+    #[test]
+    fn corrupted_snapshot_falls_back_to_rebuild() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let skill_path = root.join(".rocode/skills/review/SKILL.md");
+        fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+        fs::write(
+            &skill_path,
+            r#"---
+name: fallback-skill
+description: fallback
+---
+Fallback.
+"#,
+        )
+        .unwrap();
+
+        let snapshot_file = snapshot_path(root);
+        fs::create_dir_all(snapshot_file.parent().unwrap()).unwrap();
+        fs::write(&snapshot_file, "{ definitely-not-json").unwrap();
+
+        let authority = SkillAuthority::new(root, None);
+        let skills = authority.list_skill_meta(None).unwrap();
+        assert!(skills.iter().any(|skill| skill.name == "fallback-skill"));
+
+        let repaired: StoredSkillCatalogSnapshot =
+            serde_json::from_str(&fs::read_to_string(snapshot_file).unwrap()).unwrap();
+        assert_eq!(repaired.version, SKILL_CATALOG_SNAPSHOT_VERSION);
+    }
+
+    #[test]
+    fn unsupported_snapshot_version_falls_back_to_rebuild() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let skill_path = root.join(".rocode/skills/review/SKILL.md");
+        fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+        fs::write(
+            &skill_path,
+            r#"---
+name: versioned-skill
+description: fallback
+---
+Version fallback.
+"#,
+        )
+        .unwrap();
+
+        let snapshot_file = snapshot_path(root);
+        fs::create_dir_all(snapshot_file.parent().unwrap()).unwrap();
+        let stale = serde_json::json!({
+            "schema": SKILL_CATALOG_SNAPSHOT_SCHEMA,
+            "version": SKILL_CATALOG_SNAPSHOT_VERSION + 1,
+            "snapshot": {
+                "roots": [],
+                "signatures": [],
+                "skills": []
+            }
+        });
+        fs::write(&snapshot_file, serde_json::to_vec_pretty(&stale).unwrap()).unwrap();
+
+        let authority = SkillAuthority::new(root, None);
+        let skills = authority.list_skill_meta(None).unwrap();
+        assert!(skills.iter().any(|skill| skill.name == "versioned-skill"));
+
+        let repaired: StoredSkillCatalogSnapshot =
+            serde_json::from_str(&fs::read_to_string(snapshot_file).unwrap()).unwrap();
+        assert_eq!(repaired.version, SKILL_CATALOG_SNAPSHOT_VERSION);
+        assert!(repaired
+            .snapshot
+            .skills
+            .iter()
+            .any(|skill| skill.name == "versioned-skill"));
+    }
+
+    #[test]
+    fn refresh_after_mutation_reloads_new_skill_immediately() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let authority = SkillAuthority::new(root, None);
+
+        authority.refresh().unwrap();
+
+        let skill_path = root.join(".rocode/skills/review/SKILL.md");
+        fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+        fs::write(
+            &skill_path,
+            r#"---
+name: write-hook-skill
+description: write hook
+---
+Visible after mutation.
+"#,
+        )
+        .unwrap();
+
+        let snapshot = authority.refresh_after_mutation().unwrap();
+        assert!(snapshot
+            .skills
+            .iter()
+            .any(|skill| skill.name == "write-hook-skill"));
     }
 }

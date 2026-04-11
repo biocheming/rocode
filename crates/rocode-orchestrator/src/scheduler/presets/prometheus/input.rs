@@ -178,7 +178,7 @@ review"
         "Saved Planning Artifact",
         input.saved_planning_artifact,
     );
-    push_optional_section(&mut sections, "Active Skills", input.active_skills_markdown);
+    push_optional_section(&mut sections, "Skills Index", input.skills_index_markdown);
     push_optional_section(&mut sections, "Additional Context", input.delegation_output);
     sections.push(
         "## Review Delivery Shape

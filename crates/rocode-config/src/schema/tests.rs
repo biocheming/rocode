@@ -272,6 +272,8 @@ fn composition_skill_tree_deserializes_from_camel_case() {
             "skillTree": {
                 "enabled": true,
                 "separator": "\n--\n",
+                "tokenBudget": 512,
+                "truncationStrategy": "tail",
                 "root": {
                     "node_id": "root",
                     "markdown_path": "docs/root.md",
@@ -289,6 +291,8 @@ fn composition_skill_tree_deserializes_from_camel_case() {
         .expect("composition skill tree should exist");
     assert_eq!(skill_tree.enabled, Some(true));
     assert_eq!(skill_tree.separator.as_deref(), Some("\n--\n"));
+    assert_eq!(skill_tree.token_budget, Some(512));
+    assert_eq!(skill_tree.truncation_strategy.as_deref(), Some("tail"));
     assert_eq!(
         skill_tree.root.as_ref().map(|root| root.node_id.as_str()),
         Some("root")
@@ -302,6 +306,8 @@ fn composition_skill_tree_merge_replaces_root_and_separator() {
             skill_tree: Some(SkillTreeConfig {
                 enabled: Some(true),
                 separator: Some("old".to_string()),
+                token_budget: Some(128),
+                truncation_strategy: Some("head".to_string()),
                 root: Some(SkillTreeNodeConfig {
                     node_id: "old".to_string(),
                     markdown_path: "docs/old.md".to_string(),
@@ -317,6 +323,8 @@ fn composition_skill_tree_merge_replaces_root_and_separator() {
             skill_tree: Some(SkillTreeConfig {
                 enabled: Some(false),
                 separator: Some("new".to_string()),
+                token_budget: Some(256),
+                truncation_strategy: Some("head-tail".to_string()),
                 root: Some(SkillTreeNodeConfig {
                     node_id: "new".to_string(),
                     markdown_path: "docs/new.md".to_string(),
@@ -336,6 +344,8 @@ fn composition_skill_tree_merge_replaces_root_and_separator() {
         .expect("merged skill tree should exist");
     assert_eq!(merged.enabled, Some(false));
     assert_eq!(merged.separator.as_deref(), Some("new"));
+    assert_eq!(merged.token_budget, Some(256));
+    assert_eq!(merged.truncation_strategy.as_deref(), Some("head-tail"));
     assert_eq!(
         merged.root.as_ref().map(|root| root.markdown_path.as_str()),
         Some("docs/new.md")

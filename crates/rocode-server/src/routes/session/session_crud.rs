@@ -6,7 +6,13 @@ use axum::{
     extract::{Path, Query, State},
     Json,
 };
-use serde::{Deserialize, Serialize};
+use rocode_session::load_session_telemetry_snapshot;
+use rocode_types::{
+    FileDiff, PermissionRulesetInfo, SessionInfo, SessionListContract, SessionListHints,
+    SessionListItem, SessionListResponse, SessionListSummary, SessionRevertInfo, SessionShareInfo,
+    SessionStatusInfo, SessionSummaryInfo, SessionTimeInfo, SessionTodoInfo,
+};
+use serde::Deserialize;
 
 use crate::runtime_control::SessionRunStatus;
 use crate::session_runtime::events::broadcast_session_updated;
@@ -23,87 +29,6 @@ pub struct ListSessionsQuery {
     pub start: Option<i64>,
     pub search: Option<String>,
     pub limit: Option<usize>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct SessionInfo {
-    pub id: String,
-    pub slug: String,
-    pub project_id: String,
-    pub directory: String,
-    pub parent_id: Option<String>,
-    pub title: String,
-    pub version: String,
-    pub time: SessionTimeInfo,
-    pub summary: Option<SessionSummaryInfo>,
-    pub share: Option<SessionShareInfo>,
-    pub revert: Option<SessionRevertInfo>,
-    pub permission: Option<PermissionRulesetInfo>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<HashMap<String, serde_json::Value>>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct SessionTimeInfo {
-    pub created: i64,
-    pub updated: i64,
-    pub compacting: Option<i64>,
-    pub archived: Option<i64>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct SessionSummaryInfo {
-    pub additions: u64,
-    pub deletions: u64,
-    pub files: u64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct SessionShareInfo {
-    pub url: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct SessionRevertInfo {
-    pub message_id: String,
-    pub part_id: Option<String>,
-    pub snapshot: Option<String>,
-    pub diff: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct PermissionRulesetInfo {
-    pub allow: Vec<String>,
-    pub deny: Vec<String>,
-    pub mode: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct SessionStatusInfo {
-    pub status: String,
-    pub idle: bool,
-    pub busy: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub attempt: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next: Option<i64>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct TodoInfo {
-    pub id: String,
-    pub content: String,
-    pub status: String,
-    pub priority: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct FileDiffInfo {
-    pub path: String,
-    pub additions: u64,
-    pub deletions: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -192,45 +117,182 @@ pub struct ExecuteCommandRequest {
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
+fn session_time_info(session: &rocode_session::Session) -> SessionTimeInfo {
+    let session = session.record();
+    rocode_types::SessionTime {
+        created: session.time.created,
+        updated: session.time.updated,
+        compacting: session.time.compacting,
+        archived: session.time.archived,
+    }
+}
+
+fn session_summary_info(session: &rocode_session::Session) -> Option<SessionSummaryInfo> {
+    let session = session.record();
+    session.summary.as_ref().map(|s| SessionListSummary {
+        additions: s.additions,
+        deletions: s.deletions,
+        files: s.files,
+    })
+}
+
+fn session_list_time(session: &rocode_session::Session) -> rocode_types::SessionTime {
+    let session = session.record();
+    rocode_types::SessionTime {
+        created: session.time.created,
+        updated: session.time.updated,
+        compacting: session.time.compacting,
+        archived: session.time.archived,
+    }
+}
+
+fn session_list_summary(session: &rocode_session::Session) -> Option<SessionListSummary> {
+    let session = session.record();
+    session.summary.as_ref().map(|s| SessionListSummary {
+        additions: s.additions,
+        deletions: s.deletions,
+        files: s.files,
+    })
+}
+
+fn session_list_hints(session: &rocode_session::Session) -> Option<SessionListHints> {
+    let session = session.record();
+    let hints = SessionListHints {
+        current_model: session
+            .metadata
+            .get("current_model")
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned),
+        model_provider: session
+            .metadata
+            .get("model_provider")
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned),
+        model_id: session
+            .metadata
+            .get("model_id")
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned),
+        scheduler_profile: session
+            .metadata
+            .get("scheduler_profile")
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned),
+        resolved_scheduler_profile: session
+            .metadata
+            .get("resolved_scheduler_profile")
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned),
+        agent: session
+            .metadata
+            .get("agent")
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned),
+    };
+
+    if hints.current_model.is_none()
+        && hints.model_provider.is_none()
+        && hints.model_id.is_none()
+        && hints.scheduler_profile.is_none()
+        && hints.resolved_scheduler_profile.is_none()
+        && hints.agent.is_none()
+    {
+        None
+    } else {
+        Some(hints)
+    }
+}
+
+fn session_pending_command_invocation(
+    session: &rocode_session::Session,
+) -> Option<serde_json::Value> {
+    session
+        .record()
+        .metadata
+        .get("pending_command_invocation")
+        .cloned()
+}
+
+fn session_list_contract() -> SessionListContract {
+    SessionListContract {
+        filter_query_parameters: vec![
+            "directory".to_string(),
+            "roots".to_string(),
+            "start".to_string(),
+            "search".to_string(),
+            "limit".to_string(),
+        ],
+        search_fields: rocode_session::SESSION_LIST_SEARCH_FIELDS
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect(),
+        non_search_fields: vec![
+            "hints".to_string(),
+            "pending_command_invocation".to_string(),
+        ],
+        note: "Server-side session list search is restricted to lightweight SessionListItem fields. Display-only fields such as hints never participate.".to_string(),
+    }
+}
+
+fn session_list_response(items: Vec<SessionListItem>) -> SessionListResponse {
+    SessionListResponse {
+        items,
+        contract: session_list_contract(),
+    }
+}
+
+pub(super) fn session_to_list_item(session: &rocode_session::Session) -> SessionListItem {
+    let session_record = session.record();
+    SessionListItem {
+        id: session_record.id.clone(),
+        slug: session_record.slug.clone(),
+        project_id: session_record.project_id.clone(),
+        directory: session_record.directory.clone(),
+        parent_id: session_record.parent_id.clone(),
+        title: session_record.title.clone(),
+        version: session_record.version.clone(),
+        time: session_list_time(session),
+        summary: session_list_summary(session),
+        hints: session_list_hints(session),
+        pending_command_invocation: session_pending_command_invocation(session),
+    }
+}
+
 pub(super) fn session_to_info(session: &rocode_session::Session) -> SessionInfo {
+    let session_record = session.record();
     SessionInfo {
-        id: session.id.clone(),
-        slug: session.slug.clone(),
-        project_id: session.project_id.clone(),
-        directory: session.directory.clone(),
-        parent_id: session.parent_id.clone(),
-        title: session.title.clone(),
-        version: session.version.clone(),
-        time: SessionTimeInfo {
-            created: session.time.created,
-            updated: session.time.updated,
-            compacting: session.time.compacting,
-            archived: session.time.archived,
-        },
-        summary: session.summary.as_ref().map(|s| SessionSummaryInfo {
-            additions: s.additions,
-            deletions: s.deletions,
-            files: s.files,
-        }),
-        share: session
+        id: session_record.id.clone(),
+        slug: session_record.slug.clone(),
+        project_id: session_record.project_id.clone(),
+        directory: session_record.directory.clone(),
+        parent_id: session_record.parent_id.clone(),
+        title: session_record.title.clone(),
+        version: session_record.version.clone(),
+        time: session_time_info(session),
+        summary: session_summary_info(session),
+        share: session_record
             .share
             .as_ref()
-            .map(|s| SessionShareInfo { url: s.url.clone() }),
-        revert: session.revert.as_ref().map(|r| SessionRevertInfo {
+            .map(|s| rocode_types::SessionShare { url: s.url.clone() }),
+        revert: session_record.revert.as_ref().map(|r| SessionRevertInfo {
             message_id: r.message_id.clone(),
             part_id: r.part_id.clone(),
             snapshot: r.snapshot.clone(),
             diff: r.diff.clone(),
         }),
-        permission: session.permission.as_ref().map(|p| PermissionRulesetInfo {
-            allow: p.allow.clone(),
-            deny: p.deny.clone(),
-            mode: p.mode.clone(),
-        }),
-        metadata: if session.metadata.is_empty() {
+        permission: session_record
+            .permission
+            .as_ref()
+            .map(|p| PermissionRulesetInfo {
+                allow: p.allow.clone(),
+                deny: p.deny.clone(),
+                mode: p.mode.clone(),
+            }),
+        telemetry: load_session_telemetry_snapshot(session),
+        metadata: if session_record.metadata.is_empty() {
             None
         } else {
-            Some(session.metadata.clone())
+            Some(session_record.metadata.clone())
         },
     }
 }
@@ -288,6 +350,7 @@ pub(crate) fn resolved_session_directory(raw: &str) -> String {
 
 pub(super) fn session_model_override(session: &rocode_session::Session) -> Option<String> {
     session
+        .record()
         .metadata
         .get("model_provider")
         .and_then(|value| value.as_str())
@@ -302,6 +365,7 @@ pub(super) fn session_model_override(session: &rocode_session::Session) -> Optio
 
 pub(super) fn session_variant_override(session: &rocode_session::Session) -> Option<String> {
     session
+        .record()
         .metadata
         .get("model_variant")
         .and_then(|value| value.as_str())
@@ -310,6 +374,7 @@ pub(super) fn session_variant_override(session: &rocode_session::Session) -> Opt
 
 pub(super) fn session_agent_override(session: &rocode_session::Session) -> Option<String> {
     session
+        .record()
         .metadata
         .get("agent")
         .and_then(|value| value.as_str())
@@ -320,9 +385,10 @@ pub(super) fn session_scheduler_profile_override(
     session: &rocode_session::Session,
 ) -> Option<String> {
     session
+        .record()
         .metadata
         .get("scheduler_profile")
-        .or_else(|| session.metadata.get("resolved_scheduler_profile"))
+        .or_else(|| session.record().metadata.get("resolved_scheduler_profile"))
         .and_then(|value| value.as_str())
         .map(|value| value.to_string())
 }
@@ -333,33 +399,9 @@ pub(super) async fn set_session_run_status(
     status: SessionRunStatus,
 ) {
     state
-        .runtime_control
-        .set_session_run_status(session_id, status.clone())
+        .runtime_telemetry
+        .set_session_run_status(session_id, status)
         .await;
-
-    // Mirror run-status transition into the aggregated SessionRuntimeState.
-    match &status {
-        SessionRunStatus::Busy => {
-            state.runtime_state.mark_running(session_id, None).await;
-        }
-        SessionRunStatus::Idle => {
-            state.runtime_state.mark_idle(session_id).await;
-        }
-        SessionRunStatus::Retry { .. } => {
-            // Retry is still a "running" variant from the runtime state
-            // perspective — the session is not idle.
-            state.runtime_state.mark_running(session_id, None).await;
-        }
-    }
-
-    state.broadcast(
-        &serde_json::json!({
-            "type": "session.status",
-            "sessionID": session_id,
-            "status": status,
-        })
-        .to_string(),
-    );
 }
 
 /// Drop guard that sets session status to idle when the prompt task exits.
@@ -394,7 +436,7 @@ impl Drop for IdleGuard {
 pub(super) async fn list_sessions(
     State(state): State<Arc<ServerState>>,
     Query(query): Query<ListSessionsQuery>,
-) -> Result<Json<Vec<SessionInfo>>> {
+) -> Result<Json<SessionListResponse>> {
     let filter = rocode_session::SessionFilter {
         directory: query.directory,
         roots: query.roots.unwrap_or(false),
@@ -404,14 +446,14 @@ pub(super) async fn list_sessions(
     };
     let manager = state.sessions.lock().await;
     let sessions = manager.list_filtered(filter);
-    let infos: Vec<SessionInfo> = sessions.into_iter().map(session_to_info).collect();
-    Ok(Json(infos))
+    let items: Vec<SessionListItem> = sessions.into_iter().map(session_to_list_item).collect();
+    Ok(Json(session_list_response(items)))
 }
 
 pub(super) async fn session_status(
     State(state): State<Arc<ServerState>>,
 ) -> Result<Json<HashMap<String, SessionStatusInfo>>> {
-    let run_status = state.runtime_control.session_run_statuses().await;
+    let run_status = state.runtime_telemetry.session_run_statuses().await;
     let manager = state.sessions.lock().await;
     let sessions = manager.list();
     let status: HashMap<String, SessionStatusInfo> = sessions
@@ -510,9 +552,9 @@ pub(super) async fn create_session(
         });
         sessions.create(project_id, directory)
     };
-    let normalized_directory = resolved_session_directory(&session.directory);
-    if session.directory != normalized_directory {
-        session.directory = normalized_directory;
+    let normalized_directory = resolved_session_directory(session.record().directory.as_str());
+    if session.record().directory != normalized_directory {
+        session.set_directory(normalized_directory);
     }
     if let Some(title) = requested_title {
         session.set_title(title);
@@ -522,12 +564,8 @@ pub(super) async fn create_session(
         .as_deref()
         .or(requested_scheduler_profile.as_deref())
     {
-        session
-            .metadata
-            .insert("scheduler_profile".to_string(), serde_json::json!(profile));
-        session
-            .metadata
-            .insert("scheduler_applied".to_string(), serde_json::json!(true));
+        session.insert_metadata("scheduler_profile", serde_json::json!(profile));
+        session.insert_metadata("scheduler_applied", serde_json::json!(true));
         sessions.update(session.clone());
     }
     drop(sessions);
@@ -585,10 +623,13 @@ pub(super) async fn delete_session(
     for session_id in &deleted_session_ids {
         rocode_tool::tool_access::clear_tool_access_tracker(session_id);
         state
-            .runtime_control
+            .runtime_telemetry
             .set_session_run_status(session_id, SessionRunStatus::Idle)
             .await;
-        state.runtime_state.remove(session_id).await;
+        state
+            .runtime_telemetry
+            .clear_session_runtime(session_id)
+            .await;
     }
     persist_sessions_if_enabled(&state).await;
     Ok(Json(serde_json::json!({ "deleted": true })))
@@ -599,18 +640,28 @@ pub(super) async fn get_session_runtime(
     State(state): State<Arc<ServerState>>,
     Path(id): Path<String>,
 ) -> Result<Json<crate::session_runtime::state::SessionRuntimeState>> {
-    match state.runtime_state.get(&id).await {
-        Some(runtime) => Ok(Json(runtime)),
+    Ok(Json(runtime_snapshot_or_default(&state, &id).await?))
+}
+
+pub(super) async fn runtime_snapshot_or_default(
+    state: &Arc<ServerState>,
+    session_id: &str,
+) -> Result<crate::session_runtime::state::SessionRuntimeState> {
+    match state
+        .runtime_telemetry
+        .get_runtime_snapshot(session_id)
+        .await
+    {
+        Some(runtime) => Ok(runtime),
         None => {
-            // Session may exist but never had a prompt run. Return a default idle state.
             let sessions = state.sessions.lock().await;
-            if sessions.get(&id).is_some() {
+            if sessions.get(session_id).is_some() {
                 drop(sessions);
-                Ok(Json(
-                    crate::session_runtime::state::SessionRuntimeState::new(id),
+                Ok(crate::session_runtime::state::SessionRuntimeState::new(
+                    session_id.to_string(),
                 ))
             } else {
-                Err(ApiError::SessionNotFound(id))
+                Err(ApiError::SessionNotFound(session_id.to_string()))
             }
         }
     }
@@ -619,16 +670,17 @@ pub(super) async fn get_session_runtime(
 pub(super) async fn get_session_children(
     State(state): State<Arc<ServerState>>,
     Path(id): Path<String>,
-) -> Result<Json<Vec<SessionInfo>>> {
+) -> Result<Json<SessionListResponse>> {
     let manager = state.sessions.lock().await;
     let children = manager.children(&id);
-    Ok(Json(children.into_iter().map(session_to_info).collect()))
+    let items = children.into_iter().map(session_to_list_item).collect();
+    Ok(Json(session_list_response(items)))
 }
 
 pub(super) async fn get_session_todos(
     State(state): State<Arc<ServerState>>,
     Path(id): Path<String>,
-) -> Result<Json<Vec<TodoInfo>>> {
+) -> Result<Json<Vec<SessionTodoInfo>>> {
     let sessions = state.sessions.lock().await;
     if sessions.get(&id).is_none() {
         return Err(ApiError::SessionNotFound(id));
@@ -639,7 +691,7 @@ pub(super) async fn get_session_todos(
     let items = todos
         .into_iter()
         .enumerate()
-        .map(|(idx, todo)| TodoInfo {
+        .map(|(idx, todo)| SessionTodoInfo {
             id: format!("{}_{}", id, idx),
             content: todo.content,
             status: todo.status,
@@ -762,16 +814,29 @@ pub(super) async fn get_session_summary(
     let session = sessions
         .get(&id)
         .ok_or_else(|| ApiError::SessionNotFound(id.clone()))?;
-    Ok(Json(session.summary.as_ref().map(|s| SessionSummaryInfo {
-        additions: s.additions,
-        deletions: s.deletions,
-        files: s.files,
+    Ok(Json(session.record().summary.as_ref().map(|s| {
+        SessionListSummary {
+            additions: s.additions,
+            deletions: s.deletions,
+            files: s.files,
+        }
     })))
 }
 
 #[cfg(test)]
 mod tests {
     use super::collect_session_tree_ids;
+    use super::{
+        get_session_children, session_list_contract, session_to_info, session_to_list_item,
+    };
+    use crate::ServerState;
+    use axum::extract::{Path, State};
+    use rocode_command::stage_protocol::StageStatus;
+    use rocode_session::{
+        persist_session_telemetry_snapshot, PersistedStageTelemetrySummary, Session,
+        SessionTelemetrySnapshot, SessionTelemetrySnapshotVersion,
+    };
+    use std::sync::Arc;
 
     #[test]
     fn collect_session_tree_ids_includes_descendants() {
@@ -790,6 +855,137 @@ mod tests {
         assert_eq!(ids[0], root.id);
         assert!(ids.contains(&child.id));
         assert!(ids.contains(&grandchild.id));
+    }
+
+    #[test]
+    fn session_to_info_includes_typed_persisted_telemetry() {
+        let mut session = Session::new("project", "/tmp/project");
+        let snapshot = SessionTelemetrySnapshot {
+            version: SessionTelemetrySnapshotVersion::V1,
+            usage: rocode_types::SessionUsage {
+                input_tokens: 10,
+                output_tokens: 20,
+                reasoning_tokens: 3,
+                cache_write_tokens: 4,
+                cache_read_tokens: 5,
+                total_cost: 0.25,
+            },
+            stage_summaries: vec![PersistedStageTelemetrySummary {
+                stage_id: "stage-1".to_string(),
+                stage_name: "Plan".to_string(),
+                index: Some(1),
+                total: Some(2),
+                step: Some(1),
+                step_total: Some(3),
+                status: StageStatus::Running,
+                prompt_tokens: Some(11),
+                completion_tokens: Some(7),
+                reasoning_tokens: Some(5),
+                cache_read_tokens: Some(2),
+                cache_write_tokens: Some(1),
+                focus: Some("inspect".to_string()),
+                last_event: Some("scheduler.stage.started".to_string()),
+                waiting_on: None,
+                estimated_context_tokens: Some(99),
+                skill_tree_budget: Some(512),
+                skill_tree_truncation_strategy: Some("head".to_string()),
+                skill_tree_truncated: Some(false),
+                retry_attempt: None,
+                active_agent_count: 1,
+                active_tool_count: 2,
+                child_session_count: 0,
+                primary_child_session_id: None,
+            }],
+            last_run_status: "completed".to_string(),
+            updated_at: 123,
+        };
+        persist_session_telemetry_snapshot(&mut session, &snapshot)
+            .expect("persisted telemetry should serialize");
+
+        let info = session_to_info(&session);
+
+        assert_eq!(info.telemetry, Some(snapshot));
+    }
+
+    #[test]
+    fn session_list_item_stays_lightweight_but_keeps_selection_hints() {
+        let mut session = Session::new("project", "/tmp/project");
+        session.insert_metadata("model_provider", serde_json::json!("zhipuai"));
+        session.insert_metadata("model_id", serde_json::json!("glm-5.1"));
+        session.insert_metadata("scheduler_profile", serde_json::json!("prometheus"));
+        session.insert_metadata(
+            "pending_command_invocation",
+            serde_json::json!({"command": "connect"}),
+        );
+        persist_session_telemetry_snapshot(
+            &mut session,
+            &SessionTelemetrySnapshot {
+                version: SessionTelemetrySnapshotVersion::V1,
+                usage: rocode_types::SessionUsage {
+                    input_tokens: 1,
+                    output_tokens: 2,
+                    reasoning_tokens: 3,
+                    cache_write_tokens: 4,
+                    cache_read_tokens: 5,
+                    total_cost: 0.1,
+                },
+                stage_summaries: vec![],
+                last_run_status: "completed".to_string(),
+                updated_at: 123,
+            },
+        )
+        .expect("persisted telemetry should serialize");
+
+        let item = session_to_list_item(&session);
+        let value = serde_json::to_value(&item).expect("list item should serialize");
+
+        assert_eq!(
+            item.hints
+                .as_ref()
+                .and_then(|hints| hints.model_provider.as_deref()),
+            Some("zhipuai")
+        );
+        assert!(item.pending_command_invocation.is_some());
+        assert!(value.get("telemetry").is_none());
+        assert!(value.get("metadata").is_none());
+    }
+
+    #[test]
+    fn session_list_contract_exposes_search_allowlist_from_authority() {
+        let contract = session_list_contract();
+
+        assert_eq!(
+            contract.filter_query_parameters,
+            vec!["directory", "roots", "start", "search", "limit"]
+        );
+        assert_eq!(contract.search_fields, vec!["title".to_string()]);
+        assert!(contract.non_search_fields.contains(&"hints".to_string()));
+        assert!(contract.note.contains("hints"));
+    }
+
+    #[tokio::test]
+    async fn session_children_route_returns_list_wrapper_contract() {
+        let state = Arc::new(ServerState::new());
+        let parent_id = {
+            let mut sessions = state.sessions.lock().await;
+            let parent = sessions.create("project", "/tmp/project");
+            let child = sessions
+                .create_child(&parent.id)
+                .expect("child session should exist");
+            sessions.update(child);
+            parent.id.clone()
+        };
+
+        let axum::Json(response) = get_session_children(State(state), Path(parent_id))
+            .await
+            .expect("children route should succeed");
+
+        assert_eq!(response.items.len(), 1);
+        assert_eq!(response.contract.search_fields, vec!["title".to_string()]);
+        assert!(response
+            .contract
+            .non_search_fields
+            .contains(&"hints".to_string()));
     }
 }
 
@@ -1018,7 +1214,7 @@ pub(super) async fn execute_command(
 pub(super) async fn get_session_diff(
     State(state): State<Arc<ServerState>>,
     Path(id): Path<String>,
-) -> Result<Json<Vec<FileDiffInfo>>> {
+) -> Result<Json<Vec<FileDiff>>> {
     let sessions = state.sessions.lock().await;
     let session = sessions.get(&id).ok_or(ApiError::SessionNotFound(id))?;
     let diffs = session
@@ -1028,7 +1224,7 @@ pub(super) async fn get_session_diff(
         .map(|items| {
             items
                 .iter()
-                .map(|diff| FileDiffInfo {
+                .map(|diff| FileDiff {
                     path: diff.path.clone(),
                     additions: diff.additions,
                     deletions: diff.deletions,

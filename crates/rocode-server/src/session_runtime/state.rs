@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 
+use rocode_session::SessionUsage;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
@@ -29,6 +30,12 @@ pub struct SessionRuntimeState {
     pub run_status: RunStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_message_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<SessionUsage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_stage_id: Option<String>,
+    #[serde(default)]
+    pub active_stage_count: u32,
     pub active_tools: Vec<ActiveToolSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_question: Option<PendingQuestionSummary>,
@@ -43,6 +50,9 @@ impl SessionRuntimeState {
             session_id: session_id.into(),
             run_status: RunStatus::Idle,
             current_message_id: None,
+            usage: None,
+            active_stage_id: None,
+            active_stage_count: 0,
             active_tools: Vec::new(),
             pending_question: None,
             pending_permission: None,
@@ -162,6 +172,8 @@ impl RuntimeStateStore {
             s.run_status = RunStatus::Idle;
             s.current_message_id = None;
             s.active_tools.clear();
+            s.active_stage_id = None;
+            s.active_stage_count = 0;
             s.pending_question = None;
             s.pending_permission = None;
             // child_sessions are NOT cleared here — they persist until
@@ -208,6 +220,33 @@ impl RuntimeStateStore {
                 request_id: request_id.to_string(),
                 questions,
             });
+        })
+        .await;
+    }
+
+    pub async fn scheduler_stage_started(&self, session_id: &str, stage_id: &str) {
+        self.update(session_id, |s| {
+            s.active_stage_id = Some(stage_id.to_string());
+            s.active_stage_count = s.active_stage_count.saturating_add(1);
+        })
+        .await;
+    }
+
+    pub async fn scheduler_stage_finished(&self, session_id: &str, stage_id: Option<&str>) {
+        self.update(session_id, |s| {
+            s.active_stage_count = s.active_stage_count.saturating_sub(1);
+            if s.active_stage_count == 0 {
+                s.active_stage_id = None;
+            } else if s.active_stage_id.as_deref() == stage_id {
+                s.active_stage_id = None;
+            }
+        })
+        .await;
+    }
+
+    pub async fn set_usage(&self, session_id: &str, usage: SessionUsage) {
+        self.update(session_id, |s| {
+            s.usage = Some(usage);
         })
         .await;
     }

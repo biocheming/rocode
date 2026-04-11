@@ -1,5 +1,127 @@
 use crate::{ui_command_argument_kind, ResolvedUiCommand, UiActionId};
 
+pub const EVENTS_BROWSER_DEFAULT_PAGE_SIZE: usize = 24;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InteractiveEventsQuery {
+    pub stage_id: Option<String>,
+    pub execution_id: Option<String>,
+    pub event_type: Option<String>,
+    pub since: Option<i64>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InteractiveEventsCommand {
+    ShowCurrent,
+    ShowFiltered {
+        filter: InteractiveEventsQuery,
+        page: usize,
+    },
+    JumpPage(usize),
+    NextPage,
+    PreviousPage,
+    FirstPage,
+    Clear,
+}
+
+pub fn default_events_browser_query() -> InteractiveEventsQuery {
+    InteractiveEventsQuery {
+        limit: Some(EVENTS_BROWSER_DEFAULT_PAGE_SIZE),
+        ..Default::default()
+    }
+}
+
+pub fn parse_events_browser_command(raw: Option<&str>) -> InteractiveEventsCommand {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return InteractiveEventsCommand::ShowCurrent;
+    };
+
+    let mut parts = raw.split_whitespace();
+    let head = parts.next().unwrap_or_default().to_ascii_lowercase();
+    let tail = parts.collect::<Vec<_>>().join(" ");
+    if tail.is_empty() {
+        match head.as_str() {
+            "next" | "more" => return InteractiveEventsCommand::NextPage,
+            "prev" | "previous" | "back" => return InteractiveEventsCommand::PreviousPage,
+            "first" | "head" => return InteractiveEventsCommand::FirstPage,
+            "clear" | "reset" => return InteractiveEventsCommand::Clear,
+            _ => {}
+        }
+    }
+
+    if head == "page" {
+        if let Ok(page) = tail.parse::<usize>() {
+            return InteractiveEventsCommand::JumpPage(page.max(1));
+        }
+    }
+
+    let (filter, page) = parse_events_browser_query_spec(Some(raw));
+    InteractiveEventsCommand::ShowFiltered { filter, page }
+}
+
+pub fn parse_events_browser_query(raw: Option<&str>) -> InteractiveEventsQuery {
+    parse_events_browser_query_spec(raw).0
+}
+
+pub fn parse_events_browser_query_spec(raw: Option<&str>) -> (InteractiveEventsQuery, usize) {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return (default_events_browser_query(), 1);
+    };
+
+    if !raw.contains('=') {
+        return (
+            InteractiveEventsQuery {
+                stage_id: Some(raw.to_string()),
+                ..default_events_browser_query()
+            },
+            1,
+        );
+    }
+
+    let mut query = default_events_browser_query();
+    let mut page = 1usize;
+    for token in raw.split_whitespace() {
+        let Some((key, value)) = token.split_once('=') else {
+            continue;
+        };
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        match key {
+            "stage" | "stage_id" => query.stage_id = Some(value.to_string()),
+            "exec" | "execution" | "execution_id" => query.execution_id = Some(value.to_string()),
+            "type" | "event" | "event_type" => query.event_type = Some(value.to_string()),
+            "since" => query.since = value.parse::<i64>().ok(),
+            "limit" => query.limit = value.parse::<usize>().ok(),
+            "page" => {
+                if let Ok(parsed) = value.parse::<usize>() {
+                    page = parsed.max(1);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    (query, page)
+}
+
+pub fn events_browser_page_size(input: &InteractiveEventsQuery) -> usize {
+    input
+        .limit
+        .unwrap_or(EVENTS_BROWSER_DEFAULT_PAGE_SIZE)
+        .max(1)
+}
+
+pub fn events_browser_offset_for_page(input: &InteractiveEventsQuery, page: usize) -> usize {
+    events_browser_page_size(input).saturating_mul(page.saturating_sub(1))
+}
+
+pub fn events_browser_page_for_offset(input: &InteractiveEventsQuery, offset: usize) -> usize {
+    (offset / events_browser_page_size(input)) + 1
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InteractiveCommand {
     Exit,
@@ -36,6 +158,9 @@ pub enum InteractiveCommand {
     ScrollUp,
     ScrollDown,
     ScrollBottom,
+    ShowRuntime,
+    ShowUsage,
+    ShowEvents(Option<String>),
     /// `/inspect [stage_id]` — show stage event log for current session.
     InspectStage(Option<String>),
     /// User typed an unknown /command — we should warn, not treat as prompt.
@@ -126,6 +251,11 @@ pub fn parse_interactive_command(input: &str) -> Option<InteractiveCommand> {
         "new" => Some(InteractiveCommand::NewSession),
         "clear" => Some(InteractiveCommand::ClearScreen),
         "status" | "stats" => Some(InteractiveCommand::ShowStatus),
+        "runtime" => Some(InteractiveCommand::ShowRuntime),
+        "usage" => Some(InteractiveCommand::ShowUsage),
+        "events" | "event" => Some(InteractiveCommand::ShowEvents(
+            (!arg.is_empty()).then_some(arg),
+        )),
         "models" => Some(InteractiveCommand::ListModels),
         "model" => {
             if arg.is_empty() {
@@ -211,7 +341,11 @@ pub fn parse_interactive_command(input: &str) -> Option<InteractiveCommand> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_interactive_command, InteractiveCommand};
+    use super::{
+        default_events_browser_query, parse_events_browser_command, parse_events_browser_query,
+        parse_interactive_command, InteractiveCommand, InteractiveEventsCommand,
+        InteractiveEventsQuery, EVENTS_BROWSER_DEFAULT_PAGE_SIZE,
+    };
     use crate::{ResolvedUiCommand, UiActionId, UiCommandArgumentKind};
 
     #[test]
@@ -305,6 +439,24 @@ mod tests {
         assert_eq!(
             parse_interactive_command("/clear"),
             Some(InteractiveCommand::ClearScreen)
+        );
+        assert_eq!(
+            parse_interactive_command("/runtime"),
+            Some(InteractiveCommand::ShowRuntime)
+        );
+        assert_eq!(
+            parse_interactive_command("/usage"),
+            Some(InteractiveCommand::ShowUsage)
+        );
+        assert_eq!(
+            parse_interactive_command("/events"),
+            Some(InteractiveCommand::ShowEvents(None))
+        );
+        assert_eq!(
+            parse_interactive_command("/events stage=stg_1 limit=10"),
+            Some(InteractiveCommand::ShowEvents(Some(
+                "stage=stg_1 limit=10".to_string()
+            )))
         );
     }
 
@@ -477,6 +629,88 @@ mod tests {
         assert_eq!(
             parse_interactive_command("/stages"),
             Some(InteractiveCommand::InspectStage(None))
+        );
+    }
+
+    #[test]
+    fn parses_default_events_browser_query() {
+        assert_eq!(
+            parse_events_browser_query(None),
+            default_events_browser_query()
+        );
+    }
+
+    #[test]
+    fn parses_stage_alias_events_browser_query() {
+        assert_eq!(
+            parse_events_browser_query(Some("stg_123")),
+            InteractiveEventsQuery {
+                stage_id: Some("stg_123".to_string()),
+                limit: Some(EVENTS_BROWSER_DEFAULT_PAGE_SIZE),
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn parses_structured_events_browser_query() {
+        assert_eq!(
+            parse_events_browser_query(Some(
+                "stage=stg_1 exec=exe_2 type=session.updated limit=10 since=42"
+            )),
+            InteractiveEventsQuery {
+                stage_id: Some("stg_1".to_string()),
+                execution_id: Some("exe_2".to_string()),
+                event_type: Some("session.updated".to_string()),
+                since: Some(42),
+                limit: Some(10),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_events_browser_navigation_commands() {
+        assert_eq!(
+            parse_events_browser_command(Some("next")),
+            InteractiveEventsCommand::NextPage
+        );
+        assert_eq!(
+            parse_events_browser_command(Some("prev")),
+            InteractiveEventsCommand::PreviousPage
+        );
+        assert_eq!(
+            parse_events_browser_command(Some("clear")),
+            InteractiveEventsCommand::Clear
+        );
+        assert_eq!(
+            parse_events_browser_command(Some("first")),
+            InteractiveEventsCommand::FirstPage
+        );
+        assert_eq!(
+            parse_events_browser_command(Some("page 3")),
+            InteractiveEventsCommand::JumpPage(3)
+        );
+        assert_eq!(
+            parse_events_browser_command(Some("stage=stg_1 limit=10")),
+            InteractiveEventsCommand::ShowFiltered {
+                filter: InteractiveEventsQuery {
+                    stage_id: Some("stg_1".to_string()),
+                    limit: Some(10),
+                    ..Default::default()
+                },
+                page: 1,
+            }
+        );
+        assert_eq!(
+            parse_events_browser_command(Some("stage=stg_1 limit=10 page=2")),
+            InteractiveEventsCommand::ShowFiltered {
+                filter: InteractiveEventsQuery {
+                    stage_id: Some("stg_1".to_string()),
+                    limit: Some(10),
+                    ..Default::default()
+                },
+                page: 2,
+            }
         );
     }
 

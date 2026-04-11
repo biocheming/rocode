@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { ConversationJumpTarget } from "../hooks/useConversationJump";
 import type { useExecutionActivity } from "../hooks/useExecutionActivity";
 import { cn } from "@/lib/utils";
@@ -24,6 +25,70 @@ interface ExecutionActivityPanelProps {
 function formatTs(ts?: number | null) {
   if (!ts) return "--";
   return new Date(ts).toLocaleTimeString();
+}
+
+function formatMoney(value?: number | null) {
+  if (typeof value !== "number" || Number.isNaN(value)) return "--";
+  return `$${value.toFixed(4)}`;
+}
+
+function eventWindowLabel(page: number, count: number, pageSize: number) {
+  if (count === 0) return `page ${page} · items 0`;
+  const start = (page - 1) * pageSize + 1;
+  const end = start + count - 1;
+  return `page ${page} · items ${start}-${end}`;
+}
+
+function stageStatusTone(status: ExecutionActivityState["stageSummaries"][number]["status"]) {
+  switch (status) {
+    case "running":
+      return "bg-blue-500/10 text-blue-700 dark:text-blue-300";
+    case "waiting":
+    case "blocked":
+    case "retrying":
+      return "bg-amber-500/10 text-amber-700 dark:text-amber-300";
+    case "done":
+      return "bg-green-500/10 text-green-700 dark:text-green-300";
+    case "cancelled":
+    case "cancelling":
+      return "bg-rose-500/10 text-rose-700 dark:text-rose-300";
+    default:
+      return "bg-muted text-muted-foreground";
+  }
+}
+
+function stageSummaryMeta(stage: ExecutionActivityState["stageSummaries"][number]) {
+  const parts: string[] = [];
+  if (typeof stage.index === "number" && typeof stage.total === "number") {
+    parts.push(`${stage.index}/${stage.total}`);
+  }
+  if (typeof stage.step === "number" && typeof stage.step_total === "number") {
+    parts.push(`step ${stage.step}/${stage.step_total}`);
+  }
+  if (stage.waiting_on) {
+    parts.push(`waiting ${stage.waiting_on}`);
+  }
+  if (typeof stage.retry_attempt === "number") {
+    parts.push(`retry ${stage.retry_attempt}`);
+  }
+  if (stage.active_agent_count > 0) {
+    parts.push(`agents ${stage.active_agent_count}`);
+  }
+  if (stage.active_tool_count > 0) {
+    parts.push(`tools ${stage.active_tool_count}`);
+  }
+  if (stage.child_session_count > 0) {
+    parts.push(`child ${stage.child_session_count}`);
+  }
+  if (typeof stage.skill_tree_budget === "number") {
+    parts.push(
+      `budget ${stage.skill_tree_budget}${stage.skill_tree_truncated ? " truncated" : ""}`,
+    );
+  }
+  if (typeof stage.estimated_context_tokens === "number") {
+    parts.push(`ctx ${stage.estimated_context_tokens}`);
+  }
+  return parts;
 }
 
 function metadataValue(record: Record<string, unknown> | null | undefined, key: string) {
@@ -152,6 +217,7 @@ export function ExecutionActivityPanel({
   onNavigateChildSession,
   onNavigateToolCall,
 }: ExecutionActivityPanelProps) {
+  const [pageDraft, setPageDraft] = useState(String(activity.activityPage));
   const executionJump = executionJumpTarget(activity.selectedExecution);
   const selectedEventJump = eventJumpTarget(activity.selectedEvent);
   const selectedEventChildSessionId = eventChildSessionId(activity.selectedEvent);
@@ -159,6 +225,10 @@ export function ExecutionActivityPanel({
     Boolean(activity.selectedExecution) &&
     activity.selectedExecution?.status !== "done" &&
     activity.executionCancellingId !== activity.selectedExecution?.id;
+
+  useEffect(() => {
+    setPageDraft(String(activity.activityPage));
+  }, [activity.activityPage]);
 
   return (
     <div className="rounded-2xl border border-border bg-card/75 backdrop-blur-sm shadow-lg p-5 grid gap-4">
@@ -170,7 +240,13 @@ export function ExecutionActivityPanel({
         <button
           className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
           type="button"
-          onClick={() => void activity.refreshExecutionActivity()}
+          onClick={() =>
+            void activity.refreshExecutionActivity(
+              undefined,
+              activity.activityFilters,
+              activity.activityPage,
+            )
+          }
           disabled={activity.activityLoading}
         >
           {activity.activityLoading ? "Refreshing..." : "Refresh"}
@@ -190,10 +266,158 @@ export function ExecutionActivityPanel({
           <p className="text-sm text-muted-foreground leading-relaxed">
             Updated {formatTs(activity.executionTopology.updated_at ?? undefined)}
           </p>
+          {activity.sessionUsage ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="rounded-2xl border border-border bg-background/70 p-4 grid gap-2">
+                <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Session Usage</p>
+                <div className="flex flex-wrap gap-2">
+                  <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">input {activity.sessionUsage.input_tokens}</span>
+                  <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">output {activity.sessionUsage.output_tokens}</span>
+                  <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">reasoning {activity.sessionUsage.reasoning_tokens}</span>
+                  <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">cache read {activity.sessionUsage.cache_read_tokens}</span>
+                  <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">cache write {activity.sessionUsage.cache_write_tokens}</span>
+                </div>
+                <p className="text-sm text-muted-foreground leading-relaxed">Total cost {formatMoney(activity.sessionUsage.total_cost)}</p>
+              </div>
+              <div className="rounded-2xl border border-border bg-background/70 p-4 grid gap-2">
+                <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Active Stage</p>
+                {activity.activeStageSummary ? (
+                  <>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <strong>{activity.activeStageSummary.stage_name}</strong>
+                      <span className="rounded-full border border-border bg-muted px-3 py-1 text-xs text-muted-foreground font-medium">{activity.activeStageSummary.status}</span>
+                      {activity.sessionRuntime?.active_stage_count ? (
+                        <span className="rounded-full border border-border bg-muted px-3 py-1 text-xs text-muted-foreground font-medium">active {activity.sessionRuntime.active_stage_count}</span>
+                      ) : null}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {typeof activity.activeStageSummary.prompt_tokens === "number" ? (
+                        <span className="rounded-full border border-border bg-muted px-3 py-1 text-xs text-muted-foreground font-medium">in {activity.activeStageSummary.prompt_tokens}</span>
+                      ) : null}
+                      {typeof activity.activeStageSummary.completion_tokens === "number" ? (
+                        <span className="rounded-full border border-border bg-muted px-3 py-1 text-xs text-muted-foreground font-medium">out {activity.activeStageSummary.completion_tokens}</span>
+                      ) : null}
+                      {typeof activity.activeStageSummary.reasoning_tokens === "number" ? (
+                        <span className="rounded-full border border-border bg-muted px-3 py-1 text-xs text-muted-foreground font-medium">reasoning {activity.activeStageSummary.reasoning_tokens}</span>
+                      ) : null}
+                      {typeof activity.activeStageSummary.skill_tree_budget === "number" ? (
+                        <span className="rounded-full border border-border bg-muted px-3 py-1 text-xs text-muted-foreground font-medium">budget {activity.activeStageSummary.skill_tree_budget}</span>
+                      ) : null}
+                    </div>
+                    <p className="text-sm text-muted-foreground leading-relaxed">
+                      {activity.activeStageSummary.waiting_on
+                        ? `Waiting on ${activity.activeStageSummary.waiting_on}`
+                        : activity.activeStageSummary.last_event || "No active wait signal"}
+                    </p>
+                    {activity.activeStageSummary.skill_tree_truncated ? (
+                      <p className="text-sm text-amber-700 dark:text-amber-300 leading-relaxed">
+                        Skill tree truncated{activity.activeStageSummary.skill_tree_truncation_strategy
+                          ? ` via ${activity.activeStageSummary.skill_tree_truncation_strategy}`
+                          : ""}
+                      </p>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="text-sm text-muted-foreground leading-relaxed">No active stage summary in telemetry.</p>
+                )}
+              </div>
+            </div>
+          ) : null}
         </>
       ) : (
         <p className="text-center text-muted-foreground py-4">No scheduler topology loaded yet.</p>
       )}
+
+      {activity.stageSummaries.length ? (
+        <div className="rounded-2xl border border-border bg-background/70 p-4 grid gap-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Stage Summaries</p>
+              <h4>{activity.stageSummaries.length} stages</h4>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Authority-backed telemetry snapshot
+            </p>
+          </div>
+          <div className="grid gap-3 xl:grid-cols-2">
+            {activity.stageSummaries.map((stage) => {
+              const meta = stageSummaryMeta(stage);
+              const isHighlighted =
+                stage.stage_id === activity.sessionRuntime?.active_stage_id ||
+                stage.stage_id === previewStageId;
+              return (
+                <div
+                  key={stage.stage_id}
+                  className={cn(
+                    "rounded-xl border border-border bg-card/60 p-4 grid gap-3",
+                    isHighlighted && "border-primary/40 bg-primary/5",
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <strong className="truncate">{stage.stage_name}</strong>
+                        <span
+                          className={cn(
+                            "rounded-full px-2.5 py-1 text-xs font-medium",
+                            stageStatusTone(stage.status),
+                          )}
+                        >
+                          {stage.status}
+                        </span>
+                      </div>
+                      <p className="text-xs text-muted-foreground font-mono mt-1">
+                        {stage.stage_id}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2 shrink-0">
+                      <button
+                        className="min-h-[32px] rounded-full px-3 border border-border bg-card/70 text-foreground text-xs inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                        type="button"
+                        onClick={() => onNavigateStage(stage.stage_id)}
+                      >
+                        Open
+                      </button>
+                      <button
+                        className="min-h-[32px] rounded-full px-3 border border-border bg-card/70 text-foreground text-xs inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                        type="button"
+                        onClick={() => activity.patchActivityFilters({ stageId: stage.stage_id })}
+                      >
+                        Filter Events
+                      </button>
+                    </div>
+                  </div>
+                  {meta.length ? (
+                    <div className="flex flex-wrap gap-2">
+                      {meta.map((item) => (
+                        <span
+                          key={`${stage.stage_id}:${item}`}
+                          className="rounded-full border border-border bg-muted px-2.5 py-1 text-xs text-muted-foreground"
+                        >
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                    {typeof stage.prompt_tokens === "number" ? <span>in {stage.prompt_tokens}</span> : null}
+                    {typeof stage.completion_tokens === "number" ? <span>out {stage.completion_tokens}</span> : null}
+                    {typeof stage.reasoning_tokens === "number" ? <span>reasoning {stage.reasoning_tokens}</span> : null}
+                    {typeof stage.cache_read_tokens === "number" ? <span>cache read {stage.cache_read_tokens}</span> : null}
+                    {typeof stage.cache_write_tokens === "number" ? <span>cache write {stage.cache_write_tokens}</span> : null}
+                  </div>
+                  {stage.last_event || stage.focus ? (
+                    <div className="grid gap-1 text-xs text-muted-foreground">
+                      {stage.last_event ? <p>Last event: {stage.last_event}</p> : null}
+                      {stage.focus ? <p>Focus: {stage.focus}</p> : null}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-3 items-end">
         <label>
@@ -333,11 +557,15 @@ export function ExecutionActivityPanel({
                   Filter Events to Execution
                 </button>
                 {activity.selectedExecution.stage_id ? (
-                  <button
-                    className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
-                    type="button"
-                    onClick={() => onNavigateStage(activity.selectedExecution?.stage_id || "")}
-                  >
+                <button
+                  className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                  type="button"
+                  onClick={() =>
+                    activity.patchActivityFilters({
+                      stageId: activity.selectedExecution?.stage_id || "",
+                    })
+                  }
+                >
                     Filter Events to Stage
                   </button>
                 ) : null}
@@ -451,6 +679,69 @@ export function ExecutionActivityPanel({
               <p className="text-center text-muted-foreground py-4">No recent activity events for this filter.</p>
             )}
           </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-background/60 px-3 py-2">
+            <p className="text-xs text-muted-foreground">
+              {eventWindowLabel(
+                activity.activityPage,
+                activity.activityEvents.length,
+                activity.activityPageSize,
+              )}{" "}
+              · limit {activity.activityPageSize}
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                className="min-h-[32px] rounded-full px-3 border border-border bg-card/70 text-foreground text-xs inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                type="button"
+                disabled={!activity.activityHasPreviousPage}
+                onClick={activity.firstActivityPage}
+              >
+                First
+              </button>
+              <button
+                className="min-h-[32px] rounded-full px-3 border border-border bg-card/70 text-foreground text-xs inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                type="button"
+                disabled={!activity.activityHasPreviousPage}
+                onClick={activity.previousActivityPage}
+              >
+                Prev
+              </button>
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span>Page</span>
+                <input
+                  className="h-8 w-16 rounded-md border border-input bg-transparent px-2 py-1 text-sm text-foreground"
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={pageDraft}
+                  onChange={(event) => setPageDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      const page = Number.parseInt(pageDraft, 10);
+                      activity.goToActivityPage(Number.isFinite(page) ? page : 1);
+                    }
+                  }}
+                />
+              </label>
+              <button
+                className="min-h-[32px] rounded-full px-3 border border-border bg-card/70 text-foreground text-xs inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                type="button"
+                onClick={() => {
+                  const page = Number.parseInt(pageDraft, 10);
+                  activity.goToActivityPage(Number.isFinite(page) ? page : 1);
+                }}
+              >
+                Go
+              </button>
+              <button
+                className="min-h-[32px] rounded-full px-3 border border-border bg-card/70 text-foreground text-xs inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                type="button"
+                disabled={!activity.activityHasNextPage}
+                onClick={activity.nextActivityPage}
+              >
+                Next
+              </button>
+            </div>
+          </div>
           {activity.selectedEvent ? (
             <>
               <div className="flex flex-wrap gap-2">
@@ -469,7 +760,9 @@ export function ExecutionActivityPanel({
                   <button
                     className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
                     type="button"
-                    onClick={() => onNavigateStage(activity.selectedEvent?.stage_id || "")}
+                    onClick={() =>
+                      activity.patchActivityFilters({ stageId: activity.selectedEvent?.stage_id || "" })
+                    }
                   >
                     Filter to Stage
                   </button>

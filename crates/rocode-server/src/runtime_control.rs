@@ -1072,6 +1072,18 @@ impl RuntimeControlRegistry {
         }
         (done, total)
     }
+
+    pub(crate) async fn count_active_stage_tools(&self, stage_id: &str) -> u32 {
+        let executions = self.executions.read().await;
+        executions
+            .values()
+            .filter(|record| {
+                record.kind == ExecutionKind::ToolCall
+                    && record.stage_id.as_deref() == Some(stage_id)
+                    && record.status != ExecutionStatus::Done
+            })
+            .count() as u32
+    }
 }
 
 fn apply_field_update<T>(target: &mut Option<T>, update: FieldUpdate<T>) {

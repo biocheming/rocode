@@ -1,7 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
+import type { useExecutionActivity } from "../hooks/useExecutionActivity";
 import {
   ClockIcon,
   GitBranchIcon,
@@ -24,12 +24,16 @@ interface RightPanelWithTabsProps {
   sessionId?: string;
   apiJson: <T>(path: string, options?: RequestInit) => Promise<T>;
   onBanner: (message: string | null) => void;
+  executionActivity: ReturnType<typeof useExecutionActivity>;
+  onNavigateStage?: (stageId: string) => void;
 }
 
 export function RightPanelWithTabs({
   sessionId,
   apiJson,
   onBanner,
+  executionActivity,
+  onNavigateStage,
 }: RightPanelWithTabsProps) {
   const [activeTab, setActiveTab] = useState<TabId>("tasks");
 
@@ -65,6 +69,8 @@ export function RightPanelWithTabs({
         {activeTab === "provenance" && sessionId && (
           <ProvenanceTimeline
             sessionId={sessionId}
+            activity={executionActivity}
+            onNavigateStage={onNavigateStage}
             className="h-full"
           />
         )}

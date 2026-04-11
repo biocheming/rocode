@@ -16,7 +16,7 @@ use crate::session_runtime::events::{
 use crate::{ApiError, ServerState};
 use rocode_agent::{AgentInfo, AgentRegistry};
 use rocode_provider::ToolDefinition;
-use rocode_session::{MessageRole as SessionMessageRole, MessageUsage, Session};
+use rocode_session::{MessageRole as SessionMessageRole, Session};
 
 use super::permission::request_permission;
 use super::session::{
@@ -26,38 +26,40 @@ use super::session::{
 use super::tui::{request_question_answers_with_hook, QuestionEventHook};
 
 pub(crate) async fn send_stream_error_event(
+    state: &Arc<ServerState>,
     tx: &mpsc::Sender<std::result::Result<Event, Infallible>>,
-    session_id: Option<String>,
+    session_id: &str,
     message_id: Option<String>,
     done: Option<bool>,
     error: String,
 ) {
-    let event = ServerEvent::Error {
-        session_id,
-        error,
-        message_id,
-        done,
-    };
-    send_sse_server_event(tx, &event).await;
+    if let Some(event) = state
+        .runtime_telemetry
+        .record_session_error(session_id, message_id.as_deref(), done, &error)
+        .await
+    {
+        send_sse_server_event(tx, &event).await;
+    }
 }
 
 pub(crate) async fn send_stream_usage_event(
+    state: &Arc<ServerState>,
     tx: &mpsc::Sender<std::result::Result<Event, Infallible>>,
-    session_id: Option<String>,
+    session_id: &str,
     message_id: Option<String>,
-    prompt_tokens: u64,
-    completion_tokens: u64,
+    usage: rocode_session::SessionUsage,
 ) {
-    let event = ServerEvent::Usage {
-        session_id,
-        prompt_tokens,
-        completion_tokens,
-        message_id,
-    };
-    send_sse_server_event(tx, &event).await;
+    if let Some(event) = state
+        .runtime_telemetry
+        .record_session_usage(session_id, message_id.as_deref(), usage)
+        .await
+    {
+        send_sse_server_event(tx, &event).await;
+    }
 }
 
 async fn emit_latest_assistant_usage(
+    state: &Arc<ServerState>,
     tx: &mpsc::Sender<std::result::Result<Event, Infallible>>,
     session_id: &str,
     session: &Session,
@@ -78,18 +80,19 @@ async fn emit_latest_assistant_usage(
         return;
     };
 
-    let MessageUsage {
-        input_tokens,
-        output_tokens,
-        ..
-    } = usage;
-
     send_stream_usage_event(
+        state,
         tx,
-        Some(session_id.to_string()),
+        session_id,
         Some(message_id),
-        input_tokens,
-        output_tokens,
+        rocode_session::SessionUsage {
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            reasoning_tokens: usage.reasoning_tokens,
+            cache_write_tokens: usage.cache_write_tokens,
+            cache_read_tokens: usage.cache_read_tokens,
+            total_cost: usage.total_cost,
+        },
     )
     .await;
 }
@@ -165,55 +168,38 @@ pub(crate) async fn stream_message(
             .get_mut(&session_id)
             .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
 
-        let normalized_directory = resolved_session_directory(&session.directory);
-        if session.directory != normalized_directory {
-            session.directory = normalized_directory;
+        let normalized_directory = resolved_session_directory(session.record().directory.as_str());
+        if session.record().directory != normalized_directory {
+            session.set_directory(normalized_directory);
         }
 
         let selected_variant = request_variant.clone();
         if let Some(variant) = selected_variant.as_deref() {
-            session
-                .metadata
-                .insert("model_variant".to_string(), serde_json::json!(variant));
+            session.insert_metadata("model_variant", serde_json::json!(variant));
         } else {
-            session.metadata.remove("model_variant");
+            session.remove_metadata("model_variant");
         }
-        session.metadata.insert(
-            "model_provider".to_string(),
-            serde_json::json!(provider_id.clone()),
-        );
-        session
-            .metadata
-            .insert("model_id".to_string(), serde_json::json!(model_id.clone()));
+        session.insert_metadata("model_provider", serde_json::json!(provider_id.clone()));
+        session.insert_metadata("model_id", serde_json::json!(model_id.clone()));
         if let Some(agent) = resolved_agent.as_ref().map(|agent| agent.name.as_str()) {
-            session
-                .metadata
-                .insert("agent".to_string(), serde_json::json!(agent));
+            session.insert_metadata("agent", serde_json::json!(agent));
         } else {
-            session.metadata.remove("agent");
+            session.remove_metadata("agent");
         }
-        session.metadata.insert(
-            "scheduler_applied".to_string(),
-            serde_json::json!(scheduler_applied),
-        );
-        session.metadata.insert(
-            "scheduler_skill_tree_applied".to_string(),
+        session.insert_metadata("scheduler_applied", serde_json::json!(scheduler_applied));
+        session.insert_metadata(
+            "scheduler_skill_tree_applied",
             serde_json::json!(scheduler_skill_tree_applied),
         );
         if let Some(profile) = scheduler_profile_name.as_deref() {
-            session
-                .metadata
-                .insert("scheduler_profile".to_string(), serde_json::json!(profile));
+            session.insert_metadata("scheduler_profile", serde_json::json!(profile));
         } else {
-            session.metadata.remove("scheduler_profile");
+            session.remove_metadata("scheduler_profile");
         }
         if let Some(root_agent) = scheduler_root_agent.as_deref() {
-            session.metadata.insert(
-                "scheduler_root_agent".to_string(),
-                serde_json::json!(root_agent),
-            );
+            session.insert_metadata("scheduler_root_agent", serde_json::json!(root_agent));
         } else {
-            session.metadata.remove("scheduler_root_agent");
+            session.remove_metadata("scheduler_root_agent");
         }
         session.touch();
 
@@ -237,7 +223,7 @@ pub(crate) async fn stream_message(
     } else {
         rocode_session::resolve_prompt_parts(
             &req.content,
-            FsPath::new(&stream_session.directory),
+            FsPath::new(stream_session.record().directory.as_str()),
             &known_agents,
         )
         .await
@@ -415,8 +401,9 @@ pub(crate) async fn stream_message(
                 .find(|message| matches!(message.role, SessionMessageRole::Assistant))
                 .map(|message| message.id.clone());
             send_stream_error_event(
+                &stream_state,
                 &stream_tx,
-                Some(stream_session_id.clone()),
+                &stream_session_id,
                 message_id,
                 Some(true),
                 error.to_string(),
@@ -442,7 +429,7 @@ pub(crate) async fn stream_message(
             let mut sessions = stream_state.sessions.lock().await;
             sessions.update(session.clone());
         }
-        emit_latest_assistant_usage(&stream_tx, &stream_session_id, &session).await;
+        emit_latest_assistant_usage(&stream_state, &stream_tx, &stream_session_id, &session).await;
         broadcast_session_updated(
             stream_state.as_ref(),
             stream_session_id.clone(),

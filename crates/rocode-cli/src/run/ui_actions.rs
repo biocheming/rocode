@@ -344,15 +344,26 @@ async fn cli_execute_ui_action(
                 return Ok(CliUiActionOutcome::Continue);
             }
             let style = CliStyle::detect();
+            let current_session_id = cli_current_observed_session_id(runtime);
 
             cli_refresh_server_info(
                 api_client,
                 &runtime.frontend_projection,
-                runtime.server_session_id.as_deref(),
+                current_session_id.as_deref(),
             )
             .await;
 
-            let (phase, active_label, queue_len, token_stats, mcp_servers, lsp_servers) = runtime
+            let (
+                phase,
+                active_label,
+                queue_len,
+                token_stats,
+                mcp_servers,
+                lsp_servers,
+                session_runtime,
+                stage_summaries,
+                telemetry_topology,
+            ) = runtime
                 .frontend_projection
                 .lock()
                 .map(|projection| {
@@ -370,6 +381,9 @@ async fn cli_execute_ui_action(
                         projection.token_stats.clone(),
                         projection.mcp_servers.clone(),
                         projection.lsp_servers.clone(),
+                        projection.session_runtime.clone(),
+                        projection.stage_summaries.clone(),
+                        projection.telemetry_topology.clone(),
                     )
                 })
                 .unwrap_or_else(|_| {
@@ -380,6 +394,9 @@ async fn cli_execute_ui_action(
                         CliSessionTokenStats::default(),
                         Vec::new(),
                         Vec::new(),
+                        None,
+                        Vec::new(),
+                        None,
                     )
                 });
             let mut lines = vec![
@@ -395,6 +412,26 @@ async fn cli_execute_ui_action(
                 lines.push(format!("Active: {}", active_label));
             }
             lines.push(format!("Queue: {}", queue_len));
+            if let Some(runtime_snapshot) = session_runtime.as_ref() {
+                lines.push(format!(
+                    "Server runtime: {}",
+                    runtime_snapshot.run_status.as_ref_label()
+                ));
+                if let Some(active_stage_id) = runtime_snapshot.active_stage_id.as_deref() {
+                    let active_stage = stage_summaries
+                        .iter()
+                        .find(|stage| stage.stage_id == active_stage_id)
+                        .map(cli_format_stage_summary_brief)
+                        .unwrap_or_else(|| active_stage_id.to_string());
+                    lines.push(format!("Active stage: {}", active_stage));
+                }
+            }
+            if let Some(topology) = telemetry_topology.as_ref() {
+                lines.push(format!(
+                    "Topology: active {} · running {} · waiting {}",
+                    topology.active_count, topology.running_count, topology.waiting_count
+                ));
+            }
 
             if token_stats.total_tokens > 0 {
                 lines.push(String::new());
@@ -455,7 +492,7 @@ async fn cli_execute_ui_action(
                 }
             }
 
-            if let Some(ref sid) = runtime.server_session_id {
+            if let Some(ref sid) = current_session_id {
                 lines.push(String::new());
                 lines.push(format!("Server: {}", api_client.base_url()));
                 lines.push(format!("Session: {}", sid));

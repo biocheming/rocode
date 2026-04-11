@@ -72,6 +72,21 @@ const CLI_PROMPT_COMMANDS: &[CliPromptCommandSpec] = &[
         description: "list recovery actions",
     },
     CliPromptCommandSpec {
+        name: "runtime",
+        takes_value: None,
+        description: "show runtime telemetry",
+    },
+    CliPromptCommandSpec {
+        name: "usage",
+        takes_value: None,
+        description: "show session usage",
+    },
+    CliPromptCommandSpec {
+        name: "events",
+        takes_value: None,
+        description: "browse runtime events",
+    },
+    CliPromptCommandSpec {
         name: "model",
         takes_value: Some(CliPromptValueKind::Model),
         description: "switch model",
@@ -746,19 +761,26 @@ struct CliSessionTokenStats {
 }
 
 impl CliSessionTokenStats {
-    /// Accumulate token counts from a single assistant message.
-    fn accumulate(&mut self, tokens: &MessageTokensInfo, cost: f64) {
-        self.input_tokens += tokens.input;
-        self.output_tokens += tokens.output;
-        self.reasoning_tokens += tokens.reasoning;
-        self.cache_read_tokens += tokens.cache_read;
-        self.cache_write_tokens += tokens.cache_write;
-        self.total_tokens += tokens.input
-            + tokens.output
-            + tokens.reasoning
-            + tokens.cache_read
-            + tokens.cache_write;
-        self.total_cost += cost;
+    pub(super) fn sync_from_usage(
+        &mut self,
+        input_tokens: u64,
+        output_tokens: u64,
+        reasoning_tokens: u64,
+        cache_read_tokens: u64,
+        cache_write_tokens: u64,
+        total_cost: f64,
+    ) {
+        self.input_tokens = input_tokens;
+        self.output_tokens = output_tokens;
+        self.reasoning_tokens = reasoning_tokens;
+        self.cache_read_tokens = cache_read_tokens;
+        self.cache_write_tokens = cache_write_tokens;
+        self.total_tokens = input_tokens
+            + output_tokens
+            + reasoning_tokens
+            + cache_read_tokens
+            + cache_write_tokens;
+        self.total_cost = total_cost;
     }
 }
 
@@ -789,6 +811,10 @@ struct CliFrontendProjection {
     view_label: Option<String>,
     queue_len: usize,
     active_stage: Option<SchedulerStageBlock>,
+    session_runtime: Option<SessionRuntimeState>,
+    stage_summaries: Vec<rocode_command::stage_protocol::StageSummary>,
+    telemetry_topology: Option<SessionExecutionTopology>,
+    events_browser: Option<CliEventsBrowserState>,
     transcript: CliRetainedTranscript,
     #[cfg_attr(not(test), allow(dead_code))]
     sidebar_collapsed: bool,
@@ -812,6 +838,10 @@ impl Default for CliFrontendProjection {
             view_label: None,
             queue_len: 0,
             active_stage: None,
+            session_runtime: None,
+            stage_summaries: Vec::new(),
+            telemetry_topology: None,
+            events_browser: None,
             transcript: CliRetainedTranscript::default(),
             sidebar_collapsed: true,
             active_collapsed: true,
@@ -847,8 +877,13 @@ impl CliFrontendProjection {
         if self.queue_len > 0 {
             parts.push(format!("queue {}", self.queue_len));
         }
+        if let Some(browser) = self.events_browser.as_ref() {
+            let page = (browser.offset / browser.filter.limit.unwrap_or(24).max(1)) + 1;
+            parts.push(format!("events p{}", page));
+        }
         parts.push("Alt+Enter/Ctrl+J newline".to_string());
         parts.push("/help".to_string());
+        parts.push("/runtime".to_string());
         parts.push("/child".to_string());
         if !matches!(self.phase, CliFrontendPhase::Idle) {
             parts.push("/abort".to_string());
@@ -1495,19 +1530,31 @@ fn cli_prompt_screen_lines() -> Vec<String> {
     Vec::new()
 }
 
-fn cli_session_metadata_string(session: &SessionInfo, key: &str) -> Option<String> {
-    session
-        .metadata
-        .as_ref()?
-        .get(key)
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
+fn cli_session_hint_string(
+    session: &crate::api_client::SessionListItem,
+    key: &str,
+) -> Option<String> {
+    let hints = session.hints.as_ref()?;
+    let value = match key {
+        "current_model" => hints.current_model.as_deref(),
+        "model_provider" => hints.model_provider.as_deref(),
+        "model_id" => hints.model_id.as_deref(),
+        "scheduler_profile" => hints.scheduler_profile.as_deref(),
+        "resolved_scheduler_profile" => hints.resolved_scheduler_profile.as_deref(),
+        "agent" => hints.agent.as_deref(),
+        _ => None,
+    }?;
+
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 fn cli_recent_session_info_for_directory(
-    sessions: &[SessionInfo],
+    sessions: &[crate::api_client::SessionListItem],
     current_dir: &Path,
 ) -> Option<CliRecentSessionInfo> {
     let current_dir = current_dir.display().to_string();
@@ -1517,15 +1564,15 @@ fn cli_recent_session_info_for_directory(
         .max_by_key(|session| session.time.updated)
         .or_else(|| sessions.iter().max_by_key(|session| session.time.updated))?;
 
-    let model_label = cli_session_metadata_string(session, "current_model").or_else(|| {
-        cli_session_metadata_string(session, "model_provider")
-            .zip(cli_session_metadata_string(session, "model_id"))
+    let model_label = cli_session_hint_string(session, "current_model").or_else(|| {
+        cli_session_hint_string(session, "model_provider")
+            .zip(cli_session_hint_string(session, "model_id"))
             .map(|(provider, model)| format!("{provider}/{model}"))
     });
-    let preset_label = cli_session_metadata_string(session, "scheduler_profile")
-        .or_else(|| cli_session_metadata_string(session, "resolved_scheduler_profile"))
+    let preset_label = cli_session_hint_string(session, "scheduler_profile")
+        .or_else(|| cli_session_hint_string(session, "resolved_scheduler_profile"))
         .or_else(|| {
-            cli_session_metadata_string(session, "agent").map(|agent| format!("agent:{agent}"))
+            cli_session_hint_string(session, "agent").map(|agent| format!("agent:{agent}"))
         });
     let title = (!session.title.trim().is_empty()).then(|| session.title.trim().to_string());
 

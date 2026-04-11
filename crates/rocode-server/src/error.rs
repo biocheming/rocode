@@ -13,6 +13,9 @@ pub enum ApiError {
     #[error("Not found: {0}")]
     NotFound(String),
 
+    #[error("Permission denied: {0}")]
+    PermissionDenied(String),
+
     #[error("Bad request: {0}")]
     BadRequest(String),
 
@@ -35,6 +38,11 @@ impl IntoResponse for ApiError {
                 "session_not_found",
             ),
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg, "not_found"),
+            ApiError::PermissionDenied(msg) => (
+                StatusCode::FORBIDDEN,
+                format!("Permission denied: {}", msg),
+                "permission_denied",
+            ),
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg, "bad_request"),
             ApiError::ProviderError(msg) => (
                 StatusCode::BAD_GATEWAY,

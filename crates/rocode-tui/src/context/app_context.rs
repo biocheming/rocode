@@ -1,9 +1,10 @@
 use parking_lot::RwLock;
+use rocode_command::stage_protocol::StageSummary;
+use rocode_session::SessionUsage;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::api::ApiClient;
-use crate::api::SessionExecutionTopology;
+use crate::api::{ApiClient, SessionExecutionTopology, SessionTelemetrySnapshot};
 use crate::context::{ChildSessionInfo, KeybindRegistry, SessionContext};
 use crate::event::EventBus;
 use crate::router::Router;
@@ -124,9 +125,10 @@ pub struct AppContext {
     pub processes: RwLock<Vec<ProcessInfo>>,
     pub child_sessions: RwLock<Vec<ChildSessionInfo>>,
     pub execution_topology: RwLock<Option<SessionExecutionTopology>>,
-    /// Server-side aggregated runtime state, fetched via `GET /session/{id}/runtime`.
-    /// Replaces local derivation of active_tool_calls, pending_question,
-    /// pending_permission, and child_sessions from individual SSE events.
+    pub stage_summaries: RwLock<Vec<StageSummary>>,
+    pub session_usage: RwLock<Option<SessionUsage>>,
+    /// Server-side aggregated runtime state, preferably fetched via
+    /// `GET /session/{id}/telemetry` and mirrored from `runtime`.
     pub session_runtime: RwLock<Option<crate::api::SessionRuntimeState>>,
     pub api_client: RwLock<Option<Arc<ApiClient>>>,
 }
@@ -169,9 +171,18 @@ impl AppContext {
             processes: RwLock::new(Vec::new()),
             child_sessions: RwLock::new(Vec::new()),
             execution_topology: RwLock::new(None),
+            stage_summaries: RwLock::new(Vec::new()),
+            session_usage: RwLock::new(None),
             session_runtime: RwLock::new(None),
             api_client: RwLock::new(None),
         }
+    }
+
+    pub fn apply_session_telemetry_snapshot(&self, telemetry: SessionTelemetrySnapshot) {
+        *self.execution_topology.write() = Some(telemetry.topology);
+        *self.stage_summaries.write() = telemetry.stages;
+        *self.session_usage.write() = Some(telemetry.usage);
+        *self.session_runtime.write() = Some(telemetry.runtime);
     }
 
     pub fn navigate(&self, route: crate::router::Route) {

@@ -12,7 +12,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex};
 
-use crate::session_runtime::events::{broadcast_server_event, ServerEvent};
 use crate::{ApiError, Result, ServerState};
 
 pub(crate) fn permission_routes() -> Router<Arc<ServerState>> {
@@ -139,18 +138,9 @@ pub(crate) async fn request_permission(
         .await
         .insert(permission_id.clone(), tx);
 
-    broadcast_server_event(
-        state.as_ref(),
-        &ServerEvent::PermissionRequested {
-            session_id: session_id.clone(),
-            permission_id: permission_id.clone(),
-            info: serde_json::to_value(&request_info).unwrap_or(serde_json::Value::Null),
-        },
-    );
-
     // Update aggregated runtime state: pending permission.
     state
-        .runtime_state
+        .runtime_telemetry
         .permission_requested(
             &session_id,
             &permission_id,
@@ -162,7 +152,10 @@ pub(crate) async fn request_permission(
     PERMISSION_WAITERS.lock().await.remove(&permission_id);
 
     // Clear pending permission from aggregated runtime state.
-    state.runtime_state.permission_resolved(&session_id).await;
+    state
+        .runtime_telemetry
+        .clear_permission_pending(&session_id)
+        .await;
 
     match wait_result {
         Ok(Ok(PermissionReply { reply, message })) => match reply.as_str() {
@@ -214,7 +207,7 @@ pub struct ReplyPermissionRequest {
     pub message: Option<String>,
 }
 
-async fn reply_permission(
+pub(crate) async fn reply_permission(
     State(state): State<Arc<ServerState>>,
     Path(id): Path<String>,
     Json(req): Json<ReplyPermissionRequest>,
@@ -243,15 +236,10 @@ async fn reply_permission(
         });
     }
 
-    broadcast_server_event(
-        state.as_ref(),
-        &ServerEvent::PermissionResolved {
-            session_id: permission.session_id,
-            permission_id: id,
-            reply: req.reply,
-            message: req.message,
-        },
-    );
+    state
+        .runtime_telemetry
+        .permission_resolved(&permission.session_id, &id, &req.reply, req.message.clone())
+        .await;
     Ok(Json(true))
 }
 

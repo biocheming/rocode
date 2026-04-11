@@ -33,7 +33,9 @@
         "handoff"
       ],
       "skillTree": {
-        "contextMarkdown": "Collect only the clarifications needed to remove ambiguity, then freeze the plan and hand off a reviewed implementation path."
+        "contextMarkdown": "Collect only the clarifications needed to remove ambiguity, then freeze the plan and hand off a reviewed implementation path.",
+        "tokenBudget": 256,
+        "truncationStrategy": "tail"
       },
       "agentTree": {
         "agent": {

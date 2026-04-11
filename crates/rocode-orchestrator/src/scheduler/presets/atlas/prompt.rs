@@ -3,6 +3,7 @@ use crate::scheduler::prompt_support::{
     build_category_skills_guide, build_delegation_table, build_oracle_section,
     build_task_management_section, ANTI_PATTERNS, HARD_BLOCKS, SOFT_GUIDELINES,
 };
+use crate::scheduler::SchedulerSkillRef;
 
 pub fn atlas_system_prompt_preview() -> &'static str {
     "You are Atlas — master orchestrator for plan execution.\nBias: coordinate task waves, track every task boundary, and verify every delegation.\nBoundary: never write code yourself; act as conductor and QA gate."
@@ -93,7 +94,7 @@ pub fn atlas_synthesis_prompt(profile_suffix: &str) -> String {
 pub fn build_atlas_dynamic_prompt(
     available_agents: &[AvailableAgentMeta],
     available_categories: &[AvailableCategoryMeta],
-    skill_list: &[String],
+    skill_list: &[SchedulerSkillRef],
 ) -> String {
     let category_skills_guide = build_category_skills_guide(available_categories, skill_list);
     let delegation_table = build_delegation_table(available_agents);

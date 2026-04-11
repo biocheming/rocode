@@ -37,7 +37,9 @@ use std::time::{Duration, Instant};
 
 use chrono::{TimeZone, Utc};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use rocode_command::interactive::{parse_interactive_command, InteractiveCommand};
+use rocode_command::interactive::{
+    parse_interactive_command, InteractiveCommand, InteractiveEventsQuery,
+};
 use rocode_command::output_blocks::{BlockTone, StatusBlock};
 use rocode_command::{CommandRegistry, UiActionId};
 use rocode_core::agent_task_registry::{global_task_registry, AgentTaskStatus};
@@ -138,6 +140,7 @@ pub struct App {
     skill_list_dialog: SkillListDialog,
     theme_list_dialog: ThemeListDialog,
     status_dialog: StatusDialog,
+    status_dialog_view: StatusDialogView,
     mcp_dialog: McpDialog,
     timeline_dialog: TimelineDialog,
     fork_dialog: ForkDialog,
@@ -213,6 +216,22 @@ struct PerfCounters {
     session_sync_incremental: u64,
     question_sync: u64,
     session_updated_events: u64,
+}
+
+#[derive(Clone, Debug, Default)]
+struct TuiEventsBrowserState {
+    session_id: String,
+    filter: InteractiveEventsQuery,
+    offset: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+enum StatusDialogView {
+    #[default]
+    Overview,
+    Runtime,
+    Usage,
+    Events(TuiEventsBrowserState),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -353,6 +372,7 @@ impl App {
             skill_list_dialog: SkillListDialog::new(),
             theme_list_dialog: ThemeListDialog::new(),
             status_dialog: StatusDialog::new(),
+            status_dialog_view: StatusDialogView::Overview,
             mcp_dialog: McpDialog::new(),
             timeline_dialog: TimelineDialog::new(),
             fork_dialog: ForkDialog::new(),
@@ -1165,7 +1185,7 @@ impl App {
                                 Some("awaiting_user") => {
                                     self.set_session_status(&session.id, SessionStatus::Idle);
                                     self.prompt.set_spinner_active(false);
-                                    self.refresh_session_runtime(&session.id);
+                                    self.refresh_session_telemetry(&session.id);
                                     self.sync_question_requests();
                                 }
                                 _ => {
@@ -1214,7 +1234,7 @@ impl App {
                     ) {
                         self.set_session_status(session_id, SessionStatus::Idle);
                         self.prompt.set_spinner_active(false);
-                        self.refresh_session_runtime(session_id);
+                        self.refresh_session_telemetry(session_id);
                         self.sync_question_requests();
                     }
                     self.event_caused_change = true;
@@ -1235,12 +1255,12 @@ impl App {
                 }
                 CustomEvent::StateChanged(StateChange::SessionStatusBusy(session_id)) => {
                     self.set_session_status(session_id, SessionStatus::Running);
-                    self.refresh_session_runtime(session_id);
+                    self.refresh_session_telemetry(session_id);
                     self.sync_prompt_spinner_state();
                 }
                 CustomEvent::StateChanged(StateChange::SessionStatusIdle(session_id)) => {
                     self.set_session_status(session_id, SessionStatus::Idle);
-                    self.refresh_session_runtime(session_id);
+                    self.refresh_session_telemetry(session_id);
                     let _ = self.dispatch_next_queued_prompt(session_id);
                     self.sync_prompt_spinner_state();
                 }
@@ -1258,7 +1278,7 @@ impl App {
                             next: *next,
                         },
                     );
-                    self.refresh_session_runtime(session_id);
+                    self.refresh_session_telemetry(session_id);
                     self.sync_prompt_spinner_state();
                 }
                 CustomEvent::StateChanged(StateChange::ConfigUpdated) => {
@@ -1312,13 +1332,13 @@ impl App {
                 }
                 CustomEvent::StateChanged(StateChange::ToolCallStarted { session_id, .. }) => {
                     // Refresh runtime state to get updated active tools from server
-                    self.refresh_session_runtime(session_id);
+                    self.refresh_session_telemetry(session_id);
                 }
                 CustomEvent::StateChanged(StateChange::ToolCallCompleted {
                     session_id, ..
                 }) => {
                     // Refresh runtime state to get updated active tools from server
-                    self.refresh_session_runtime(session_id);
+                    self.refresh_session_telemetry(session_id);
                 }
                 CustomEvent::StateChanged(StateChange::TopologyChanged { session_id }) => {
                     self.handle_topology_changed(session_id);
@@ -1373,7 +1393,7 @@ impl App {
                     }
 
                     if is_active_session && self.status_dialog.is_open() {
-                        self.refresh_status_dialog();
+                        self.refresh_active_status_dialog();
                     }
                 }
                 _ => {}
@@ -1415,7 +1435,7 @@ impl App {
                             self.check_scheduler_handoff(session_id);
                             self.refresh_child_sessions();
                             if self.status_dialog.is_open() {
-                                self.refresh_status_dialog();
+                                self.refresh_active_status_dialog();
                             }
                         }
                         self.pending_session_sync = None;
@@ -1430,7 +1450,7 @@ impl App {
                         tick_changed = true;
                         self.refresh_child_sessions();
                         if self.status_dialog.is_open() {
-                            self.refresh_status_dialog();
+                            self.refresh_active_status_dialog();
                         }
                     }
                 }
@@ -1740,12 +1760,16 @@ mod tests {
                 compacting: None,
                 archived: None,
             },
+            summary: None,
+            share: None,
+            permission: None,
             revert: Some(SessionRevertInfo {
                 message_id: "m2".to_string(),
                 part_id: Some("p1".to_string()),
                 snapshot: Some("snapshot".to_string()),
                 diff: None,
             }),
+            telemetry: None,
             metadata: None,
         };
         let mapped_messages = vec![map_api_message(&MessageInfo {

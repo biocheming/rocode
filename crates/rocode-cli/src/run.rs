@@ -42,7 +42,9 @@ use rocode_util::util::color::strip_ansi;
 use tokio::sync::{mpsc, Mutex as AsyncMutex};
 use tokio_util::sync::CancellationToken;
 
-use crate::api_client::{CliApiClient, McpStatusInfo, MessageTokensInfo, SessionInfo};
+use crate::api_client::{
+    CliApiClient, McpStatusInfo, SessionExecutionTopology, SessionRuntimeState,
+};
 use crate::cli::{InteractiveCliMode, RunOutputFormat};
 use crate::event_stream::{self, CliServerEvent};
 use crate::providers::{render_help, setup_providers};
@@ -635,13 +637,13 @@ mod tests {
         CliPromptSelectionState, CliRecentSessionInfo, CliRetainedTranscript, CliSessionTokenStats,
         PermissionMemory, TerminalStreamAccumulator,
     };
-    use crate::api_client::SessionInfo;
+    use crate::api_client::SessionListItem;
     use chrono::Utc;
     use rocode_command::cli_style::CliStyle;
     use rocode_command::output_blocks::{MessageBlock, OutputBlock, SchedulerStageBlock};
     use rocode_command::{CommandRegistry, ResolvedUiCommand, UiActionId, UiCommandArgumentKind};
     use rocode_config::{Config, UiPreferencesConfig};
-    use rocode_tui::api::SessionTimeInfo;
+    use rocode_tui::api::{SessionListHints, SessionListTime};
     use std::collections::{BTreeSet, HashMap, VecDeque};
     use std::path::Path;
     use std::sync::atomic::AtomicBool;
@@ -702,6 +704,11 @@ mod tests {
             focus: None,
             last_event: None,
             waiting_on: None,
+            estimated_context_tokens: None,
+            skill_tree_budget: None,
+            skill_tree_truncation_strategy: None,
+            skill_tree_truncated: None,
+            retry_attempt: None,
             activity: None,
             loop_budget: None,
             available_skill_count: None,
@@ -1140,7 +1147,7 @@ mod tests {
     #[test]
     fn startup_banner_uses_recent_session_metadata() {
         let now = Utc::now().timestamp_millis();
-        let sessions = vec![SessionInfo {
+        let sessions = vec![SessionListItem {
             id: "s1".to_string(),
             slug: "s1".to_string(),
             project_id: "p1".to_string(),
@@ -1148,21 +1155,22 @@ mod tests {
             parent_id: None,
             title: "Research Session".to_string(),
             version: "v1".to_string(),
-            time: SessionTimeInfo {
+            time: SessionListTime {
                 created: now,
                 updated: now,
                 compacting: None,
                 archived: None,
             },
-            revert: None,
-            metadata: Some(HashMap::from([
-                ("model_provider".to_string(), serde_json::json!("zhipuai")),
-                ("model_id".to_string(), serde_json::json!("GLM-5")),
-                (
-                    "scheduler_profile".to_string(),
-                    serde_json::json!("prometheus"),
-                ),
-            ])),
+            summary: None,
+            hints: Some(SessionListHints {
+                current_model: None,
+                model_provider: Some("zhipuai".to_string()),
+                model_id: Some("GLM-5".to_string()),
+                scheduler_profile: Some("prometheus".to_string()),
+                resolved_scheduler_profile: None,
+                agent: None,
+            }),
+            pending_command_invocation: None,
         }];
         let info = cli_recent_session_info_for_directory(&sessions, Path::new("/tmp/project"))
             .expect("recent session info");
@@ -1191,6 +1199,10 @@ mod tests {
             view_label: Some("view child child-abc".to_string()),
             queue_len: 2,
             active_stage: Some(stage_with_status("running")),
+            session_runtime: None,
+            stage_summaries: Vec::new(),
+            telemetry_topology: None,
+            events_browser: None,
             transcript: CliRetainedTranscript::default(),
             sidebar_collapsed: false,
             active_collapsed: false,

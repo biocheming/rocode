@@ -11,6 +11,7 @@ mod project;
 mod provider;
 mod pty;
 mod session;
+mod skill_catalog;
 mod stream;
 mod task;
 mod tui;
@@ -19,6 +20,10 @@ mod workspace;
 // Re-export all pub items from sub-modules so `pub use routes::*` in lib.rs continues to work.
 use self::plugin_auth::{ensure_plugin_loader_active, plugin_auth_routes};
 use self::process::process_routes;
+use self::skill_catalog::{
+    get_skill_detail, list_skill_catalog_entries, manage_skill, resolve_skill_catalog,
+    SkillCatalogQuery,
+};
 use self::task::task_routes;
 pub use config::*;
 pub use file::*;
@@ -75,6 +80,9 @@ pub fn router() -> Router<Arc<ServerState>> {
         .route("/agent", get(list_agents))
         .route("/mode", get(list_execution_modes))
         .route("/skill", get(list_skills))
+        .route("/skill/catalog", get(list_skill_catalog_entries))
+        .route("/skill/detail", get(get_skill_detail))
+        .route("/skill/manage", post(manage_skill))
         .route("/lsp", get(get_lsp_status))
         .route("/formatter", get(get_formatter_status))
         .route("/auth/{id}", put(set_auth).delete(delete_auth))
@@ -895,14 +903,11 @@ async fn apply_plugin_config_hooks(loader: &Arc<PluginLoader>, config: &mut AppC
     }
 }
 
-async fn list_skills() -> Result<Json<Vec<String>>> {
-    let mut names: Vec<String> = rocode_skill::list_available_skills()
-        .into_iter()
-        .map(|(name, _description)| name)
-        .collect();
-    names.sort_by_key(|name| name.to_ascii_lowercase());
-    names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
-    Ok(Json(names))
+async fn list_skills(
+    State(state): State<Arc<ServerState>>,
+    Query(query): Query<SkillCatalogQuery>,
+) -> Result<Json<Vec<rocode_skill::SkillMetaView>>> {
+    Ok(Json(resolve_skill_catalog(&state, &query).await?))
 }
 
 #[derive(Debug, Serialize)]

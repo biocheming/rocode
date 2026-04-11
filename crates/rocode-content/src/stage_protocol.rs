@@ -10,6 +10,23 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod telemetry_event_names {
+    pub const SESSION_UPDATED: &str = "session.updated";
+    pub const SESSION_STATUS: &str = "session.status";
+    pub const SESSION_USAGE: &str = "session.usage";
+    pub const SESSION_ERROR: &str = "session.error";
+    pub const QUESTION_CREATED: &str = "question.created";
+    pub const QUESTION_RESOLVED: &str = "question.resolved";
+    pub const PERMISSION_REQUESTED: &str = "permission.requested";
+    pub const PERMISSION_RESOLVED: &str = "permission.resolved";
+    pub const TOOL_STARTED: &str = "tool.started";
+    pub const TOOL_COMPLETED: &str = "tool.completed";
+    pub const EXECUTION_TOPOLOGY_CHANGED: &str = "execution.topology.changed";
+    pub const DIFF_UPDATED: &str = "diff.updated";
+    pub const CHILD_SESSION_ATTACHED: &str = "child_session.attached";
+    pub const CHILD_SESSION_DETACHED: &str = "child_session.detached";
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StageSummary {
     pub stage_id: String,
@@ -37,6 +54,18 @@ pub struct StageSummary {
     pub focus: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_event: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_on: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_context_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_tree_budget: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_tree_truncation_strategy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_tree_truncated: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_attempt: Option<u64>,
     pub active_agent_count: u32,
     pub active_tool_count: u32,
     pub child_session_count: u32,

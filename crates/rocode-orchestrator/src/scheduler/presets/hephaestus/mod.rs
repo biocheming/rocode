@@ -168,7 +168,9 @@ fn hephaestus_execution_orchestration_charter(
         build_hephaestus_dynamic_prompt(
             &plan.available_agents,
             &plan.available_categories,
-            &plan.skill_list,
+            plan.effective_skill_list(Some(
+                crate::scheduler::SchedulerStageKind::ExecutionOrchestration,
+            )),
         ),
         profile_suffix,
     )

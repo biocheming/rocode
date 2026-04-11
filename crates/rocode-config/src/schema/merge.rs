@@ -361,6 +361,8 @@ impl DeepMerge for SkillTreeConfig {
         merge_option_replace(&mut self.enabled, other.enabled);
         merge_option_replace(&mut self.root, other.root);
         merge_option_replace(&mut self.separator, other.separator);
+        merge_option_replace(&mut self.token_budget, other.token_budget);
+        merge_option_replace(&mut self.truncation_strategy, other.truncation_strategy);
     }
 }
 

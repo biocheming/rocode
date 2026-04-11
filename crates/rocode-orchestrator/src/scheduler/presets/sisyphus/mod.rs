@@ -161,7 +161,9 @@ fn sisyphus_dynamic_charter(plan: &SchedulerProfilePlan) -> String {
     build_sisyphus_dynamic_prompt(
         &plan.available_agents,
         &plan.available_categories,
-        &plan.skill_list,
+        plan.effective_skill_list(Some(
+            crate::scheduler::SchedulerStageKind::ExecutionOrchestration,
+        )),
     )
 }
 

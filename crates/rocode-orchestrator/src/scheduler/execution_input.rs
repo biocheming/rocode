@@ -34,7 +34,8 @@ pub(super) fn compose_execution_orchestration_input(
             skill_tree_context: skill_tree_context_value,
             available_agents: &plan.available_agents,
             available_categories: &plan.available_categories,
-            skill_list: &plan.skill_list,
+            skill_list: plan
+                .effective_skill_list(Some(super::SchedulerStageKind::ExecutionOrchestration)),
         },
     ) {
         return composed;

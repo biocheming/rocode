@@ -157,6 +157,9 @@ fn render_scheduler_stage_block(stage: &SchedulerStageBlock) -> String {
     if let Some(detail) = scheduler_stage_secondary_token_summary(stage) {
         out.push_str(&format!("  usage: {detail}\n"));
     }
+    if let Some(detail) = scheduler_stage_skill_tree_summary(stage) {
+        out.push_str(&format!("  skill tree: {detail}\n"));
+    }
     if let Some(ref child_id) = stage.child_session_id {
         out.push_str(&format!("  child session: {child_id}\n"));
     }
@@ -756,6 +759,11 @@ fn render_scheduler_stage_rich(stage: &SchedulerStageBlock, style: &CliStyle) ->
             style.dim(text)
         }));
     }
+    if let Some(detail) = scheduler_stage_skill_tree_summary(stage) {
+        out.push_str(&stage_tree_field(style, "Skill Tree", &detail, |text| {
+            style.dim(text)
+        }));
+    }
     if let Some(ref child_id) = stage.child_session_id {
         out.push_str(&stage_tree_field(
             style,
@@ -912,6 +920,34 @@ fn scheduler_stage_secondary_token_summary(stage: &SchedulerStageBlock) -> Optio
     }
     if let Some(cache_write) = stage.cache_write_tokens {
         parts.push(format!("cache write {cache_write}"));
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+fn scheduler_stage_skill_tree_summary(stage: &SchedulerStageBlock) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(estimated) = stage.estimated_context_tokens {
+        parts.push(format!("est {estimated}"));
+    }
+    if let Some(budget) = stage.skill_tree_budget {
+        parts.push(format!("budget {budget}"));
+    }
+    if let Some(strategy) = stage
+        .skill_tree_truncation_strategy
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        parts.push(format!("truncate {strategy}"));
+    }
+    if let Some(truncated) = stage.skill_tree_truncated {
+        parts.push(if truncated {
+            "truncated".to_string()
+        } else {
+            "full".to_string()
+        });
+    }
+    if let Some(retry_attempt) = stage.retry_attempt {
+        parts.push(format!("retry {retry_attempt}"));
     }
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
@@ -1330,6 +1366,11 @@ mod tests {
                 focus: Some("planning".to_string()),
                 last_event: Some("Tool finished: Read".to_string()),
                 waiting_on: Some("model".to_string()),
+                estimated_context_tokens: Some(2048),
+                skill_tree_budget: Some(4096),
+                skill_tree_truncation_strategy: Some("tail".to_string()),
+                skill_tree_truncated: Some(false),
+                retry_attempt: None,
                 activity: Some("Task → build\n- label: Schema migration".to_string()),
                 loop_budget: None,
                 available_skill_count: None,
@@ -1354,6 +1395,8 @@ mod tests {
         assert!(line.contains("waiting_on=model"));
         assert!(line.contains("tokens=1200/320"));
         assert!(line.contains("usage: reasoning 0 · cache read 0 · cache write 0"));
+        assert!(line.contains("skill tree: est 2048"));
+        assert!(line.contains("budget 4096"));
         assert!(line.contains("activity:"));
     }
 
@@ -1577,6 +1620,11 @@ mod tests {
                 focus: Some("verification".to_string()),
                 last_event: Some("Question started".to_string()),
                 waiting_on: Some("user".to_string()),
+                estimated_context_tokens: Some(256),
+                skill_tree_budget: Some(512),
+                skill_tree_truncation_strategy: Some("head-tail".to_string()),
+                skill_tree_truncated: Some(true),
+                retry_attempt: Some(2),
                 activity: Some("Question (1)\n- Scope: proceed with review?".to_string()),
                 loop_budget: None,
                 available_skill_count: Some(3),
@@ -1624,6 +1672,7 @@ mod tests {
         assert!(out.contains("waiting on user"));
         assert!(out.contains("tokens 980/221"));
         assert!(out.contains("Usage: reasoning 0 · cache read 0 · cache write 0"));
+        assert!(out.contains("Skill Tree: est 256"));
         assert!(out.contains("Activity:"));
         assert!(out.contains("◈ Decision"));
     }
@@ -1648,6 +1697,11 @@ mod tests {
                 focus: Some("Decide the correct workflow and preserve request intent for a very long biomedical planning request".to_string()),
                 last_event: Some("Step 1 started with model analysis and route rubric evaluation".to_string()),
                 waiting_on: Some("model".to_string()),
+                estimated_context_tokens: Some(8192),
+                skill_tree_budget: Some(4096),
+                skill_tree_truncation_strategy: Some("tail".to_string()),
+                skill_tree_truncated: Some(true),
+                retry_attempt: None,
                 activity: None,
                 loop_budget: None,
                 available_skill_count: None,
@@ -1718,6 +1772,11 @@ mod tests {
             focus: None,
             last_event: None,
             waiting_on: None,
+            estimated_context_tokens: None,
+            skill_tree_budget: None,
+            skill_tree_truncation_strategy: None,
+            skill_tree_truncated: None,
+            retry_attempt: None,
             activity: None,
             loop_budget: None,
             available_skill_count: None,
@@ -1759,6 +1818,11 @@ mod tests {
             focus: None,
             last_event: None,
             waiting_on: None,
+            estimated_context_tokens: None,
+            skill_tree_budget: None,
+            skill_tree_truncation_strategy: None,
+            skill_tree_truncated: None,
+            retry_attempt: None,
             activity: None,
             loop_budget: None,
             available_skill_count: None,
@@ -1799,6 +1863,11 @@ mod tests {
             focus: Some("code analysis".to_string()),
             last_event: Some("tool_call".to_string()),
             waiting_on: None,
+            estimated_context_tokens: Some(300),
+            skill_tree_budget: Some(512),
+            skill_tree_truncation_strategy: Some("head-tail".to_string()),
+            skill_tree_truncated: Some(false),
+            retry_attempt: Some(1),
             activity: Some("reading files".to_string()),
             loop_budget: Some("step-limit:5".to_string()),
             available_skill_count: Some(10),
@@ -1857,6 +1926,11 @@ mod tests {
             focus: None,
             last_event: None,
             waiting_on: None,
+            estimated_context_tokens: None,
+            skill_tree_budget: None,
+            skill_tree_truncation_strategy: None,
+            skill_tree_truncated: None,
+            retry_attempt: None,
             activity: None,
             loop_budget: Some("unbounded".to_string()),
             available_skill_count: None,

@@ -50,6 +50,38 @@ import {
 
 type ThemeId = "daylight" | "sunset" | "graphite" | "midnight";
 
+interface PersistedStageTelemetrySummary {
+  stage_id: string;
+  stage_name: string;
+  status: string;
+}
+
+interface PersistedSessionTelemetrySnapshot {
+  version: string;
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+    reasoning_tokens: number;
+    cache_write_tokens: number;
+    cache_read_tokens: number;
+    total_cost: number;
+  };
+  stage_summaries: PersistedStageTelemetrySummary[];
+  last_run_status: string;
+  updated_at: number;
+}
+
+// Mirror of `rocode_types::SessionListHints`.
+interface SessionListHints {
+  current_model?: string | null;
+  model_provider?: string | null;
+  model_id?: string | null;
+  scheduler_profile?: string | null;
+  resolved_scheduler_profile?: string | null;
+  agent?: string | null;
+}
+
+// Mirror of `rocode_types::SessionListItem`.
 interface SessionRecord {
   id: string;
   title: string;
@@ -57,10 +89,27 @@ interface SessionRecord {
   directory?: string;
   project_id?: string;
   updated?: number;
+  hints?: SessionListHints | null;
+  pending_command_invocation?: PendingCommandInvocation | null;
+  telemetry?: PersistedSessionTelemetrySnapshot | null;
   metadata?: Record<string, unknown> | null;
   time?: {
     updated?: number;
   };
+}
+
+// Mirror of `rocode_types::SessionListContract`.
+interface SessionListContractRecord {
+  filter_query_parameters: string[];
+  search_fields: string[];
+  non_search_fields: string[];
+  note: string;
+}
+
+// Mirror of `rocode_types::SessionListResponse`.
+interface SessionListResponseRecord {
+  items: SessionRecord[];
+  contract: SessionListContractRecord;
 }
 
 interface ProviderModel {
@@ -583,7 +632,7 @@ function pendingCommandFromSession(
   session: SessionRecord,
   questionId: string,
 ): PendingCommandInvocation | null {
-  const pending = session.metadata?.pending_command_invocation;
+  const pending = session.pending_command_invocation ?? session.metadata?.pending_command_invocation;
   if (!pending || typeof pending !== "object") return null;
   const invocation = pending as PendingCommandInvocation;
   if (invocation.questionId && invocation.questionId !== questionId) {
@@ -1139,8 +1188,8 @@ export default function App() {
     });
 
   const fetchSessions = async (): Promise<SessionRecord[]> => {
-    const sessionData = await apiJson<SessionRecord[]>("/session?limit=500");
-    return normalizeSessions(sessionData ?? []);
+    const sessionData = await apiJson<SessionListResponseRecord>("/session?limit=500");
+    return normalizeSessions(sessionData?.items ?? []);
   };
 
   const reloadCoreSettingsData = async () => {
@@ -1558,7 +1607,13 @@ export default function App() {
       }
 
       if (type === "session.status" && eventSessionId === selectedSessionRef.current) {
-        const status = String(event.status ?? "");
+        const rawStatus = event.status;
+        const status =
+          typeof rawStatus === "string"
+            ? rawStatus
+            : rawStatus && typeof rawStatus === "object" && "type" in rawStatus
+              ? String((rawStatus as { type?: unknown }).type ?? "")
+              : String(rawStatus ?? "");
         if (status === "idle" || status === "complete" || status === "error") {
           setStreaming(false);
           setStatusLine(status || "idle");
@@ -2430,6 +2485,7 @@ export default function App() {
             workspaceMode={resolvedWorkspaceMode}
             workspaceRootPath={resolvedWorkspaceRootPath}
             workspaceConfigDir={workspaceContext?.identity?.config_dir ?? null}
+            selectedSessionId={selectedSessionId}
             modeOptions={settingsModeOptions}
             selectedMode={selectedMode}
             onModeChange={setSelectedMode}

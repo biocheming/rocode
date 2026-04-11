@@ -249,7 +249,7 @@ async fn sisyphus_runs_single_execution_orchestration_without_review_or_synthesi
     let mut plan = sisyphus_plan().with_description(Some(
         "OMO-style single-loop delegation-first orchestrator".to_string(),
     ));
-    plan.skill_list = vec!["review-pr".to_string(), "simplify".to_string()];
+    plan.skill_list = vec!["review-pr".into(), "simplify".into()];
     plan.available_agents = vec![
         crate::scheduler::AvailableAgentMeta {
             name: "explore".to_string(),

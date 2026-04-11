@@ -729,6 +729,7 @@ impl MessageRepository {
                         .metadata
                         .and_then(|m| serde_json::from_str(&m).ok())
                         .unwrap_or_default(),
+                    usage: None,
                     finish: row.finish,
                 })
             })
@@ -786,6 +787,7 @@ impl MessageRepository {
                         .metadata
                         .and_then(|m| serde_json::from_str(&m).ok())
                         .unwrap_or_default(),
+                    usage: None,
                     finish: row.finish,
                 }))
             }

@@ -265,15 +265,12 @@ fn default_post_route_stages(kind: SchedulerPresetKind) -> Vec<SchedulerStageKin
 
 fn append_skill_tree_context(skill_tree: &mut Option<SkillTreeRequestPlan>, context: &str) {
     match skill_tree {
-        Some(tree) => {
-            if !tree.context_markdown.trim().is_empty() {
-                tree.context_markdown.push_str("\n\n");
-            }
-            tree.context_markdown.push_str(context);
-        }
+        Some(tree) => tree.append_context(context),
         None => {
             *skill_tree = Some(SkillTreeRequestPlan {
                 context_markdown: context.to_string(),
+                token_budget: None,
+                truncation_strategy: Default::default(),
             });
         }
     }
@@ -564,6 +561,8 @@ analysis
     fn apply_context_append_updates_skill_tree() {
         let mut plan = base_plan().with_skill_tree(SkillTreeRequestPlan {
             context_markdown: "base context".to_string(),
+            token_budget: None,
+            truncation_strategy: Default::default(),
         });
         let decision =
             orchestrate_decision(None, None, None, Some("extra route context"), "append");
@@ -574,6 +573,26 @@ analysis
                 .map(|tree| tree.context_markdown.as_str()),
             Some("base context\n\nextra route context")
         );
+    }
+
+    #[test]
+    fn apply_context_append_respects_skill_tree_budget() {
+        let mut plan = base_plan().with_skill_tree(SkillTreeRequestPlan {
+            context_markdown: "AAAAAAAAAAAAAAAAAAAA".to_string(),
+            token_budget: Some(10),
+            truncation_strategy: crate::skill_tree::SkillTreeTruncationStrategy::Tail,
+        });
+        let decision =
+            orchestrate_decision(None, None, None, Some("BBBBBBBBBBBBBBBBBBBB"), "append");
+        apply_route_decision(&mut plan, 1, &decision);
+
+        let context = plan
+            .skill_tree
+            .as_ref()
+            .map(|tree| tree.context_markdown.as_str())
+            .expect("skill tree should remain");
+        assert!(context.contains("truncated"));
+        assert!(context.ends_with("BBBBBBBBBB"));
     }
 
     #[test]

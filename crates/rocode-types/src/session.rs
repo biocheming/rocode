@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use rocode_content::stage_protocol::StageStatus;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -44,7 +45,7 @@ pub struct PermissionRuleset {
     pub mode: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionTime {
     pub created: i64,
     pub updated: i64,
@@ -66,7 +67,7 @@ impl Default for SessionTime {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct SessionUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -132,4 +133,198 @@ impl Session {
         self.time.updated = now.timestamp_millis();
         self.updated_at = now;
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionTelemetrySnapshotVersion {
+    #[default]
+    V1,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionListHints {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduler_profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_scheduler_profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionListSummary {
+    pub additions: u64,
+    pub deletions: u64,
+    pub files: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionListItem {
+    pub id: String,
+    pub slug: String,
+    pub project_id: String,
+    pub directory: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    pub title: String,
+    pub version: String,
+    pub time: SessionTime,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<SessionListSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hints: Option<SessionListHints>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_command_invocation: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionListContract {
+    pub filter_query_parameters: Vec<String>,
+    pub search_fields: Vec<String>,
+    pub non_search_fields: Vec<String>,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionListResponse {
+    pub items: Vec<SessionListItem>,
+    pub contract: SessionListContract,
+}
+
+pub type SessionTimeInfo = SessionTime;
+pub type SessionSummaryInfo = SessionListSummary;
+pub type SessionShareInfo = SessionShare;
+pub type SessionRevertInfo = SessionRevert;
+pub type PermissionRulesetInfo = PermissionRuleset;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionInfo {
+    pub id: String,
+    pub slug: String,
+    pub project_id: String,
+    pub directory: String,
+    pub parent_id: Option<String>,
+    pub title: String,
+    pub version: String,
+    pub time: SessionTimeInfo,
+    #[serde(default)]
+    pub summary: Option<SessionSummaryInfo>,
+    #[serde(default)]
+    pub share: Option<SessionShareInfo>,
+    #[serde(default)]
+    pub revert: Option<SessionRevertInfo>,
+    #[serde(default)]
+    pub permission: Option<PermissionRulesetInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telemetry: Option<SessionTelemetrySnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<HashMap<String, serde_json::Value>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionStatusInfo {
+    pub status: String,
+    pub idle: bool,
+    pub busy: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PersistedStageTelemetrySummary {
+    pub stage_id: String,
+    pub stage_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_total: Option<u64>,
+    pub status: StageStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_event: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_on: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_context_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_tree_budget: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_tree_truncation_strategy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_tree_truncated: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_attempt: Option<u64>,
+    pub active_agent_count: u32,
+    pub active_tool_count: u32,
+    pub child_session_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_child_session_id: Option<String>,
+}
+
+impl From<rocode_content::stage_protocol::StageSummary> for PersistedStageTelemetrySummary {
+    fn from(value: rocode_content::stage_protocol::StageSummary) -> Self {
+        Self {
+            stage_id: value.stage_id,
+            stage_name: value.stage_name,
+            index: value.index,
+            total: value.total,
+            step: value.step,
+            step_total: value.step_total,
+            status: value.status,
+            prompt_tokens: value.prompt_tokens,
+            completion_tokens: value.completion_tokens,
+            reasoning_tokens: value.reasoning_tokens,
+            cache_read_tokens: value.cache_read_tokens,
+            cache_write_tokens: value.cache_write_tokens,
+            focus: value.focus,
+            last_event: value.last_event,
+            waiting_on: value.waiting_on,
+            estimated_context_tokens: value.estimated_context_tokens,
+            skill_tree_budget: value.skill_tree_budget,
+            skill_tree_truncation_strategy: value.skill_tree_truncation_strategy,
+            skill_tree_truncated: value.skill_tree_truncated,
+            retry_attempt: value.retry_attempt,
+            active_agent_count: value.active_agent_count,
+            active_tool_count: value.active_tool_count,
+            child_session_count: value.child_session_count,
+            primary_child_session_id: value.primary_child_session_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionTelemetrySnapshot {
+    #[serde(default)]
+    pub version: SessionTelemetrySnapshotVersion,
+    pub usage: SessionUsage,
+    #[serde(default)]
+    pub stage_summaries: Vec<PersistedStageTelemetrySummary>,
+    pub last_run_status: String,
+    pub updated_at: i64,
 }

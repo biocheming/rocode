@@ -867,20 +867,24 @@ async fn cli_refresh_server_info(
     }
 
     if let Some(session_id) = server_session_id {
-        match api_client.get_messages(session_id).await {
-            Ok(messages) => {
-                let mut stats = CliSessionTokenStats::default();
-                for message in &messages {
-                    if message.role == "assistant" {
-                        stats.accumulate(&message.tokens, message.cost);
-                    }
-                }
+        match api_client.get_session_telemetry(session_id).await {
+            Ok(telemetry) => {
                 if let Ok(mut projection) = projection.lock() {
-                    projection.token_stats = stats;
+                    projection.session_runtime = Some(telemetry.runtime.clone());
+                    projection.stage_summaries = telemetry.stages.clone();
+                    projection.telemetry_topology = Some(telemetry.topology.clone());
+                    projection.token_stats.sync_from_usage(
+                        telemetry.usage.input_tokens,
+                        telemetry.usage.output_tokens,
+                        telemetry.usage.reasoning_tokens,
+                        telemetry.usage.cache_read_tokens,
+                        telemetry.usage.cache_write_tokens,
+                        telemetry.usage.total_cost,
+                    );
                 }
             }
             Err(error) => {
-                tracing::debug!("Failed to refresh token stats: {}", error);
+                tracing::debug!("Failed to refresh session telemetry: {}", error);
             }
         }
     }

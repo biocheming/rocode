@@ -7,7 +7,9 @@ use std::sync::Arc;
 use rocode_agent::{AgentExecutor, AgentInfo, AgentRegistry};
 use rocode_config::loader::load_config;
 use rocode_config::{Config, SkillTreeNodeConfig};
-use rocode_orchestrator::{resolve_skill_markdown_repo, SkillTreeNode, SkillTreeRequestPlan};
+use rocode_orchestrator::{
+    resolve_skill_markdown_repo, SkillTreeNode, SkillTreeRequestPlan, SkillTreeTruncationStrategy,
+};
 use rocode_session::system::{EnvironmentContext, SystemPrompt};
 use rocode_tool::registry::create_default_registry;
 
@@ -37,11 +39,26 @@ fn resolve_request_skill_tree_plan(config: &Config) -> Option<SkillTreeRequestPl
     let root = skill_tree.root.as_ref()?;
     let root = to_orchestrator_skill_tree(root);
     let markdown_repo = resolve_skill_markdown_repo(&config.skill_paths);
+    let truncation_strategy = skill_tree
+        .truncation_strategy
+        .as_deref()
+        .and_then(SkillTreeTruncationStrategy::from_label);
+    if skill_tree.truncation_strategy.is_some() && truncation_strategy.is_none() {
+        tracing::warn!(
+            strategy = skill_tree
+                .truncation_strategy
+                .as_deref()
+                .unwrap_or_default(),
+            "unknown skill tree truncation strategy; using default head-tail"
+        );
+    }
 
-    match SkillTreeRequestPlan::from_tree_with_separator(
+    match SkillTreeRequestPlan::from_tree_with_options(
         &root,
         &markdown_repo,
         skill_tree.separator.as_deref(),
+        skill_tree.token_budget,
+        truncation_strategy,
     ) {
         Ok(plan) => plan,
         Err(error) => {

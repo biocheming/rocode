@@ -327,6 +327,16 @@ pub struct SchedulerStageBlock {
     pub focus: Option<String>,
     pub last_event: Option<String>,
     pub waiting_on: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_context_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_tree_budget: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_tree_truncation_strategy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_tree_truncated: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_attempt: Option<u64>,
     pub activity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_budget: Option<String>,
@@ -391,6 +401,22 @@ impl SchedulerStageBlock {
             .get("scheduler_stage_waiting_on")
             .and_then(|v| v.as_str())
             .map(String::from);
+        let estimated_context_tokens = metadata
+            .get("scheduler_stage_estimated_context_tokens")
+            .and_then(|v| v.as_u64());
+        let skill_tree_budget = metadata
+            .get("scheduler_stage_skill_tree_budget")
+            .and_then(|v| v.as_u64());
+        let skill_tree_truncation_strategy = metadata
+            .get("scheduler_stage_skill_tree_truncation_strategy")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let skill_tree_truncated = metadata
+            .get("scheduler_stage_skill_tree_truncated")
+            .and_then(|v| v.as_bool());
+        let retry_attempt = metadata
+            .get("scheduler_stage_retry_attempt")
+            .and_then(|v| v.as_u64());
         let activity = metadata
             .get("scheduler_stage_activity")
             .and_then(|v| v.as_str())
@@ -477,6 +503,11 @@ impl SchedulerStageBlock {
             focus,
             last_event,
             waiting_on,
+            estimated_context_tokens,
+            skill_tree_budget,
+            skill_tree_truncation_strategy,
+            skill_tree_truncated,
+            retry_attempt,
             activity,
             loop_budget,
             available_skill_count,
@@ -513,6 +544,12 @@ impl SchedulerStageBlock {
             cache_write_tokens: self.cache_write_tokens,
             focus: self.focus.clone(),
             last_event: self.last_event.clone(),
+            waiting_on: self.waiting_on.clone(),
+            estimated_context_tokens: self.estimated_context_tokens,
+            skill_tree_budget: self.skill_tree_budget,
+            skill_tree_truncation_strategy: self.skill_tree_truncation_strategy.clone(),
+            skill_tree_truncated: self.skill_tree_truncated,
+            retry_attempt: self.retry_attempt,
             active_agent_count: self.active_agents.len() as u32,
             active_tool_count: 0,
             child_session_count: if self.child_session_id.is_some() {
