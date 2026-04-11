@@ -569,7 +569,7 @@ impl SessionPrompt {
         let pending_set: std::collections::HashSet<String> =
             pending_calls.iter().cloned().collect();
         let now = chrono::Utc::now().timestamp_millis();
-        for msg in &mut session.messages {
+        for msg in session.messages_mut() {
             for part in &mut msg.parts {
                 if let PartType::ToolCall {
                     id,
@@ -607,7 +607,7 @@ impl SessionPrompt {
         for call_id in &pending_calls {
             tool_results_msg.add_tool_result(call_id, "Tool execution aborted", true);
         }
-        session.messages.push(tool_results_msg);
+        session.push_message(tool_results_msg);
     }
 }
 
@@ -624,17 +624,17 @@ mod tests {
 
         // Add a user message
         session
-            .messages
+            .messages_mut()
             .push(SessionMessage::user(sid.clone(), "do something"));
 
         // Add an assistant message with two tool calls but only one result
         let mut assistant = SessionMessage::assistant(sid.clone());
         assistant.add_tool_call("call_1", "bash", serde_json::json!({"command": "echo a"}));
         assistant.add_tool_call("call_2", "read_file", serde_json::json!({"path": "foo.rs"}));
-        session.messages.push(assistant);
+        session.messages_mut().push(assistant);
         let mut existing_tool_result = SessionMessage::tool(sid.clone());
         existing_tool_result.add_tool_result("call_1", "output a", false);
-        session.messages.push(existing_tool_result);
+        session.messages_mut().push(existing_tool_result);
         // call_2 has no result — simulates abort mid-execution
 
         SessionPrompt::abort_pending_tool_calls(&mut session);
@@ -666,15 +666,15 @@ mod tests {
         let sid = session.id.clone();
 
         session
-            .messages
+            .messages_mut()
             .push(SessionMessage::user(sid.clone(), "do something"));
 
         let mut assistant = SessionMessage::assistant(sid.clone());
         assistant.add_tool_call("call_1", "bash", serde_json::json!({"command": "echo a"}));
-        session.messages.push(assistant);
+        session.messages_mut().push(assistant);
         let mut tool_result = SessionMessage::tool(sid.clone());
         tool_result.add_tool_result("call_1", "output a", false);
-        session.messages.push(tool_result);
+        session.messages_mut().push(tool_result);
 
         let part_count_before = session.messages.last().map(|m| m.parts.len()).unwrap_or(0);
 
@@ -694,7 +694,7 @@ mod tests {
         let sid = session.id.clone();
 
         session
-            .messages
+            .messages_mut()
             .push(SessionMessage::user(sid.clone(), "do something"));
 
         let mut assistant = SessionMessage::assistant(sid.clone());
@@ -702,7 +702,7 @@ mod tests {
         assistant.add_tool_call("call_2", "read_file", serde_json::json!({}));
         assistant.add_tool_call("call_3", "write_file", serde_json::json!({}));
         // No results at all — all three are pending
-        session.messages.push(assistant);
+        session.messages_mut().push(assistant);
 
         SessionPrompt::abort_pending_tool_calls(&mut session);
 
@@ -798,7 +798,7 @@ mod tests {
         let mut session = Session::new("proj", ".");
         let sid = session.id.clone();
         session
-            .messages
+            .messages_mut()
             .push(SessionMessage::user(sid.clone(), "do something"));
 
         let mut assistant = SessionMessage::assistant(sid.clone());
@@ -818,7 +818,7 @@ mod tests {
             created_at: chrono::Utc::now(),
             message_id: None,
         });
-        session.messages.push(assistant);
+        session.messages_mut().push(assistant);
 
         SessionPrompt::abort_pending_tool_calls(&mut session);
 

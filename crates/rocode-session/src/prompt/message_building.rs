@@ -914,7 +914,7 @@ impl SessionPrompt {
             return;
         }
         let pruned: HashSet<String> = pruned_ids.into_iter().collect();
-        for msg in &mut session.messages {
+        for msg in session.messages_mut() {
             for part in &mut msg.parts {
                 if !pruned.contains(&part.id) {
                     continue;
@@ -927,7 +927,7 @@ impl SessionPrompt {
         }
 
         // Record the compacting timestamp so the session DB row reflects that pruning occurred.
-        session.time.compacting = Some(chrono::Utc::now().timestamp_millis());
+        session.record_mut().time.compacting = Some(chrono::Utc::now().timestamp_millis());
         session.touch();
     }
 
@@ -973,10 +973,10 @@ impl SessionPrompt {
             created_at: chrono::Utc::now(),
             message_id: None,
         });
-        session.messages.push(compaction_msg);
+        session.messages_mut().push(compaction_msg);
 
         // Set the compacting timestamp on the session.
-        session.time.compacting = Some(chrono::Utc::now().timestamp_millis());
+        session.record_mut().time.compacting = Some(chrono::Utc::now().timestamp_millis());
         session.touch();
 
         Some(summary)
@@ -1096,7 +1096,7 @@ mod tests {
         let session_id = session.id.clone();
 
         session
-            .messages
+            .messages_mut()
             .push(SessionMessage::user(session_id.clone(), "old user message"));
 
         let mut old_assistant = SessionMessage::assistant(session_id.clone());
@@ -1104,19 +1104,21 @@ mod tests {
         old_assistant.add_tool_result("call_a", "A".repeat(140_000), false);
         old_assistant.add_tool_call("call_b", "bash", serde_json::json!({"command": "echo b"}));
         old_assistant.add_tool_result("call_b", "B".repeat(140_000), false);
-        session.messages.push(old_assistant);
+        session.messages_mut().push(old_assistant);
         // PLACEHOLDER_TESTS_CONTINUE_2
 
         session
-            .messages
+            .messages_mut()
             .push(SessionMessage::user(session_id.clone(), "new user one"));
         session
-            .messages
+            .messages_mut()
             .push(SessionMessage::assistant(session_id.clone()));
         session
-            .messages
+            .messages_mut()
             .push(SessionMessage::user(session_id.clone(), "new user two"));
-        session.messages.push(SessionMessage::assistant(session_id));
+        session
+            .messages_mut()
+            .push(SessionMessage::assistant(session_id));
 
         SessionPrompt::prune_after_loop(&mut session);
 

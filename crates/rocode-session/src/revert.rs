@@ -64,7 +64,7 @@ impl RevertManager {
             None => return Ok(None),
         };
 
-        let messages = &session.messages;
+        let messages = &session.record().messages;
         let mut last_user_id: Option<String> = None;
         let mut revert: Option<RevertInfo> = None;
 
@@ -99,7 +99,11 @@ impl RevertManager {
         }
 
         if let Some(mut rev) = revert {
-            let existing_snapshot = session.revert.as_ref().and_then(|r| r.snapshot.clone());
+            let existing_snapshot = session
+                .record()
+                .revert
+                .as_ref()
+                .and_then(|r| r.snapshot.clone());
 
             rev.snapshot = Some(
                 existing_snapshot
@@ -140,7 +144,7 @@ impl RevertManager {
             None => return Ok(None),
         };
 
-        let revert = match &session.revert {
+        let revert = match &session.record().revert {
             Some(r) => r.clone(),
             None => return Ok(Some(session)),
         };
@@ -169,7 +173,7 @@ impl RevertManager {
         };
 
         let message_id = &revert.message_id;
-        let messages = &session.messages;
+        let messages = &session.record().messages;
 
         let mut preserve: Vec<crate::SessionMessage> = Vec::new();
         let mut target_msg: Option<crate::SessionMessage> = None;
@@ -200,7 +204,7 @@ impl RevertManager {
         }
 
         if let Some(session) = manager.get_mut(session_id) {
-            session.messages = preserve;
+            session.record_mut().messages = preserve;
             session.clear_revert();
         }
 

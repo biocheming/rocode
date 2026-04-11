@@ -657,7 +657,7 @@ impl<'a> LoopSink for SessionStepSink<'a> {
         match event {
             LoopEvent::TextChunk(text) => {
                 self.ensure_assistant_output_started().await;
-                if let Some(assistant) = self.session.messages.get_mut(self.assistant_index) {
+                if let Some(assistant) = self.session.messages_mut().get_mut(self.assistant_index) {
                     SessionPrompt::append_delta_part(assistant, false, text);
                 }
                 self.emit_output_block(
@@ -678,7 +678,7 @@ impl<'a> LoopSink for SessionStepSink<'a> {
             }
             LoopEvent::ReasoningChunk { text, .. } => {
                 self.ensure_reasoning_output_started().await;
-                if let Some(assistant) = self.session.messages.get_mut(self.assistant_index) {
+                if let Some(assistant) = self.session.messages_mut().get_mut(self.assistant_index) {
                     SessionPrompt::append_delta_part(assistant, true, text);
                 }
                 self.emit_output_block(
@@ -759,7 +759,9 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                         )
                         .await;
                     }
-                    if let Some(assistant) = self.session.messages.get_mut(self.assistant_index) {
+                    if let Some(assistant) =
+                        self.session.messages_mut().get_mut(self.assistant_index)
+                    {
                         SessionPrompt::upsert_tool_call_part(
                             assistant,
                             id,
@@ -830,7 +832,9 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                         )
                         .await;
                     }
-                    if let Some(assistant) = self.session.messages.get_mut(self.assistant_index) {
+                    if let Some(assistant) =
+                        self.session.messages_mut().get_mut(self.assistant_index)
+                    {
                         SessionPrompt::upsert_tool_call_part(
                             assistant,
                             id,
@@ -926,7 +930,7 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                     )
                     .await;
                 }
-                if let Some(assistant) = self.session.messages.get_mut(self.assistant_index) {
+                if let Some(assistant) = self.session.messages_mut().get_mut(self.assistant_index) {
                     SessionPrompt::upsert_tool_call_part(
                         assistant,
                         &call.id,
@@ -1033,7 +1037,7 @@ impl<'a> LoopSink for SessionStepSink<'a> {
                     attachments: state_attachments,
                 }
             };
-            if let Some(assistant) = self.session.messages.get_mut(self.assistant_index) {
+            if let Some(assistant) = self.session.messages_mut().get_mut(self.assistant_index) {
                 SessionPrompt::upsert_tool_call_part(
                     assistant,
                     &call.id,
@@ -1179,7 +1183,7 @@ impl SessionPrompt {
         system_prompt: Option<&str>,
     ) {
         let Some(user_msg) = session
-            .messages
+            .messages_mut()
             .iter_mut()
             .rfind(|m| matches!(m.role, MessageRole::User))
         else {
@@ -1848,7 +1852,7 @@ impl SessionPrompt {
         assistant_index: usize,
         step_output: &SessionStepRuntimeOutput,
     ) {
-        if let Some(assistant_msg) = session.messages.get_mut(assistant_index) {
+        if let Some(assistant_msg) = session.messages_mut().get_mut(assistant_index) {
             if let Some(reason) = step_output.finish_reason.clone() {
                 assistant_msg
                     .metadata
@@ -1942,7 +1946,7 @@ impl SessionPrompt {
         }
 
         let hook_outputs = rocode_plugin::trigger_collect(hook_ctx).await;
-        if let Some(current_assistant) = session.messages.get_mut(assistant_index) {
+        if let Some(current_assistant) = session.messages_mut().get_mut(assistant_index) {
             apply_chat_message_hook_outputs(current_assistant, hook_outputs);
         }
     }
@@ -2067,7 +2071,7 @@ impl SessionPrompt {
                 assistant_metadata.insert("agent".to_string(), serde_json::json!(agent));
                 assistant_metadata.insert("mode".to_string(), serde_json::json!(agent));
             }
-            session.messages.push(SessionMessage {
+            session.messages_mut().push(SessionMessage {
                 id: assistant_message_id,
                 session_id: session_id.clone(),
                 role: MessageRole::Assistant,
@@ -2125,7 +2129,7 @@ impl SessionPrompt {
                         attachments,
                     );
                 }
-                session.messages.push(tool_msg);
+                session.messages_mut().push(tool_msg);
             }
 
             let has_tool_calls = session
@@ -2383,13 +2387,15 @@ impl SessionPrompt {
         }
 
         for (part_index, subtask_id, is_error, description, output) in results {
-            if let Some(part) = session.messages[last_user_idx].parts.get_mut(part_index) {
-                if let PartType::Subtask { status, .. } = &mut part.part_type {
-                    *status = if is_error {
-                        "error".to_string()
-                    } else {
-                        "completed".to_string()
-                    };
+            if let Some(message) = session.messages_mut().get_mut(last_user_idx) {
+                if let Some(part) = message.parts.get_mut(part_index) {
+                    if let PartType::Subtask { status, .. } = &mut part.part_type {
+                        *status = if is_error {
+                            "error".to_string()
+                        } else {
+                            "completed".to_string()
+                        };
+                    }
                 }
             }
 
@@ -3321,7 +3327,7 @@ mod tests {
         let mut session = Session::new("proj", ".");
         let sid = session.id.clone();
         session
-            .messages
+            .messages_mut()
             .push(SessionMessage::user(sid.clone(), "run tools"));
 
         let mut assistant = SessionMessage::assistant(sid);
@@ -3339,7 +3345,7 @@ mod tests {
             message_id: None,
         });
         assistant.add_tool_call("call_ok", "noarg_echo", serde_json::json!({}));
-        session.messages.push(assistant);
+        session.messages_mut().push(assistant);
 
         let provider: Arc<dyn Provider> =
             Arc::new(StaticModelProvider::with_model("test-model", 8192, 1024));
@@ -3381,11 +3387,11 @@ mod tests {
         let mut session = Session::new("proj", ".");
         let sid = session.id.clone();
         session
-            .messages
+            .messages_mut()
             .push(SessionMessage::user(sid.clone(), "run noarg"));
         let mut assistant = SessionMessage::assistant(sid);
         assistant.add_tool_call("call_noarg", "noarg_echo", serde_json::json!({}));
-        session.messages.push(assistant);
+        session.messages_mut().push(assistant);
 
         let provider: Arc<dyn Provider> =
             Arc::new(StaticModelProvider::with_model("test-model", 8192, 1024));
@@ -3438,11 +3444,11 @@ mod tests {
         let mut session = Session::new("proj", ".");
         let sid = session.id.clone();
         session
-            .messages
+            .messages_mut()
             .push(SessionMessage::user(sid.clone(), "run invalid"));
         let mut assistant = SessionMessage::assistant(sid);
         assistant.add_tool_call("call_invalid", "needs_path", serde_json::json!({}));
-        session.messages.push(assistant);
+        session.messages_mut().push(assistant);
 
         let provider: Arc<dyn Provider> =
             Arc::new(StaticModelProvider::with_model("test-model", 8192, 1024));
@@ -3518,7 +3524,7 @@ mod tests {
         let mut session = Session::new("proj", ".");
         let sid = session.id.clone();
         session
-            .messages
+            .messages_mut()
             .push(SessionMessage::user(sid.clone(), "run running only"));
         let mut assistant = SessionMessage::assistant(sid);
         assistant.parts.push(crate::MessagePart {
@@ -3538,7 +3544,7 @@ mod tests {
             message_id: None,
         });
         assistant.add_tool_call("call_running", "noarg_echo", serde_json::json!({}));
-        session.messages.push(assistant);
+        session.messages_mut().push(assistant);
 
         let provider: Arc<dyn Provider> =
             Arc::new(StaticModelProvider::with_model("test-model", 8192, 1024));
@@ -3581,21 +3587,21 @@ mod tests {
         let sid = session.id.clone();
 
         session
-            .messages
+            .messages_mut()
             .push(SessionMessage::user(sid.clone(), "turn one"));
         let mut assistant_1 = SessionMessage::assistant(sid.clone());
         assistant_1.add_tool_call("tool-call-0", "noarg_echo", serde_json::json!({}));
-        session.messages.push(assistant_1);
+        session.messages_mut().push(assistant_1);
         let mut tool_msg_1 = SessionMessage::tool(sid.clone());
         tool_msg_1.add_tool_result("tool-call-0", "{}", false);
-        session.messages.push(tool_msg_1);
+        session.messages_mut().push(tool_msg_1);
 
         session
-            .messages
+            .messages_mut()
             .push(SessionMessage::user(sid.clone(), "turn two"));
         let mut assistant_2 = SessionMessage::assistant(sid);
         assistant_2.add_tool_call("tool-call-0", "noarg_echo", serde_json::json!({}));
-        session.messages.push(assistant_2);
+        session.messages_mut().push(assistant_2);
 
         let provider: Arc<dyn Provider> =
             Arc::new(StaticModelProvider::with_model("test-model", 8192, 1024));

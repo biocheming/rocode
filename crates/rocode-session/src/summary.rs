@@ -242,7 +242,7 @@ pub fn persist_session_diffs(
 ) -> anyhow::Result<()> {
     let key = session_diff_storage_key(session_id);
     let value = serde_json::to_value(diffs)?;
-    session.metadata.insert(key, value);
+    session.insert_metadata(key, value);
     Ok(())
 }
 
@@ -783,7 +783,7 @@ mod tests {
 
         set_session_summary(&mut session, &summary);
 
-        let stored = session.summary.expect("summary should be set");
+        let stored = session.summary.clone().expect("summary should be set");
         assert_eq!(stored.additions, 7);
         assert_eq!(stored.deletions, 2);
         assert_eq!(stored.files, 1);

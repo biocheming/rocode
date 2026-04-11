@@ -160,7 +160,8 @@ fn assistant_visible_text_from_message(message: &rocode_session::SessionMessage)
 }
 
 pub(crate) fn latest_user_prompt(session: &rocode_session::Session) -> Option<String> {
-    session.messages.iter().rev().find_map(|message| {
+    let record = session.record();
+    record.messages.iter().rev().find_map(|message| {
         if !matches!(message.role, rocode_session::MessageRole::User) {
             return None;
         }
@@ -183,6 +184,7 @@ pub(crate) fn latest_user_prompt(session: &rocode_session::Session) -> Option<St
 
 fn latest_assistant_finish(session: &rocode_session::Session) -> Option<String> {
     session
+        .record()
         .messages
         .iter()
         .rev()
@@ -198,6 +200,7 @@ pub(crate) fn collect_stage_recovery_targets(
     session: &rocode_session::Session,
 ) -> Vec<StageRecoveryTarget> {
     session
+        .record()
         .messages
         .iter()
         .rev()
@@ -254,7 +257,7 @@ pub(crate) fn collect_subtask_recovery_targets(
     session: &rocode_session::Session,
 ) -> Vec<SubtaskRecoveryTarget> {
     let mut targets = Vec::new();
-    for message in session.messages.iter().rev() {
+    for message in session.record().messages.iter().rev() {
         if !matches!(message.role, rocode_session::MessageRole::User) {
             continue;
         }
@@ -645,15 +648,9 @@ mod tests {
     #[test]
     fn recovery_protocol_surfaces_run_stage_and_subtask_actions() {
         let mut session = rocode_session::Session::new("default", ".");
-        session
-            .metadata
-            .insert("scheduler_profile".to_string(), serde_json::json!("atlas"));
-        session
-            .metadata
-            .insert("model_provider".to_string(), serde_json::json!("openai"));
-        session
-            .metadata
-            .insert("model_id".to_string(), serde_json::json!("gpt-5"));
+        session.insert_metadata("scheduler_profile".to_string(), serde_json::json!("atlas"));
+        session.insert_metadata("model_provider".to_string(), serde_json::json!("openai"));
+        session.insert_metadata("model_id".to_string(), serde_json::json!("gpt-5"));
 
         let user = session.add_user_message("Refactor the scheduler runtime");
         user.add_subtask("sub_1", "Verify stage recovery");

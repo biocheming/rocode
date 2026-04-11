@@ -454,7 +454,7 @@ fn message_to_info(
 
 fn collect_tool_names(session: &rocode_session::Session) -> HashMap<String, String> {
     let mut tool_names = HashMap::new();
-    for message in &session.messages {
+    for message in &session.record().messages {
         for part in &message.parts {
             if let rocode_session::PartType::ToolCall { id, name, .. } = &part.part_type {
                 if !name.trim().is_empty() {
@@ -591,9 +591,7 @@ pub(super) async fn send_message(
         .ok_or_else(|| ApiError::SessionNotFound(session_id.clone()))?;
     session.add_user_message(&req.content);
     if let Some(variant) = req.variant.as_deref() {
-        session
-            .metadata
-            .insert("model_variant".to_string(), serde_json::json!(variant));
+        session.insert_metadata("model_variant".to_string(), serde_json::json!(variant));
     }
     let tool_names = collect_tool_names(session);
     let assistant_msg = session.add_assistant_message();
@@ -640,7 +638,7 @@ pub(super) async fn list_messages(
     let limit = query.limit.filter(|value| *value > 0);
     let mut started = query.after.is_none();
     let mut messages = Vec::new();
-    for message in &session.messages {
+    for message in &session.record().messages {
         if !started {
             if query.after.as_deref() == Some(message.id.as_str()) {
                 started = true;
@@ -663,7 +661,7 @@ pub(super) async fn list_messages(
     // If the anchor message is unknown, fall back to a full list so clients can recover.
     if query.after.is_some() && !started {
         messages.clear();
-        for message in &session.messages {
+        for message in &session.record().messages {
             messages.push(message_to_info(
                 &session_id,
                 message,

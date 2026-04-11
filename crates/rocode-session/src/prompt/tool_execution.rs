@@ -122,7 +122,7 @@ impl SessionPrompt {
             return Ok(0);
         }
 
-        if let Some(assistant_msg) = session.messages.get_mut(last_assistant_index) {
+        if let Some(assistant_msg) = session.messages_mut().get_mut(last_assistant_index) {
             for (call_id, tool_name, input) in &tool_calls {
                 Self::upsert_tool_call_part(
                     assistant_msg,
@@ -312,7 +312,7 @@ impl SessionPrompt {
                 );
                 executed_calls += 1;
 
-                if let Some(assistant_msg) = session.messages.get_mut(last_assistant_index) {
+                if let Some(assistant_msg) = session.messages_mut().get_mut(last_assistant_index) {
                     let now = chrono::Utc::now().timestamp_millis();
                     let next_state = if is_error {
                         crate::ToolState::Error {
@@ -360,7 +360,7 @@ impl SessionPrompt {
         };
 
         if !tool_results_msg.parts.is_empty() {
-            session.messages.push(tool_results_msg);
+            session.push_message(tool_results_msg);
         }
 
         let pending_synthetic_messages = {
@@ -486,11 +486,11 @@ impl SessionPrompt {
         subsessions: &HashMap<String, PersistedSubsession>,
     ) {
         if subsessions.is_empty() {
-            session.metadata.remove("subsessions");
+            session.remove_metadata("subsessions");
             return;
         }
         if let Ok(value) = serde_json::to_value(subsessions) {
-            session.metadata.insert("subsessions".to_string(), value);
+            session.insert_metadata("subsessions".to_string(), value);
         }
     }
 
@@ -991,7 +991,7 @@ mod tests {
 
         let mut session = Session::new("proj", ".");
         let sid = session.id.clone();
-        session.messages.push(SessionMessage::user(
+        session.messages_mut().push(SessionMessage::user(
             sid.clone(),
             "run synthetic attachment",
         ));
@@ -1001,7 +1001,7 @@ mod tests {
             "synthetic_attachment",
             serde_json::json!({}),
         );
-        session.messages.push(assistant);
+        session.messages_mut().push(assistant);
 
         let provider: Arc<dyn Provider> =
             Arc::new(StaticModelProvider::with_model("test-model", 8192, 1024));
@@ -1097,7 +1097,7 @@ mod tests {
     #[test]
     fn mcp_tools_from_session_reads_runtime_metadata() {
         let mut session = Session::new("proj", ".");
-        session.metadata.insert(
+        session.insert_metadata(
             "mcp_tools".to_string(),
             serde_json::json!([{
                 "name": "repo_search",

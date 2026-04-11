@@ -51,10 +51,10 @@ pub fn trigger_compaction(session: &mut Session, messages: &[SessionMessage]) ->
         created_at: chrono::Utc::now(),
         message_id: None,
     });
-    session.messages.push(compaction_msg);
+    session.push_message(compaction_msg);
 
     // Set the compacting timestamp on the session.
-    session.time.compacting = Some(chrono::Utc::now().timestamp_millis());
+    session.record_mut().time.compacting = Some(chrono::Utc::now().timestamp_millis());
     session.touch();
 
     Some(summary)

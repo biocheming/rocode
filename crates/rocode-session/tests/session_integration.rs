@@ -38,7 +38,7 @@ fn test_session_child_creation() {
     let child = Session::child(&parent);
 
     assert!(child.parent_id.is_some());
-    assert_eq!(child.parent_id.unwrap(), parent.id);
+    assert_eq!(child.parent_id.clone().unwrap(), parent.id);
     assert_eq!(child.project_id, parent.project_id);
     assert_eq!(child.directory, parent.directory);
 }
@@ -50,7 +50,7 @@ fn test_session_default_title() {
     assert!(session.is_default_title());
 
     let mut session_with_title = Session::new("test-project", "/test/directory");
-    session_with_title.title = "Custom Title".to_string();
+    session_with_title.set_title("Custom Title");
 
     assert!(!session_with_title.is_default_title());
 }
@@ -58,12 +58,12 @@ fn test_session_default_title() {
 #[test]
 fn test_session_forked_title() {
     let mut session = Session::new("test-project", "/test/directory");
-    session.title = "My Session".to_string();
+    session.set_title("My Session");
 
     let forked = session.get_forked_title();
     assert_eq!(forked, "My Session (fork #1)");
 
-    session.title = "My Session (fork #1)".to_string();
+    session.set_title("My Session (fork #1)");
     let forked2 = session.get_forked_title();
     assert_eq!(forked2, "My Session (fork #2)");
 }

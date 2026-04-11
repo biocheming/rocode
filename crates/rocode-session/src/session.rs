@@ -1,11 +1,17 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::sync::Arc;
 use uuid::Uuid;
 
 use rocode_core::bus::{Bus, BusEventDef};
 use rocode_plugin::{HookContext, HookEvent};
+use rocode_types::Session as SessionRecord;
+pub use rocode_types::{
+    FileDiff, PermissionRuleset, SessionRevert, SessionShare, SessionStatus, SessionSummary,
+    SessionTime, SessionUsage,
+};
 
 #[cfg(test)]
 use crate::MessageUsage;
@@ -28,6 +34,12 @@ pub static PART_UPDATED_EVENT: BusEventDef = BusEventDef::new("message.part.upda
 pub static PART_REMOVED_EVENT: BusEventDef = BusEventDef::new("message.part.removed");
 pub static PART_DELTA_EVENT: BusEventDef = BusEventDef::new("message.part.delta");
 pub static COMMAND_EXECUTED_EVENT: BusEventDef = BusEventDef::new("command.executed");
+
+/// Canonical allowlist for server-side session list search.
+///
+/// This is owned by `rocode-session` so all adapters expose the same list-search
+/// semantics and cannot silently broaden them with detail-only fields.
+pub const SESSION_LIST_SEARCH_FIELDS: &[&str] = &["title"];
 
 pub fn sanitize_display_text(text: &str) -> String {
     let mut lines = Vec::new();
@@ -73,87 +85,6 @@ pub fn sanitize_display_text(text: &str) -> String {
 // Session Info Schema
 // ============================================================================
 
-/// Summary of changes in a session
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SessionSummary {
-    pub additions: u64,
-    pub deletions: u64,
-    pub files: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub diffs: Option<Vec<FileDiff>>,
-}
-
-/// File diff entry
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileDiff {
-    pub path: String,
-    pub additions: u64,
-    pub deletions: u64,
-}
-
-/// Share information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionShare {
-    pub url: String,
-}
-
-/// Revert information for undo functionality
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionRevert {
-    pub message_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub part_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub snapshot: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub diff: Option<String>,
-}
-
-/// Permission ruleset
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct PermissionRuleset {
-    #[serde(default)]
-    pub allow: Vec<String>,
-    #[serde(default)]
-    pub deny: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mode: Option<String>,
-}
-
-/// Time tracking for session
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionTime {
-    pub created: i64,
-    pub updated: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub compacting: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub archived: Option<i64>,
-}
-
-impl Default for SessionTime {
-    fn default() -> Self {
-        let now = Utc::now().timestamp_millis();
-        Self {
-            created: now,
-            updated: now,
-            compacting: None,
-            archived: None,
-        }
-    }
-}
-
-/// Usage statistics for a session
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SessionUsage {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub reasoning_tokens: u64,
-    pub cache_write_tokens: u64,
-    pub cache_read_tokens: u64,
-    pub total_cost: f64,
-}
-
 // ============================================================================
 // Session Event Types
 // ============================================================================
@@ -192,15 +123,6 @@ pub struct SessionError {
 // ============================================================================
 // Session Status
 // ============================================================================
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub enum SessionStatus {
-    #[default]
-    Active,
-    Completed,
-    Archived,
-    Compacting,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum RunStatus {
@@ -313,35 +235,82 @@ impl Default for SessionStateManager {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Session {
-    pub id: String,
-    pub slug: String,
-    pub project_id: String,
-    pub directory: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<String>,
-    pub title: String,
-    pub version: String,
-    pub time: SessionTime,
-    pub messages: Vec<SessionMessage>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub summary: Option<SessionSummary>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub share: Option<SessionShare>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub revert: Option<SessionRevert>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub permission: Option<PermissionRuleset>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub usage: Option<SessionUsage>,
-    #[serde(default)]
-    pub status: SessionStatus,
-    #[serde(default)]
-    pub metadata: HashMap<String, serde_json::Value>,
-    #[serde(default, skip_serializing)]
-    pub created_at: DateTime<Utc>,
-    #[serde(default, skip_serializing)]
-    pub updated_at: DateTime<Utc>,
+    inner: SessionRecord,
+}
+
+impl Session {
+    pub fn record(&self) -> &SessionRecord {
+        &self.inner
+    }
+
+    pub fn into_record(self) -> SessionRecord {
+        self.inner
+    }
+
+    pub(crate) fn record_mut(&mut self) -> &mut SessionRecord {
+        &mut self.inner
+    }
+
+    pub fn messages_mut(&mut self) -> &mut Vec<SessionMessage> {
+        &mut self.inner.messages
+    }
+
+    pub fn insert_metadata(
+        &mut self,
+        key: impl Into<String>,
+        value: serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        let previous = self.inner.metadata.insert(key.into(), value);
+        self.touch();
+        previous
+    }
+
+    pub fn remove_metadata(&mut self, key: &str) -> Option<serde_json::Value> {
+        let previous = self.inner.metadata.remove(key);
+        self.touch();
+        previous
+    }
+
+    pub fn set_directory(&mut self, directory: impl Into<String>) {
+        let directory = directory.into();
+        if self.inner.directory != directory {
+            self.inner.directory = directory;
+            self.touch();
+        }
+    }
+
+    pub fn push_message(&mut self, message: SessionMessage) {
+        self.inner.messages.push(message);
+        self.touch();
+    }
+}
+
+impl AsRef<SessionRecord> for Session {
+    fn as_ref(&self) -> &SessionRecord {
+        self.record()
+    }
+}
+
+impl From<SessionRecord> for Session {
+    fn from(inner: SessionRecord) -> Self {
+        Self { inner }
+    }
+}
+
+impl From<Session> for SessionRecord {
+    fn from(session: Session) -> Self {
+        session.into_record()
+    }
+}
+
+impl Deref for Session {
+    type Target = SessionRecord;
+
+    fn deref(&self) -> &Self::Target {
+        self.record()
+    }
 }
 
 impl Session {
@@ -354,24 +323,26 @@ impl Session {
         let slug = Self::generate_slug();
 
         Self {
-            id: format!("ses_{}", Uuid::new_v4().simple()),
-            slug,
-            project_id: project_id.into(),
-            directory: directory.into(),
-            parent_id: None,
-            title: format!("New session - {}", now.to_rfc3339()),
-            version: Self::VERSION.to_string(),
-            time: SessionTime::default(),
-            messages: Vec::new(),
-            summary: None,
-            share: None,
-            revert: None,
-            permission: None,
-            usage: None,
-            status: SessionStatus::Active,
-            metadata: HashMap::new(),
-            created_at: now,
-            updated_at: now,
+            inner: SessionRecord {
+                id: format!("ses_{}", Uuid::new_v4().simple()),
+                slug,
+                project_id: project_id.into(),
+                directory: directory.into(),
+                parent_id: None,
+                title: format!("New session - {}", now.to_rfc3339()),
+                version: Self::VERSION.to_string(),
+                time: SessionTime::default(),
+                messages: Vec::new(),
+                summary: None,
+                share: None,
+                revert: None,
+                permission: None,
+                usage: None,
+                status: SessionStatus::Active,
+                metadata: HashMap::new(),
+                created_at: now,
+                updated_at: now,
+            },
         }
     }
 
@@ -379,26 +350,29 @@ impl Session {
     pub fn child(parent: &Session) -> Self {
         let now = Utc::now();
         let slug = Self::generate_slug();
+        let parent_record = parent.record();
 
         Self {
-            id: format!("ses_{}", Uuid::new_v4().simple()),
-            slug,
-            project_id: parent.project_id.clone(),
-            directory: parent.directory.clone(),
-            parent_id: Some(parent.id.clone()),
-            title: format!("Child session - {}", now.to_rfc3339()),
-            version: Self::VERSION.to_string(),
-            time: SessionTime::default(),
-            messages: Vec::new(),
-            summary: None,
-            share: None,
-            revert: None,
-            permission: parent.permission.clone(),
-            usage: None,
-            status: SessionStatus::Active,
-            metadata: HashMap::new(),
-            created_at: now,
-            updated_at: now,
+            inner: SessionRecord {
+                id: format!("ses_{}", Uuid::new_v4().simple()),
+                slug,
+                project_id: parent_record.project_id.clone(),
+                directory: parent_record.directory.clone(),
+                parent_id: Some(parent_record.id.clone()),
+                title: format!("Child session - {}", now.to_rfc3339()),
+                version: Self::VERSION.to_string(),
+                time: SessionTime::default(),
+                messages: Vec::new(),
+                summary: None,
+                share: None,
+                revert: None,
+                permission: parent_record.permission.clone(),
+                usage: None,
+                status: SessionStatus::Active,
+                metadata: HashMap::new(),
+                created_at: now,
+                updated_at: now,
+            },
         }
     }
 
@@ -409,17 +383,17 @@ impl Session {
 
     /// Check if title is a default generated title
     pub fn is_default_title(&self) -> bool {
-        let prefix = if self.parent_id.is_some() {
+        let prefix = if self.inner.parent_id.is_some() {
             "Child session - "
         } else {
             "New session - "
         };
 
-        if !self.title.starts_with(prefix) {
+        if !self.inner.title.starts_with(prefix) {
             return false;
         }
 
-        let timestamp_part = &self.title[prefix.len()..];
+        let timestamp_part = &self.inner.title[prefix.len()..];
         chrono::DateTime::parse_from_rfc3339(timestamp_part).is_ok()
     }
 
@@ -428,6 +402,7 @@ impl Session {
     pub fn allows_auto_title_regeneration(&self) -> bool {
         self.is_default_title()
             || self
+                .inner
                 .metadata
                 .get(Self::AUTO_TITLE_PENDING_REFINE_KEY)
                 .and_then(|value| value.as_bool())
@@ -437,23 +412,23 @@ impl Session {
     /// Get a forked title
     pub fn get_forked_title(&self) -> String {
         // Simple implementation without regex dependency
-        if self.title.ends_with(")") && self.title.contains(" (fork #") {
-            if let Some(pos) = self.title.rfind(" (fork #") {
-                let base = &self.title[..pos];
-                let num_part = &self.title[pos + 8..self.title.len() - 1];
+        if self.inner.title.ends_with(")") && self.inner.title.contains(" (fork #") {
+            if let Some(pos) = self.inner.title.rfind(" (fork #") {
+                let base = &self.inner.title[..pos];
+                let num_part = &self.inner.title[pos + 8..self.inner.title.len() - 1];
                 if let Ok(num) = num_part.parse::<u32>() {
                     return format!("{} (fork #{})", base, num + 1);
                 }
             }
         }
-        format!("{} (fork #1)", self.title)
+        format!("{} (fork #1)", self.inner.title)
     }
 
     /// Touch the session (update timestamp)
     pub fn touch(&mut self) {
         let now = Utc::now();
-        self.time.updated = now.timestamp_millis();
-        self.updated_at = now;
+        self.inner.time.updated = now.timestamp_millis();
+        self.inner.updated_at = now;
     }
 
     // ========================================================================
@@ -462,10 +437,10 @@ impl Session {
 
     /// Add a user message
     pub fn add_user_message(&mut self, text: impl Into<String>) -> &mut SessionMessage {
-        let msg = SessionMessage::user(&self.id, text);
-        self.messages.push(msg);
+        let msg = SessionMessage::user(&self.inner.id, text);
+        self.inner.messages.push(msg);
         self.touch();
-        self.messages.last_mut().unwrap()
+        self.inner.messages.last_mut().unwrap()
     }
 
     /// Add a synthetic user message with optional attachments.
@@ -474,7 +449,7 @@ impl Session {
         text: impl Into<String>,
         attachments: &[crate::FilePart],
     ) -> &mut SessionMessage {
-        let mut msg = SessionMessage::user(&self.id, text);
+        let mut msg = SessionMessage::user(&self.inner.id, text);
         msg.mark_text_parts_synthetic();
         for attachment in attachments {
             msg.add_file(
@@ -486,22 +461,23 @@ impl Session {
                 attachment.mime.clone(),
             );
         }
-        self.messages.push(msg);
+        self.inner.messages.push(msg);
         self.touch();
-        self.messages.last_mut().unwrap()
+        self.inner.messages.last_mut().unwrap()
     }
 
     /// Add an assistant message
     pub fn add_assistant_message(&mut self) -> &mut SessionMessage {
-        let msg = SessionMessage::assistant(&self.id);
-        self.messages.push(msg);
+        let msg = SessionMessage::assistant(&self.inner.id);
+        self.inner.messages.push(msg);
         self.touch();
-        self.messages.last_mut().unwrap()
+        self.inner.messages.last_mut().unwrap()
     }
 
     /// Get the last user message
     pub fn last_user_message(&self) -> Option<&SessionMessage> {
-        self.messages
+        self.inner
+            .messages
             .iter()
             .rev()
             .find(|m| matches!(m.role, MessageRole::User))
@@ -509,7 +485,8 @@ impl Session {
 
     /// Get the last assistant message
     pub fn last_assistant_message(&self) -> Option<&SessionMessage> {
-        self.messages
+        self.inner
+            .messages
             .iter()
             .rev()
             .find(|m| matches!(m.role, MessageRole::Assistant))
@@ -517,23 +494,23 @@ impl Session {
 
     /// Get message count
     pub fn message_count(&self) -> usize {
-        self.messages.len()
+        self.inner.messages.len()
     }
 
     /// Get a message by ID
     pub fn get_message(&self, id: &str) -> Option<&SessionMessage> {
-        self.messages.iter().find(|m| m.id == id)
+        self.inner.messages.iter().find(|m| m.id == id)
     }
 
     /// Get a mutable message by ID
     pub fn get_message_mut(&mut self, id: &str) -> Option<&mut SessionMessage> {
-        self.messages.iter_mut().find(|m| m.id == id)
+        self.inner.messages.iter_mut().find(|m| m.id == id)
     }
 
     /// Remove a message by ID
     pub fn remove_message(&mut self, id: &str) -> Option<SessionMessage> {
-        if let Some(pos) = self.messages.iter().position(|m| m.id == id) {
-            let msg = self.messages.remove(pos);
+        if let Some(pos) = self.inner.messages.iter().position(|m| m.id == id) {
+            let msg = self.inner.messages.remove(pos);
             self.touch();
             Some(msg)
         } else {
@@ -547,15 +524,15 @@ impl Session {
 
     /// Update a message by replacing it entirely
     pub fn update_message(&mut self, msg: SessionMessage) -> Option<&SessionMessage> {
-        if let Some(pos) = self.messages.iter().position(|m| m.id == msg.id) {
-            self.messages[pos] = msg;
+        if let Some(pos) = self.inner.messages.iter().position(|m| m.id == msg.id) {
+            self.inner.messages[pos] = msg;
             self.touch();
-            Some(&self.messages[pos])
+            Some(&self.inner.messages[pos])
         } else {
             // New message - append
-            self.messages.push(msg);
+            self.inner.messages.push(msg);
             self.touch();
-            self.messages.last()
+            self.inner.messages.last()
         }
     }
 
@@ -593,7 +570,7 @@ impl Session {
     /// Aggregate usage across all assistant messages in the session
     pub fn get_usage(&self) -> SessionUsage {
         let mut usage = SessionUsage::default();
-        for msg in &self.messages {
+        for msg in &self.inner.messages {
             if matches!(msg.role, MessageRole::Assistant) {
                 if let Some(ref msg_usage) = msg.usage {
                     usage.input_tokens += msg_usage.input_tokens;
@@ -610,19 +587,20 @@ impl Session {
 
     /// Share the session (set share URL)
     pub fn share_session(&mut self, url: impl Into<String>) {
-        self.share = Some(SessionShare { url: url.into() });
+        self.inner.share = Some(SessionShare { url: url.into() });
         self.touch();
     }
 
     /// Unshare the session
     pub fn unshare_session(&mut self) {
-        self.share = None;
+        self.inner.share = None;
         self.touch();
     }
 
     /// Compute diff summary from messages
     pub fn diff(&self) -> Vec<FileDiff> {
-        self.summary
+        self.inner
+            .summary
             .as_ref()
             .and_then(|s| s.diffs.clone())
             .unwrap_or_default()
@@ -634,16 +612,18 @@ impl Session {
 
     /// Set the title
     pub fn set_title(&mut self, title: impl Into<String>) {
-        self.title = title.into();
-        self.metadata.remove(Self::AUTO_TITLE_PENDING_REFINE_KEY);
+        self.inner.title = title.into();
+        self.inner
+            .metadata
+            .remove(Self::AUTO_TITLE_PENDING_REFINE_KEY);
         self.touch();
     }
 
     /// Set an immediate auto-generated title that should still be replaced by
     /// the refined LLM title after the first completed turn.
     pub fn set_auto_title(&mut self, title: impl Into<String>) {
-        self.title = title.into();
-        self.metadata.insert(
+        self.inner.title = title.into();
+        self.inner.metadata.insert(
             Self::AUTO_TITLE_PENDING_REFINE_KEY.to_string(),
             serde_json::json!(true),
         );
@@ -652,69 +632,69 @@ impl Session {
 
     /// Set the archived status
     pub fn set_archived(&mut self, time: Option<i64>) {
-        self.time.archived = time.or_else(|| Some(Utc::now().timestamp_millis()));
-        self.status = SessionStatus::Archived;
+        self.inner.time.archived = time.or_else(|| Some(Utc::now().timestamp_millis()));
+        self.inner.status = SessionStatus::Archived;
         self.touch();
     }
 
     /// Set the permission ruleset
     pub fn set_permission(&mut self, permission: PermissionRuleset) {
-        self.permission = Some(permission);
+        self.inner.permission = Some(permission);
         self.touch();
     }
 
     /// Set the revert information
     pub fn set_revert(&mut self, revert: SessionRevert) {
-        self.revert = Some(revert);
+        self.inner.revert = Some(revert);
         self.touch();
     }
 
     /// Clear the revert information
     pub fn clear_revert(&mut self) {
-        self.revert = None;
+        self.inner.revert = None;
         self.touch();
     }
 
     /// Set the summary
     pub fn set_summary(&mut self, summary: SessionSummary) {
-        self.summary = Some(summary);
+        self.inner.summary = Some(summary);
         self.touch();
     }
 
     /// Set the share information
     pub fn set_share(&mut self, share: SessionShare) {
-        self.share = Some(share);
+        self.inner.share = Some(share);
         self.touch();
     }
 
     /// Clear the share information
     pub fn clear_share(&mut self) {
-        self.share = None;
+        self.inner.share = None;
         self.touch();
     }
 
     /// Update usage statistics
     pub fn update_usage(&mut self, usage: SessionUsage) {
-        self.usage = Some(usage);
+        self.inner.usage = Some(usage);
         self.touch();
     }
 
     /// Start compacting
     pub fn start_compacting(&mut self) {
-        self.time.compacting = Some(Utc::now().timestamp_millis());
-        self.status = SessionStatus::Compacting;
+        self.inner.time.compacting = Some(Utc::now().timestamp_millis());
+        self.inner.status = SessionStatus::Compacting;
     }
 
     /// Finish compacting
     pub fn finish_compacting(&mut self) {
-        self.time.compacting = None;
-        self.status = SessionStatus::Active;
+        self.inner.time.compacting = None;
+        self.inner.status = SessionStatus::Active;
         self.touch();
     }
 
     /// Mark as completed
     pub fn complete(&mut self) {
-        self.status = SessionStatus::Completed;
+        self.inner.status = SessionStatus::Completed;
         self.touch();
     }
 
@@ -725,23 +705,23 @@ impl Session {
     /// Convert to a database row representation
     pub fn to_row(&self) -> SessionRow {
         SessionRow {
-            id: self.id.clone(),
-            slug: self.slug.clone(),
-            project_id: self.project_id.clone(),
-            directory: self.directory.clone(),
-            parent_id: self.parent_id.clone(),
-            title: self.title.clone(),
-            version: self.version.clone(),
-            time_created: self.time.created,
-            time_updated: self.time.updated,
-            time_compacting: self.time.compacting,
-            time_archived: self.time.archived,
-            share_url: self.share.as_ref().map(|s| s.url.clone()),
-            summary_additions: self.summary.as_ref().map(|s| s.additions),
-            summary_deletions: self.summary.as_ref().map(|s| s.deletions),
-            summary_files: self.summary.as_ref().map(|s| s.files),
-            revert: self.revert.clone(),
-            permission: self.permission.clone(),
+            id: self.inner.id.clone(),
+            slug: self.inner.slug.clone(),
+            project_id: self.inner.project_id.clone(),
+            directory: self.inner.directory.clone(),
+            parent_id: self.inner.parent_id.clone(),
+            title: self.inner.title.clone(),
+            version: self.inner.version.clone(),
+            time_created: self.inner.time.created,
+            time_updated: self.inner.time.updated,
+            time_compacting: self.inner.time.compacting,
+            time_archived: self.inner.time.archived,
+            share_url: self.inner.share.as_ref().map(|s| s.url.clone()),
+            summary_additions: self.inner.summary.as_ref().map(|s| s.additions),
+            summary_deletions: self.inner.summary.as_ref().map(|s| s.deletions),
+            summary_files: self.inner.summary.as_ref().map(|s| s.files),
+            revert: self.inner.revert.clone(),
+            permission: self.inner.permission.clone(),
         }
     }
 
@@ -775,29 +755,31 @@ impl Session {
         let updated_at = DateTime::from_timestamp_millis(row.time_updated).unwrap_or_else(Utc::now);
 
         Self {
-            id: row.id,
-            slug: row.slug,
-            project_id: row.project_id,
-            directory: row.directory,
-            parent_id: row.parent_id,
-            title: row.title,
-            version: row.version,
-            time: SessionTime {
-                created: row.time_created,
-                updated: row.time_updated,
-                compacting: row.time_compacting,
-                archived: row.time_archived,
+            inner: SessionRecord {
+                id: row.id,
+                slug: row.slug,
+                project_id: row.project_id,
+                directory: row.directory,
+                parent_id: row.parent_id,
+                title: row.title,
+                version: row.version,
+                time: SessionTime {
+                    created: row.time_created,
+                    updated: row.time_updated,
+                    compacting: row.time_compacting,
+                    archived: row.time_archived,
+                },
+                messages: Vec::new(),
+                summary,
+                share,
+                revert: row.revert,
+                permission: row.permission,
+                usage: None,
+                status,
+                metadata: HashMap::new(),
+                created_at,
+                updated_at,
             },
-            messages: Vec::new(),
-            summary,
-            share,
-            revert: row.revert,
-            permission: row.permission,
-            usage: None,
-            status,
-            metadata: HashMap::new(),
-            created_at,
-            updated_at,
         }
     }
 }
@@ -913,7 +895,8 @@ impl SessionManager {
         directory: impl Into<String>,
     ) -> Session {
         let session = Session::new(project_id, directory);
-        self.sessions.insert(session.id.clone(), session.clone());
+        self.sessions
+            .insert(session.record().id.clone(), session.clone());
         self.events.push(SessionEvent::Created {
             info: session.clone(),
         });
@@ -923,7 +906,7 @@ impl SessionManager {
 
         // Plugin hook: session.start — notify plugins of new session
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let session_id = session.id.clone();
+            let session_id = session.record().id.clone();
             handle.spawn(async move {
                 rocode_plugin::trigger(
                     HookContext::new(HookEvent::SessionStart).with_session(&session_id),
@@ -939,7 +922,7 @@ impl SessionManager {
     pub fn create_child(&mut self, parent_id: &str) -> Option<Session> {
         let parent = self.sessions.get(parent_id)?;
         let child = Session::child(parent);
-        let child_id = child.id.clone();
+        let child_id = child.record().id.clone();
         self.sessions.insert(child_id, child.clone());
         self.events.push(SessionEvent::Created {
             info: child.clone(),
@@ -954,21 +937,24 @@ impl SessionManager {
         let forked_title = original.get_forked_title();
 
         let mut forked = Session::child(original);
-        forked.parent_id = None;
-        forked.title = forked_title;
+        {
+            let forked_record = forked.record_mut();
+            forked_record.parent_id = None;
+            forked_record.title = forked_title;
+        }
 
         if let Some(msg_id) = message_id {
-            for msg in &original.messages {
+            for msg in &original.record().messages {
                 if msg.id == msg_id {
                     break;
                 }
-                forked.messages.push(msg.clone());
+                forked.push_message(msg.clone());
             }
         } else {
-            forked.messages = original.messages.clone();
+            forked.record_mut().messages = original.record().messages.clone();
         }
 
-        let forked_id = forked.id.clone();
+        let forked_id = forked.record().id.clone();
         self.sessions.insert(forked_id, forked.clone());
         self.events.push(SessionEvent::Created {
             info: forked.clone(),
@@ -1119,20 +1105,20 @@ impl SessionManager {
             .values()
             .filter(|s| {
                 if let Some(ref dir) = filter.directory {
-                    if s.directory != *dir {
+                    if s.record().directory != *dir {
                         return false;
                     }
                 }
-                if filter.roots && s.parent_id.is_some() {
+                if filter.roots && s.record().parent_id.is_some() {
                     return false;
                 }
                 if let Some(start) = filter.start {
-                    if s.time.updated < start {
+                    if s.record().time.updated < start {
                         return false;
                     }
                 }
                 if let Some(ref search) = filter.search {
-                    if !s.title.to_lowercase().contains(&search.to_lowercase()) {
+                    if !Self::matches_list_search(s, search) {
                         return false;
                     }
                 }
@@ -1145,13 +1131,17 @@ impl SessionManager {
     pub fn children(&self, parent_id: &str) -> Vec<&Session> {
         self.sessions
             .values()
-            .filter(|s| s.parent_id.as_deref() == Some(parent_id))
+            .filter(|s| s.record().parent_id.as_deref() == Some(parent_id))
             .collect()
     }
 
     /// Delete a session
     pub fn delete(&mut self, id: &str) -> Option<Session> {
-        let children: Vec<String> = self.children(id).iter().map(|s| s.id.clone()).collect();
+        let children: Vec<String> = self
+            .children(id)
+            .iter()
+            .map(|s| s.record().id.clone())
+            .collect();
         for child_id in children {
             self.delete(&child_id);
         }
@@ -1166,7 +1156,7 @@ impl SessionManager {
 
         // Plugin hook: session.end — notify plugins of session deletion
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let session_id = session.id.clone();
+            let session_id = session.record().id.clone();
             handle.spawn(async move {
                 rocode_plugin::trigger(
                     HookContext::new(HookEvent::SessionEnd).with_session(&session_id),
@@ -1180,7 +1170,7 @@ impl SessionManager {
 
     /// Update a session
     pub fn update(&mut self, session: Session) {
-        let id = session.id.clone();
+        let id = session.record().id.clone();
         self.sessions.insert(id, session.clone());
         self.events.push(SessionEvent::Updated {
             info: session.clone(),
@@ -1291,6 +1281,21 @@ impl SessionManager {
     pub fn set_bus(&mut self, bus: Arc<Bus>) {
         self.bus = Some(bus);
     }
+
+    fn matches_list_search(session: &Session, search: &str) -> bool {
+        let needle = search.trim().to_ascii_lowercase();
+        if needle.is_empty() {
+            return true;
+        }
+
+        debug_assert_eq!(SESSION_LIST_SEARCH_FIELDS, ["title"]);
+
+        session
+            .record()
+            .title
+            .to_ascii_lowercase()
+            .contains(&needle)
+    }
 }
 
 /// Filter options for listing sessions
@@ -1299,6 +1304,10 @@ pub struct SessionFilter {
     pub directory: Option<String>,
     pub roots: bool,
     pub start: Option<i64>,
+    /// Free-text search over lightweight list fields only.
+    ///
+    /// This must never inspect detail-only sources such as metadata,
+    /// persisted telemetry snapshots, messages, or derived runtime state.
     pub search: Option<String>,
     pub limit: Option<usize>,
 }
@@ -1345,7 +1354,7 @@ mod tests {
         let child = Session::child(&parent);
 
         assert!(child.parent_id.is_some());
-        assert_eq!(child.parent_id.unwrap(), parent.id);
+        assert_eq!(child.parent_id.clone().unwrap(), parent.id);
         assert!(child.title.starts_with("Child session"));
     }
 
@@ -1381,10 +1390,8 @@ mod tests {
         let title1 = session.get_forked_title();
         assert!(title1.ends_with("(fork #1)"));
 
-        let temp = Session {
-            title: title1,
-            ..session.clone()
-        };
+        let mut temp = session.clone();
+        temp.set_title(title1);
         let title2 = temp.get_forked_title();
         assert!(title2.ends_with("(fork #2)"));
     }
@@ -1428,6 +1435,42 @@ mod tests {
         session.update_message(new_msg);
         assert!(session.get_message(&new_id).is_some());
         assert_eq!(session.message_count(), 1);
+    }
+
+    #[test]
+    fn list_search_only_matches_lightweight_title_field() {
+        let mut manager = SessionManager::new();
+        let mut session = manager.create("project-1", "/path/to/project");
+        session.set_title("Atlas Planning Session");
+        session.insert_metadata("model_provider".to_string(), serde_json::json!("zhipuai"));
+        session.insert_metadata("model_id".to_string(), serde_json::json!("glm-5.1"));
+        session.insert_metadata(
+            "telemetry".to_string(),
+            serde_json::json!({
+                "last_run_status": "completed",
+                "stage_summaries": [{"stage_name": "Route"}]
+            }),
+        );
+        manager.update(session.clone());
+
+        let by_title = manager.list_filtered(SessionFilter {
+            search: Some("planning".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(by_title.len(), 1);
+        assert_eq!(by_title[0].id, session.id);
+
+        let by_metadata = manager.list_filtered(SessionFilter {
+            search: Some("zhipuai".to_string()),
+            ..Default::default()
+        });
+        assert!(by_metadata.is_empty());
+
+        let by_telemetry = manager.list_filtered(SessionFilter {
+            search: Some("route".to_string()),
+            ..Default::default()
+        });
+        assert!(by_telemetry.is_empty());
     }
 
     #[test]
