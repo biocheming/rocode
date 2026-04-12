@@ -1038,6 +1038,25 @@ fn request_analysis_input_includes_prometheus_workflow_constraint() {
 }
 
 #[test]
+fn request_analysis_input_includes_skills_guidance_when_skills_are_available() {
+    let mut plan = planner_only_plan();
+    plan.skill_list = vec![SchedulerSkillRef {
+        name: "docker-debug".to_string(),
+        description: "Troubleshoot Docker build and runtime failures".to_string(),
+        category: Some("ops".to_string()),
+    }];
+    let orchestrator =
+        SchedulerProfileOrchestrator::new(plan, ToolRunner::new(Arc::new(NoopToolExecutor)));
+
+    let input = orchestrator.compose_request_analysis_input("Debug the container startup issue");
+
+    assert!(input.contains("## Skills"));
+    assert!(input.contains("<available_skills>"));
+    assert!(input.contains("After completing a complex task (5+ tool calls)"));
+    assert!(input.contains("patch it immediately with `skill_manage`"));
+}
+
+#[test]
 fn prometheus_stage_graph_exposes_planner_workflow_and_handoff_finalization() {
     let plan = planner_only_plan();
     let graph = plan.stage_graph();

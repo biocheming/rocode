@@ -53,6 +53,10 @@ pub(crate) const SOFT_GUIDELINES: &str = r#"## Soft Guidelines
 - Prefer small, focused changes over large refactors
 - When uncertain about scope, ask"#;
 
+pub(crate) const SKILLS_GUIDANCE: &str = r#"After completing a complex task (5+ tool calls), fixing a tricky error, or discovering a non-trivial workflow, save the approach as a skill with `skill_manage` so you can reuse it next time.
+
+When using a skill and finding it outdated, incomplete, or wrong, patch it immediately with `skill_manage` instead of waiting to be asked."#;
+
 // ===========================================================================
 // Dynamic section builders (mirrors OMO dynamic-agent-prompt-builder.ts)
 // ===========================================================================
@@ -175,6 +179,8 @@ pub(crate) fn build_category_skills_guide(
             "> Read this index first, then use `skill_view(name)` before EVERY delegation. If a skill exposes supporting files, continue with `skill_view(name, file_path)`."
                 .to_string(),
         );
+        lines.push(String::new());
+        lines.push(SKILLS_GUIDANCE.to_string());
     }
 
     lines.push(String::new());
@@ -349,6 +355,7 @@ pub(crate) fn build_capabilities_summary(
             "Use `skill_view(name)` to inspect any relevant skill before relying on it."
                 .to_string(),
         );
+        sections.push(SKILLS_GUIDANCE.to_string());
     }
 
     sections.join("\n")
@@ -389,3 +396,28 @@ pub(crate) fn render_skill_catalog(skill_list: &[SchedulerSkillRef]) -> String {
 // ===========================================================================
 // Tests
 // ===========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capabilities_summary_includes_skills_guidance_after_skill_catalog() {
+        let summary = build_capabilities_summary(
+            &[],
+            &[],
+            &[SchedulerSkillRef {
+                name: "debug-linux".to_string(),
+                description: "Investigate Linux-specific failures".to_string(),
+                category: Some("debug".to_string()),
+            }],
+        );
+
+        assert!(summary.contains("<available_skills>"));
+        assert!(summary.contains(
+            "Use `skill_view(name)` to inspect any relevant skill before relying on it."
+        ));
+        assert!(summary.contains("After completing a complex task (5+ tool calls)"));
+        assert!(summary.contains("patch it immediately with `skill_manage`"));
+    }
+}

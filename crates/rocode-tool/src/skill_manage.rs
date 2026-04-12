@@ -52,7 +52,7 @@ impl Tool for SkillManageTool {
     }
 
     fn description(&self) -> &str {
-        "Create, patch, edit, delete, or manage supporting files for workspace-local skills under .rocode/skills."
+        "Create, patch, edit, delete, or manage supporting files for workspace-local skills under .rocode/skills. Create when a complex task succeeded (5+ tool calls), you overcame errors, a user-corrected approach worked, you discovered a non-trivial workflow, or the user asks you to remember a procedure. Patch when instructions are stale or wrong, a skill fails on a specific OS or environment, steps or pitfalls are missing, or you used a skill and found gaps not covered by it. After difficult or iterative tasks, offer to save the approach as a skill. Skip simple one-offs. Confirm with the user before creating or deleting skills."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -469,5 +469,14 @@ mod tests {
         let permissions = requests.lock().unwrap();
         assert_eq!(permissions.len(), 1);
         assert_eq!(permissions[0].permission, "skill_manage");
+    }
+
+    #[test]
+    fn description_includes_self_improvement_guidance() {
+        let description = SkillManageTool.description();
+        assert!(description.contains("complex task succeeded (5+ tool calls)"));
+        assert!(description.contains("After difficult or iterative tasks"));
+        assert!(description.contains("Patch when instructions are stale or wrong"));
+        assert!(description.contains("Confirm with the user before creating or deleting"));
     }
 }
