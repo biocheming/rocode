@@ -2407,7 +2407,7 @@ export function SettingsDrawer({
                 />
               </div>
 
-              <div className="grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+              <div className="grid gap-6">
                 <div className="grid gap-3 content-start">
                   <div className="flex items-center justify-between gap-3">
                     <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Catalog</p>
@@ -2500,60 +2500,59 @@ export function SettingsDrawer({
                   )}
                 </div>
 
-                <div className="grid gap-6 content-start">
-                  <div className="grid gap-3 rounded-2xl border border-border bg-card/70 p-5">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="m-0 text-xs tracking-widest uppercase text-muted-foreground font-semibold">Create Skill</p>
-                        <h3 className="m-0 mt-1">New workspace skill</h3>
-                      </div>
-                    </div>
-                    <input
-                      type="text"
-                      placeholder="skill name"
-                      value={newSkillName}
-                      onChange={(event) => setNewSkillName(event.target.value)}
-                    />
-                    <input
-                      type="text"
-                      placeholder="description"
-                      value={newSkillDescription}
-                      onChange={(event) => setNewSkillDescription(event.target.value)}
-                    />
-                    <input
-                      type="text"
-                      placeholder="category (optional)"
-                      value={newSkillCategory}
-                      onChange={(event) => setNewSkillCategory(event.target.value)}
-                    />
-                    <textarea
-                      className="min-h-40 w-full resize-y rounded-2xl border border-border bg-card/80 p-3.5 text-foreground leading-relaxed font-mono text-sm"
-                      placeholder="Skill body"
-                      value={newSkillBody}
-                      onChange={(event) => setNewSkillBody(event.target.value)}
-                      spellCheck={false}
-                    />
-                    <div className="flex items-center gap-2">
-                      <button
-                        className="min-h-[36px] rounded-full px-5 bg-foreground border-foreground text-background text-sm font-semibold inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px"
-                        type="button"
-                        disabled={
-                          !skillsMutationsEnabled ||
-                          !newSkillName.trim() ||
-                          !newSkillDescription.trim() ||
-                          !newSkillBody.trim() ||
-                          busyKey === `skill:create:${newSkillName.trim() || "new"}`
-                        }
-                        onClick={() => void createSkill()}
-                      >
-                        {busyKey === `skill:create:${newSkillName.trim() || "new"}`
-                          ? "Creating..."
-                          : "Create Skill"}
-                      </button>
+                <div className="grid gap-3 rounded-2xl border border-border bg-card/70 p-5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="m-0 text-xs tracking-widest uppercase text-muted-foreground font-semibold">Create Skill</p>
+                      <h3 className="m-0 mt-1">New workspace skill</h3>
                     </div>
                   </div>
+                  <input
+                    type="text"
+                    placeholder="skill name"
+                    value={newSkillName}
+                    onChange={(event) => setNewSkillName(event.target.value)}
+                  />
+                  <input
+                    type="text"
+                    placeholder="description"
+                    value={newSkillDescription}
+                    onChange={(event) => setNewSkillDescription(event.target.value)}
+                  />
+                  <input
+                    type="text"
+                    placeholder="category (optional)"
+                    value={newSkillCategory}
+                    onChange={(event) => setNewSkillCategory(event.target.value)}
+                  />
+                  <textarea
+                    className="min-h-40 w-full resize-y rounded-2xl border border-border bg-card/80 p-3.5 text-foreground leading-relaxed font-mono text-sm"
+                    placeholder="Skill body"
+                    value={newSkillBody}
+                    onChange={(event) => setNewSkillBody(event.target.value)}
+                    spellCheck={false}
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      className="min-h-[36px] rounded-full px-5 bg-foreground border-foreground text-background text-sm font-semibold inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px"
+                      type="button"
+                      disabled={
+                        !skillsMutationsEnabled ||
+                        !newSkillName.trim() ||
+                        !newSkillDescription.trim() ||
+                        !newSkillBody.trim() ||
+                        busyKey === `skill:create:${newSkillName.trim() || "new"}`
+                      }
+                      onClick={() => void createSkill()}
+                    >
+                      {busyKey === `skill:create:${newSkillName.trim() || "new"}`
+                        ? "Creating..."
+                        : "Create Skill"}
+                    </button>
+                  </div>
+                </div>
 
-                  <div className="grid gap-3 rounded-2xl border border-border bg-card/70 p-5">
+                <div className="grid gap-3 rounded-2xl border border-border bg-card/70 p-5">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="m-0 text-xs tracking-widest uppercase text-muted-foreground font-semibold">Edit Skill</p>
@@ -2696,7 +2695,6 @@ export function SettingsDrawer({
                         Select a skill from the catalog to inspect or edit its raw <code>SKILL.md</code>.
                       </p>
                     )}
-                  </div>
                 </div>
               </div>
             </div>
