@@ -7,7 +7,6 @@ import {
   Layers2,
   LayoutGrid,
   Search,
-  Settings,
   ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -49,7 +48,6 @@ interface SessionSidebarProps {
   onCreateSession: () => void;
   onSelectWorkspace: (workspacePath: string) => void;
   onSelectSession: (sessionId: string) => void;
-  onOpenSettings: () => void;
 }
 
 function SessionTreeList({
@@ -149,7 +147,6 @@ export function SessionSidebar({
   onCreateSession,
   onSelectWorkspace,
   onSelectSession,
-  onOpenSettings,
 }: SessionSidebarProps) {
   const [workspaceQuery, setWorkspaceQuery] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
@@ -257,7 +254,7 @@ export function SessionSidebar({
             </div>
           </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-2">
+          <div className="mt-4 grid grid-cols-1 gap-2">
             <Button
               variant="outline"
               size="sm"
@@ -269,32 +266,9 @@ export function SessionSidebar({
               <FolderPlus className="mr-1.5 h-3.5 w-3.5" />
               New Project
             </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              className="h-9 rounded-xl"
-              type="button"
-              data-testid="session-new-top"
-              onClick={onCreateSession}
-              disabled={!currentWorkspacePath}
-            >
-              <Layers2 className="mr-1.5 h-3.5 w-3.5" />
-              New Session
-            </Button>
           </div>
 
           <div className="mt-3 flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 rounded-xl px-3"
-              type="button"
-              data-testid="settings-open"
-              onClick={onOpenSettings}
-            >
-              <Settings className="mr-1.5 h-3.5 w-3.5" />
-              Settings
-            </Button>
             <a
               className="inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-border px-3 text-xs text-inherit no-underline transition-colors hover:bg-muted/40"
               data-testid="legacy-link"
@@ -342,7 +316,7 @@ export function SessionSidebar({
                     key={workspace.path}
                     type="button"
                     className={cn(
-                      "rounded-2xl border border-border/70 bg-background px-3 py-3 text-left shadow-sm transition-all hover:border-border hover:bg-background",
+                      "rounded-2xl border border-border/70 bg-background px-3 py-2.5 text-left shadow-sm transition-all hover:border-border hover:bg-background",
                       workspace.path === currentWorkspacePath &&
                         "border-foreground/20 bg-muted/40 shadow-[0_10px_24px_rgba(15,23,42,0.06)]",
                     )}
@@ -355,7 +329,7 @@ export function SessionSidebar({
                     <div className="mt-1 truncate text-[11px] text-muted-foreground">
                       {workspace.path}
                     </div>
-                    <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
                       <span className="rounded-full bg-muted px-2 py-0.5">
                         {workspace.sessionCount} sessions
                       </span>

@@ -2414,83 +2414,85 @@ export function SettingsDrawer({
                     <span>{skillCatalog.length} skills</span>
                   </div>
                   {skillCatalog.length ? (
-                    skillCatalog.map((skill) => {
-                      const selected = selectedSkillEntry?.name === skill.name;
-                      const managedRecord =
-                        managedRecordBySkill.get(skill.name.trim().toLowerCase()) ?? null;
-                      const latestGuard =
-                        latestGuardBySkill.get(skill.name.trim().toLowerCase()) ?? null;
-                      return (
-                        <button
-                          key={skill.name}
-                          type="button"
-                          className={cn(
-                            "rounded-2xl border p-4 text-left transition-all duration-150",
-                            selected
-                              ? "border-foreground bg-accent"
-                              : "border-border bg-card/70 hover:-translate-y-px hover:bg-accent",
-                          )}
-                          onClick={() => setSelectedSkillName(skill.name)}
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="grid gap-1">
-                              <strong>{skill.name}</strong>
-                              <span className="text-sm text-muted-foreground">{skill.description}</span>
-                            </div>
-                            <span
+                    <div className="max-h-[28rem] overflow-y-auto pr-1">
+                      <div className="grid gap-2">
+                        {skillCatalog.map((skill) => {
+                          const selected = selectedSkillEntry?.name === skill.name;
+                          const managedRecord =
+                            managedRecordBySkill.get(skill.name.trim().toLowerCase()) ?? null;
+                          const latestGuard =
+                            latestGuardBySkill.get(skill.name.trim().toLowerCase()) ?? null;
+                          return (
+                            <button
+                              key={skill.name}
+                              type="button"
                               className={cn(
-                                "rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide",
-                                skill.writable
-                                  ? "border-green-300 bg-green-50 text-green-800 dark:border-green-700 dark:bg-green-950 dark:text-green-300"
-                                  : "border-border bg-muted text-muted-foreground",
+                                "rounded-xl border px-3 py-2.5 text-left transition-all duration-150",
+                                selected
+                                  ? "border-foreground bg-accent"
+                                  : "border-border bg-card/70 hover:-translate-y-px hover:bg-accent",
                               )}
+                              onClick={() => setSelectedSkillName(skill.name)}
                             >
-                              {skill.writable ? "workspace" : "read only"}
-                            </span>
-                          </div>
-                          <p className="m-0 mt-2 text-xs leading-relaxed text-muted-foreground">
-                            {skill.category ? `${skill.category} · ` : ""}
-                            {skill.supporting_files.length} supporting files
-                          </p>
-                          <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
-                            {managedRecord ? (
-                              <>
-                                <span className="rounded-full border border-border bg-card/80 px-2.5 py-1 text-muted-foreground">
-                                  source {managedRecord.source?.source_id || "workspace-local"}
-                                </span>
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <strong className="block truncate">{skill.name}</strong>
+                                  <p className="m-0 mt-1 truncate text-xs text-muted-foreground">
+                                    {skill.description || "No description"}
+                                  </p>
+                                </div>
                                 <span
                                   className={cn(
-                                    "rounded-full border px-2.5 py-1",
-                                    managedRecord.locally_modified || managedRecord.deleted_locally
-                                      ? "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200"
-                                      : "border-border bg-card/80 text-muted-foreground",
+                                    "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                                    skill.writable
+                                      ? "border-green-300 bg-green-50 text-green-800 dark:border-green-700 dark:bg-green-950 dark:text-green-300"
+                                      : "border-border bg-muted text-muted-foreground",
                                   )}
                                 >
-                                  {managedSkillStateLabel(managedRecord)}
+                                  {skill.writable ? "workspace" : "read only"}
                                 </span>
-                              </>
-                            ) : null}
-                            {latestGuard ? (
-                              <span
-                                className={cn(
-                                  "rounded-full border px-2.5 py-1",
-                                  latestGuard.status === "blocked"
-                                    ? "border-red-300 bg-red-50 text-red-800 dark:border-red-700 dark:bg-red-950/60 dark:text-red-300"
-                                    : latestGuard.status === "warn"
-                                      ? "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200"
-                                      : "border-border bg-card/80 text-muted-foreground",
-                                )}
-                              >
-                                {latestGuardStatusLabel(latestGuard)} · {latestGuard.violations.length}
-                              </span>
-                            ) : null}
-                          </div>
-                          <p className="m-0 mt-2 break-all text-xs leading-relaxed text-muted-foreground">
-                            {skill.location}
-                          </p>
-                        </button>
-                      );
-                    })
+                              </div>
+                              <div className="mt-2 flex flex-wrap gap-1.5 text-[10px]">
+                                <span className="rounded-full border border-border bg-card/80 px-2 py-0.5 text-muted-foreground">
+                                  {skill.supporting_files.length} files
+                                </span>
+                                {skill.category ? (
+                                  <span className="rounded-full border border-border bg-card/80 px-2 py-0.5 text-muted-foreground">
+                                    {skill.category}
+                                  </span>
+                                ) : null}
+                                {managedRecord ? (
+                                  <span
+                                    className={cn(
+                                      "rounded-full border px-2 py-0.5",
+                                      managedRecord.locally_modified || managedRecord.deleted_locally
+                                        ? "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200"
+                                        : "border-border bg-card/80 text-muted-foreground",
+                                    )}
+                                  >
+                                    {managedSkillStateLabel(managedRecord)}
+                                  </span>
+                                ) : null}
+                                {latestGuard ? (
+                                  <span
+                                    className={cn(
+                                      "rounded-full border px-2 py-0.5",
+                                      latestGuard.status === "blocked"
+                                        ? "border-red-300 bg-red-50 text-red-800 dark:border-red-700 dark:bg-red-950/60 dark:text-red-300"
+                                        : latestGuard.status === "warn"
+                                          ? "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200"
+                                          : "border-border bg-card/80 text-muted-foreground",
+                                    )}
+                                  >
+                                    {latestGuardStatusLabel(latestGuard)}
+                                  </span>
+                                ) : null}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
                   ) : (
                     <p className="rounded-2xl border border-border bg-card/70 px-4 py-6 text-sm text-muted-foreground">
                       No skills discovered yet.

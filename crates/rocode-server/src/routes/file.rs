@@ -168,6 +168,44 @@ fn canonical_root(root: &FsPath) -> Result<PathBuf> {
         .map_err(|e| ApiError::BadRequest(format!("Failed to resolve project root: {}", e)))
 }
 
+fn nearest_existing_ancestor(path: &FsPath) -> Option<PathBuf> {
+    let mut current = Some(path);
+    while let Some(candidate) = current {
+        if candidate.exists() {
+            return Some(candidate.to_path_buf());
+        }
+        current = candidate.parent();
+    }
+    None
+}
+
+fn effective_root_for_input(input: &str, default_root: &FsPath) -> Result<PathBuf> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return canonical_root(default_root);
+    }
+
+    let raw = PathBuf::from(trimmed);
+    if !raw.is_absolute() {
+        return canonical_root(default_root);
+    }
+
+    let resolved = resolve_user_path(trimmed, default_root);
+    let ancestor = nearest_existing_ancestor(&resolved).ok_or_else(|| {
+        ApiError::BadRequest("Failed to resolve an existing ancestor for path".to_string())
+    })?;
+    let root = if ancestor.is_dir() {
+        ancestor
+    } else {
+        ancestor
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| ancestor.clone())
+    };
+
+    canonical_root(&root)
+}
+
 fn canonicalize_within_root(path: &FsPath, root: &FsPath) -> Result<PathBuf> {
     let canonical_root = canonical_root(root)?;
     let canonical_path = path
@@ -300,7 +338,8 @@ fn build_tree_node(path: &FsPath, root: &FsPath) -> Result<FileTreeNode> {
 }
 
 async fn list_files(Query(query): Query<ListFilesQuery>) -> Result<Json<Vec<FileInfo>>> {
-    let root = project_root()?;
+    let default_root = project_root()?;
+    let root = effective_root_for_input(&query.path, &default_root)?;
     let path = resolve_existing_input_path(&query.path, &root)?;
     let mut files = Vec::new();
 
@@ -322,17 +361,19 @@ async fn list_files(Query(query): Query<ListFilesQuery>) -> Result<Json<Vec<File
 }
 
 async fn get_file_tree(Query(query): Query<FileTreeQuery>) -> Result<Json<FileTreeNode>> {
-    let root = project_root()?;
-    let path = if let Some(input) = query.path.as_deref() {
-        resolve_existing_input_path(input, &root)?
+    let default_root = project_root()?;
+    if let Some(input) = query.path.as_deref() {
+        let root = effective_root_for_input(input, &default_root)?;
+        Ok(Json(build_tree_node(&resolve_existing_input_path(input, &root)?, &root)?))
     } else {
-        canonical_root(&root)?
-    };
-    Ok(Json(build_tree_node(&path, &root)?))
+        let root = canonical_root(&default_root)?;
+        Ok(Json(build_tree_node(&root, &root)?))
+    }
 }
 
 async fn read_file(Query(query): Query<ListFilesQuery>) -> Result<Json<serde_json::Value>> {
-    let root = project_root()?;
+    let default_root = project_root()?;
+    let root = effective_root_for_input(&query.path, &default_root)?;
     let path = resolve_existing_input_path(&query.path, &root)?;
 
     if path.is_file() {
@@ -348,7 +389,8 @@ async fn read_file(Query(query): Query<ListFilesQuery>) -> Result<Json<serde_jso
 }
 
 async fn write_file(Json(req): Json<WriteFileRequest>) -> Result<Json<FileWriteResponse>> {
-    let root = project_root()?;
+    let default_root = project_root()?;
+    let root = effective_root_for_input(&req.path, &default_root)?;
     let path = resolve_output_path(&req.path, &root)?;
 
     if path.exists() && path.is_dir() {
@@ -385,7 +427,8 @@ async fn write_file(Json(req): Json<WriteFileRequest>) -> Result<Json<FileWriteR
 async fn create_directory(
     Json(req): Json<CreateDirectoryRequest>,
 ) -> Result<Json<DirectoryCreateResponse>> {
-    let root = project_root()?;
+    let default_root = project_root()?;
+    let root = effective_root_for_input(&req.path, &default_root)?;
     let path = resolve_output_path(&req.path, &root)?;
 
     if path.exists() {
@@ -409,7 +452,8 @@ async fn create_directory(
 }
 
 async fn delete_file(Json(req): Json<DeleteFileRequest>) -> Result<Json<FileDeleteResponse>> {
-    let root = project_root()?;
+    let default_root = project_root()?;
+    let root = effective_root_for_input(&req.path, &default_root)?;
     let path = resolve_existing_input_path(&req.path, &root)?;
 
     if path.is_dir() {
@@ -436,7 +480,8 @@ async fn delete_file(Json(req): Json<DeleteFileRequest>) -> Result<Json<FileDele
 }
 
 async fn download_file(Query(query): Query<ListFilesQuery>) -> Result<impl IntoResponse> {
-    let root = project_root()?;
+    let default_root = project_root()?;
+    let root = effective_root_for_input(&query.path, &default_root)?;
     let path = resolve_existing_input_path(&query.path, &root)?;
 
     if !path.is_file() {
@@ -485,25 +530,16 @@ fn decode_upload_bytes(file: &UploadFileRequest) -> Result<Vec<u8>> {
     Ok(file.content.as_bytes().to_vec())
 }
 
-async fn upload_files(Json(req): Json<UploadFilesRequest>) -> Result<Json<UploadFilesResponse>> {
-    let root = project_root()?;
-    if req.files.is_empty() {
-        return Err(ApiError::BadRequest(
-            "No uploaded files were provided".to_string(),
-        ));
-    }
-
-    let target_dir = if let Some(path) = req.path.as_deref() {
-        resolve_output_path(path, &root)?
-    } else {
-        canonical_root(&root)?
-    };
-
-    std::fs::create_dir_all(&target_dir)
+fn persist_uploaded_files(
+    root: &FsPath,
+    target_dir: &FsPath,
+    files: Vec<UploadFileRequest>,
+) -> Result<Json<UploadFilesResponse>> {
+    std::fs::create_dir_all(target_dir)
         .map_err(|e| ApiError::BadRequest(format!("Failed to create upload target: {}", e)))?;
 
     let mut saved_files = Vec::new();
-    for file in req.files {
+    for file in files {
         let safe_name = FsPath::new(&file.name)
             .file_name()
             .map(|name| name.to_string_lossy().to_string())
@@ -511,7 +547,7 @@ async fn upload_files(Json(req): Json<UploadFilesRequest>) -> Result<Json<Upload
             .ok_or_else(|| ApiError::BadRequest("Uploaded file name is invalid".to_string()))?;
         let bytes = decode_upload_bytes(&file)?;
 
-        let output_path = ensure_within_root_nonexistent(&target_dir.join(&safe_name), &root)?;
+        let output_path = ensure_within_root_nonexistent(&target_dir.join(&safe_name), root)?;
         std::fs::write(&output_path, &bytes)
             .map_err(|e| ApiError::BadRequest(format!("Failed to write uploaded file: {}", e)))?;
 
@@ -524,6 +560,24 @@ async fn upload_files(Json(req): Json<UploadFilesRequest>) -> Result<Json<Upload
     }
 
     Ok(Json(UploadFilesResponse { files: saved_files }))
+}
+
+async fn upload_files(Json(req): Json<UploadFilesRequest>) -> Result<Json<UploadFilesResponse>> {
+    let default_root = project_root()?;
+    if req.files.is_empty() {
+        return Err(ApiError::BadRequest(
+            "No uploaded files were provided".to_string(),
+        ));
+    }
+
+    if let Some(path) = req.path.as_deref() {
+        let root = effective_root_for_input(path, &default_root)?;
+        let target_dir = resolve_output_path(path, &root)?;
+        persist_uploaded_files(&root, &target_dir, req.files)
+    } else {
+        let root = canonical_root(&default_root)?;
+        persist_uploaded_files(&root, &root, req.files)
+    }
 }
 
 async fn get_file_status() -> Result<Json<Vec<FileStatusInfo>>> {
@@ -601,10 +655,11 @@ pub struct SearchResult {
 }
 
 async fn find_text(Query(query): Query<FindTextQuery>) -> Result<Json<Vec<SearchResult>>> {
-    let root = project_root()?;
+    let default_root = project_root()?;
     let base_input = query
         .path
-        .unwrap_or_else(|| root.to_string_lossy().to_string());
+        .unwrap_or_else(|| default_root.to_string_lossy().to_string());
+    let root = effective_root_for_input(&base_input, &default_root)?;
     let base_path = resolve_existing_input_path(&base_input, &root)?;
     let mut results = Vec::new();
 
@@ -648,6 +703,71 @@ async fn find_text(Query(query): Query<FindTextQuery>) -> Result<Json<Vec<Search
 
     search_recursive(&base_path, &root, &query.pattern, &mut results);
     Ok(Json(results))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{effective_root_for_input, nearest_existing_ancestor};
+    use std::path::PathBuf;
+
+    #[test]
+    fn nearest_existing_ancestor_walks_up_for_missing_path() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let existing = temp.path().join("workspace");
+        std::fs::create_dir_all(&existing).expect("mkdir");
+
+        let missing = existing.join("nested").join("file.txt");
+        assert_eq!(
+            nearest_existing_ancestor(&missing).as_deref(),
+            Some(existing.as_path())
+        );
+    }
+
+    #[test]
+    fn effective_root_keeps_relative_paths_inside_default_root() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("project");
+        std::fs::create_dir_all(&root).expect("mkdir");
+
+        let resolved = effective_root_for_input("src/main.rs", &root).expect("root");
+        assert_eq!(resolved, root.canonicalize().expect("canonical"));
+    }
+
+    #[test]
+    fn effective_root_uses_absolute_workspace_directory() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let default_root = temp.path().join("server-root");
+        let workspace = temp.path().join("external-workspace");
+        std::fs::create_dir_all(&default_root).expect("mkdir default");
+        std::fs::create_dir_all(workspace.join("src")).expect("mkdir workspace");
+
+        let resolved =
+            effective_root_for_input(workspace.to_string_lossy().as_ref(), &default_root)
+                .expect("root");
+        assert_eq!(resolved, workspace.canonicalize().expect("canonical"));
+    }
+
+    #[test]
+    fn effective_root_uses_parent_for_absolute_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let default_root = temp.path().join("server-root");
+        let workspace = temp.path().join("external-workspace");
+        let file = workspace.join("src").join("lib.rs");
+        std::fs::create_dir_all(file.parent().expect("parent")).expect("mkdir workspace");
+        std::fs::create_dir_all(&default_root).expect("mkdir default");
+        std::fs::write(&file, "fn main() {}").expect("write file");
+
+        let resolved = effective_root_for_input(file.to_string_lossy().as_ref(), &default_root)
+            .expect("root");
+        assert_eq!(
+            resolved,
+            file.parent()
+                .map(PathBuf::from)
+                .expect("parent")
+                .canonicalize()
+                .expect("canonical")
+        );
+    }
 }
 
 #[derive(Debug, Deserialize)]

@@ -2346,7 +2346,6 @@ export default function App() {
               }}
               onSelectWorkspace={selectWorkspace}
               onSelectSession={(sessionId) => setSelectedSessionId(sessionId)}
-              onOpenSettings={() => setSettingsOpen(true)}
             />
           </div>
         )}
