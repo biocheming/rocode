@@ -114,8 +114,8 @@ export function ComposerPanel({
 
       <div
         className={cn(
-          "overflow-hidden rounded-[30px] border border-border/70 bg-background/95 shadow-[0_20px_48px_rgba(15,23,42,0.08)] transition-all",
-          composerDragActive ? "border-primary/40 bg-primary/5 shadow-primary/10" : ""
+          "overflow-hidden rounded-xl border border-border/45 bg-background/95 shadow-sm transition-colors",
+          composerDragActive ? "border-primary/40 bg-primary/5" : ""
         )}
       >
         <form
@@ -167,7 +167,7 @@ export function ComposerPanel({
             <div className="border-b border-border/50 px-5 py-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded-full border border-border/70 bg-muted/30 px-2.5 py-1 text-[11px] font-medium text-foreground">
+                  <span className="roc-pill-outline px-2.5 text-foreground">
                     {workspaceLabel}
                   </span>
                   <span className="text-[11px] text-muted-foreground">
@@ -201,7 +201,7 @@ export function ComposerPanel({
                         type="button"
                         variant="ghost"
                         size="icon"
-                        className="h-9 w-9 rounded-xl"
+                        className="h-9 w-9 rounded-lg"
                         onClick={() => {
                           document.querySelector<HTMLInputElement>(
                             '[data-testid="composer-file-input"]',
@@ -239,7 +239,7 @@ export function ComposerPanel({
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="h-9 gap-1.5 rounded-xl border-border/60 text-xs"
+                  className="h-9 gap-1.5 rounded-lg border-border/45 text-xs"
                   onClick={() => {
                     window.dispatchEvent(new CustomEvent('rocode:stop-streaming'));
                   }}
@@ -254,7 +254,7 @@ export function ComposerPanel({
                   variant="default"
                   size="sm"
                   disabled={!composer.trim() && attachments.length === 0}
-                  className="h-10 rounded-xl px-4"
+                  className="h-10 rounded-lg px-4"
                 >
                   <span className="mr-1 text-xs font-medium">Send</span>
                   <SendIcon className="size-3.5" />

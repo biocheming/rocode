@@ -57,7 +57,7 @@ export function AttachmentDetailsPanel({
     : null;
 
   return (
-    <div className="rounded-2xl border border-border bg-card/80 p-4 grid gap-3.5" data-testid="attachment-details">
+    <div className="roc-panel p-4 grid gap-3.5" data-testid="attachment-details">
       <ProvenanceTrail
         provenance={provenance}
         workspaceReference={relativePath}
@@ -72,7 +72,7 @@ export function AttachmentDetailsPanel({
         </div>
         <div className="flex items-center flex-wrap gap-2.5">
           {languageLabel ? <span className="rounded-full border border-primary/20 bg-primary/10 px-3 py-2 text-xs font-bold uppercase tracking-wider">{languageLabel}</span> : null}
-          <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">{attachmentSource(attachment)}</span>
+          <span className="roc-pill px-3 py-1.5 text-xs">{attachmentSource(attachment)}</span>
           {activeStageId ? (
             <button className="text-xs text-primary underline underline-offset-2 cursor-pointer hover:text-primary/80 border-0 bg-transparent p-0" type="button" onClick={() => onNavigateStage(activeStageId)}>
               stage {activeStageId}
@@ -80,7 +80,7 @@ export function AttachmentDetailsPanel({
           ) : null}
           {workspacePath ? (
             <button
-              className="min-h-[42px] rounded-full px-4 border border-border bg-card/70 text-foreground inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px"
+              className="roc-action min-h-[42px] px-4 cursor-pointer transition-colors"
               type="button"
               data-testid="attachment-locate"
               onClick={() => onLocateAttachment(attachment)}
@@ -92,11 +92,11 @@ export function AttachmentDetailsPanel({
       </div>
 
       {previewUrl ? (
-        <div className="rounded-2xl border border-border bg-card/80 p-3">
+        <div className="rounded-xl border border-border/35 bg-background/65 p-3">
           <img className="max-w-full max-h-80 rounded-xl object-contain" src={previewUrl} alt={attachmentLabel(attachment)} />
         </div>
       ) : textPreviewExcerpt ? (
-        <div className="rounded-2xl border border-border bg-card/80 p-3">
+        <div className="rounded-xl border border-border/35 bg-background/65 p-3">
           {codeLike ? (
             <pre
               className="font-mono text-sm leading-relaxed rounded-xl bg-foreground/90 text-background p-3"
@@ -120,7 +120,7 @@ export function AttachmentDetailsPanel({
           ) : null}
         </div>
       ) : textPreviewUrl ? (
-        <div className="rounded-2xl border border-border bg-card/80 p-3">
+        <div className="rounded-xl border border-border/35 bg-background/65 p-3">
           <iframe
             className="w-full min-h-60 border-0 rounded-xl"
             src={textPreviewUrl}

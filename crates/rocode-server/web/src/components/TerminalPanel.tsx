@@ -131,7 +131,7 @@ export function TerminalPanel({ terminal }: TerminalPanelProps) {
   }, [terminal.activeBuffer, terminal.activeSession, terminal.resizeSession]);
 
   return (
-    <div className="rounded-2xl border border-border bg-card/75 backdrop-blur-sm shadow-lg p-5 grid gap-4" data-testid="terminal-panel">
+    <div className="roc-panel p-5 grid gap-4" data-testid="terminal-panel">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Terminal</p>
@@ -139,7 +139,7 @@ export function TerminalPanel({ terminal }: TerminalPanelProps) {
         </div>
         <div className="flex items-center gap-2">
           <button
-            className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+            className="roc-action min-h-[36px] px-4 text-sm cursor-pointer transition-colors"
             type="button"
             data-testid="terminal-refresh"
             onClick={terminal.refresh}
@@ -148,7 +148,7 @@ export function TerminalPanel({ terminal }: TerminalPanelProps) {
             {terminal.loading ? "Refreshing..." : "Refresh"}
           </button>
           <button
-            className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+            className="roc-action min-h-[36px] px-4 text-sm cursor-pointer transition-colors"
             type="button"
             data-testid="terminal-create"
             onClick={() => void terminal.createSession()}
@@ -157,7 +157,7 @@ export function TerminalPanel({ terminal }: TerminalPanelProps) {
             {terminal.creating ? "Creating..." : "+ New"}
           </button>
           <button
-            className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+            className="roc-action min-h-[36px] px-4 text-sm cursor-pointer transition-colors"
             type="button"
             data-testid="terminal-delete"
             onClick={() => void terminal.deleteSession(terminal.activeSession!.id)}
@@ -176,7 +176,11 @@ export function TerminalPanel({ terminal }: TerminalPanelProps) {
                 key={session.id}
                 data-testid="terminal-tab"
                 data-session-id={session.id}
-                className={terminal.activeId === session.id ? "px-4 py-2 rounded-full border-0 cursor-pointer text-sm bg-foreground text-background font-semibold" : "px-4 py-2 rounded-full border border-border cursor-pointer text-sm bg-card/70 text-foreground hover:bg-accent"}
+                className={
+                  terminal.activeId === session.id
+                    ? "px-4 py-2 rounded-lg border border-foreground/10 cursor-pointer text-sm bg-foreground text-background font-semibold"
+                    : "px-4 py-2 rounded-lg border border-transparent cursor-pointer text-sm bg-transparent text-foreground hover:bg-accent"
+                }
                 type="button"
                 onClick={() => terminal.setActiveId(session.id)}
               >
@@ -188,15 +192,15 @@ export function TerminalPanel({ terminal }: TerminalPanelProps) {
           {terminal.activeSession ? (
             <>
               <div className="flex flex-wrap gap-2">
-                <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">{terminal.activeSession.status}</span>
-                <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">{terminal.activeSession.cwd || "cwd unknown"}</span>
-                <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">{terminal.activeSession.id}</span>
+                <span className="roc-pill px-3 py-1.5 text-xs">{terminal.activeSession.status}</span>
+                <span className="roc-pill px-3 py-1.5 text-xs">{terminal.activeSession.cwd || "cwd unknown"}</span>
+                <span className="roc-pill px-3 py-1.5 text-xs">{terminal.activeSession.id}</span>
               </div>
               <div className="grid gap-2">
                 <div
                   ref={viewportRef}
                   data-testid="terminal-viewport"
-                  className="terminal-viewport"
+                  className="terminal-viewport roc-subpanel min-h-[24rem] bg-background/85 p-2"
                   onClick={() => xtermRef.current?.focus()}
                 />
                 <p className="text-xs text-muted-foreground italic">

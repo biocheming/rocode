@@ -205,8 +205,8 @@ export function MessageCard({
     <article
       className={cn(
         "group/message",
-        highlighted && "ring-2 ring-primary/30 ring-offset-2 ring-offset-background rounded-2xl",
-        activeStageId && message.stage_id === activeStageId && "ring-2 ring-amber-500/30 ring-offset-2 ring-offset-background rounded-2xl",
+        highlighted && "ring-2 ring-primary/30 ring-offset-2 ring-offset-background rounded-xl",
+        activeStageId && message.stage_id === activeStageId && "ring-2 ring-amber-500/30 ring-offset-2 ring-offset-background rounded-xl",
       )}
       data-testid="message-card"
       data-feed-id={message.feedId}

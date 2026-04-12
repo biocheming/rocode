@@ -230,15 +230,18 @@ export function ExecutionActivityPanel({
     setPageDraft(String(activity.activityPage));
   }, [activity.activityPage]);
 
+  const actionButtonClass =
+    "roc-action min-h-[36px] px-4 text-sm cursor-pointer transition-colors";
+
   return (
-    <div className="rounded-2xl border border-border bg-card/75 backdrop-blur-sm shadow-lg p-5 grid gap-4">
+    <div className="roc-panel p-5 grid gap-4">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Scheduler</p>
           <h3>Execution + Activity</h3>
         </div>
         <button
-          className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+          className={actionButtonClass}
           type="button"
           onClick={() =>
             void activity.refreshExecutionActivity(
@@ -256,52 +259,52 @@ export function ExecutionActivityPanel({
       {activity.executionTopology ? (
         <>
           <div className="flex flex-wrap gap-2">
-            <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">active {activity.executionTopology.active_count}</span>
-            <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">running {activity.executionTopology.running_count}</span>
-            <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">waiting {activity.executionTopology.waiting_count}</span>
-            <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">retry {activity.executionTopology.retry_count ?? 0}</span>
-            <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">cancelling {activity.executionTopology.cancelling_count ?? 0}</span>
-            <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">done {activity.executionTopology.done_count}</span>
+            <span className="roc-pill px-3 py-1.5 text-xs">active {activity.executionTopology.active_count}</span>
+            <span className="roc-pill px-3 py-1.5 text-xs">running {activity.executionTopology.running_count}</span>
+            <span className="roc-pill px-3 py-1.5 text-xs">waiting {activity.executionTopology.waiting_count}</span>
+            <span className="roc-pill px-3 py-1.5 text-xs">retry {activity.executionTopology.retry_count ?? 0}</span>
+            <span className="roc-pill px-3 py-1.5 text-xs">cancelling {activity.executionTopology.cancelling_count ?? 0}</span>
+            <span className="roc-pill px-3 py-1.5 text-xs">done {activity.executionTopology.done_count}</span>
           </div>
           <p className="text-sm text-muted-foreground leading-relaxed">
             Updated {formatTs(activity.executionTopology.updated_at ?? undefined)}
           </p>
           {activity.sessionUsage ? (
             <div className="grid gap-3 md:grid-cols-2">
-              <div className="rounded-2xl border border-border bg-background/70 p-4 grid gap-2">
+              <div className="roc-subpanel p-4 grid gap-2 bg-background/55">
                 <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Session Usage</p>
                 <div className="flex flex-wrap gap-2">
-                  <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">input {activity.sessionUsage.input_tokens}</span>
-                  <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">output {activity.sessionUsage.output_tokens}</span>
-                  <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">reasoning {activity.sessionUsage.reasoning_tokens}</span>
-                  <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">cache read {activity.sessionUsage.cache_read_tokens}</span>
-                  <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">cache write {activity.sessionUsage.cache_write_tokens}</span>
+                  <span className="roc-pill px-3 py-1.5 text-xs">input {activity.sessionUsage.input_tokens}</span>
+                  <span className="roc-pill px-3 py-1.5 text-xs">output {activity.sessionUsage.output_tokens}</span>
+                  <span className="roc-pill px-3 py-1.5 text-xs">reasoning {activity.sessionUsage.reasoning_tokens}</span>
+                  <span className="roc-pill px-3 py-1.5 text-xs">cache read {activity.sessionUsage.cache_read_tokens}</span>
+                  <span className="roc-pill px-3 py-1.5 text-xs">cache write {activity.sessionUsage.cache_write_tokens}</span>
                 </div>
                 <p className="text-sm text-muted-foreground leading-relaxed">Total cost {formatMoney(activity.sessionUsage.total_cost)}</p>
               </div>
-              <div className="rounded-2xl border border-border bg-background/70 p-4 grid gap-2">
+              <div className="roc-subpanel p-4 grid gap-2 bg-background/55">
                 <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Active Stage</p>
                 {activity.activeStageSummary ? (
                   <>
                     <div className="flex flex-wrap items-center gap-2">
                       <strong>{activity.activeStageSummary.stage_name}</strong>
-                      <span className="rounded-full border border-border bg-muted px-3 py-1 text-xs text-muted-foreground font-medium">{activity.activeStageSummary.status}</span>
+                      <span className="roc-pill px-3 py-1 text-xs">{activity.activeStageSummary.status}</span>
                       {activity.sessionRuntime?.active_stage_count ? (
-                        <span className="rounded-full border border-border bg-muted px-3 py-1 text-xs text-muted-foreground font-medium">active {activity.sessionRuntime.active_stage_count}</span>
+                        <span className="roc-pill px-3 py-1 text-xs">active {activity.sessionRuntime.active_stage_count}</span>
                       ) : null}
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {typeof activity.activeStageSummary.prompt_tokens === "number" ? (
-                        <span className="rounded-full border border-border bg-muted px-3 py-1 text-xs text-muted-foreground font-medium">in {activity.activeStageSummary.prompt_tokens}</span>
+                        <span className="roc-pill px-3 py-1 text-xs">in {activity.activeStageSummary.prompt_tokens}</span>
                       ) : null}
                       {typeof activity.activeStageSummary.completion_tokens === "number" ? (
-                        <span className="rounded-full border border-border bg-muted px-3 py-1 text-xs text-muted-foreground font-medium">out {activity.activeStageSummary.completion_tokens}</span>
+                        <span className="roc-pill px-3 py-1 text-xs">out {activity.activeStageSummary.completion_tokens}</span>
                       ) : null}
                       {typeof activity.activeStageSummary.reasoning_tokens === "number" ? (
-                        <span className="rounded-full border border-border bg-muted px-3 py-1 text-xs text-muted-foreground font-medium">reasoning {activity.activeStageSummary.reasoning_tokens}</span>
+                        <span className="roc-pill px-3 py-1 text-xs">reasoning {activity.activeStageSummary.reasoning_tokens}</span>
                       ) : null}
                       {typeof activity.activeStageSummary.skill_tree_budget === "number" ? (
-                        <span className="rounded-full border border-border bg-muted px-3 py-1 text-xs text-muted-foreground font-medium">budget {activity.activeStageSummary.skill_tree_budget}</span>
+                        <span className="roc-pill px-3 py-1 text-xs">budget {activity.activeStageSummary.skill_tree_budget}</span>
                       ) : null}
                     </div>
                     <p className="text-sm text-muted-foreground leading-relaxed">
@@ -329,7 +332,7 @@ export function ExecutionActivityPanel({
       )}
 
       {activity.stageSummaries.length ? (
-        <div className="rounded-2xl border border-border bg-background/70 p-4 grid gap-3">
+        <div className="roc-subpanel p-4 grid gap-3 bg-background/55">
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Stage Summaries</p>
@@ -349,8 +352,8 @@ export function ExecutionActivityPanel({
                 <div
                   key={stage.stage_id}
                   className={cn(
-                    "rounded-xl border border-border bg-card/60 p-4 grid gap-3",
-                    isHighlighted && "border-primary/40 bg-primary/5",
+                    "roc-item p-4 grid gap-3 bg-card/45",
+                    isHighlighted ? "roc-item-active border-primary/40 bg-accent/45" : "hover:bg-accent/30",
                   )}
                 >
                   <div className="flex items-start justify-between gap-3">
@@ -372,14 +375,14 @@ export function ExecutionActivityPanel({
                     </div>
                     <div className="flex flex-wrap gap-2 shrink-0">
                       <button
-                        className="min-h-[32px] rounded-full px-3 border border-border bg-card/70 text-foreground text-xs inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                        className="roc-action min-h-[32px] px-3 text-xs cursor-pointer transition-colors"
                         type="button"
                         onClick={() => onNavigateStage(stage.stage_id)}
                       >
                         Open
                       </button>
                       <button
-                        className="min-h-[32px] rounded-full px-3 border border-border bg-card/70 text-foreground text-xs inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                        className="roc-action min-h-[32px] px-3 text-xs cursor-pointer transition-colors"
                         type="button"
                         onClick={() => activity.patchActivityFilters({ stageId: stage.stage_id })}
                       >
@@ -392,7 +395,7 @@ export function ExecutionActivityPanel({
                       {meta.map((item) => (
                         <span
                           key={`${stage.stage_id}:${item}`}
-                          className="rounded-full border border-border bg-muted px-2.5 py-1 text-xs text-muted-foreground"
+                          className="roc-pill px-2.5 py-1 text-xs"
                         >
                           {item}
                         </span>

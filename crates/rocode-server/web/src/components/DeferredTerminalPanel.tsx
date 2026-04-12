@@ -14,7 +14,7 @@ interface DeferredTerminalPanelProps {
 
 function TerminalLoadingFallback() {
   return (
-    <div className="rounded-2xl border border-border bg-card/75 backdrop-blur-sm shadow-lg p-5 flex flex-col items-center justify-center gap-3 text-muted-foreground" data-testid="terminal-loading">
+    <div className="roc-panel p-5 flex flex-col items-center justify-center gap-3 text-muted-foreground" data-testid="terminal-loading">
       <h3>Loading terminal...</h3>
       <p>The xterm.js terminal is being loaded as a separate chunk.</p>
     </div>
@@ -28,14 +28,14 @@ export function DeferredTerminalPanel({
 }: DeferredTerminalPanelProps) {
   if (!expanded) {
     return (
-      <div className="rounded-2xl border border-border bg-card/75 backdrop-blur-sm shadow-lg p-5 grid gap-4" data-testid="terminal-collapsed">
+      <div className="roc-panel p-5 grid gap-4" data-testid="terminal-collapsed">
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Terminal</p>
             <h3>PTY Sessions</h3>
           </div>
           <button
-            className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+            className="roc-action min-h-[36px] px-4 text-sm cursor-pointer transition-colors"
             type="button"
             data-testid="terminal-open"
             onClick={onExpand}

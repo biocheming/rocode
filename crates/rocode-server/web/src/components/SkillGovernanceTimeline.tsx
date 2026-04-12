@@ -134,7 +134,7 @@ export function SkillGovernanceTimeline({
   }, [entries, scope, selectedSkillName, selectedSourceId]);
 
   return (
-    <div className="grid gap-4 rounded-2xl border border-border bg-card/70 p-5">
+    <div className="roc-panel grid gap-4 p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="m-0 text-xs tracking-widest uppercase text-muted-foreground font-semibold">
@@ -146,10 +146,10 @@ export function SkillGovernanceTimeline({
           <button
             type="button"
             className={cn(
-              "min-h-[34px] rounded-full px-4 text-sm transition-all duration-150",
+              "min-h-[34px] rounded-lg px-4 text-sm transition-colors",
               scope === "all"
                 ? "bg-foreground text-background"
-                : "border border-border bg-card/70 text-foreground hover:bg-accent",
+                : "border border-transparent bg-transparent text-foreground hover:bg-accent",
             )}
             onClick={() => setScope("all")}
           >
@@ -159,10 +159,10 @@ export function SkillGovernanceTimeline({
             type="button"
             disabled={counts.skill === 0}
             className={cn(
-              "min-h-[34px] rounded-full px-4 text-sm transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-50",
+              "min-h-[34px] rounded-lg px-4 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50",
               scope === "skill"
                 ? "bg-foreground text-background"
-                : "border border-border bg-card/70 text-foreground hover:bg-accent",
+                : "border border-transparent bg-transparent text-foreground hover:bg-accent",
             )}
             onClick={() => setScope("skill")}
           >
@@ -172,10 +172,10 @@ export function SkillGovernanceTimeline({
             type="button"
             disabled={counts.source === 0}
             className={cn(
-              "min-h-[34px] rounded-full px-4 text-sm transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-50",
+              "min-h-[34px] rounded-lg px-4 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50",
               scope === "source"
                 ? "bg-foreground text-background"
-                : "border border-border bg-card/70 text-foreground hover:bg-accent",
+                : "border border-transparent bg-transparent text-foreground hover:bg-accent",
             )}
             onClick={() => setScope("source")}
           >
@@ -201,7 +201,7 @@ export function SkillGovernanceTimeline({
           filteredEntries.map((entry) => (
             <article
               key={entry.entry_id}
-              className="rounded-2xl border border-border bg-muted/10 p-4 text-sm"
+              className="rounded-xl border border-border/35 bg-muted/8 p-4 text-sm"
             >
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="grid gap-1">
@@ -215,7 +215,7 @@ export function SkillGovernanceTimeline({
                     >
                       {entry.status}
                     </span>
-                    <span className="rounded-full border border-border bg-card/80 px-2.5 py-1 text-[11px] uppercase tracking-wide text-muted-foreground">
+                    <span className="roc-pill-outline px-2.5 py-1 text-[11px] uppercase tracking-wide">
                       {entry.kind}
                     </span>
                   </div>
@@ -228,24 +228,24 @@ export function SkillGovernanceTimeline({
 
               <div className="mt-3 flex flex-wrap gap-2 text-xs">
                 {entry.skill_name ? (
-                  <span className="rounded-full border border-border bg-card/70 px-2.5 py-1">
+                  <span className="roc-pill-outline px-2.5 py-1">
                     skill {entry.skill_name}
                   </span>
                 ) : null}
                 {entry.source_id ? (
-                  <span className="rounded-full border border-border bg-card/70 px-2.5 py-1">
+                  <span className="roc-pill-outline px-2.5 py-1">
                     source {entry.source_id}
                   </span>
                 ) : null}
                 {entry.actor ? (
-                  <span className="rounded-full border border-border bg-card/70 px-2.5 py-1 text-muted-foreground">
+                  <span className="roc-pill-outline px-2.5 py-1 text-muted-foreground">
                     actor {entry.actor}
                   </span>
                 ) : null}
               </div>
 
               {entry.managed_record ? (
-                <div className="mt-3 rounded-xl border border-border/70 bg-card/70 p-3 text-xs text-muted-foreground">
+                <div className="mt-3 rounded-lg border border-border/35 bg-background/65 p-3 text-xs text-muted-foreground">
                   <div>
                     managed revision {entry.managed_record.installed_revision || "--"} ·{" "}
                     {managedStateLabel(entry.managed_record)}

@@ -109,7 +109,7 @@ export function InteractionOverlays({
                     <textarea
                       data-testid="question-input"
                       data-question-index={index}
-                      className="min-h-[96px] rounded-2xl border border-border bg-background/70 px-4 py-3 text-sm text-foreground"
+                      className="min-h-[96px] rounded-xl border border-border/45 bg-background/70 px-4 py-3 text-sm text-foreground"
                       value={
                         Array.isArray(questionAnswers[index])
                           ? questionAnswers[index].join("\n")

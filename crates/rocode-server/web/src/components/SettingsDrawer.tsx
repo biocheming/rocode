@@ -1445,11 +1445,20 @@ export function SettingsDrawer({
   const chooseKnownProvider = (provider: KnownProviderEntryLike) => {
     onConnectQueryChange(provider.id);
   };
+  const secondaryButtonClass =
+    "roc-action min-h-[36px] px-4 text-foreground text-sm cursor-pointer transition-colors";
+  const primaryButtonClass =
+    "min-h-[36px] rounded-lg px-5 border border-foreground bg-foreground text-background text-sm font-semibold inline-flex items-center justify-center cursor-pointer transition-colors disabled:cursor-not-allowed disabled:opacity-60";
+  const summaryCardClass = "rounded-xl border border-border/40 bg-card/72 p-4 grid gap-2";
+  const sectionCardClass = "grid gap-4 rounded-xl border border-border/40 bg-card/65 p-5";
+  const mutedCardClass = "rounded-xl border border-border/35 bg-muted/10 px-4 py-3 text-sm leading-relaxed text-muted-foreground";
+  const editorTextareaClass =
+    "min-h-40 w-full resize-y rounded-xl border border-border/45 bg-background/78 p-3.5 text-foreground leading-relaxed font-mono text-sm";
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-start justify-end" data-testid="settings-overlay" onClick={onClose}>
       <section
-        className="h-full w-full max-w-3xl bg-card border-l border-border overflow-y-auto p-8 flex flex-col gap-6"
+        className="h-full w-full max-w-3xl bg-card border-l border-border/50 overflow-y-auto p-8 flex flex-col gap-6"
         data-testid="settings-drawer"
         onClick={(event) => event.stopPropagation()}
       >
@@ -1460,14 +1469,14 @@ export function SettingsDrawer({
           </div>
           <div className="flex items-center gap-2">
             <button
-              className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+              className={secondaryButtonClass}
               type="button"
               data-testid="settings-refresh"
               onClick={() => void reloadSettingsData()}
             >
               {refreshing ? "Refreshing..." : "Refresh"}
             </button>
-            <button className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent" type="button" data-testid="settings-close" onClick={onClose}>
+            <button className={secondaryButtonClass} type="button" data-testid="settings-close" onClick={onClose}>
               Close
             </button>
           </div>
@@ -1479,7 +1488,11 @@ export function SettingsDrawer({
               key={tab.id}
               type="button"
               data-testid={`settings-tab-${tab.id}`}
-              className={activeTab === tab.id ? "px-4 py-2 rounded-full border-0 cursor-pointer text-sm bg-foreground text-background font-semibold" : "px-4 py-2 rounded-full border border-border cursor-pointer text-sm bg-card/70 text-foreground hover:bg-accent"}
+              className={
+                activeTab === tab.id
+                  ? "px-4 py-2 rounded-lg border border-foreground/10 cursor-pointer text-sm bg-foreground text-background font-semibold"
+                  : "px-4 py-2 rounded-lg border border-transparent cursor-pointer text-sm bg-transparent text-foreground hover:bg-accent"
+              }
               onClick={() => setActiveTab(tab.id)}
             >
               {tab.label}
@@ -1487,12 +1500,12 @@ export function SettingsDrawer({
           ))}
         </div>
 
-        {feedback ? <div className="rounded-2xl border border-amber-300 bg-amber-50/80 px-5 py-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200">{feedback}</div> : null}
+        {feedback ? <div className="rounded-xl border border-amber-300 bg-amber-50/80 px-5 py-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200">{feedback}</div> : null}
 
         <div className="flex flex-col gap-6 flex-1 min-h-0">
           {loading ? <div className="flex flex-col items-center justify-center gap-3 text-muted-foreground py-8">Loading settings...</div> : null}
           {!loading && isolatedNotice ? (
-            <div className="rounded-2xl border border-amber-300 bg-amber-50/80 px-5 py-3 text-sm leading-relaxed text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200">
+            <div className="rounded-xl border border-amber-300 bg-amber-50/80 px-5 py-3 text-sm leading-relaxed text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200">
               {isolatedNotice}
             </div>
           ) : null}
@@ -1506,7 +1519,11 @@ export function SettingsDrawer({
                     <button
                       key={item.id}
                       type="button"
-                      className={theme === item.id ? "px-4 py-2 rounded-full border-0 cursor-pointer text-sm bg-foreground text-background font-semibold" : "px-4 py-2 rounded-full border border-border cursor-pointer text-sm bg-card/70 text-foreground hover:bg-accent"}
+                      className={
+                        theme === item.id
+                          ? "px-4 py-2 rounded-lg border border-foreground/10 cursor-pointer text-sm bg-foreground text-background font-semibold"
+                          : "px-4 py-2 rounded-lg border border-transparent cursor-pointer text-sm bg-transparent text-foreground hover:bg-accent"
+                      }
                       onClick={() => onThemeChange(item.id)}
                     >
                       {item.label}
@@ -1561,11 +1578,11 @@ export function SettingsDrawer({
               <div className="grid gap-3">
                 <label>Workspace Authority</label>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="rounded-2xl border border-border bg-card/80 p-4 grid gap-2">
+                  <div className={summaryCardClass}>
                     <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Workspace Mode</span>
                     <strong>{workspaceMode === "isolated" ? "isolated sandbox" : "shared workspace"}</strong>
                   </div>
-                  <div className="rounded-2xl border border-border bg-card/80 p-4 grid gap-2">
+                  <div className={summaryCardClass}>
                     <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Workspace Root</span>
                     <strong className="break-all text-sm">{workspaceRootPath || "--"}</strong>
                   </div>
@@ -1577,10 +1594,10 @@ export function SettingsDrawer({
                 ) : null}
                 <div
                   className={cn(
-                    "rounded-2xl border px-4 py-3 text-sm leading-relaxed",
+                    "rounded-xl border px-4 py-3 text-sm leading-relaxed",
                     workspaceMode === "isolated"
                       ? "border-amber-300 bg-amber-50/80 text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200"
-                      : "border-border bg-muted/20 text-muted-foreground",
+                      : "border-border/35 bg-muted/10 text-muted-foreground",
                   )}
                 >
                   {workspaceMode === "isolated"
@@ -1590,19 +1607,19 @@ export function SettingsDrawer({
               </div>
 
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <div className="rounded-2xl border border-border bg-card/80 p-4 grid gap-2">
+                <div className={summaryCardClass}>
                   <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Providers</span>
                   <strong>{providerSummary}</strong>
                 </div>
-                <div className="rounded-2xl border border-border bg-card/80 p-4 grid gap-2">
+                <div className={summaryCardClass}>
                   <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Scheduler Path</span>
                   <strong>{schedulerConfig?.raw_path || configSnapshot?.schedulerPath || "--"}</strong>
                 </div>
-                <div className="rounded-2xl border border-border bg-card/80 p-4 grid gap-2">
+                <div className={summaryCardClass}>
                   <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">MCP Servers</span>
                   <strong>{Object.keys(mcpConfigs).length}</strong>
                 </div>
-                <div className="rounded-2xl border border-border bg-card/80 p-4 grid gap-2">
+                <div className={summaryCardClass}>
                   <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Plugins</span>
                   <strong>{Object.keys(pluginConfigs).length}</strong>
                 </div>
@@ -1631,7 +1648,7 @@ export function SettingsDrawer({
                   onChange={(event) => onConnectQueryChange(event.target.value)}
                 />
                 {connectQuery.trim() ? (
-                  <div className="grid gap-2 rounded-xl border border-border bg-card/50 p-3">
+                  <div className="grid gap-2 rounded-lg border border-border/35 bg-muted/10 p-3">
                     {connectResolveBusy ? (
                       <p className="m-0 text-sm text-muted-foreground">
                         Resolving provider defaults...
@@ -1645,7 +1662,7 @@ export function SettingsDrawer({
                         <button
                           key={provider.id}
                           type="button"
-                          className="rounded-xl border border-border bg-card/70 px-3 py-2 text-left text-sm transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                          className="rounded-lg border border-transparent bg-transparent px-3 py-2 text-left text-sm transition-colors hover:bg-accent"
                           onClick={() => chooseKnownProvider(provider)}
                         >
                           <strong>{provider.name}</strong>
@@ -1796,7 +1813,7 @@ export function SettingsDrawer({
                 <label htmlFor="settings-scheduler-content">Scheduler Config</label>
                 <textarea
                   id="settings-scheduler-content"
-                  className="min-h-40 w-full resize-y rounded-2xl border border-border bg-card/80 p-3.5 text-foreground leading-relaxed font-mono text-sm"
+                  className={editorTextareaClass}
                   value={schedulerContentDraft}
                   onChange={(event) => setSchedulerContentDraft(event.target.value)}
                   spellCheck={false}
@@ -1848,26 +1865,26 @@ export function SettingsDrawer({
               <div className="grid gap-3">
                 <label>Workspace Skill Authority</label>
                 <div className="grid gap-3 sm:grid-cols-3">
-                  <div className="rounded-2xl border border-border bg-card/80 p-4 grid gap-2">
+                  <div className={summaryCardClass}>
                     <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Workspace Root</span>
                     <strong className="break-all text-sm">{workspaceRootPath || "--"}</strong>
                   </div>
-                  <div className="rounded-2xl border border-border bg-card/80 p-4 grid gap-2">
+                  <div className={summaryCardClass}>
                     <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Writable Skill Root</span>
                     <strong className="break-all text-sm">{skillWorkspaceRoot}</strong>
                   </div>
-                  <div className="rounded-2xl border border-border bg-card/80 p-4 grid gap-2">
+                  <div className={summaryCardClass}>
                     <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Discovered Skills</span>
                     <strong>{skillCatalog.length}</strong>
                   </div>
                 </div>
-                <div className="rounded-2xl border border-border bg-muted/20 px-4 py-3 text-sm leading-relaxed text-muted-foreground">
+                <div className={mutedCardClass}>
                   Writes from this panel go through <code>/skill/manage</code> and land only in the
                   current workspace authority at <code>{skillWorkspaceRoot}</code>. Global config and
                   external skill roots stay read-only here.
                 </div>
                 {selectedSessionId ? (
-                  <div className="rounded-2xl border border-border bg-card/70 px-4 py-3 text-sm leading-relaxed text-muted-foreground">
+                  <div className={mutedCardClass}>
                     Catalog reads now go through <code>/skill/catalog?session_id=...</code>, so the
                     visible skill set follows the active session's scheduler stage when a stage is
                     currently constraining tools. Detail preview now uses the same session-aware
@@ -1875,14 +1892,14 @@ export function SettingsDrawer({
                   </div>
                 ) : null}
                 {!skillsMutationsEnabled ? (
-                  <div className="rounded-2xl border border-amber-300 bg-amber-50/80 px-4 py-3 text-sm leading-relaxed text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200">
+                  <div className="rounded-xl border border-amber-300 bg-amber-50/80 px-4 py-3 text-sm leading-relaxed text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200">
                     Select or create a session before managing skills so permission prompts can be
                     routed to the active session.
                   </div>
                 ) : null}
               </div>
 
-              <div className="grid gap-4 rounded-2xl border border-border bg-card/70 p-5">
+              <div className={sectionCardClass}>
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="m-0 text-xs tracking-widest uppercase text-muted-foreground font-semibold">Skill Hub / Sync</p>
@@ -1926,7 +1943,7 @@ export function SettingsDrawer({
 
                 <div className="flex flex-wrap items-center gap-2">
                   <button
-                    className="min-h-[36px] rounded-full px-5 bg-foreground border-foreground text-background text-sm font-semibold inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px disabled:cursor-not-allowed disabled:opacity-60"
+                    className={primaryButtonClass}
                     type="button"
                     disabled={!skillSyncSourceId.trim() || !skillSyncLocator.trim() || busyKey === `skill:sync:plan:${skillSyncSourceId.trim()}`}
                     onClick={() => void planSkillSync()}
@@ -1934,7 +1951,7 @@ export function SettingsDrawer({
                     {busyKey === `skill:sync:plan:${skillSyncSourceId.trim()}` ? "Planning..." : "Preview Sync Plan"}
                   </button>
                   <button
-                    className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                    className={secondaryButtonClass}
                     type="button"
                     disabled={
                       !skillsMutationsEnabled ||
@@ -1947,7 +1964,7 @@ export function SettingsDrawer({
                     {busyKey === `skill:sync:apply:${skillSyncSourceId.trim()}` ? "Applying..." : "Apply Sync"}
                   </button>
                   <button
-                    className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                    className={secondaryButtonClass}
                     type="button"
                     disabled={!skillSyncSourceId.trim() || !skillSyncLocator.trim() || busyKey === `skill:index:refresh:${skillSyncSourceId.trim()}`}
                     onClick={() => void refreshSkillSourceIndex()}
@@ -1955,7 +1972,7 @@ export function SettingsDrawer({
                     {busyKey === `skill:index:refresh:${skillSyncSourceId.trim()}` ? "Refreshing Index..." : "Refresh Source Index"}
                   </button>
                   <button
-                    className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                    className={secondaryButtonClass}
                     type="button"
                     disabled={!skillSyncSourceId.trim() || !skillSyncLocator.trim() || busyKey === `skill:guard:source ${skillSyncSourceId.trim()}`}
                     onClick={() => void runSelectedSourceGuard()}
@@ -1968,7 +1985,7 @@ export function SettingsDrawer({
                   <div className="grid gap-3">
                     <div className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Managed Skills</div>
                     {managedSkills.length ? managedSkills.slice(0, 8).map((record) => (
-                      <div key={record.skill_name} className="rounded-xl border border-border bg-muted/10 p-3 text-sm">
+                      <div key={record.skill_name} className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm">
                         <div className="flex items-start justify-between gap-3">
                           <strong>{record.skill_name}</strong>
                           <span className="text-muted-foreground">{record.installed_revision || "--"}</span>
@@ -1978,7 +1995,7 @@ export function SettingsDrawer({
                         </div>
                       </div>
                     )) : (
-                      <div className="rounded-xl border border-border bg-muted/10 p-3 text-sm text-muted-foreground">No managed records yet.</div>
+                      <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm text-muted-foreground">No managed records yet.</div>
                     )}
                   </div>
 
@@ -1988,7 +2005,7 @@ export function SettingsDrawer({
                       <button
                         key={snapshot.source.source_id}
                         type="button"
-                        className="rounded-xl border border-border bg-muted/10 p-3 text-left transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                        className="rounded-lg border border-transparent bg-transparent p-3 text-left transition-colors hover:bg-accent"
                         onClick={() => {
                           setSkillSyncSourceId(snapshot.source.source_id);
                           setSkillSyncSourceKind(snapshot.source.source_kind);
@@ -2004,12 +2021,12 @@ export function SettingsDrawer({
                         <div className="mt-1 break-all text-xs text-muted-foreground">{snapshot.source.locator}</div>
                       </button>
                     )) : (
-                      <div className="rounded-xl border border-border bg-muted/10 p-3 text-sm text-muted-foreground">No source index cached yet.</div>
+                      <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm text-muted-foreground">No source index cached yet.</div>
                     )}
                   </div>
                 </div>
 
-                <div className="grid gap-4 rounded-2xl border border-border bg-muted/10 p-4">
+                <div className="grid gap-4 rounded-xl border border-border/35 bg-muted/8 p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="m-0 text-xs tracking-widest uppercase text-muted-foreground font-semibold">Remote Install</p>
@@ -2028,7 +2045,7 @@ export function SettingsDrawer({
                       onChange={(event) => setRemoteInstallSkillName(event.target.value)}
                     />
                     <button
-                      className="min-h-[36px] rounded-full px-5 bg-foreground border-foreground text-background text-sm font-semibold inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px disabled:cursor-not-allowed disabled:opacity-60"
+                      className={primaryButtonClass}
                       type="button"
                       disabled={
                         !skillSyncSourceId.trim() ||
@@ -2043,7 +2060,7 @@ export function SettingsDrawer({
                         : "Preview Install"}
                     </button>
                     <button
-                      className="min-h-[36px] rounded-full px-5 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                      className={secondaryButtonClass}
                       type="button"
                       disabled={
                         !skillSyncSourceId.trim() ||
@@ -2058,7 +2075,7 @@ export function SettingsDrawer({
                         : "Preview Update"}
                     </button>
                     <button
-                      className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                      className={secondaryButtonClass}
                       type="button"
                       disabled={
                         !skillsMutationsEnabled ||
@@ -2074,7 +2091,7 @@ export function SettingsDrawer({
                         : "Install To Workspace"}
                     </button>
                     <button
-                      className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                      className={secondaryButtonClass}
                       type="button"
                       disabled={
                         !skillsMutationsEnabled ||
@@ -2090,7 +2107,7 @@ export function SettingsDrawer({
                         : "Update Workspace"}
                     </button>
                     <button
-                      className="min-h-[36px] rounded-full px-4 border border-amber-300 bg-amber-50/80 text-amber-950 text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200 dark:hover:bg-amber-950/60"
+                      className="min-h-[36px] rounded-lg px-4 border border-amber-300 bg-amber-50/80 text-amber-950 text-sm inline-flex items-center justify-center cursor-pointer transition-colors disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200 dark:hover:bg-amber-950/60"
                       type="button"
                       disabled={
                         !skillsMutationsEnabled ||
@@ -2106,7 +2123,7 @@ export function SettingsDrawer({
                         : "Detach Managed"}
                     </button>
                     <button
-                      className="min-h-[36px] rounded-full px-4 border border-red-300 bg-red-50/80 text-red-900 text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-700 dark:bg-red-950/40 dark:text-red-200 dark:hover:bg-red-950/60"
+                      className="min-h-[36px] rounded-lg px-4 border border-red-300 bg-red-50/80 text-red-900 text-sm inline-flex items-center justify-center cursor-pointer transition-colors disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-700 dark:bg-red-950/40 dark:text-red-200 dark:hover:bg-red-950/60"
                       type="button"
                       disabled={
                         !skillsMutationsEnabled ||
@@ -2128,7 +2145,7 @@ export function SettingsDrawer({
                   </div>
 
                   {selectedRemoteSourceEntry ? (
-                    <div className="rounded-xl border border-border bg-card/60 p-3 text-sm">
+                    <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm">
                       <div className="flex items-start justify-between gap-3">
                         <strong>{selectedRemoteSourceEntry.skill_name}</strong>
                         <span className="text-muted-foreground">
@@ -2143,7 +2160,7 @@ export function SettingsDrawer({
                       </div>
                     </div>
                   ) : (
-                    <div className="rounded-xl border border-border bg-card/60 p-3 text-sm text-muted-foreground">
+                    <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm text-muted-foreground">
                       Type a skill name from the selected source index to preview or apply a remote install.
                     </div>
                   )}
@@ -2163,10 +2180,10 @@ export function SettingsDrawer({
                               key={entry.skill_name}
                               type="button"
                               className={cn(
-                                "rounded-xl border p-3 text-left transition-all duration-150",
+                                "rounded-lg border p-3 text-left transition-colors",
                                 selected
-                                  ? "border-foreground bg-accent"
-                                  : "border-border bg-card/60 hover:-translate-y-px hover:bg-accent",
+                                  ? "border-border/70 bg-accent"
+                                  : "border-transparent bg-transparent hover:bg-accent",
                               )}
                               onClick={() => setRemoteInstallSkillName(entry.skill_name)}
                             >
@@ -2190,7 +2207,7 @@ export function SettingsDrawer({
                       <div className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">
                         Hub Policy
                       </div>
-                      <div className="rounded-xl border border-border bg-card/60 p-3 text-sm">
+                      <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm">
                         {skillHubPolicy ? (
                           <div className="grid gap-2 text-muted-foreground">
                             <div>
@@ -2207,9 +2224,9 @@ export function SettingsDrawer({
                             </div>
                           </div>
                         ) : (
-                          <div className="text-muted-foreground">
-                            No hub policy payload loaded yet.
-                          </div>
+                        <div className="text-muted-foreground">
+                          No hub policy payload loaded yet.
+                        </div>
                         )}
                       </div>
                     </div>
@@ -2219,7 +2236,7 @@ export function SettingsDrawer({
                         Distribution Snapshot
                       </div>
                       {selectedRemoteDistribution ? (
-                        <div className="rounded-xl border border-border bg-card/60 p-3 text-sm">
+                        <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm">
                           <div className="flex items-center justify-between gap-3">
                             <strong>{selectedRemoteDistribution.skill_name}</strong>
                             <span
@@ -2247,7 +2264,7 @@ export function SettingsDrawer({
                           ) : null}
                         </div>
                       ) : (
-                        <div className="rounded-xl border border-border bg-card/60 p-3 text-sm text-muted-foreground">
+                        <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm text-muted-foreground">
                           No resolved distribution recorded for the current remote skill yet.
                         </div>
                       )}
@@ -2258,7 +2275,7 @@ export function SettingsDrawer({
                         Artifact Cache
                       </div>
                       {selectedRemoteArtifactCache ? (
-                        <div className="rounded-xl border border-border bg-card/60 p-3 text-sm">
+                        <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm">
                           <div className="flex items-center justify-between gap-3">
                             <strong>{selectedRemoteArtifactCache.artifact.artifact_id}</strong>
                             <span
@@ -2292,7 +2309,7 @@ export function SettingsDrawer({
                           )}
                         </div>
                       ) : (
-                        <div className="rounded-xl border border-border bg-card/60 p-3 text-sm text-muted-foreground">
+                        <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm text-muted-foreground">
                           No artifact cache entry captured yet for the current remote skill.
                         </div>
                       )}
@@ -2303,7 +2320,7 @@ export function SettingsDrawer({
                         Lifecycle State
                       </div>
                       {selectedRemoteLifecycle ? (
-                        <div className="rounded-xl border border-border bg-card/60 p-3 text-sm">
+                        <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm">
                           <div className="flex items-center justify-between gap-3">
                             <strong>{selectedRemoteLifecycle.skill_name}</strong>
                             <span
@@ -2329,7 +2346,7 @@ export function SettingsDrawer({
                           )}
                         </div>
                       ) : (
-                        <div className="rounded-xl border border-border bg-card/60 p-3 text-sm text-muted-foreground">
+                        <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm text-muted-foreground">
                           No lifecycle record captured yet for the current remote skill.
                         </div>
                       )}
@@ -2338,13 +2355,13 @@ export function SettingsDrawer({
                 </div>
 
                 {skillSyncPlan ? (
-                  <div className="grid gap-3 rounded-2xl border border-border bg-muted/10 p-4">
+                  <div className="grid gap-3 rounded-xl border border-border/35 bg-muted/8 p-4">
                     <div className="flex items-center justify-between gap-3">
                       <strong>Sync Plan · {skillSyncPlan.source_id}</strong>
                       <span className="text-sm text-muted-foreground">{skillSyncPlan.entries.length} entries</span>
                     </div>
                     {skillSyncPlan.entries.length ? skillSyncPlan.entries.map((entry) => (
-                      <div key={`${entry.skill_name}:${entry.action}`} className="rounded-xl border border-border bg-card/60 p-3 text-sm">
+                      <div key={`${entry.skill_name}:${entry.action}`} className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm">
                         <div className="flex items-start justify-between gap-3">
                           <strong>{entry.skill_name}</strong>
                           <span className="text-xs uppercase tracking-wide text-muted-foreground">{entry.action}</span>
@@ -2352,13 +2369,13 @@ export function SettingsDrawer({
                         <div className="mt-2 text-muted-foreground">{entry.reason}</div>
                       </div>
                     )) : (
-                      <div className="rounded-xl border border-border bg-card/60 p-3 text-sm text-muted-foreground">This source currently produces an empty plan.</div>
+                      <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm text-muted-foreground">This source currently produces an empty plan.</div>
                     )}
                   </div>
                 ) : null}
 
                 {remoteInstallPlan ? (
-                  <div className="grid gap-3 rounded-2xl border border-border bg-muted/10 p-4">
+                  <div className="grid gap-3 rounded-xl border border-border/35 bg-muted/8 p-4">
                     <div className="flex items-center justify-between gap-3">
                       <strong>
                         Remote Install Plan · {remoteInstallPlan.entry.skill_name}
@@ -2393,7 +2410,7 @@ export function SettingsDrawer({
                 ) : null}
 
                 {skillGuardTarget ? (
-                  <div className="rounded-2xl border border-border bg-muted/10 px-4 py-3 text-sm text-muted-foreground">
+                  <div className={mutedCardClass}>
                     Latest guard run targeted <code>{skillGuardTarget}</code> and returned{" "}
                     {skillGuardReports.length} report{skillGuardReports.length === 1 ? "" : "s"}.
                     The full result is now folded into the governance timeline below.
@@ -2427,10 +2444,10 @@ export function SettingsDrawer({
                               key={skill.name}
                               type="button"
                               className={cn(
-                                "rounded-xl border px-3 py-2.5 text-left transition-all duration-150",
+                                "rounded-lg border px-3 py-2.5 text-left transition-colors",
                                 selected
-                                  ? "border-foreground bg-accent"
-                                  : "border-border bg-card/70 hover:-translate-y-px hover:bg-accent",
+                                  ? "border-border/70 bg-accent"
+                                  : "border-transparent bg-transparent hover:bg-accent",
                               )}
                               onClick={() => setSelectedSkillName(skill.name)}
                             >
@@ -2494,13 +2511,13 @@ export function SettingsDrawer({
                       </div>
                     </div>
                   ) : (
-                    <p className="rounded-2xl border border-border bg-card/70 px-4 py-6 text-sm text-muted-foreground">
+                    <p className="rounded-xl border border-border/35 bg-background/60 px-4 py-6 text-sm text-muted-foreground">
                       No skills discovered yet.
                     </p>
                   )}
                 </div>
 
-                <div className="grid gap-3 rounded-2xl border border-border bg-card/70 p-5">
+                <div className={sectionCardClass}>
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="m-0 text-xs tracking-widest uppercase text-muted-foreground font-semibold">Create Skill</p>
@@ -2526,7 +2543,7 @@ export function SettingsDrawer({
                     onChange={(event) => setNewSkillCategory(event.target.value)}
                   />
                   <textarea
-                    className="min-h-40 w-full resize-y rounded-2xl border border-border bg-card/80 p-3.5 text-foreground leading-relaxed font-mono text-sm"
+                    className={editorTextareaClass}
                     placeholder="Skill body"
                     value={newSkillBody}
                     onChange={(event) => setNewSkillBody(event.target.value)}
@@ -2534,7 +2551,7 @@ export function SettingsDrawer({
                   />
                   <div className="flex items-center gap-2">
                     <button
-                      className="min-h-[36px] rounded-full px-5 bg-foreground border-foreground text-background text-sm font-semibold inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px"
+                      className={primaryButtonClass}
                       type="button"
                       disabled={
                         !skillsMutationsEnabled ||
@@ -2552,7 +2569,7 @@ export function SettingsDrawer({
                   </div>
                 </div>
 
-                <div className="grid gap-3 rounded-2xl border border-border bg-card/70 p-5">
+                <div className={sectionCardClass}>
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="m-0 text-xs tracking-widest uppercase text-muted-foreground font-semibold">Edit Skill</p>
@@ -2620,7 +2637,7 @@ export function SettingsDrawer({
                             </div>
                           );
                         })()}
-                        <div className="grid gap-2 rounded-xl border border-border bg-muted/10 p-3 text-sm text-muted-foreground">
+                        <div className="grid gap-2 rounded-lg border border-border/35 bg-muted/8 p-3 text-sm text-muted-foreground">
                           <div className="break-all">
                             <strong>Location:</strong> {selectedSkillEntry.location}
                           </div>
@@ -2646,7 +2663,7 @@ export function SettingsDrawer({
                           <p className="m-0 text-sm text-muted-foreground">Loading skill source...</p>
                         ) : (
                           <textarea
-                            className="min-h-[26rem] w-full resize-y rounded-2xl border border-border bg-card/80 p-3.5 text-foreground leading-relaxed font-mono text-sm"
+                            className="min-h-[26rem] w-full resize-y rounded-xl border border-border/45 bg-background/78 p-3.5 text-foreground leading-relaxed font-mono text-sm"
                             value={skillEditorContent}
                             onChange={(event) => setSkillEditorContent(event.target.value)}
                             spellCheck={false}
@@ -2656,7 +2673,7 @@ export function SettingsDrawer({
 
                         <div className="flex items-center gap-2">
                           <button
-                            className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                            className={secondaryButtonClass}
                             type="button"
                             disabled={busyKey === `skill:guard:skill ${selectedSkillEntry.name}`}
                             onClick={() => void runSelectedSkillGuard()}
@@ -2664,7 +2681,7 @@ export function SettingsDrawer({
                             {busyKey === `skill:guard:skill ${selectedSkillEntry.name}` ? "Scanning..." : "Run Guard Check"}
                           </button>
                           <button
-                            className="min-h-[36px] rounded-full px-5 bg-foreground border-foreground text-background text-sm font-semibold inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px disabled:cursor-not-allowed disabled:opacity-60"
+                            className={primaryButtonClass}
                             type="button"
                             disabled={
                               !skillsMutationsEnabled ||
@@ -2677,7 +2694,7 @@ export function SettingsDrawer({
                             {busyKey === `skill:edit:${selectedSkillEntry.name}` ? "Saving..." : "Save Skill"}
                           </button>
                           <button
-                            className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                            className={secondaryButtonClass}
                             type="button"
                             disabled={
                               !skillsMutationsEnabled ||
@@ -2691,7 +2708,7 @@ export function SettingsDrawer({
                         </div>
                       </>
                     ) : (
-                      <p className="rounded-2xl border border-border bg-muted/10 px-4 py-6 text-sm text-muted-foreground">
+                      <p className="rounded-xl border border-border/35 bg-muted/8 px-4 py-6 text-sm text-muted-foreground">
                         Select a skill from the catalog to inspect or edit its raw <code>SKILL.md</code>.
                       </p>
                     )}
@@ -2754,7 +2771,7 @@ export function SettingsDrawer({
                 <div key={key} className="grid gap-3 col-span-full">
                   <label>{key}</label>
                   <textarea
-                    className="min-h-40 w-full resize-y rounded-2xl border border-border bg-card/80 p-3.5 text-foreground leading-relaxed font-mono text-sm"
+                    className={editorTextareaClass}
                     value={mcpDrafts[key] ?? ""}
                     onChange={(event) => setMcpDrafts((current) => ({ ...current, [key]: event.target.value }))}
                     spellCheck={false}
@@ -2790,7 +2807,7 @@ export function SettingsDrawer({
                   onChange={(event) => setNewMcpKey(event.target.value)}
                 />
                 <textarea
-                  className="min-h-40 w-full resize-y rounded-2xl border border-border bg-card/80 p-3.5 text-foreground leading-relaxed font-mono text-sm"
+                  className={editorTextareaClass}
                   value={newMcpDraft}
                   onChange={(event) => setNewMcpDraft(event.target.value)}
                   spellCheck={false}
@@ -2838,7 +2855,7 @@ export function SettingsDrawer({
                 <div key={key} className="grid gap-3 col-span-full">
                   <label>{key}</label>
                   <textarea
-                    className="min-h-40 w-full resize-y rounded-2xl border border-border bg-card/80 p-3.5 text-foreground leading-relaxed font-mono text-sm"
+                    className={editorTextareaClass}
                     value={pluginDrafts[key] ?? ""}
                     onChange={(event) => setPluginDrafts((current) => ({ ...current, [key]: event.target.value }))}
                     spellCheck={false}
@@ -2874,7 +2891,7 @@ export function SettingsDrawer({
                   onChange={(event) => setNewPluginKey(event.target.value)}
                 />
                 <textarea
-                  className="min-h-40 w-full resize-y rounded-2xl border border-border bg-card/80 p-3.5 text-foreground leading-relaxed font-mono text-sm"
+                  className={editorTextareaClass}
                   value={newPluginDraft}
                   onChange={(event) => setNewPluginDraft(event.target.value)}
                   spellCheck={false}

@@ -84,9 +84,9 @@ export function SchedulerStageCard({
   return (
     <article
       className={cn(
-        "rounded-2xl border border-border bg-card/70 p-4 grid gap-3.5 bg-gradient-to-b from-card/95 to-card/85",
+        "rounded-xl border border-border/40 bg-card/72 p-4 grid gap-3.5",
         (message.role ?? "assistant") === "user" && "bg-primary/10",
-        highlighted && "border-primary/30 shadow-[0_0_0_2px_var(--ring)] shadow-lg",
+        highlighted && "border-primary/35 bg-accent/45 shadow-sm",
       )}
       data-testid="scheduler-stage-card"
       data-feed-id={message.feedId}
@@ -132,7 +132,7 @@ export function SchedulerStageCard({
         </div>
         <div className="flex flex-wrap gap-1.5">
           {chips.map((chip, index) => (
-            <span key={`${message.feedId}-chip-${index}`} className="rounded-full border border-border bg-card/70 px-3 py-2">
+            <span key={`${message.feedId}-chip-${index}`} className="roc-pill-outline px-3 py-2">
               {chip}
             </span>
           ))}
@@ -178,14 +178,14 @@ export function SchedulerStageCard({
       {tokens.length ? (
         <div className="flex flex-wrap gap-1.5">
           {tokens.map((token) => (
-            <span key={`${message.feedId}-${token}`} className="rounded-full border border-border bg-card/70 px-3 py-2">
+            <span key={`${message.feedId}-${token}`} className="roc-pill-outline px-3 py-2">
               {token}
             </span>
           ))}
         </div>
       ) : null}
       {message.decision ? (
-        <section className="rounded-xl border border-border bg-card/60 p-3 grid gap-2">
+        <section className="rounded-lg border border-border/35 bg-background/65 p-3 grid gap-2">
           {message.decision.title ? <h4>{message.decision.title}</h4> : null}
           {message.decision.fields?.length ? (
             <dl className="mt-3 grid gap-2">
@@ -198,7 +198,7 @@ export function SchedulerStageCard({
             </dl>
           ) : null}
           {message.decision.sections?.map((section, index) => (
-            <details key={`${message.feedId}-decision-section-${index}`} className="rounded-lg border border-border bg-card/50 p-2.5" open>
+            <details key={`${message.feedId}-decision-section-${index}`} className="rounded-md border border-border/35 bg-muted/10 p-2.5" open>
               <summary>{section.title || `Section ${index + 1}`}</summary>
               <pre>{section.body || ""}</pre>
             </details>
@@ -206,13 +206,13 @@ export function SchedulerStageCard({
         </section>
       ) : null}
       {message.activity ? (
-        <details className="rounded-lg border border-border bg-card/50 p-2.5" open>
+        <details className="rounded-md border border-border/35 bg-muted/10 p-2.5" open>
           <summary>Activity</summary>
           <pre>{message.activity}</pre>
         </details>
       ) : null}
       {message.text?.trim() ? (
-        <details className="rounded-lg border border-border bg-card/50 p-2.5">
+        <details className="rounded-md border border-border/35 bg-muted/10 p-2.5">
           <summary>Raw Block</summary>
           <pre>{message.text}</pre>
         </details>

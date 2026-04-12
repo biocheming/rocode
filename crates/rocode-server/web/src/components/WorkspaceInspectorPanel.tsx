@@ -67,12 +67,15 @@ interface WorkspaceInspectorPanelProps {
 
 function InspectorLoadingCard({ label }: { label: string }) {
   return (
-    <div className="rounded-2xl border border-border bg-card/75 backdrop-blur-sm shadow-lg p-5 grid gap-2.5 text-muted-foreground">
+    <div className="roc-panel p-5 grid gap-2.5 text-muted-foreground">
       <h3>Loading {label}...</h3>
       <p>This panel is being loaded as a separate chunk.</p>
     </div>
   );
 }
+
+const workspaceActionButtonClass =
+  "roc-action min-h-[42px] px-4 cursor-pointer transition-colors";
 
 export function WorkspaceInspectorPanel({
   workspaceLoading,
@@ -116,18 +119,18 @@ export function WorkspaceInspectorPanel({
 
   return (
     <div className="flex flex-col gap-5 min-h-0 overflow-y-auto p-5" data-testid="workspace-inspector">
-      <div className="rounded-2xl border border-border bg-card/75 backdrop-blur-sm shadow-lg p-5 grid gap-3 min-h-0" data-testid="workspace-tree-card">
+      <div className="roc-panel p-5 grid gap-3 min-h-0" data-testid="workspace-tree-card">
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Workspace</p>
             <h3>File Tree</h3>
           </div>
           <div className="flex items-center flex-wrap gap-2.5 justify-end">
-            <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">
+            <span className="roc-pill px-3 py-1.5 text-xs">
               {workspaceLoading ? "loading" : `${fileTree?.children?.length ?? 0} items`}
             </span>
             <button
-              className="min-h-[42px] rounded-full px-4 border border-border bg-card/70 text-foreground inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px"
+              className={workspaceActionButtonClass}
               type="button"
               data-testid="workspace-new-file"
               onClick={() => void onCreateWorkspaceFile()}
@@ -135,7 +138,7 @@ export function WorkspaceInspectorPanel({
               New File
             </button>
             <button
-              className="min-h-[42px] rounded-full px-4 border border-border bg-card/70 text-foreground inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px"
+              className={workspaceActionButtonClass}
               type="button"
               data-testid="workspace-new-folder"
               onClick={() => void onCreateWorkspaceDirectory()}
@@ -143,7 +146,7 @@ export function WorkspaceInspectorPanel({
               New Folder
             </button>
             <button
-              className="min-h-[42px] rounded-full px-4 border border-border bg-card/70 text-foreground inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px"
+              className={workspaceActionButtonClass}
               type="button"
               data-testid="workspace-upload"
               disabled={fileUploading}
@@ -184,19 +187,19 @@ export function WorkspaceInspectorPanel({
         </div>
       </div>
 
-      <div className="rounded-2xl border border-border bg-card/75 backdrop-blur-sm shadow-lg p-5 grid gap-3 min-h-0" data-testid="workspace-editor-card">
+      <div className="roc-panel p-5 grid gap-3 min-h-0" data-testid="workspace-editor-card">
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Workspace</p>
             <h3>{selectedWorkspaceFilename || "Workspace Preview"}</h3>
           </div>
           <div className="flex items-center flex-wrap gap-2.5 justify-end">
-            <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">
+            <span className="roc-pill px-3 py-1.5 text-xs">
               {selectedWorkspaceType === "directory" ? "directory" : workspaceDirty ? "dirty" : "saved"}
             </span>
-            {selectedWorkspacePath && workspaceLinkLabel ? <span className="rounded-full border border-border bg-muted px-3 py-1.5 text-xs text-muted-foreground font-medium">{workspaceLinkLabel}</span> : null}
+            {selectedWorkspacePath && workspaceLinkLabel ? <span className="roc-pill px-3 py-1.5 text-xs">{workspaceLinkLabel}</span> : null}
             <button
-              className="min-h-[42px] rounded-full px-4 border border-border bg-card/70 text-foreground inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px"
+              className={workspaceActionButtonClass}
               type="button"
               data-testid="workspace-insert-reference"
               disabled={!selectedWorkspacePath}
@@ -205,7 +208,7 @@ export function WorkspaceInspectorPanel({
               Insert @
             </button>
             <button
-              className="min-h-[42px] rounded-full px-4 border border-border bg-card/70 text-foreground inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px"
+              className={workspaceActionButtonClass}
               type="button"
               data-testid="workspace-attach"
               disabled={!selectedWorkspacePath}
@@ -214,7 +217,7 @@ export function WorkspaceInspectorPanel({
               Attach
             </button>
             <button
-              className="min-h-[42px] rounded-full px-4 border border-border bg-card/70 text-foreground inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px"
+              className={workspaceActionButtonClass}
               type="button"
               data-testid="workspace-download"
               disabled={!selectedFilePath || fileDeleting || fileSaving}
@@ -223,7 +226,7 @@ export function WorkspaceInspectorPanel({
               Download
             </button>
             <button
-              className="min-h-[42px] rounded-full px-4 border border-border bg-card/70 text-foreground inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px"
+              className={workspaceActionButtonClass}
               type="button"
               data-testid="workspace-delete"
               disabled={!selectedWorkspacePath || selectedWorkspaceIsRoot || fileDeleting || fileSaving}
@@ -232,7 +235,7 @@ export function WorkspaceInspectorPanel({
               {fileDeleting ? "Deleting..." : "Delete"}
             </button>
             <button
-              className="min-h-[42px] rounded-full px-4 border border-border bg-card/70 text-foreground inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px"
+              className={workspaceActionButtonClass}
               type="button"
               data-testid="workspace-save"
               disabled={!selectedFilePath || fileLoading || fileSaving || fileDeleting || !workspaceDirty}
@@ -246,7 +249,7 @@ export function WorkspaceInspectorPanel({
           <>
             <p className="mt-2.5 text-sm leading-relaxed text-muted-foreground break-all">{selectedFilePath}</p>
             <textarea
-              className="mt-3.5 min-h-80 w-full resize-y rounded-2xl border border-border bg-card/80 p-3.5 text-foreground leading-relaxed font-mono text-sm"
+              className="roc-textarea mt-3.5 min-h-80 w-full resize-y p-3.5 text-foreground leading-relaxed font-mono text-sm"
               data-testid="workspace-editor"
               value={selectedFileContent}
               onChange={(event) => onWorkspaceContentChange(event.target.value)}

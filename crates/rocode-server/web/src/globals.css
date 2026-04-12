@@ -51,7 +51,7 @@
 :root,
 html[data-theme="daylight"] {
   color-scheme: light;
-  --radius: 0.625rem;
+  --radius: 0.5rem;
   --background: oklch(0.975 0.005 85);
   --foreground: oklch(0.18 0.02 260);
   --card: oklch(0.99 0.003 85);
@@ -202,12 +202,50 @@ html[data-theme="midnight"] {
   }
 }
 
+@layer components {
+  .roc-panel {
+    @apply rounded-xl border border-border/45 bg-card/72 shadow-sm;
+  }
+
+  .roc-subpanel {
+    @apply rounded-lg border border-border/35 bg-muted/10;
+  }
+
+  .roc-item {
+    @apply rounded-lg border border-transparent bg-transparent transition-colors;
+  }
+
+  .roc-item:hover {
+    @apply bg-accent/45;
+  }
+
+  .roc-item-active {
+    @apply border-border/70 bg-accent/60 shadow-sm;
+  }
+
+  .roc-pill {
+    @apply rounded-full bg-muted/55 px-2.5 py-1 text-[11px] font-medium text-muted-foreground;
+  }
+
+  .roc-pill-outline {
+    @apply rounded-full border border-border/45 bg-background/70 px-2.5 py-1 text-[11px] font-medium text-muted-foreground;
+  }
+
+  .roc-action {
+    @apply inline-flex items-center justify-center rounded-lg border border-border/45 bg-background/70 text-foreground transition-colors hover:bg-accent;
+  }
+
+  .roc-textarea {
+    @apply rounded-xl border border-border/45 bg-background/78;
+  }
+}
+
 /* Terminal viewport xterm styling */
 .terminal-viewport .xterm {
   height: 100%;
 }
 .terminal-viewport .xterm-viewport {
-  border-radius: 0.75rem;
+  border-radius: 0.5rem;
 }
 
 /* Custom scrollbar */
