@@ -1,11 +1,14 @@
 use crate::{
-    SkillDetailView, SkillHermesMetadata, SkillMetadataBlocks, SkillPrerequisites,
-    SkillReadinessStatus, SkillRequiredEnvironmentVariable, SkillRocodeMetadata,
+    write::parse_skill_frontmatter_lines, SkillDetailView,
+    SkillFrontmatter as FormalSkillFrontmatter, SkillHermesMetadata, SkillMetadataBlocks,
+    SkillPrerequisites, SkillReadinessStatus, SkillRequiredEnvironmentVariable,
+    SkillRocodeMetadata,
 };
 use serde::de::DeserializeOwned;
 use serde_yaml::Value as YamlValue;
 use std::env;
 use std::fs;
+use std::io;
 use std::path::Path;
 
 pub(crate) fn read_skill_detail(skill_markdown: &Path) -> Result<SkillDetailView, std::io::Error> {
@@ -13,16 +16,16 @@ pub(crate) fn read_skill_detail(skill_markdown: &Path) -> Result<SkillDetailView
         return Ok(SkillDetailView::default());
     };
 
-    let version = parse_optional_scalar(&frontmatter, "version");
-    let author = parse_optional_scalar(&frontmatter, "author");
-    let license = parse_optional_scalar(&frontmatter, "license");
-    let platforms = parse_top_level_list(&frontmatter, "platforms");
-    let tags = parse_hermes_list(&frontmatter, "tags");
-    let related_skills = parse_hermes_list(&frontmatter, "related_skills");
-    let prerequisites = parse_prerequisites(&frontmatter);
-    let metadata = parse_metadata_blocks(&frontmatter, &tags, &related_skills);
-    let required_environment_variables = parse_required_environment_variables(&frontmatter);
-    let required_commands = parse_required_commands(&frontmatter);
+    let version = project_optional_scalar(&frontmatter, |value| value.version.clone(), "version");
+    let author = project_optional_scalar(&frontmatter, |value| value.author.clone(), "author");
+    let license = project_optional_scalar(&frontmatter, |value| value.license.clone(), "license");
+    let platforms = project_string_list(&frontmatter, |value| value.platforms.clone(), "platforms");
+    let tags = project_tags(&frontmatter);
+    let related_skills = project_related_skills(&frontmatter);
+    let prerequisites = project_prerequisites(&frontmatter);
+    let metadata = project_metadata_blocks(&frontmatter, &tags, &related_skills);
+    let required_environment_variables = project_required_environment_variables(&frontmatter);
+    let required_commands = project_required_commands(&frontmatter);
     let missing_required_environment_variables = required_environment_variables
         .iter()
         .filter(|entry| env::var_os(&entry.name).is_none())
@@ -60,19 +63,27 @@ pub(crate) fn read_skill_detail(skill_markdown: &Path) -> Result<SkillDetailView
 }
 
 #[derive(Debug, Clone)]
-struct SkillFrontmatter {
+struct SkillFrontmatterSource {
     raw: String,
     parsed: Option<YamlValue>,
+    formal: FormalSkillFrontmatter,
 }
 
 fn read_skill_frontmatter(
     skill_markdown: &Path,
-) -> Result<Option<SkillFrontmatter>, std::io::Error> {
+) -> Result<Option<SkillFrontmatterSource>, std::io::Error> {
     let Some(raw) = read_frontmatter_block(skill_markdown)? else {
         return Ok(None);
     };
+    let lines = raw.lines().map(|line| line.to_string()).collect::<Vec<_>>();
     let parsed = serde_yaml::from_str::<YamlValue>(&raw).ok();
-    Ok(Some(SkillFrontmatter { raw, parsed }))
+    let formal = parse_skill_frontmatter_lines(&lines)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
+    Ok(Some(SkillFrontmatterSource {
+        raw,
+        parsed,
+        formal,
+    }))
 }
 
 fn read_frontmatter_block(skill_markdown: &Path) -> Result<Option<String>, std::io::Error> {
@@ -94,7 +105,128 @@ fn read_frontmatter_block(skill_markdown: &Path) -> Result<Option<String>, std::
     Ok(None)
 }
 
-fn parse_hermes_list(frontmatter: &SkillFrontmatter, key: &str) -> Vec<String> {
+fn project_optional_scalar(
+    frontmatter: &SkillFrontmatterSource,
+    formal_value: impl Fn(&FormalSkillFrontmatter) -> Option<String>,
+    key: &str,
+) -> Option<String> {
+    formal_value(&frontmatter.formal)
+        .filter(|value| !value.is_empty())
+        .or_else(|| parse_optional_scalar(frontmatter, key))
+}
+
+fn project_string_list(
+    frontmatter: &SkillFrontmatterSource,
+    formal_value: impl Fn(&FormalSkillFrontmatter) -> Vec<String>,
+    key: &str,
+) -> Vec<String> {
+    let values = formal_value(&frontmatter.formal);
+    if !values.is_empty() {
+        return values;
+    }
+    parse_top_level_list(frontmatter, key)
+}
+
+fn project_tags(frontmatter: &SkillFrontmatterSource) -> Vec<String> {
+    if let Some(tags) = frontmatter
+        .formal
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.hermes.as_ref())
+        .map(|metadata| metadata.tags.clone())
+        .filter(|value| !value.is_empty())
+    {
+        return tags;
+    }
+    if !frontmatter.formal.tags.is_empty() {
+        return frontmatter.formal.tags.clone();
+    }
+    parse_hermes_list(frontmatter, "tags")
+}
+
+fn project_related_skills(frontmatter: &SkillFrontmatterSource) -> Vec<String> {
+    if let Some(related_skills) = frontmatter
+        .formal
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.hermes.as_ref())
+        .map(|metadata| metadata.related_skills.clone())
+        .filter(|value| !value.is_empty())
+    {
+        return related_skills;
+    }
+    if !frontmatter.formal.related_skills.is_empty() {
+        return frontmatter.formal.related_skills.clone();
+    }
+    parse_hermes_list(frontmatter, "related_skills")
+}
+
+fn project_prerequisites(frontmatter: &SkillFrontmatterSource) -> Option<SkillPrerequisites> {
+    if let Some(prerequisites) = frontmatter
+        .formal
+        .prerequisites
+        .clone()
+        .filter(|value| !value.env_vars.is_empty() || !value.commands.is_empty())
+    {
+        return Some(prerequisites);
+    }
+    parse_prerequisites(frontmatter)
+}
+
+fn project_metadata_blocks(
+    frontmatter: &SkillFrontmatterSource,
+    tags: &[String],
+    related_skills: &[String],
+) -> Option<SkillMetadataBlocks> {
+    if let Some(metadata) = frontmatter
+        .formal
+        .metadata
+        .clone()
+        .filter(|value| value.hermes.is_some() || value.rocode.is_some())
+    {
+        return Some(metadata);
+    }
+    parse_metadata_blocks(frontmatter, tags, related_skills)
+}
+
+fn project_required_environment_variables(
+    frontmatter: &SkillFrontmatterSource,
+) -> Vec<SkillRequiredEnvironmentVariable> {
+    if !frontmatter.formal.required_environment_variables.is_empty() {
+        return frontmatter.formal.required_environment_variables.clone();
+    }
+    if let Some(prerequisites) = frontmatter.formal.prerequisites.as_ref() {
+        if !prerequisites.env_vars.is_empty() {
+            return prerequisites
+                .env_vars
+                .iter()
+                .cloned()
+                .map(|name| SkillRequiredEnvironmentVariable {
+                    name,
+                    description: None,
+                    prompt: None,
+                    help: None,
+                    required_for: None,
+                })
+                .collect();
+        }
+    }
+    parse_required_environment_variables(frontmatter)
+}
+
+fn project_required_commands(frontmatter: &SkillFrontmatterSource) -> Vec<String> {
+    if !frontmatter.formal.required_commands.is_empty() {
+        return frontmatter.formal.required_commands.clone();
+    }
+    if let Some(prerequisites) = frontmatter.formal.prerequisites.as_ref() {
+        if !prerequisites.commands.is_empty() {
+            return prerequisites.commands.clone();
+        }
+    }
+    parse_required_commands(frontmatter)
+}
+
+fn parse_hermes_list(frontmatter: &SkillFrontmatterSource, key: &str) -> Vec<String> {
     let nested = parse_yaml_list(frontmatter.parsed.as_ref(), &["metadata", "hermes"], key);
     if !nested.is_empty() {
         return nested;
@@ -110,13 +242,13 @@ fn parse_hermes_list(frontmatter: &SkillFrontmatter, key: &str) -> Vec<String> {
     parse_nested_list(&frontmatter.raw, &[], key)
 }
 
-fn parse_optional_scalar(frontmatter: &SkillFrontmatter, key: &str) -> Option<String> {
+fn parse_optional_scalar(frontmatter: &SkillFrontmatterSource, key: &str) -> Option<String> {
     parse_yaml_scalar(frontmatter.parsed.as_ref(), &[], key)
         .or_else(|| parse_top_level_scalar(&frontmatter.raw, key))
         .filter(|value| !value.is_empty())
 }
 
-fn parse_top_level_list(frontmatter: &SkillFrontmatter, key: &str) -> Vec<String> {
+fn parse_top_level_list(frontmatter: &SkillFrontmatterSource, key: &str) -> Vec<String> {
     let values = parse_yaml_list(frontmatter.parsed.as_ref(), &[], key);
     if !values.is_empty() {
         return values;
@@ -124,7 +256,7 @@ fn parse_top_level_list(frontmatter: &SkillFrontmatter, key: &str) -> Vec<String
     parse_nested_list(&frontmatter.raw, &[], key)
 }
 
-fn parse_prerequisites(frontmatter: &SkillFrontmatter) -> Option<SkillPrerequisites> {
+fn parse_prerequisites(frontmatter: &SkillFrontmatterSource) -> Option<SkillPrerequisites> {
     if let Some(parsed) =
         parse_yaml_typed::<SkillPrerequisites>(frontmatter.parsed.as_ref(), &[], "prerequisites")
     {
@@ -143,7 +275,7 @@ fn parse_prerequisites(frontmatter: &SkillFrontmatter) -> Option<SkillPrerequisi
 }
 
 fn parse_metadata_blocks(
-    frontmatter: &SkillFrontmatter,
+    frontmatter: &SkillFrontmatterSource,
     tags: &[String],
     related_skills: &[String],
 ) -> Option<SkillMetadataBlocks> {
@@ -205,7 +337,7 @@ fn parse_metadata_blocks(
     }
 }
 
-fn parse_required_commands(frontmatter: &SkillFrontmatter) -> Vec<String> {
+fn parse_required_commands(frontmatter: &SkillFrontmatterSource) -> Vec<String> {
     let commands = parse_yaml_list(frontmatter.parsed.as_ref(), &[], "required_commands");
     if !commands.is_empty() {
         return commands;
@@ -222,7 +354,7 @@ fn parse_required_commands(frontmatter: &SkillFrontmatter) -> Vec<String> {
 }
 
 fn parse_required_environment_variables(
-    frontmatter: &SkillFrontmatter,
+    frontmatter: &SkillFrontmatterSource,
 ) -> Vec<SkillRequiredEnvironmentVariable> {
     let env_vars = parse_yaml_named_requirement_list(
         frontmatter.parsed.as_ref(),
