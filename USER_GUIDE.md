@@ -1,48 +1,94 @@
 # USER GUIDE - RustingOpenCode (ROCode)
 
-本手册面向日常使用者，覆盖启动、常用命令、scheduler 预设、TUI 交互与故障排查。  
-品牌名为 `RustingOpenCode`（简称 `ROCode`），当前 CLI 命令为 `rocode`。
+本手册面向日常使用者，按“如何启动、如何工作、如何排查”的顺序介绍当前版本的 ROCode。
 
 ## 0. 版本
 
 - 当前版本：`v2026.4.12`
+- 当前 CLI 命令：`rocode`
 
-## 1. 快速启动
+## 1. 先选运行方式
 
-如果你从源码运行：
+### 1.1 TUI
 
-```bash
-cd RustingOpenCode
-cargo run -p rocode-cli -- --help
-```
-
-默认进入 TUI：
+适合日常在本地仓库里交互式工作：
 
 ```bash
-cargo run -p rocode-cli --
+rocode tui
 ```
 
-等价于：
+也可以从源码直接启动：
 
 ```bash
 cargo run -p rocode-cli -- tui
 ```
 
-单次非交互运行：
+### 1.2 单次运行
+
+适合脚本、自动化、CI：
 
 ```bash
-cargo run -p rocode-cli -- run "请总结这个仓库当前风险"
+rocode run "请检查这个仓库里的高风险改动"
 ```
 
-启动 HTTP 服务：
+常用附加参数：
 
 ```bash
-cargo run -p rocode-cli -- serve --port 3000 --hostname 127.0.0.1
+rocode run "..." --model <MODEL>
+rocode run "..." --session <SESSION_ID>
+rocode run "..." --continue
+rocode run "..." --fork
+rocode run "..." --format json
+rocode run "..." --thinking
 ```
 
-## 2. 常用命令
+### 1.3 HTTP Server / Web
 
-### 2.1 会话管理
+启动服务：
+
+```bash
+rocode serve --hostname 127.0.0.1 --port 3000
+```
+
+启动 Web：
+
+```bash
+rocode web --hostname 127.0.0.1 --port 3000
+```
+
+当前 Web 正式入口是 `/`，不是历史过渡路由。
+
+### 1.4 Attach
+
+如果服务已经启动，可以附加：
+
+```bash
+rocode attach http://127.0.0.1:3000
+```
+
+## 2. 最常见的日常操作
+
+### 2.1 查看模型并刷新 provider catalog
+
+```bash
+rocode models
+rocode models --refresh
+rocode models openrouter --refresh --verbose
+```
+
+这组命令会直接反映当前模型目录，而不是只看静态内置列表。
+
+### 2.2 管理认证
+
+```bash
+rocode auth list
+rocode auth login --help
+rocode auth logout --help
+```
+
+如果 provider 连不上，先看 `auth list`，再刷新 `models`。
+
+### 2.3 查看和管理 session
 
 ```bash
 rocode session list
@@ -51,215 +97,272 @@ rocode session show <SESSION_ID>
 rocode session delete <SESSION_ID>
 ```
 
-### 2.2 模型与配置
+### 2.4 查看配置
 
 ```bash
-rocode models
-rocode models --refresh --verbose
 rocode config
+rocode debug paths
+rocode debug config
 ```
 
-### 2.3 认证管理
+如果你不确定当前 runtime 到底读了哪份配置，这三条最有用。
+
+## 3. Workspace / Config 现在是怎么工作的
+
+ROCode 现在区分：
+
+- workspace local authority
+- sandbox `.rocode`
+- project config
+- global config
+- shared / isolated workspace mode
+
+常见规则：
+
+- 当前 workspace 下的 `.rocode/` 是本地运行时 authority
+- 项目配置入口通常是 `rocode.jsonc` / `rocode.json`
+- 全局配置默认在 `~/.config/rocode/rocode.jsonc`
+- 如果当前 workspace 是 isolated 模式，global config 的修改不会自动作用于当前 sandbox runtime
+
+如果你只想影响当前项目，优先改当前 workspace 的配置和 `.rocode/`，不要先改全局。
+
+## 4. TUI 里会看到什么
+
+### 4.1 Session 与忙碌状态
+
+- 当 session 正在运行时，普通输入不会插入当前 workflow 中间
+- 如果系统需要你回答，它应通过正式 question UI 发起
+- scheduler stage transcript 会被投影到主 session，而不是只藏在内部日志里
+
+### 4.2 Slash Command
+
+- TUI、CLI、Web 使用统一 slash command 语义
+- 命令缺参数时，会走 question / 参数补全链路
+- 不再要求每个命令都必须走旧式静态预注册弹窗
+
+### 4.3 Skill 浏览与 Hub
+
+当前 TUI 已能查看：
+
+- resolved skill catalog
+- source index
+- remote distributions
+- artifact cache
+- lifecycle
+- governance timeline
+- hub policy
+
+写操作也已经在 TUI 里闭环，包括 install / update / detach / remove / sync。
+
+## 5. Web 里会看到什么
+
+当前 Web 以当前 workspace 为中心：
+
+- 左侧是当前 workspace 的 session tree
+- settings 会显示 workspace mode / workspace root
+- skills 面板会显示 managed skill、distribution、artifact cache、lifecycle、timeline
+- isolated workspace 模式下会明确提示“当前不会继承 global config”
+
+如果你在 settings 里改的是全局配置，Web 也会提示这些修改是否影响当前 sandbox runtime。
+
+## 6. Skill Hub 使用方式
+
+### 6.1 先看状态
 
 ```bash
-rocode auth list
-rocode auth login --help
-rocode auth logout --help
+rocode skill hub status
+rocode skill hub managed
+rocode skill hub index
+rocode skill hub distributions
+rocode skill hub artifact-cache
+rocode skill hub policy
+rocode skill hub lifecycle
 ```
 
-说明：`auth login/logout` 的具体参数请以 `--help` 输出为准。
+### 6.2 远程安装
 
-### 2.4 MCP 管理
+```bash
+rocode skill hub install-plan \
+  --source-id <id> \
+  --source-kind registry \
+  --locator <locator> \
+  --skill-name <name>
+```
+
+真正写入 workspace：
+
+```bash
+rocode skill hub install-apply \
+  --session-id <session> \
+  --source-id <id> \
+  --source-kind registry \
+  --locator <locator> \
+  --skill-name <name>
+```
+
+### 6.3 更新 / 解绑 / 删除
+
+```bash
+rocode skill hub update-apply --session-id <session> --source-id <id> --source-kind registry --locator <locator> --skill-name <name>
+rocode skill hub detach --session-id <session> --source-id <id> --source-kind registry --locator <locator> --skill-name <name>
+rocode skill hub remove --session-id <session> --source-id <id> --source-kind registry --locator <locator> --skill-name <name>
+```
+
+### 6.4 Policy
+
+当前 artifact policy 已正式可观测：
+
+```bash
+rocode skill hub policy
+```
+
+它会显示：
+
+- artifact cache retention
+- fetch timeout
+- max download bytes
+- max extract bytes
+
+## 7. MCP / Agent / Debug
+
+### 7.1 MCP
 
 ```bash
 rocode mcp list
+rocode mcp add --help
 rocode mcp connect <NAME>
 rocode mcp disconnect <NAME>
-rocode mcp add --help
-rocode mcp auth --help
+rocode mcp auth list
+rocode mcp debug <NAME>
 ```
 
-如果本地服务不在默认地址，可加：
+### 7.2 Agent
 
 ```bash
-rocode mcp --server http://127.0.0.1:3000 list
+rocode agent list
+rocode agent create --help
+rocode debug agent <NAME>
 ```
 
-### 2.5 调试命令
+### 7.3 Debug
+
+常用入口：
 
 ```bash
 rocode debug paths
 rocode debug config
-rocode debug skill
-rocode debug agent
+rocode debug skills --help
+rocode debug docs validate --help
+rocode debug lsp --help
 ```
 
-## 3. Scheduler 预设速览
+如果你在排 skill / provider / workspace / docs 问题，`debug` 基本是第一现场。
 
-当前公开 scheduler 预设共有 4 个：
+## 8. 推荐工作流
 
-- `sisyphus`：偏执行，delegation-first，适合具体 coding / bugfix / repo tasks
-- `prometheus`：偏规划，interview → plan → review → handoff，不直接执行代码实现
-- `atlas`：偏协调，围绕 task ledger、delegation waves、verification 与 synthesis
-- `hephaestus`：偏自主执行，强调深度探索、方案决策、落地与验证
-
-交互上需要注意：
-
-- `Prometheus` 的阻塞性 interview 问题应通过正式 `question` 卡片回答
-- `Atlas` 的 gate Yes / No 是内部 QA rubric，不是用户问卷
-- `Hephaestus` 使用更明确的失败恢复升级协议，而不是泛化重试
-
-补充说明：
-
-- `/autoresearch` 不是第五个公开 preset，也不是一个独立 mode；它是一个命令入口，底层仍然调用 scheduler 配置文件
-- 如果项目里定义了自定义 scheduler profile，命令会解析并把它作为实际执行配置；mode 列表与 `/autoresearch` 的职责不同，不要求一一对应
-
-## 4. TUI 与 Run 常用参数
-
-查看完整参数：
+### 8.1 本地仓库交互开发
 
 ```bash
-rocode tui --help
-rocode run --help
+rocode tui
 ```
 
-高频参数（两者都常用）：
+适合：
 
-- `-m, --model <MODEL>`：指定模型
-- `-c, --continue`：继续最近会话
-- `-s, --session <SESSION>`：继续指定会话
-- `--fork`：分叉会话
-- `--agent <AGENT>`：指定 agent（默认 `build`）
-- `--port <PORT>` / `--hostname <HOSTNAME>`：服务地址参数
+- 边看代码边交互修改
+- 需要 session continuity
+- 需要 question / timeline / runtime telemetry
 
-`run` 额外常用：
+### 8.2 脚本与自动化
 
-- `--format default|json`
-- `-f, --file <FILE>`
-- `--thinking`
-
-## 5. TUI 交互说明
-
-### 5.1 首轮 system prompt
-
-- 首轮 user turn 会显示精简版 system prompt preview
-- 后续 turn 不重复完整展示，以减少视觉噪音
-
-### 5.2 Scheduler stage 投影
-
-- scheduler 的每个 stage transcript 会投影到主 session
-- `route` 阶段会以可读摘要形式展示，而不是原始 JSON
-- `Prometheus` / `Sisyphus` / `Atlas` / `Hephaestus` 的行为仍以各自 preset authority 为准
-
-### 5.3 Busy 与 question 的关系
-
-- 当当前 session `busy` 时，普通输入不会插入到正在运行的 workflow 中，而是进入排队
-- 如果当前 workflow 需要你回答，它应该通过 `question` 卡片发起，而不是要求你在普通输入框里插话
-- question 卡片有选项时会自动追加 `Other (type your own)`，用于自定义答案
-
-### 5.4 Slash Commands 与 `/autoresearch`
-
-- TUI、CLI、Web 三端现在使用统一的 slash command 语义
-- 输入 `/autoresearch` 后，如果参数不完整，会进入标准 question 补参流程
-- 已注册 slash 命令仍然提供提示与建议；未知命令不会强制阻塞普通输入流
-- `/autoresearch` 运行期间，scheduler stage、verification 和 reasoning 会持续投影到当前 session
-
-最小示例：
-
-```text
-/autoresearch --profile autoresearch-run --goal "继续扩写 book/ml_drug_discovery_book.md"
+```bash
+rocode run "..." --format json
 ```
 
-常见前提：
+适合：
 
-- 项目目录内存在 `.rocode/scheduler/autoresearch.jsonc` 或等价 profile
-- profile 中配置了 `verify.command`
-- 如果需要只保留改进结果，应同时配置 metric 提取与 discard/keep 条件
+- CI
+- 批处理
+- 外部系统调用
 
-### 5.5 Web 会话与侧栏
+### 8.3 长时间服务化
 
-- Web 首页以当前 workspace 为主视角
-- 左侧侧栏展示当前 workspace 的 session tree
-- 右侧侧栏展示 workspace 文件树
-- 历史 `/new`、`/web-next` 路由已经收口，默认访问 `/`
+```bash
+rocode serve --hostname 127.0.0.1 --port 3000
+```
 
-## 6. 配置文件位置
+适合：
 
-程序会按优先级合并多份配置（向上查找）：
+- Web
+- 外部 HTTP 客户端
+- 多会话并行观察
 
-- `rocode.jsonc`
-- `rocode.json`
-- `.rocode/rocode.jsonc`
-- `.rocode/rocode.json`
+## 9. 故障排查
 
-全局配置默认位置：
+### 9.1 模型或 provider 不对
 
-- `~/.config/rocode/rocode.jsonc`（或 `.json`）
+按这个顺序查：
 
-建议：先使用项目级最小配置，再逐步增加 provider / mcp / agent / lsp。
+```bash
+rocode auth list
+rocode models --refresh --verbose
+rocode config
+rocode debug paths
+```
 
-项目纯净性说明：
+### 9.2 当前配置和你想的不一样
 
-- 项目级配置入口以 `rocode.jsonc` / `rocode.json` 为准
-- 历史 `opencode` 配置排查建议使用仓库脚本 `scripts/scan_legacy_config.py`
+先看：
 
-## 7. 推荐工作流
+```bash
+rocode debug paths
+rocode debug config
+```
 
-### 7.1 本地交互开发
+重点确认：
 
-1. `cargo run -p rocode-cli --`
-2. 在 TUI 中执行任务
-3. 用 `rocode session list/show` 回看历史
+- 当前 project root
+- 当前 workspace mode
+- 是否存在 `.rocode/`
+- 当前 runtime 是否继承 global config
 
-### 7.2 脚本或集成场景
+### 9.3 Skill Hub 看不到预期状态
 
-1. `rocode serve --port 3000`
-2. 用 `rocode run ... --format json` 或服务 API 集成
-3. 用 `rocode stats` 追踪 token / cost
+按这个顺序查：
 
-### 7.3 文档/书稿的 `autoresearch` 工作流
+```bash
+rocode skill hub index
+rocode skill hub distributions
+rocode skill hub artifact-cache
+rocode skill hub lifecycle
+rocode skill hub policy
+```
 
-1. 在项目内定义 `.rocode/scheduler/autoresearch.jsonc`
-2. 配置 `verify.command`、metric 提取规则、iterationPolicy
-3. 用 `/autoresearch` 或 `rocode run "/autoresearch ..."` 启动
-4. 根据 `stats=`、`gaps=`、章节长度等验证输出持续收敛目标稿件
+如果需要更细：
 
-如果目标是教材或书稿，建议验证器至少约束：
+```bash
+rocode debug skills audit
+rocode debug skills timeline
+```
 
-- 全书总字数
-- 每章最小字数
-- 表格与参考文献数量
-- 近三年论文覆盖
-- 章节固定栏目完整度
+### 9.4 MCP 连不上
 
-## 8. 故障排查
+```bash
+rocode mcp list
+rocode mcp debug <NAME>
+rocode mcp auth list
+```
 
-### 8.1 端口冲突
+### 9.5 LSP / docs 问题
 
-- 换端口：`rocode serve --port 3001`
+```bash
+rocode debug lsp --help
+rocode debug docs validate --help
+```
 
-### 8.2 模型不可用
+## 10. 继续阅读
 
-1. `rocode auth list`
-2. `rocode models --refresh`
-3. `rocode config` 检查 provider 配置是否生效
-
-### 8.3 配置疑难
-
-1. `rocode debug paths` 查看配置搜索路径
-2. `rocode debug config` 查看最终合并结果
-
-### 8.4 MCP 连接异常
-
-1. `rocode mcp list`
-2. `rocode mcp debug <NAME>`
-3. `rocode mcp connect <NAME>`
-
-## 9. 文档索引
-
-- 项目总览：`README.md`
-- 文档总索引：`docs/README.md`
-- Scheduler 文档：`docs/examples/scheduler/README.md`
-- `/autoresearch` 统一设计：`docs/autoresearch-command-unified-design.md`
-- Context Docs：`docs/examples/context_docs/README.md`
-- 插件 / skill / Rust 示例：`docs/plugins_example/README.md`
+- 项目总览：[README.md](/home/biocheming/tests/python/rust/rocode/README.md)
+- 文档索引：[docs/README.md](/home/biocheming/tests/python/rust/rocode/docs/README.md)
+- Scheduler 示例：[docs/examples/scheduler/README.md](/home/biocheming/tests/python/rust/rocode/docs/examples/scheduler/README.md)
+- Context Docs：[docs/examples/context_docs/README.md](/home/biocheming/tests/python/rust/rocode/docs/examples/context_docs/README.md)
+- 插件 / skill 示例：[docs/plugins_example/README.md](/home/biocheming/tests/python/rust/rocode/docs/plugins_example/README.md)

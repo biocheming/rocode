@@ -1,264 +1,286 @@
 # RustingOpenCode (ROCode)
 
-**A Rusted OpenCode Version**
+RustingOpenCode（简称 `ROCode`）是一个面向本地仓库工作的 Rust 编码代理系统。它提供统一的 CLI、TUI、HTTP Server 和 Web 界面，并把 session、scheduler、tool、provider、skill、runtime telemetry 这些能力收敛到同一套 authority 驱动的运行模型中。
 
-RustingOpenCode（简称 ROCode）是 OpenCode 的 Rust 实现与演进版本，提供完整的 CLI / TUI / Server 工作流，用于本地 AI 编码代理、会话管理、工具调用、MCP/LSP 集成和插件扩展。
-
-## 当前状态
+## 当前版本
 
 - 软件名：`RustingOpenCode` / `ROCode`
-- 版本标识：`v2026.4.12`
+- 版本：`v2026.4.12`
 - 可执行命令：`rocode`
-- 公共 scheduler presets：`sisyphus` / `prometheus` / `atlas` / `hephaestus`
+- 当前公开 scheduler presets：`sisyphus` / `prometheus` / `atlas` / `hephaestus`
 
-## 功能概览
+## 它现在能做什么
 
-- 交互模式：TUI（默认）、CLI 单次运行、HTTP 服务、Web / ACP 模式
-- 会话能力：创建 / 继续 / 分叉会话，导入导出会话
-- 工具系统：内置读写编辑、Shell、补丁、提问等工具链
-- 模型体系：多 Provider 适配、Agent 模式切换
-- 扩展能力：插件桥接（含 TS 插件）、MCP、LSP
-- Scheduler：共享执行骨架 + public OMO-aligned presets
-- 终端体验：增强排版、可折叠侧栏、代码高亮、路径补全、question 卡片
-- `/autoresearch`：CLI / TUI / Web 统一命令入口，支持补参与验证驱动的迭代优化
+- 在本地仓库里运行编码代理，支持交互式 TUI、单次 `run`、HTTP Server、Web UI、ACP
+- 维护会话树、会话分叉、会话导入导出，以及统一的 session telemetry / usage / events 读模型
+- 统一管理模型目录、provider 连接、认证状态，以及 provider catalog 刷新
+- 统一管理 workspace skill、remote skill hub、distribution / artifact cache / lifecycle / guard / timeline
+- 接入 MCP、LSP、插件与 scheduler profile，并把它们暴露到同一套 runtime 中
+- 以 workspace authority 为中心处理配置解析、sandbox `.rocode`、global config 与 shared / isolated workspace 模式
 
-## Scheduler 快览
+## 运行界面
 
-当前公开的 scheduler 预设都运行在同一套共享骨架上：
-
-- `sisyphus`：delegation-first / execution-oriented / single-loop execution orchestration
-- `prometheus`：planning-first / interview → plan → review → handoff
-- `atlas`：coordination-heavy / task-ledger-driven execution + synthesis
-- `hephaestus`：autonomous deep worker / explore → plan → decide → execute → verify
-
-最近交互收口的重点包括：
-
-- `Prometheus` 的阻塞性 interview 问题应走正式 `question` 工具，而不是只写在 transcript 里
-- `Atlas` 的 QA `Gate Decision` 是内部 gate rubric，不是用户问卷；只有真实用户决策阻塞才应发 question
-- `Hephaestus` 使用更明确的 `3-Level Escalation Protocol`
-- TUI 会把 scheduler stage transcript 投影到主 session，并对 `route` 阶段做可读摘要渲染
-- `/autoresearch` 命令走统一的 command + scheduler 配置链路，CLI / TUI / Web 都使用同一套参数补全与 question 流程
-- verification / reasoning / scheduler stage 的流式输出在三端保持同构，Web 与 TUI 会做更稳定的历史回放与增量合并
-
-## TUI 交互说明
-
-- 首轮 user turn 会显示精简后的 system prompt preview，而不是完整长 prompt
-- scheduler stage transcript 会作为 assistant stage 消息投影到主 session 中
-- 当 session 处于 `busy` 时，普通输入会排队；若当前 workflow 需要用户回答，应通过 `question` 卡片完成
-- question 卡片在有选项时会自动追加 `Other (type your own)`，用于自定义答案
-- slash command 弹窗不再要求所有命令都必须预注册；已注册命令继续提供提示，`/autoresearch` 这类仓库命令会进入统一补参与执行链路
-
-## `/autoresearch` 快览
-
-`/autoresearch` 不是一个单独的 mode，而是一个命令入口。它的职责是把“目标 + 参数 + scheduler 配置 + verify/guard”组织成一次迭代优化运行。
-
-- CLI：`rocode run "/autoresearch ..."`
-- TUI：输入 `/autoresearch`，按 question 卡片补齐缺失参数
-- Web：在输入框直接发送 `/autoresearch`，缺失参数会走同一套 question UI
-
-适用场景：
-
-- 持续改进文档、教案、书稿、报告、代码质量基线
-- 本地有明确 `verify` 指标与 `guard` 约束的优化回路
-- 希望让 scheduler 自动执行“修改 → 验证 → 保留/丢弃”循环
-
-不适用场景：
-
-- 只有开放式聊天目标、没有可检验输出
-- 尚未定义 `verify` / `guard` / metric 提取规则
+- `rocode tui`
+  - 默认终端界面，适合日常交互开发
+- `rocode run`
+  - 非交互单次执行，适合集成脚本与 CI
+- `rocode serve`
+  - 启动 HTTP Server
+- `rocode web`
+  - 启动 headless server 并打开 Web
+- `rocode attach`
+  - 连接到已运行的 server
+- `rocode acp`
+  - 启动 Agent Client Protocol server
 
 ## 快速开始
 
-### 1. 环境要求
+### 环境要求
 
 - Rust stable
 - Cargo
-- Git（建议）
+- Git
 
-### 2. 构建
+### 构建
 
 ```bash
 cargo build -p rocode-cli
 ```
 
-### 3. 查看帮助
-
-```bash
-./target/debug/rocode --help
-```
-
-或
+### 查看帮助
 
 ```bash
 cargo run -p rocode-cli -- --help
 ```
 
-### 4. 启动方式
+### 启动方式
 
-- 默认进入 TUI：
+默认进入 TUI：
 
 ```bash
 cargo run -p rocode-cli --
 ```
 
-- 显式进入 TUI：
+显式指定 TUI：
 
 ```bash
 cargo run -p rocode-cli -- tui
 ```
 
-- 非交互运行：
+单次运行：
 
 ```bash
-cargo run -p rocode-cli -- run "请检查这个仓库中的风险点"
+cargo run -p rocode-cli -- run "请审查当前仓库里最危险的改动"
 ```
 
-- 启动 HTTP 服务：
+启动 HTTP Server：
 
 ```bash
-cargo run -p rocode-cli -- serve --port 3000 --hostname 127.0.0.1
+cargo run -p rocode-cli -- serve --hostname 127.0.0.1 --port 3000
 ```
 
-Web 前端入口说明：
+启动 Web：
 
-- `/`：默认 React Web 首页
-- `/web/*`：React Web 静态资源前缀
+```bash
+cargo run -p rocode-cli -- web --hostname 127.0.0.1 --port 3000
+```
 
-当前 Web 交互约定：
+## 当前 CLI 入口
 
-- 首页左侧为 workspace-scoped session tree，按 workspace 聚合 session
-- 右侧为 workspace 文件树侧栏，可显隐
-- session 列表只展示当前 workspace 下的会话，避免跨项目噪音
-- 已移除 `/new`、`/web-next` 等过渡期入口，`/` 为唯一主入口
+当前顶层命令分组以 `crates/rocode-cli/src/cli.rs` 为准，主要包括：
 
-## CLI 命令总览
+- `tui`
+- `attach`
+- `run`
+- `serve`
+- `web`
+- `acp`
+- `models`
+- `session`
+- `skill`
+- `stats`
+- `db`
+- `config`
+- `auth`
+- `agent`
+- `debug`
+- `mcp`
+- `export`
+- `import`
+- `github`
+- `pr`
+- `upgrade`
+- `uninstall`
+- `generate`
+- `version`
+- `info`
 
-以下命令来自当前 `rocode --help`：
-
-- `tui`：启动交互式终端界面
-- `attach`：附加到已运行的服务
-- `run`：单次消息运行
-- `serve`：启动 HTTP 服务
-- `web`：启动 headless 服务并打开 Web 界面
-- `acp`：启动 ACP 服务
-- `models`：查看可用模型
-- `session`：会话管理
-- `stats`：token / cost 统计
-- `db`：数据库工具
-- `config`：查看配置
-- `auth`：凭据管理
-- `agent`：Agent 管理
-- `debug`：调试与排障
-- `mcp`：MCP 管理
-- `export` / `import`：会话导出导入
-- `github` / `pr`：GitHub 相关能力
-- `upgrade` / `uninstall`：升级与卸载
-- `generate`：生成 OpenAPI 规范
-- `version`：查看版本
-
-常用帮助：
+最常用的帮助入口：
 
 ```bash
 rocode tui --help
 rocode run --help
-rocode serve --help
+rocode models --help
 rocode session --help
+rocode skill hub --help
+rocode debug --help
 ```
 
-## 配置
+## Workspace 与配置模型
 
-项目配置会在以下路径中按优先级合并（向上查找）：
+ROCode 当前已经不是“只读一份全局配置”的工具。运行时会同时考虑 workspace authority、sandbox `.rocode`、global config 和缓存状态，但优先级是明确的：
 
-- `rocode.jsonc`
-- `rocode.json`
-- `.rocode/rocode.jsonc`
-- `.rocode/rocode.json`
+- 当前工作区内的 `.rocode/` 是 workspace runtime 的正式本地 authority
+- `rocode.jsonc` / `rocode.json` 与 `.rocode/rocode.jsonc` / `.json` 是项目侧配置入口
+- `~/.config/rocode/rocode.jsonc` 是全局配置入口
+- shared / isolated workspace mode 会影响当前 runtime 是否继承 global config
 
-全局配置默认路径：
+如果当前 workspace 处于 isolated 模式，global config 的修改不会自动变成当前 sandbox runtime。
 
-- Linux / macOS：`~/.config/rocode/rocode.jsonc`（或 `.json`）
+## 模型与 Provider
 
-### `context_docs` 外部注册表
-
-`context_docs` 的正式配置只在主配置中保留一个路径引用：
-
-```jsonc
-{
-  "docs": {
-    "contextDocsRegistryPath": "./docs/examples/context_docs/context-docs-registry.example.json"
-  }
-}
-```
-
-正式 schema 与示例入口：
-
-- Registry schema：`docs/examples/context_docs/context-docs-registry.schema.json`
-- Docs index schema：`docs/examples/context_docs/context-docs-index.schema.json`
-- Registry example：`docs/examples/context_docs/context-docs-registry.example.json`
-- Docs index example：`docs/examples/context_docs/react-router.docs-index.example.json`
-- Secondary docs index example：`docs/examples/context_docs/tokio.docs-index.example.json`
-- 说明文档：`docs/examples/context_docs/README.md`
-
-只读校验命令：
+模型目录与 provider catalog 已经支持显式刷新：
 
 ```bash
-rocode debug docs validate
-rocode debug docs validate --registry ./docs/examples/context_docs/context-docs-registry.example.json
-rocode debug docs validate --index ./docs/examples/context_docs/react-router.docs-index.example.json
+rocode models
+rocode models --refresh
+rocode models zhipu --refresh --verbose
 ```
 
-## 仓库结构（模块与功能）
-
-- `crates/rocode-cli`：CLI 入口与子命令编排（binary: `rocode`）
-- `crates/rocode-tui`：终端交互界面与渲染状态机
-- `crates/rocode-server`：HTTP / SSE / WebSocket API 与路由聚合
-- `crates/rocode-session`：会话引擎、提示词主循环、工具回合控制
-- `crates/rocode-agent`：Agent 注册、执行与消息封装
-- `crates/rocode-orchestrator`：对话编排层（多步执行与 tool 调度）
-- `crates/rocode-tool`：工具注册中心与内置工具实现
-- `crates/rocode-permission`：权限规则与 `allow/deny/ask` 决策
-- `crates/rocode-provider`：多 Provider 协议适配与流式解析
-- `crates/rocode-storage`：SQLite 持久化与仓储层
-- `crates/rocode-config`：配置发现、解析与合并
-- `crates/rocode-plugin`：Hook 系统与 TS 子进程桥接
-- `crates/rocode-command`：Slash Command 系统
-- `crates/rocode-mcp`：MCP 客户端、OAuth 与传输抽象
-- `crates/rocode-lsp`：LSP 客户端与注册表
-- `crates/rocode-watcher`：文件监听与变更事件广播
-- `crates/rocode-grep`：代码 / 文本搜索封装
-- `crates/rocode-core`：基础能力（总线、ID、进程注册）
-- `crates/rocode-types`：跨 crate 共享类型
-- `crates/rocode-util`：文件、日志、JSON-ish 等通用能力
-
-## 开发与验证
+常用认证命令：
 
 ```bash
-cargo fmt
+rocode auth list
+rocode auth login --help
+rocode auth logout --help
+```
+
+## Skill Hub
+
+当前 `skill hub` 已经是正式的一组 CLI / Server / TUI / Web 能力，不再是零散调试命令。它覆盖：
+
+- managed skill provenance
+- source index
+- distribution records
+- artifact cache
+- artifact policy
+- lifecycle records
+- install / update / detach / remove
+- sync plan / sync apply
+
+常用入口：
+
+```bash
+rocode skill hub status
+rocode skill hub managed
+rocode skill hub index
+rocode skill hub distributions
+rocode skill hub artifact-cache
+rocode skill hub policy
+rocode skill hub lifecycle
+```
+
+写操作示例：
+
+```bash
+rocode skill hub install-plan --source-id <id> --source-kind registry --locator <locator> --skill-name <name>
+rocode skill hub install-apply --session-id <session> --source-id <id> --source-kind registry --locator <locator> --skill-name <name>
+rocode skill hub update-apply --session-id <session> --source-id <id> --source-kind registry --locator <locator> --skill-name <name>
+rocode skill hub detach --session-id <session> --source-id <id> --source-kind registry --locator <locator> --skill-name <name>
+rocode skill hub remove --session-id <session> --source-id <id> --source-kind registry --locator <locator> --skill-name <name>
+```
+
+## TUI / Web 当前约定
+
+- TUI 是当前最完整的交互前端
+- Web 首页 `/` 是唯一正式入口
+- Web 左侧展示当前 workspace 范围内的 session tree
+- Web settings 已暴露 workspace mode / workspace root / skill hub policy / governance timeline 等信息
+- TUI 与 Web 都直接读取统一的 session / skill / telemetry 读模型，而不是各端自己推断状态
+
+## 运行时观测
+
+当前系统已经把 runtime telemetry 做成正式读模型。你可以通过 server / CLI / TUI / Web 查看：
+
+- session telemetry
+- stage summaries
+- usage
+- paginated events
+- provenance timeline
+
+调试入口主要在：
+
+```bash
+rocode debug --help
+rocode debug skills --help
+rocode debug docs --help
+rocode stats --help
+```
+
+## MCP / LSP / 插件
+
+MCP 常用入口：
+
+```bash
+rocode mcp list
+rocode mcp add --help
+rocode mcp connect <NAME>
+rocode mcp disconnect <NAME>
+rocode mcp auth list
+```
+
+Agent 与调试入口：
+
+```bash
+rocode agent list
+rocode agent create --help
+rocode debug agent <NAME>
+```
+
+## 仓库结构
+
+- `crates/rocode-cli`
+  - CLI 入口与命令编排
+- `crates/rocode-tui`
+  - 终端前端与交互状态机
+- `crates/rocode-server`
+  - HTTP / SSE / Web 前端与路由
+- `crates/rocode-session`
+  - session 领域模型与持久化
+- `crates/rocode-agent`
+  - agent 执行与封装
+- `crates/rocode-orchestrator`
+  - scheduler / orchestration authority
+- `crates/rocode-tool`
+  - 工具注册与 tool-facing adapter
+- `crates/rocode-skill`
+  - skill authority、hub、distribution、artifact、guard、lifecycle
+- `crates/rocode-provider`
+  - provider / model protocol 适配
+- `crates/rocode-config`
+  - 配置发现、解析、合并
+- `crates/rocode-types`
+  - 跨端共享读写模型
+
+## 开发验证
+
+常用：
+
+```bash
+cargo fmt --all
 cargo check
-cargo clippy --workspace --all-targets
-bash scripts/check_runtime_governance.sh
 ```
 
-最小验证（常用）：
+前端 / 服务侧常用：
 
 ```bash
-cargo check -p rocode-cli
-cargo check -p rocode-tui
-cargo check -p rocode-orchestrator
+cargo check -p rocode-cli -p rocode-server -p rocode-tui
 ```
 
-## 文档导航
+## 文档入口
 
-当前仓库中实际维护中的入口文档：
-
-- 用户指南：`USER_GUIDE.md`
-- 文档索引：`docs/README.md`
-- Scheduler 示例与说明：`docs/examples/scheduler/README.md`
-- `/autoresearch` 统一实现设计：`docs/autoresearch-command-unified-design.md`
-- Context Docs 示例与 schema：`docs/examples/context_docs/README.md`
-- 插件 / skill / Rust 扩展示例：`docs/plugins_example/README.md`
-
-## 说明
-
-- 当前默认命令名为 `rocode`
-- 公开 scheduler 只包含 4 个 presets：`sisyphus` / `prometheus` / `atlas` / `hephaestus`
+- 用户使用指南：[USER_GUIDE.md](/home/biocheming/tests/python/rust/rocode/USER_GUIDE.md)
+- 文档索引：[docs/README.md](/home/biocheming/tests/python/rust/rocode/docs/README.md)
+- Scheduler 示例：[docs/examples/scheduler/README.md](/home/biocheming/tests/python/rust/rocode/docs/examples/scheduler/README.md)
+- Context Docs：[docs/examples/context_docs/README.md](/home/biocheming/tests/python/rust/rocode/docs/examples/context_docs/README.md)
+- 插件 / skill 示例：[docs/plugins_example/README.md](/home/biocheming/tests/python/rust/rocode/docs/plugins_example/README.md)
