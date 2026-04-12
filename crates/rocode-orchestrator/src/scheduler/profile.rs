@@ -4,6 +4,8 @@ mod inputs;
 mod parsing;
 pub(super) mod presentation;
 
+pub(super) use parsing::parse_dynamic_agent_tree;
+
 use crate::agent_tree::{AgentTreeNode, AgentTreeOrchestrator};
 use crate::iterative_workflow::IterativeWorkflowConfig;
 use crate::output_metadata::{

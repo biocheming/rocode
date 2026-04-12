@@ -120,7 +120,13 @@ pub(super) async fn persist_session_telemetry_metadata(
             %error,
             "failed to persist telemetry snapshot into session metadata"
         );
+        return;
     }
+
+    state
+        .runtime_telemetry
+        .emit_telemetry_snapshot_updated_hook(&session_id, &snapshot)
+        .await;
 }
 
 #[cfg(test)]
@@ -128,10 +134,18 @@ mod tests {
     use super::*;
     use crate::runtime_control::SessionExecutionTopology;
     use crate::session_runtime::state::SessionRuntimeState;
+    use crate::session_runtime::{emit_scheduler_stage_message, SchedulerStageMessageInput};
     use crate::ServerState;
     use rocode_command::stage_protocol::{StageStatus, StageSummary};
-    use rocode_session::{persist_session_telemetry_snapshot, SessionTelemetrySnapshotVersion};
+    use rocode_orchestrator::ExecutionContext;
+    use rocode_plugin::{global, Hook, HookEvent};
+    use rocode_session::{
+        persist_session_telemetry_snapshot, MessageUsage, SessionTelemetrySnapshotVersion,
+    };
+    use std::collections::HashMap;
     use std::sync::Arc;
+    use tokio::sync::mpsc;
+    use tokio::time::{timeout, Duration};
 
     #[test]
     fn telemetry_snapshot_syncs_runtime_usage_from_session_when_missing() {
@@ -300,5 +314,110 @@ mod tests {
                 .map(|snapshot| snapshot.last_run_status.as_str()),
             Some("completed")
         );
+    }
+
+    #[tokio::test]
+    async fn persist_session_telemetry_metadata_emits_snapshot_hook() {
+        let state = Arc::new(ServerState::new());
+        let hook_name = format!(
+            "telemetry-snapshot-updated-{}",
+            uuid::Uuid::new_v4().simple()
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        global()
+            .register(Hook::new(
+                &hook_name,
+                HookEvent::TelemetrySnapshotUpdated,
+                move |ctx| {
+                    let tx = tx.clone();
+                    async move {
+                        let _ = tx.send(ctx);
+                        Ok(())
+                    }
+                },
+            ))
+            .await;
+
+        let mut session = {
+            let mut sessions = state.sessions.lock().await;
+            sessions.create("project", "/tmp/project")
+        };
+        let session_id = session.id.clone();
+        let assistant = session.add_assistant_message();
+        assistant.usage = Some(MessageUsage {
+            input_tokens: 10,
+            output_tokens: 20,
+            reasoning_tokens: 3,
+            cache_write_tokens: 4,
+            cache_read_tokens: 5,
+            total_cost: 0.25,
+        });
+
+        let exec_ctx = ExecutionContext {
+            session_id: session_id.clone(),
+            workdir: "/tmp/project".to_string(),
+            agent_name: "test-agent".to_string(),
+            metadata: HashMap::new(),
+        };
+
+        emit_scheduler_stage_message(SchedulerStageMessageInput {
+            state: &state,
+            session_id: &session_id,
+            scheduler_profile: "prometheus",
+            stage_name: "plan",
+            stage_index: 1,
+            stage_total: 1,
+            content: "## Plan\n\n- summarize runtime",
+            exec_ctx: &exec_ctx,
+            output_hook: None,
+        })
+        .await;
+
+        state
+            .runtime_telemetry
+            .record_session_usage(
+                &session_id,
+                None,
+                SessionUsage {
+                    input_tokens: 10,
+                    output_tokens: 20,
+                    reasoning_tokens: 3,
+                    cache_write_tokens: 4,
+                    cache_read_tokens: 5,
+                    total_cost: 0.25,
+                },
+            )
+            .await;
+
+        persist_session_telemetry_metadata(&state, &mut session).await;
+
+        let hook_ctx = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("hook should fire")
+            .expect("hook payload should arrive");
+        assert_eq!(hook_ctx.session_id.as_deref(), Some(session_id.as_str()));
+        assert_eq!(
+            hook_ctx.get("sessionID"),
+            Some(&serde_json::json!(session_id))
+        );
+        assert_eq!(
+            hook_ctx
+                .get("snapshot")
+                .and_then(|value| value.get("usage"))
+                .and_then(|value| value.get("input_tokens")),
+            Some(&serde_json::json!(10))
+        );
+        assert_eq!(
+            hook_ctx
+                .get("snapshot")
+                .and_then(|value| value.get("stage_summaries"))
+                .and_then(|value| value.as_array())
+                .map(Vec::len),
+            Some(1)
+        );
+
+        let _ = global()
+            .remove(&HookEvent::TelemetrySnapshotUpdated, &hook_name)
+            .await;
     }
 }

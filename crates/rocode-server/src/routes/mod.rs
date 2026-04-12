@@ -12,6 +12,7 @@ mod provider;
 mod pty;
 mod session;
 mod skill_catalog;
+mod skill_hub;
 mod stream;
 mod task;
 mod tui;
@@ -24,6 +25,7 @@ use self::skill_catalog::{
     get_skill_detail, list_skill_catalog_entries, manage_skill, resolve_skill_catalog,
     SkillCatalogQuery,
 };
+use self::skill_hub::skill_hub_routes;
 use self::task::task_routes;
 pub use config::*;
 pub use file::*;
@@ -83,6 +85,7 @@ pub fn router() -> Router<Arc<ServerState>> {
         .route("/skill/catalog", get(list_skill_catalog_entries))
         .route("/skill/detail", get(get_skill_detail))
         .route("/skill/manage", post(manage_skill))
+        .nest("/skill/hub", skill_hub_routes())
         .route("/lsp", get(get_lsp_status))
         .route("/formatter", get(get_formatter_status))
         .route("/auth/{id}", put(set_auth).delete(delete_auth))

@@ -252,7 +252,42 @@ After EVERY delegation round:
 - Keep task boundaries explicit; never merge multiple plan items into one vague delegation
 - Parallelize only when tasks are truly independent and do not conflict on files or sequencing
 - Do not mark the plan complete while a single required task lacks evidence
-- Surface blockers explicitly instead of hand-waving them away"#;
+- Surface blockers explicitly instead of hand-waving them away
+
+## Dynamic Parallel Execution
+
+When your task analysis reveals 2–5 independent sub-tasks that can safely run in parallel
+(no shared file writes, no ordering dependencies, no resource conflicts), output a
+`<parallel_plan>` XML block with a JSON payload describing the parallel worker wave:
+
+```
+<parallel_plan>
+{
+  "root_task": "Parent coordination task description",
+  "children": [
+    {
+      "name": "worker-alpha",
+      "task": "Specific task with scope, verification requirements, and MUST DO / MUST NOT DO constraints",
+      "allowed_tools": ["read", "glob", "grep", "write", "bash"]
+    },
+    {
+      "name": "worker-beta",
+      "task": "Another independent task description",
+      "allowed_tools": ["read", "glob", "grep"]
+    }
+  ]
+}
+</parallel_plan>
+```
+
+Rules:
+- Maximum 5 children per parallel wave
+- Each child must have a unique `name`
+- `allowed_tools` must be a subset of your own available tools
+- Tasks must be truly independent: no shared file writes, no ordering dependencies
+- If tasks have dependencies, use sequential delegation instead
+- The parallel plan will be reviewed before execution; include enough detail for verification
+- After outputting a parallel plan, continue your coordination analysis in the same response"#;
 
 const ATLAS_WORKFLOW_SECTION: &str = r#"<workflow>
 ## Step 0: Register Tracking

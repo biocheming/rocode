@@ -96,6 +96,10 @@ pub enum HookEvent {
     // Text completion (matches TS "experimental.text.complete")
     TextComplete,
 
+    // Runtime telemetry notifications
+    TelemetrySnapshotUpdated,
+    StageSummaryUpdated,
+
     // Shell environment (matches TS "shell.env")
     ShellEnv,
 
@@ -195,6 +199,8 @@ const CACHEABLE_EVENTS: &[HookEvent] = &[HookEvent::ConfigLoaded, HookEvent::She
 /// Events that are pure notifications — callers don't need the result.
 const FIRE_AND_FORGET_EVENTS: &[HookEvent] = &[
     HookEvent::SessionCompacting,
+    HookEvent::TelemetrySnapshotUpdated,
+    HookEvent::StageSummaryUpdated,
     HookEvent::Error,
     HookEvent::FileChange,
     HookEvent::SessionEnd,

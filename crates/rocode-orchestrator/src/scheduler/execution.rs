@@ -109,6 +109,21 @@ impl<'a> SchedulerExecutionService<'a> {
                 break;
             }
             self.state.execution.delegated = Some(execution_output.clone());
+
+            // Try to extract a dynamic agent tree from execution output.
+            // When found, the next round will use it for true parallel dispatch.
+            if self.state.preset_runtime.dynamic_agent_tree.is_none() {
+                if let Some(dynamic_tree) =
+                    super::parse_dynamic_agent_tree(&execution_output.content)
+                {
+                    tracing::info!(
+                        round,
+                        children = dynamic_tree.children.len(),
+                        "parsed dynamic agent tree from execution output"
+                    );
+                    self.state.preset_runtime.dynamic_agent_tree = Some(dynamic_tree);
+                }
+            }
             SchedulerProfileOrchestrator::sync_preset_runtime_authority(
                 self.plan, self.state, self.ctx,
             );
@@ -616,12 +631,16 @@ impl<'a> SchedulerExecutionService<'a> {
         allow_execution_fallback: bool,
         exec_ctx_override: Option<&ExecutionContext>,
     ) -> Result<OrchestratorOutput, OrchestratorError> {
-        let adapter = if let Some(exec_ctx) = exec_ctx_override.cloned() {
+        let mut adapter = if let Some(exec_ctx) = exec_ctx_override.cloned() {
             SchedulerExecutionCapabilityAdapter::new(self.orchestrator, self.plan, self.ctx)
                 .with_exec_ctx(exec_ctx)
         } else {
             SchedulerExecutionCapabilityAdapter::new(self.orchestrator, self.plan, self.ctx)
         };
+        // Inject runtime-constructed agent tree if present.
+        if let Some(ref tree) = self.state.preset_runtime.dynamic_agent_tree {
+            adapter = adapter.with_dynamic_agent_tree(tree.clone());
+        }
         adapter
             .execute_execution_path(
                 execution_input,

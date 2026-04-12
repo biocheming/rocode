@@ -46,6 +46,12 @@ struct TaskInput {
     load_skills: Option<Vec<String>>,
     #[serde(default, alias = "runInBackground")]
     run_in_background: bool,
+    /// Inline agent spec: custom system prompt for a dynamically constructed agent.
+    #[serde(default, alias = "agentPrompt")]
+    agent_prompt: Option<String>,
+    /// Inline agent spec: allowed tools for a dynamically constructed agent.
+    #[serde(default, alias = "agentTools")]
+    agent_tools: Option<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -76,6 +82,10 @@ struct NormalizedTaskInput {
     load_skills: Option<Vec<String>>,
     #[allow(dead_code)]
     run_in_background: bool,
+    /// Inline agent system prompt for runtime agent construction.
+    agent_prompt: Option<String>,
+    /// Inline agent allowed tools for runtime agent construction.
+    agent_tools: Option<Vec<String>>,
 }
 
 impl TaskInput {
@@ -141,6 +151,8 @@ impl TaskInput {
             command: self.command,
             load_skills: self.load_skills,
             run_in_background: self.run_in_background,
+            agent_prompt: self.agent_prompt,
+            agent_tools: self.agent_tools,
         })
     }
 }
@@ -194,7 +206,7 @@ impl Tool for TaskTool {
             "properties": {
                 "subagent_type": {
                     "type": "string",
-                    "description": "The type of specialized agent to use for this task (e.g., 'explore', 'librarian', 'oracle')"
+                    "description": "The type of specialized agent to use for this task (e.g., 'explore', 'librarian', 'oracle'). Use any name for a runtime-constructed agent when paired with agent_prompt."
                 },
                 "description": {
                     "type": "string",
@@ -220,6 +232,15 @@ impl Tool for TaskTool {
                 "run_in_background": {
                     "type": "boolean",
                     "description": "Run the task in background (default: false)"
+                },
+                "agent_prompt": {
+                    "type": "string",
+                    "description": "Inline system prompt for a dynamically constructed agent. When subagent_type is not a known agent, this prompt defines the agent's role and behavior at runtime."
+                },
+                "agent_tools": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Allowed tools for a dynamically constructed agent. Only tools available to the parent agent can be granted."
                 }
             },
             "required": ["subagent_type", "description", "prompt"]
@@ -287,6 +308,26 @@ impl Tool for TaskTool {
             }
             TaskDispatchKind::Agent(name) => {
                 let agent = ctx.do_get_agent_info(name).await;
+
+                // If the agent name is not found in the registry and the caller
+                // provides an inline agent spec, dynamically build one.
+                let agent = match (agent, &input.agent_prompt) {
+                    (Some(info), _) => Some(info),
+                    (None, Some(_agent_prompt)) => {
+                        // Inline spec provided — attempt runtime construction
+                        ctx.do_build_agent(
+                            name.clone(),
+                            input.agent_prompt.clone(),
+                            None,
+                            None,
+                            input.agent_tools.clone().unwrap_or_default(),
+                        )
+                        .await
+                        .ok()
+                    }
+                    (None, None) => None,
+                };
+
                 let preferred_model = if let Some(model) = agent.as_ref().and_then(|a| {
                     a.model
                         .as_ref()
@@ -1103,5 +1144,103 @@ Use clear visual hierarchy.
                 "category": serde_json::Value::Null,
             }]))
         );
+    }
+
+    #[tokio::test]
+    async fn task_builds_dynamic_agent_from_inline_spec() {
+        let create_calls = Arc::new(Mutex::new(Vec::<(
+            String,
+            Option<String>,
+            Option<String>,
+            Vec<String>,
+        )>::new()));
+        let prompt_calls = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+
+        let ctx = ToolContext::new("session-1".into(), "message-1".into(), ".".into())
+            // No with_get_agent_info — "custom-reviewer" is not a known agent
+            .with_get_last_model(|_session_id| async move { Ok(Some("provider-x:model-y".into())) })
+            .with_build_agent(
+                |name, _system_prompt, _model, max_steps, _allowed_tools| async move {
+                    Ok(TaskAgentInfo {
+                        name,
+                        model: None,
+                        can_use_task: true,
+                        steps: max_steps,
+                        execution: None,
+                        max_tokens: None,
+                        temperature: None,
+                        top_p: None,
+                        variant: None,
+                    })
+                },
+            )
+            .with_create_subsession({
+                let create_calls = create_calls.clone();
+                move |agent, title, model, disabled_tools| {
+                    let create_calls = create_calls.clone();
+                    async move {
+                        create_calls
+                            .lock()
+                            .await
+                            .push((agent, title, model, disabled_tools));
+                        Ok("task_custom_reviewer_1".to_string())
+                    }
+                }
+            })
+            .with_prompt_subsession({
+                let prompt_calls = prompt_calls.clone();
+                move |session_id, prompt| {
+                    let prompt_calls = prompt_calls.clone();
+                    async move {
+                        prompt_calls.lock().await.push((session_id, prompt));
+                        Ok("custom reviewer output".to_string())
+                    }
+                }
+            });
+
+        let args = serde_json::json!({
+            "description": "Custom review",
+            "prompt": "Review the code for security issues",
+            "subagent_type": "custom-reviewer",
+            "agent_prompt": "You are a security-focused code reviewer. Identify vulnerabilities.",
+            "agent_tools": ["read", "grep", "glob"]
+        });
+
+        let result = TaskTool::new().execute(args, ctx).await.unwrap();
+
+        assert_eq!(result.title, "Custom review");
+        assert!(result.output.contains("custom reviewer output"));
+
+        let create_calls = create_calls.lock().await.clone();
+        assert_eq!(create_calls.len(), 1);
+        assert_eq!(create_calls[0].0, "custom-reviewer");
+
+        let prompt_calls = prompt_calls.lock().await.clone();
+        assert_eq!(prompt_calls.len(), 1);
+        assert_eq!(prompt_calls[0].1, "Review the code for security issues");
+    }
+
+    #[tokio::test]
+    async fn task_without_build_agent_callback_falls_back_for_unknown_name() {
+        let ctx = ToolContext::new("session-1".into(), "message-1".into(), ".".into())
+            // No with_get_agent_info, no with_build_agent
+            .with_get_last_model(|_session_id| async move { Ok(Some("p:m".into())) })
+            .with_create_subsession(|_agent, _title, _model, _disabled_tools| async move {
+                Ok("task_fallback_1".to_string())
+            })
+            .with_prompt_subsession(|_session_id, _prompt| async move {
+                Ok("fallback output".to_string())
+            });
+
+        let args = serde_json::json!({
+            "description": "Fallback test",
+            "prompt": "Do something",
+            "subagent_type": "nonexistent_agent"
+        });
+
+        let result = TaskTool::new().execute(args, ctx).await.unwrap();
+        // Without build_agent callback, the unknown agent name still works
+        // (existing fallback behavior is preserved)
+        assert!(result.output.contains("fallback output"));
     }
 }

@@ -9,7 +9,22 @@ pub use rocode_session::{
 };
 use rocode_session::{SessionTelemetrySnapshot as PersistedSessionTelemetrySnapshot, SessionUsage};
 use rocode_state::RecentModelEntry;
-pub use rocode_types::SessionStatusInfo;
+pub use rocode_types::{
+    ManagedSkillRecord, SessionStatusInfo, SkillArtifactCacheEntry, SkillAuditEvent,
+    SkillDistributionRecord, SkillGovernanceTimelineEntry, SkillGovernanceTimelineStatus,
+    SkillGovernanceWriteResult, SkillGuardReport, SkillGuardStatus, SkillHubArtifactCacheResponse,
+    SkillHubAuditResponse, SkillHubDistributionResponse, SkillHubGuardRunRequest,
+    SkillHubGuardRunResponse, SkillHubIndexRefreshRequest, SkillHubIndexRefreshResponse,
+    SkillHubIndexResponse, SkillHubLifecycleResponse, SkillHubManagedDetachRequest,
+    SkillHubManagedDetachResponse, SkillHubManagedRemoveRequest, SkillHubManagedRemoveResponse,
+    SkillHubManagedResponse, SkillHubPolicy, SkillHubPolicyResponse,
+    SkillHubRemoteInstallApplyRequest, SkillHubRemoteInstallPlanRequest,
+    SkillHubRemoteUpdateApplyRequest, SkillHubRemoteUpdatePlanRequest, SkillHubSyncApplyRequest,
+    SkillHubSyncPlanRequest, SkillHubSyncPlanResponse, SkillHubTimelineQuery,
+    SkillHubTimelineResponse, SkillManagedLifecycleRecord, SkillRemoteInstallAction,
+    SkillRemoteInstallEntry, SkillRemoteInstallPlan, SkillRemoteInstallResponse,
+    SkillSourceIndexSnapshot, SkillSourceKind, SkillSourceRef, SkillSyncPlan,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -106,10 +121,29 @@ pub struct SkillManageResult {
 pub struct SkillManageResponse {
     #[serde(flatten)]
     pub result: SkillManageResult,
+    #[serde(default)]
+    pub guard_report: Option<SkillGuardReport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SkillCatalogQuery {
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub stage: Option<String>,
+    #[serde(default)]
+    pub tool_policy: Option<String>,
+    #[serde(default)]
+    pub tools: Vec<String>,
+    #[serde(default)]
+    pub toolsets: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SkillDetailQuery {
+    pub name: String,
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
@@ -1565,16 +1599,19 @@ impl ApiClient {
         Ok(response.json::<Vec<SkillCatalogEntry>>()?)
     }
 
-    pub fn get_skill_detail(&self, name: &str) -> anyhow::Result<SkillDetailResponse> {
+    pub fn get_skill_detail(
+        &self,
+        query: &SkillDetailQuery,
+    ) -> anyhow::Result<SkillDetailResponse> {
         let url = format!("{}/skill/detail", self.base_url);
-        let response = self.client.get(&url).query(&[("name", name)]).send()?;
+        let response = self.client.get(&url).query(query).send()?;
 
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().unwrap_or_default();
             anyhow::bail!(
                 "Failed to fetch skill detail `{}`: {} - {}",
-                name,
+                query.name,
                 status,
                 text
             );
@@ -1594,6 +1631,317 @@ impl ApiClient {
         }
 
         Ok(response.json::<SkillManageResponse>()?)
+    }
+
+    pub fn list_skill_hub_managed(&self) -> anyhow::Result<SkillHubManagedResponse> {
+        let url = format!("{}/skill/hub/managed", self.base_url);
+        let response = self.client.get(&url).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to fetch skill hub managed state: {} - {}",
+                status,
+                text
+            );
+        }
+
+        Ok(response.json::<SkillHubManagedResponse>()?)
+    }
+
+    pub fn list_skill_hub_index(&self) -> anyhow::Result<SkillHubIndexResponse> {
+        let url = format!("{}/skill/hub/index", self.base_url);
+        let response = self.client.get(&url).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to fetch skill hub source index: {} - {}",
+                status,
+                text
+            );
+        }
+
+        Ok(response.json::<SkillHubIndexResponse>()?)
+    }
+
+    pub fn list_skill_hub_distributions(&self) -> anyhow::Result<SkillHubDistributionResponse> {
+        let url = format!("{}/skill/hub/distributions", self.base_url);
+        let response = self.client.get(&url).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to fetch skill hub distributions: {} - {}",
+                status,
+                text
+            );
+        }
+
+        Ok(response.json::<SkillHubDistributionResponse>()?)
+    }
+
+    pub fn list_skill_hub_artifact_cache(&self) -> anyhow::Result<SkillHubArtifactCacheResponse> {
+        let url = format!("{}/skill/hub/artifact-cache", self.base_url);
+        let response = self.client.get(&url).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to fetch skill hub artifact cache: {} - {}",
+                status,
+                text
+            );
+        }
+
+        Ok(response.json::<SkillHubArtifactCacheResponse>()?)
+    }
+
+    pub fn list_skill_hub_policy(&self) -> anyhow::Result<SkillHubPolicyResponse> {
+        let url = format!("{}/skill/hub/policy", self.base_url);
+        let response = self.client.get(&url).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to fetch skill hub policy: {} - {}", status, text);
+        }
+
+        Ok(response.json::<SkillHubPolicyResponse>()?)
+    }
+
+    pub fn list_skill_hub_lifecycle(&self) -> anyhow::Result<SkillHubLifecycleResponse> {
+        let url = format!("{}/skill/hub/lifecycle", self.base_url);
+        let response = self.client.get(&url).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to fetch skill hub lifecycle: {} - {}", status, text);
+        }
+
+        Ok(response.json::<SkillHubLifecycleResponse>()?)
+    }
+
+    pub fn refresh_skill_hub_index(
+        &self,
+        req: &SkillHubIndexRefreshRequest,
+    ) -> anyhow::Result<SkillHubIndexRefreshResponse> {
+        let url = format!("{}/skill/hub/index/refresh", self.base_url);
+        let response = self.client.post(&url).json(req).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to refresh skill hub index: {} - {}", status, text);
+        }
+
+        Ok(response.json::<SkillHubIndexRefreshResponse>()?)
+    }
+
+    pub fn list_skill_hub_audit(&self) -> anyhow::Result<SkillHubAuditResponse> {
+        let url = format!("{}/skill/hub/audit", self.base_url);
+        let response = self.client.get(&url).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to fetch skill hub audit: {} - {}", status, text);
+        }
+
+        Ok(response.json::<SkillHubAuditResponse>()?)
+    }
+
+    pub fn list_skill_hub_timeline(
+        &self,
+        query: &SkillHubTimelineQuery,
+    ) -> anyhow::Result<SkillHubTimelineResponse> {
+        let url = format!("{}/skill/hub/timeline", self.base_url);
+        let response = self.client.get(&url).query(query).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to fetch skill hub governance timeline: {} - {}",
+                status,
+                text
+            );
+        }
+
+        Ok(response.json::<SkillHubTimelineResponse>()?)
+    }
+
+    pub fn run_skill_hub_guard(
+        &self,
+        req: &SkillHubGuardRunRequest,
+    ) -> anyhow::Result<SkillHubGuardRunResponse> {
+        let url = format!("{}/skill/hub/guard/run", self.base_url);
+        let response = self.client.post(&url).json(req).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to run skill hub guard: {} - {}", status, text);
+        }
+
+        Ok(response.json::<SkillHubGuardRunResponse>()?)
+    }
+
+    pub fn plan_skill_hub_sync(
+        &self,
+        req: &SkillHubSyncPlanRequest,
+    ) -> anyhow::Result<SkillHubSyncPlanResponse> {
+        let url = format!("{}/skill/hub/sync/plan", self.base_url);
+        let response = self.client.post(&url).json(req).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to plan skill hub sync: {} - {}", status, text);
+        }
+
+        Ok(response.json::<SkillHubSyncPlanResponse>()?)
+    }
+
+    pub fn apply_skill_hub_sync(
+        &self,
+        req: &SkillHubSyncApplyRequest,
+    ) -> anyhow::Result<SkillHubSyncPlanResponse> {
+        let url = format!("{}/skill/hub/sync/apply", self.base_url);
+        let response = self.client.post(&url).json(req).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to apply skill hub sync: {} - {}", status, text);
+        }
+
+        Ok(response.json::<SkillHubSyncPlanResponse>()?)
+    }
+
+    pub fn plan_skill_hub_remote_install(
+        &self,
+        req: &SkillHubRemoteInstallPlanRequest,
+    ) -> anyhow::Result<SkillRemoteInstallPlan> {
+        let url = format!("{}/skill/hub/install/plan", self.base_url);
+        let response = self.client.post(&url).json(req).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to plan skill hub remote install: {} - {}",
+                status,
+                text
+            );
+        }
+
+        Ok(response.json::<SkillRemoteInstallPlan>()?)
+    }
+
+    pub fn apply_skill_hub_remote_install(
+        &self,
+        req: &SkillHubRemoteInstallApplyRequest,
+    ) -> anyhow::Result<SkillRemoteInstallResponse> {
+        let url = format!("{}/skill/hub/install/apply", self.base_url);
+        let response = self.client.post(&url).json(req).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to apply skill hub remote install: {} - {}",
+                status,
+                text
+            );
+        }
+
+        Ok(response.json::<SkillRemoteInstallResponse>()?)
+    }
+
+    pub fn plan_skill_hub_remote_update(
+        &self,
+        req: &SkillHubRemoteUpdatePlanRequest,
+    ) -> anyhow::Result<SkillRemoteInstallPlan> {
+        let url = format!("{}/skill/hub/update/plan", self.base_url);
+        let response = self.client.post(&url).json(req).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to plan skill hub remote update: {} - {}",
+                status,
+                text
+            );
+        }
+
+        Ok(response.json::<SkillRemoteInstallPlan>()?)
+    }
+
+    pub fn apply_skill_hub_remote_update(
+        &self,
+        req: &SkillHubRemoteUpdateApplyRequest,
+    ) -> anyhow::Result<SkillRemoteInstallResponse> {
+        let url = format!("{}/skill/hub/update/apply", self.base_url);
+        let response = self.client.post(&url).json(req).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to apply skill hub remote update: {} - {}",
+                status,
+                text
+            );
+        }
+
+        Ok(response.json::<SkillRemoteInstallResponse>()?)
+    }
+
+    pub fn detach_skill_hub_managed(
+        &self,
+        req: &SkillHubManagedDetachRequest,
+    ) -> anyhow::Result<SkillHubManagedDetachResponse> {
+        let url = format!("{}/skill/hub/detach", self.base_url);
+        let response = self.client.post(&url).json(req).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to detach skill hub managed skill: {} - {}",
+                status,
+                text
+            );
+        }
+
+        Ok(response.json::<SkillHubManagedDetachResponse>()?)
+    }
+
+    pub fn remove_skill_hub_managed(
+        &self,
+        req: &SkillHubManagedRemoveRequest,
+    ) -> anyhow::Result<SkillHubManagedRemoveResponse> {
+        let url = format!("{}/skill/hub/remove", self.base_url);
+        let response = self.client.post(&url).json(req).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to remove skill hub managed skill: {} - {}",
+                status,
+                text
+            );
+        }
+
+        Ok(response.json::<SkillHubManagedRemoveResponse>()?)
     }
 
     pub fn get_mcp_status(&self) -> anyhow::Result<Vec<McpStatusInfo>> {

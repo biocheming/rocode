@@ -14,6 +14,8 @@ pub(super) struct SchedulerExecutionCapabilityAdapter<'a> {
     plan: &'a SchedulerProfilePlan,
     ctx: &'a OrchestratorContext,
     exec_ctx_override: Option<ExecutionContext>,
+    /// Runtime-constructed agent tree (parsed from LLM parallel_plan output).
+    dynamic_agent_tree: Option<AgentTreeNode>,
 }
 
 impl<'a> SchedulerExecutionCapabilityAdapter<'a> {
@@ -27,11 +29,17 @@ impl<'a> SchedulerExecutionCapabilityAdapter<'a> {
             plan,
             ctx,
             exec_ctx_override: None,
+            dynamic_agent_tree: None,
         }
     }
 
     pub(super) fn with_exec_ctx(mut self, exec_ctx: ExecutionContext) -> Self {
         self.exec_ctx_override = Some(exec_ctx);
+        self
+    }
+
+    pub(super) fn with_dynamic_agent_tree(mut self, tree: AgentTreeNode) -> Self {
+        self.dynamic_agent_tree = Some(tree);
         self
     }
 
@@ -144,10 +152,14 @@ impl<'a> SchedulerExecutionCapabilityAdapter<'a> {
         stage_context: Option<(String, u32)>,
         stage: Option<SchedulerStageKind>,
     ) -> Result<OrchestratorOutput, OrchestratorError> {
-        // Priority: per-stage agent_tree → profile-level agent_tree → skill_graph → fallback.
+        // Priority: per-stage agent_tree → profile-level agent_tree →
+        //           dynamic_agent_tree → skill_graph → fallback.
         let stage_tree = stage.and_then(|s| self.plan.stage_agent_tree(s));
         if let Some(agent_tree) = stage_tree.or(self.plan.agent_tree.as_ref()) {
             self.execute_agent_tree(agent_tree, execution_input, child_mode, stage_context)
+                .await
+        } else if let Some(ref dynamic_tree) = self.dynamic_agent_tree {
+            self.execute_agent_tree(dynamic_tree, execution_input, child_mode, stage_context)
                 .await
         } else if let Some(skill_graph) = &self.plan.skill_graph {
             self.execute_skill_graph(skill_graph, execution_input, stage_context)

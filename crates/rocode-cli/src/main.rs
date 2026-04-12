@@ -18,6 +18,7 @@ mod run;
 mod server;
 mod server_lifecycle;
 mod session_cmd;
+mod skill_cmd;
 mod tui;
 mod upgrade;
 mod util;
@@ -34,6 +35,7 @@ use mcp_cmd::handle_mcp_command;
 use run::{run_non_interactive, RunNonInteractiveOptions};
 use server::{run_acp_command, run_server_command, run_web_command};
 use session_cmd::{handle_session_command, show_config};
+use skill_cmd::handle_skill_command;
 use tui::{run_tui, TuiLaunchOptions};
 use upgrade::{handle_uninstall_command, handle_upgrade_command};
 
@@ -221,6 +223,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(Commands::Session { action }) => {
             handle_session_command(action).await?;
+        }
+        Some(Commands::Skill { action }) => {
+            handle_skill_command(action).await?;
         }
         Some(Commands::Stats {
             days,

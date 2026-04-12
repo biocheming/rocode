@@ -80,6 +80,12 @@ struct TaskFlowInput {
     status_filter: Option<Vec<String>>,
     #[serde(default = "default_limit")]
     limit: usize,
+    /// Inline agent system prompt for runtime agent construction.
+    #[serde(default, alias = "agentPrompt")]
+    agent_prompt: Option<String>,
+    /// Inline agent allowed tools for runtime agent construction.
+    #[serde(default, alias = "agentTools")]
+    agent_tools: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -210,6 +216,15 @@ impl Tool for TaskFlowTool {
                     "maximum": 100,
                     "default": 20,
                     "description": "Maximum number of tasks to return for list"
+                },
+                "agent_prompt": {
+                    "type": "string",
+                    "description": "Inline system prompt for a dynamically constructed agent (create only). When the agent name is not known, this defines its role at runtime."
+                },
+                "agent_tools": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Allowed tools for a dynamically constructed agent (create only). Only tools available to the parent can be granted."
                 }
             },
             "required": ["operation"]
@@ -298,6 +313,17 @@ async fn execute_delegate(
     }
     if input.run_in_background {
         task_args.insert("run_in_background".to_string(), serde_json::json!(true));
+    }
+    if let Some(agent_prompt) = input
+        .agent_prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        task_args.insert("agent_prompt".to_string(), serde_json::json!(agent_prompt));
+    }
+    if let Some(agent_tools) = input.agent_tools.as_ref() {
+        task_args.insert("agent_tools".to_string(), serde_json::json!(agent_tools));
     }
 
     let delegated = TaskTool::new()
@@ -859,6 +885,8 @@ mod tests {
             todo_item: None,
             status_filter: None,
             limit: DEFAULT_LIMIT,
+            agent_prompt: None,
+            agent_tools: None,
         };
         match validate_input(&input) {
             Err(ToolError::InvalidArguments(msg)) => assert!(msg.contains("agent is required")),
@@ -890,6 +918,8 @@ mod tests {
             todo_item: None,
             status_filter: None,
             limit: DEFAULT_LIMIT,
+            agent_prompt: None,
+            agent_tools: None,
         };
         match validate_input(&input) {
             Err(ToolError::InvalidArguments(msg)) => assert!(msg.contains("task_id is required")),
@@ -912,6 +942,8 @@ mod tests {
             todo_item: None,
             status_filter: None,
             limit: DEFAULT_LIMIT,
+            agent_prompt: None,
+            agent_tools: None,
         };
         match validate_input(&get_input) {
             Err(ToolError::InvalidArguments(msg)) => assert!(msg.contains("required for get")),
@@ -943,6 +975,8 @@ mod tests {
             todo_item: None,
             status_filter: Some(vec!["running".to_string(), "completed".to_string()]),
             limit: 0,
+            agent_prompt: None,
+            agent_tools: None,
         };
         assert!(matches!(
             validate_input(&input),
@@ -951,6 +985,8 @@ mod tests {
 
         let input = TaskFlowInput {
             limit: 999,
+            agent_prompt: None,
+            agent_tools: None,
             ..input
         };
         assert!(matches!(
@@ -960,6 +996,8 @@ mod tests {
 
         let input = TaskFlowInput {
             limit: DEFAULT_LIMIT,
+            agent_prompt: None,
+            agent_tools: None,
             status_filter: Some(vec!["unknown".to_string()]),
             ..input
         };
@@ -988,6 +1026,8 @@ mod tests {
             }),
             status_filter: None,
             limit: DEFAULT_LIMIT,
+            agent_prompt: None,
+            agent_tools: None,
         };
         match validate_input(&input) {
             Err(ToolError::InvalidArguments(msg)) => assert!(msg.contains("todo_item.content")),
@@ -1097,6 +1137,8 @@ mod tests {
             todo_item: None,
             status_filter: None,
             limit: DEFAULT_LIMIT,
+            agent_prompt: None,
+            agent_tools: None,
         };
 
         let error = execute_cancel(&input).expect_err("missing task should fail");
@@ -1135,6 +1177,8 @@ mod tests {
             todo_item: None,
             status_filter: None,
             limit: DEFAULT_LIMIT,
+            agent_prompt: None,
+            agent_tools: None,
         };
 
         let result = execute_cancel(&input).expect("cancel should succeed");

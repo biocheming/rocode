@@ -1,12 +1,12 @@
 use async_trait::async_trait;
 use rocode_skill::{
     CreateSkillRequest, DeleteSkillRequest, EditSkillRequest, PatchSkillRequest,
-    RemoveSkillFileRequest, SkillWriteAction, WriteSkillFileRequest,
+    RemoveSkillFileRequest, SkillGovernedWriteResult, SkillWriteAction, WriteSkillFileRequest,
 };
 use serde::Deserialize;
 use std::path::Path;
 
-use crate::skill_support::{authority_for, map_skill_error};
+use crate::skill_support::{governance_authority_for, map_skill_error};
 use crate::{Metadata, PermissionRequest, Tool, ToolContext, ToolError, ToolResult};
 
 pub struct SkillManageTool;
@@ -106,70 +106,90 @@ impl Tool for SkillManageTool {
     ) -> Result<ToolResult, ToolError> {
         let input: SkillManageInput =
             serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
-        let authority = authority_for(Path::new(&ctx.directory), ctx.config_store.clone());
+        let authority =
+            governance_authority_for(Path::new(&ctx.directory), ctx.config_store.clone());
 
         let permission = build_permission_request(&input)?;
         ctx.ask_permission(permission).await?;
 
         let result = match input.action {
             SkillManageAction::Create => authority
-                .create_skill(CreateSkillRequest {
-                    name: required_string(input.name, "name")?,
-                    description: required_string(input.description, "description")?,
-                    body: required_string(input.body, "body")?,
-                    category: optional_trimmed(input.category),
-                    directory_name: optional_trimmed(input.directory_name),
-                })
+                .create_skill(
+                    CreateSkillRequest {
+                        name: required_string(input.name, "name")?,
+                        description: required_string(input.description, "description")?,
+                        body: required_string(input.body, "body")?,
+                        category: optional_trimmed(input.category),
+                        directory_name: optional_trimmed(input.directory_name),
+                    },
+                    "tool:skill_manage",
+                )
                 .map_err(map_skill_error)?,
             SkillManageAction::Patch => authority
-                .patch_skill(PatchSkillRequest {
-                    name: required_string(input.name, "name")?,
-                    new_name: optional_trimmed(input.new_name),
-                    description: optional_trimmed(input.description),
-                    body: optional_trimmed_multiline(input.body),
-                })
+                .patch_skill(
+                    PatchSkillRequest {
+                        name: required_string(input.name, "name")?,
+                        new_name: optional_trimmed(input.new_name),
+                        description: optional_trimmed(input.description),
+                        body: optional_trimmed_multiline(input.body),
+                    },
+                    "tool:skill_manage",
+                )
                 .map_err(map_skill_error)?,
             SkillManageAction::Edit => authority
-                .edit_skill(EditSkillRequest {
-                    name: required_string(input.name, "name")?,
-                    content: required_string(input.content, "content")?,
-                })
+                .edit_skill(
+                    EditSkillRequest {
+                        name: required_string(input.name, "name")?,
+                        content: required_string(input.content, "content")?,
+                    },
+                    "tool:skill_manage",
+                )
                 .map_err(map_skill_error)?,
             SkillManageAction::WriteFile => authority
-                .write_supporting_file(WriteSkillFileRequest {
-                    name: required_string(input.name, "name")?,
-                    file_path: required_string(input.file_path, "file_path")?,
-                    content: required_string(input.content, "content")?,
-                })
+                .write_supporting_file(
+                    WriteSkillFileRequest {
+                        name: required_string(input.name, "name")?,
+                        file_path: required_string(input.file_path, "file_path")?,
+                        content: required_string(input.content, "content")?,
+                    },
+                    "tool:skill_manage",
+                )
                 .map_err(map_skill_error)?,
             SkillManageAction::RemoveFile => authority
-                .remove_supporting_file(RemoveSkillFileRequest {
-                    name: required_string(input.name, "name")?,
-                    file_path: required_string(input.file_path, "file_path")?,
-                })
+                .remove_supporting_file(
+                    RemoveSkillFileRequest {
+                        name: required_string(input.name, "name")?,
+                        file_path: required_string(input.file_path, "file_path")?,
+                    },
+                    "tool:skill_manage",
+                )
                 .map_err(map_skill_error)?,
             SkillManageAction::Delete => authority
-                .delete_skill(DeleteSkillRequest {
-                    name: required_string(input.name, "name")?,
-                })
+                .delete_skill(
+                    DeleteSkillRequest {
+                        name: required_string(input.name, "name")?,
+                    },
+                    "tool:skill_manage",
+                )
                 .map_err(map_skill_error)?,
         };
 
-        let changed_path = result.location.to_string_lossy().to_string();
+        let changed_path = result.result.location.to_string_lossy().to_string();
         ctx.do_publish_bus(
             "skill.updated",
             serde_json::json!({
-                "action": write_action_label(&result.action),
-                "skill": result.skill_name,
+                "action": write_action_label(&result.result.action),
+                "skill": result.result.skill_name,
                 "path": changed_path,
-                "supportingFile": result.supporting_file,
+                "supportingFile": result.result.supporting_file,
+                "guardReport": result.guard_report,
             }),
         )
         .await;
 
         let output = format_output(&result);
         Ok(ToolResult {
-            title: format!("Skill {}", write_action_label(&result.action)),
+            title: format!("Skill {}", write_action_label(&result.result.action)),
             output,
             metadata: format_metadata(&result),
             truncated: false,
@@ -277,14 +297,14 @@ fn write_action_label(action: &SkillWriteAction) -> &'static str {
     }
 }
 
-fn format_output(result: &rocode_skill::SkillWriteResult) -> String {
+fn format_output(result: &SkillGovernedWriteResult) -> String {
     let mut output = format!(
         "<skill_manage_result action=\"{}\" skill=\"{}\" path=\"{}\">",
-        write_action_label(&result.action),
-        result.skill_name,
-        result.location.display()
+        write_action_label(&result.result.action),
+        result.result.skill_name,
+        result.result.location.display()
     );
-    if let Some(skill) = &result.skill {
+    if let Some(skill) = &result.result.skill {
         output.push_str(&format!(
             "\nname: {}\ndescription: {}\nlocation: {}",
             skill.name,
@@ -299,25 +319,35 @@ fn format_output(result: &rocode_skill::SkillWriteResult) -> String {
             skill.supporting_files.len()
         ));
     }
-    if let Some(file_path) = result.supporting_file.as_deref() {
+    if let Some(file_path) = result.result.supporting_file.as_deref() {
         output.push_str(&format!("\nfile_path: {}", file_path));
+    }
+    if let Some(report) = &result.guard_report {
+        output.push_str(&format!(
+            "\nguard_status: {:?}\nguard_violations: {}",
+            report.status,
+            report.violations.len()
+        ));
     }
     output.push_str("\n</skill_manage_result>");
     output
 }
 
-fn format_metadata(result: &rocode_skill::SkillWriteResult) -> Metadata {
+fn format_metadata(result: &SkillGovernedWriteResult) -> Metadata {
     let mut metadata = Metadata::new();
     metadata.insert(
         "action".to_string(),
-        serde_json::json!(write_action_label(&result.action)),
+        serde_json::json!(write_action_label(&result.result.action)),
     );
-    metadata.insert("name".to_string(), serde_json::json!(&result.skill_name));
+    metadata.insert(
+        "name".to_string(),
+        serde_json::json!(&result.result.skill_name),
+    );
     metadata.insert(
         "location".to_string(),
-        serde_json::json!(result.location.to_string_lossy().to_string()),
+        serde_json::json!(result.result.location.to_string_lossy().to_string()),
     );
-    if let Some(skill) = &result.skill {
+    if let Some(skill) = &result.result.skill {
         metadata.insert(
             "skill".to_string(),
             serde_json::json!({
@@ -332,13 +362,19 @@ fn format_metadata(result: &rocode_skill::SkillWriteResult) -> Metadata {
             "display.summary".to_string(),
             serde_json::json!(format!(
                 "{} {}",
-                write_action_label(&result.action),
+                write_action_label(&result.result.action),
                 skill.name
             )),
         );
     }
-    if let Some(file_path) = result.supporting_file.as_deref() {
+    if let Some(file_path) = result.result.supporting_file.as_deref() {
         metadata.insert("file_path".to_string(), serde_json::json!(file_path));
+    }
+    if let Some(report) = &result.guard_report {
+        metadata.insert(
+            "guard_report".to_string(),
+            serde_json::to_value(report).unwrap_or_default(),
+        );
     }
     metadata
 }
@@ -413,7 +449,7 @@ mod tests {
             .unwrap();
 
         assert!(result.output.contains("local-skill"));
-        let authority = authority_for(dir.path(), None);
+        let authority = crate::skill_support::authority_for(dir.path(), None);
         let names = authority
             .list_skill_meta(None)
             .unwrap()

@@ -39,7 +39,26 @@ pub fn hook_name_to_event(name: &str) -> Option<HookEvent> {
         "experimental.chat.system.transform" => Some(HookEvent::ChatSystemTransform),
         "experimental.chat.messages.transform" => Some(HookEvent::ChatMessagesTransform),
         "experimental.session.compacting" => Some(HookEvent::SessionCompacting),
+        "experimental.telemetry.snapshot.updated" => Some(HookEvent::TelemetrySnapshotUpdated),
+        "experimental.telemetry.stage.summary.updated" => Some(HookEvent::StageSummaryUpdated),
         "experimental.text.complete" => Some(HookEvent::TextComplete),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_runtime_telemetry_hook_names() {
+        assert_eq!(
+            hook_name_to_event("experimental.telemetry.snapshot.updated"),
+            Some(HookEvent::TelemetrySnapshotUpdated)
+        );
+        assert_eq!(
+            hook_name_to_event("experimental.telemetry.stage.summary.updated"),
+            Some(HookEvent::StageSummaryUpdated)
+        );
     }
 }

@@ -193,7 +193,7 @@ pub(crate) fn parse_skill_file(path: &Path, root: &SkillRoot) -> Option<SkillMet
         category: derive_category(root, skill_dir),
         location: path.to_path_buf(),
         supporting_files: collect_supporting_files(skill_dir),
-        conditions: SkillConditions::default(),
+        conditions: parse_rocode_conditions(&frontmatter),
     })
 }
 
@@ -273,6 +273,128 @@ fn parse_frontmatter_value(frontmatter: &str, key: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn parse_rocode_conditions(frontmatter: &str) -> SkillConditions {
+    SkillConditions {
+        requires_tools: parse_scoped_frontmatter_list(frontmatter, "requires_tools"),
+        fallback_for_tools: parse_scoped_frontmatter_list(frontmatter, "fallback_for_tools"),
+        requires_toolsets: parse_scoped_frontmatter_list(frontmatter, "requires_toolsets"),
+        fallback_for_toolsets: parse_scoped_frontmatter_list(frontmatter, "fallback_for_toolsets"),
+        stage_filter: parse_scoped_frontmatter_list(frontmatter, "stage_filter"),
+    }
+}
+
+fn parse_scoped_frontmatter_list(frontmatter: &str, key: &str) -> Vec<String> {
+    let lines = frontmatter.lines().collect::<Vec<_>>();
+    let mut in_metadata = false;
+    let mut metadata_indent = 0usize;
+    let mut in_rocode = false;
+    let mut rocode_indent = 0usize;
+
+    let mut index = 0usize;
+    while index < lines.len() {
+        let line = lines[index];
+        let trimmed = line.trim();
+        let indent = line.len().saturating_sub(line.trim_start().len());
+
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            index += 1;
+            continue;
+        }
+
+        if in_rocode && indent <= rocode_indent && !trimmed.starts_with('-') {
+            in_rocode = false;
+        }
+        if in_metadata && indent <= metadata_indent && !trimmed.starts_with("metadata:") {
+            in_metadata = false;
+            in_rocode = false;
+        }
+
+        if trimmed == "metadata:" {
+            in_metadata = true;
+            metadata_indent = indent;
+            in_rocode = false;
+            index += 1;
+            continue;
+        }
+
+        if in_metadata && trimmed == "rocode:" {
+            in_rocode = true;
+            rocode_indent = indent;
+            index += 1;
+            continue;
+        }
+
+        if in_rocode {
+            let prefix = format!("{key}:");
+            if let Some(value) = trimmed.strip_prefix(&prefix) {
+                let key_indent = indent;
+                let value = value.trim();
+                if !value.is_empty() {
+                    return parse_inline_yaml_list(value);
+                }
+
+                let mut items = Vec::new();
+                let mut cursor = index + 1;
+                while cursor < lines.len() {
+                    let next = lines[cursor];
+                    let next_trimmed = next.trim();
+                    let next_indent = next.len().saturating_sub(next.trim_start().len());
+                    if next_trimmed.is_empty() || next_trimmed.starts_with('#') {
+                        cursor += 1;
+                        continue;
+                    }
+                    if next_indent <= key_indent {
+                        break;
+                    }
+                    if let Some(item) = next_trimmed.strip_prefix('-') {
+                        let item = normalize_yaml_scalar(item.trim());
+                        if !item.is_empty() {
+                            items.push(item);
+                        }
+                    }
+                    cursor += 1;
+                }
+                return items;
+            }
+        }
+
+        index += 1;
+    }
+
+    Vec::new()
+}
+
+fn parse_inline_yaml_list(value: &str) -> Vec<String> {
+    let trimmed = value.trim();
+    if trimmed.starts_with('[') && trimmed.ends_with(']') {
+        return trimmed[1..trimmed.len() - 1]
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(normalize_yaml_scalar)
+            .filter(|item| !item.is_empty())
+            .collect();
+    }
+
+    let scalar = normalize_yaml_scalar(trimmed);
+    if scalar.is_empty() {
+        Vec::new()
+    } else {
+        vec![scalar]
+    }
+}
+
+fn normalize_yaml_scalar(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.len() >= 2
+        && ((trimmed.starts_with('"') && trimmed.ends_with('"'))
+            || (trimmed.starts_with('\'') && trimmed.ends_with('\'')))
+    {
+        return trimmed[1..trimmed.len() - 1].trim().to_string();
+    }
+    trimmed.to_string()
 }
 
 fn iter_skill_files(root: &Path) -> Vec<PathBuf> {

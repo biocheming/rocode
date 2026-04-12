@@ -12,6 +12,7 @@ use crate::session_runtime::stage_summary::StageSummaryStore;
 use crate::session_runtime::state::{RuntimeStateStore, SessionRuntimeState};
 use crate::stage_event_log::{EventFilter, StageEventLog};
 use rocode_command::stage_protocol::{telemetry_event_names, EventScope, StageEvent, StageSummary};
+use rocode_plugin::{HookContext, HookEvent};
 use rocode_session::{
     SessionMessage, SessionTelemetrySnapshot, SessionTelemetrySnapshotVersion, SessionUsage,
 };
@@ -654,9 +655,14 @@ impl RuntimeTelemetryAuthority {
             .count_active_stage_tools(&stage_id)
             .await;
 
-        self.stage_summaries
+        let changed = self
+            .stage_summaries
             .upsert(session_id, summary.clone())
             .await;
+        if changed {
+            self.emit_stage_summary_updated_hook(session_id, &summary)
+                .await;
+        }
         Some(summary)
     }
 
@@ -689,6 +695,28 @@ impl RuntimeTelemetryAuthority {
             last_run_status: last_run_status.into(),
             updated_at: chrono::Utc::now().timestamp_millis(),
         })
+    }
+
+    pub(crate) async fn emit_telemetry_snapshot_updated_hook(
+        &self,
+        session_id: &str,
+        snapshot: &SessionTelemetrySnapshot,
+    ) {
+        let Ok(snapshot) = serde_json::to_value(snapshot) else {
+            tracing::warn!(
+                session_id,
+                "failed to serialize telemetry snapshot for plugin hook"
+            );
+            return;
+        };
+
+        rocode_plugin::trigger(
+            HookContext::new(HookEvent::TelemetrySnapshotUpdated)
+                .with_session(session_id)
+                .with_data("sessionID", serde_json::json!(session_id))
+                .with_data("snapshot", snapshot),
+        )
+        .await;
     }
 
     async fn record_stage_event(&self, session_id: &str, event: StageEvent) {
@@ -733,5 +761,123 @@ impl RuntimeTelemetryAuthority {
                 "stageID": ctx.stage_id,
             }),
         }
+    }
+
+    async fn emit_stage_summary_updated_hook(&self, session_id: &str, summary: &StageSummary) {
+        let Ok(summary) = serde_json::to_value(summary) else {
+            tracing::warn!(
+                session_id,
+                "failed to serialize stage summary for plugin hook"
+            );
+            return;
+        };
+
+        rocode_plugin::trigger(
+            HookContext::new(HookEvent::StageSummaryUpdated)
+                .with_session(session_id)
+                .with_data("sessionID", serde_json::json!(session_id))
+                .with_data("summary", summary),
+        )
+        .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session_runtime::{emit_scheduler_stage_message, SchedulerStageMessageInput};
+    use crate::ServerState;
+    use rocode_orchestrator::ExecutionContext;
+    use rocode_plugin::{global, Hook};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tokio::sync::mpsc;
+    use tokio::time::{timeout, Duration};
+
+    #[tokio::test]
+    async fn refresh_stage_summary_emits_hook_from_authority_summary() {
+        let state = Arc::new(ServerState::new());
+        let session_id = {
+            let mut sessions = state.sessions.lock().await;
+            let session = sessions.create("project", "/tmp/project");
+            session.id.clone()
+        };
+
+        let hook_name = format!("stage-summary-updated-{}", uuid::Uuid::new_v4().simple());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        global()
+            .register(Hook::new(
+                &hook_name,
+                HookEvent::StageSummaryUpdated,
+                move |ctx| {
+                    let tx = tx.clone();
+                    async move {
+                        let _ = tx.send(ctx);
+                        Ok(())
+                    }
+                },
+            ))
+            .await;
+
+        let exec_ctx = ExecutionContext {
+            session_id: session_id.clone(),
+            workdir: "/tmp/project".to_string(),
+            agent_name: "test-agent".to_string(),
+            metadata: HashMap::new(),
+        };
+
+        emit_scheduler_stage_message(SchedulerStageMessageInput {
+            state: &state,
+            session_id: &session_id,
+            scheduler_profile: "prometheus",
+            stage_name: "plan",
+            stage_index: 1,
+            stage_total: 2,
+            content: "## Plan\n\n- inspect scheduler",
+            exec_ctx: &exec_ctx,
+            output_hook: None,
+        })
+        .await;
+
+        let hook_ctx = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("hook should fire")
+            .expect("hook payload should arrive");
+        assert_eq!(hook_ctx.session_id.as_deref(), Some(session_id.as_str()));
+        assert_eq!(
+            hook_ctx.get("sessionID"),
+            Some(&serde_json::json!(session_id))
+        );
+        assert_eq!(
+            hook_ctx.get("summary").and_then(|v| v.get("stage_name")),
+            Some(&serde_json::json!("plan"))
+        );
+        assert!(hook_ctx
+            .get("summary")
+            .and_then(|value| value.get("stage_id"))
+            .and_then(|value| value.as_str())
+            .is_some());
+
+        let message_snapshot = {
+            let sessions = state.sessions.lock().await;
+            let session = sessions.get(&session_id).expect("session should exist");
+            session
+                .messages
+                .last()
+                .cloned()
+                .expect("stage message should exist")
+        };
+
+        let _ = state
+            .runtime_telemetry
+            .refresh_stage_summary_from_message(&session_id, &message_snapshot)
+            .await;
+        assert!(timeout(Duration::from_millis(200), rx.recv())
+            .await
+            .is_err());
+
+        let _ = global()
+            .remove(&HookEvent::StageSummaryUpdated, &hook_name)
+            .await;
     }
 }

@@ -13,6 +13,7 @@ lsp = ["rocode-lsp", "lsp-types"]
 rocode-core = { path = "../rocode-core" }
 rocode-config = { path = "../rocode-config" }
 rocode-skill = { path = "../rocode-skill" }
+rocode-types = { path = "../rocode-types" }
 rocode-util = { path = "../rocode-util" }
 rocode-grep = { path = "../rocode-grep" }
 rocode-plugin = { path = "../rocode-plugin" }

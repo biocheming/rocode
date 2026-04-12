@@ -1,3 +1,4 @@
+use rocode_types::SkillGuardReport;
 use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
@@ -38,12 +39,42 @@ pub enum SkillError {
     #[error("skill already exists: {name}")]
     SkillAlreadyExists { name: String },
 
+    #[error(
+        "skill guard blocked `{}` with {} violation(s)",
+        report.skill_name,
+        report.violations.len()
+    )]
+    GuardBlocked { report: SkillGuardReport },
+
     #[error("skill write size limit exceeded for `{path}`: {size} bytes > {limit} bytes")]
     SkillWriteSizeExceeded {
         path: String,
         size: usize,
         limit: usize,
     },
+
+    #[error("artifact fetch timed out for `{locator}` after {timeout_ms}ms")]
+    ArtifactFetchTimeout { locator: String, timeout_ms: u64 },
+
+    #[error("artifact download size limit exceeded for `{locator}`: {size} bytes > {limit} bytes")]
+    ArtifactDownloadSizeExceeded {
+        locator: String,
+        size: u64,
+        limit: u64,
+    },
+
+    #[error("artifact extract size limit exceeded for `{path}`: {size} bytes > {limit} bytes")]
+    ArtifactExtractSizeExceeded {
+        path: PathBuf,
+        size: u64,
+        limit: u64,
+    },
+
+    #[error("artifact checksum mismatch: expected sha256:{expected}, got sha256:{actual}")]
+    ArtifactChecksumMismatch { expected: String, actual: String },
+
+    #[error("artifact layout mismatch at `{path}`: {message}")]
+    ArtifactLayoutMismatch { path: PathBuf, message: String },
 
     #[error("failed to read skill path `{path}`: {message}")]
     ReadFailed { path: PathBuf, message: String },

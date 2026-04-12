@@ -197,6 +197,80 @@ pub(super) fn attach_subsession_callbacks(
         }
     });
 
+    // Bridge the build_agent callback so that task tools can dynamically
+    // construct agents at runtime without polluting the global registry.
+    let parent_agent_name = ctx.agent.clone();
+    let ctx = ctx.with_build_agent({
+        let registry = agent_registry.clone();
+        move |name, system_prompt, model, max_steps, allowed_tools| {
+            let registry = registry.clone();
+            let parent_agent_name = parent_agent_name.clone();
+            async move {
+                // If already registered, return the existing definition
+                if let Some(info) = registry.get(&name) {
+                    return Ok(rocode_tool::TaskAgentInfo {
+                        name: info.name.clone(),
+                        model: info.model.as_ref().map(|m| rocode_tool::TaskAgentModel {
+                            provider_id: m.provider_id.clone(),
+                            model_id: m.model_id.clone(),
+                        }),
+                        can_use_task: info.is_tool_allowed("task"),
+                        steps: info.max_steps,
+                        execution: Some(agent_execution_context(info)),
+                        max_tokens: info.max_tokens,
+                        temperature: info.temperature,
+                        top_p: info.top_p,
+                        variant: info.variant.clone(),
+                    });
+                }
+
+                // Build a temporary agent from the inline spec
+                let mut agent = crate::AgentInfo::custom(&name);
+                if let Some(prompt) = system_prompt {
+                    agent = agent.with_system_prompt(prompt);
+                }
+                if let Some(steps) = max_steps {
+                    agent = agent.with_max_steps(steps);
+                }
+                if let Some((provider_id, model_id)) = parse_model_string(model.as_deref()) {
+                    agent = agent.with_model(model_id, provider_id);
+                }
+
+                // Permission inheritance: intersect requested tools with
+                // parent agent's allowed tools to prevent privilege escalation.
+                if !allowed_tools.is_empty() {
+                    let parent_tools: std::collections::HashSet<String> = registry
+                        .get(&parent_agent_name)
+                        .map(|p| p.allowed_tools.iter().cloned().collect())
+                        .unwrap_or_default();
+                    let inherited: Vec<String> = allowed_tools
+                        .into_iter()
+                        .filter(|tool| parent_tools.contains(tool))
+                        .collect();
+                    // Re-derive permission from the parent's ruleset for safety
+                    let ruleset = rocode_permission::build_agent_ruleset(&name, &[]);
+                    agent.allowed_tools = inherited;
+                    agent = agent.with_permission(ruleset);
+                }
+
+                Ok(rocode_tool::TaskAgentInfo {
+                    name: agent.name.clone(),
+                    model: agent.model.as_ref().map(|m| rocode_tool::TaskAgentModel {
+                        provider_id: m.provider_id.clone(),
+                        model_id: m.model_id.clone(),
+                    }),
+                    can_use_task: agent.is_tool_allowed("task"),
+                    steps: agent.max_steps,
+                    execution: Some(agent_execution_context(&agent)),
+                    max_tokens: agent.max_tokens,
+                    temperature: agent.temperature,
+                    top_p: agent.top_p,
+                    variant: agent.variant.clone(),
+                })
+            }
+        }
+    });
+
     ctx.with_create_subsession({
         let subsessions = subsessions.clone();
         let registry = agent_registry.clone();

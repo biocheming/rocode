@@ -24,7 +24,17 @@ pub use rocode_tui::api::{
     RevertResponse, SessionEventsQuery, SessionExecutionTopology, SessionInfo,
     SessionInsightsResponse, SessionListItem, SessionListResponse, SessionRecoveryProtocol,
     SessionRunStatusKind, SessionRuntimeState, SessionStatusInfo, SessionTelemetrySnapshot,
-    ShareResponse, SkillCatalogEntry, SkillCatalogQuery, SkillDetailResponse, UpdateSessionRequest,
+    ShareResponse, SkillCatalogEntry, SkillCatalogQuery, SkillDetailQuery, SkillDetailResponse,
+    SkillHubArtifactCacheResponse, SkillHubAuditResponse, SkillHubDistributionResponse,
+    SkillHubGuardRunRequest, SkillHubGuardRunResponse, SkillHubIndexRefreshRequest,
+    SkillHubIndexRefreshResponse, SkillHubIndexResponse, SkillHubLifecycleResponse,
+    SkillHubManagedDetachRequest, SkillHubManagedDetachResponse, SkillHubManagedRemoveRequest,
+    SkillHubManagedRemoveResponse, SkillHubManagedResponse, SkillHubPolicyResponse,
+    SkillHubRemoteInstallApplyRequest, SkillHubRemoteInstallPlanRequest,
+    SkillHubRemoteUpdateApplyRequest, SkillHubRemoteUpdatePlanRequest, SkillHubSyncApplyRequest,
+    SkillHubSyncPlanRequest, SkillHubSyncPlanResponse, SkillHubTimelineQuery,
+    SkillHubTimelineResponse, SkillRemoteInstallPlan, SkillRemoteInstallResponse,
+    UpdateSessionRequest,
 };
 
 /// Async HTTP client for communicating with the ROCode server.
@@ -496,15 +506,158 @@ impl CliApiClient {
         Self::json_ok(resp, "list skills").await
     }
 
-    pub async fn get_skill_detail(&self, name: &str) -> anyhow::Result<SkillDetailResponse> {
+    pub async fn get_skill_detail(
+        &self,
+        query: &SkillDetailQuery,
+    ) -> anyhow::Result<SkillDetailResponse> {
         let url = server_url(&self.base_url, "/skill/detail");
-        let resp = self
-            .client
-            .get(&url)
-            .query(&[("name", name)])
-            .send()
-            .await?;
-        Self::json_ok(resp, &format!("get skill detail `{}`", name)).await
+        let resp = self.client.get(&url).query(query).send().await?;
+        Self::json_ok(resp, &format!("get skill detail `{}`", query.name)).await
+    }
+
+    pub async fn list_skill_hub_managed(&self) -> anyhow::Result<SkillHubManagedResponse> {
+        let url = server_url(&self.base_url, "/skill/hub/managed");
+        let resp = self.client.get(&url).send().await?;
+        Self::json_ok(resp, "get skill hub managed").await
+    }
+
+    pub async fn list_skill_hub_index(&self) -> anyhow::Result<SkillHubIndexResponse> {
+        let url = server_url(&self.base_url, "/skill/hub/index");
+        let resp = self.client.get(&url).send().await?;
+        Self::json_ok(resp, "get skill hub index").await
+    }
+
+    pub async fn list_skill_hub_distributions(
+        &self,
+    ) -> anyhow::Result<SkillHubDistributionResponse> {
+        let url = server_url(&self.base_url, "/skill/hub/distributions");
+        let resp = self.client.get(&url).send().await?;
+        Self::json_ok(resp, "get skill hub distributions").await
+    }
+
+    pub async fn list_skill_hub_artifact_cache(
+        &self,
+    ) -> anyhow::Result<SkillHubArtifactCacheResponse> {
+        let url = server_url(&self.base_url, "/skill/hub/artifact-cache");
+        let resp = self.client.get(&url).send().await?;
+        Self::json_ok(resp, "get skill hub artifact cache").await
+    }
+
+    pub async fn list_skill_hub_policy(&self) -> anyhow::Result<SkillHubPolicyResponse> {
+        let url = server_url(&self.base_url, "/skill/hub/policy");
+        let resp = self.client.get(&url).send().await?;
+        Self::json_ok(resp, "get skill hub policy").await
+    }
+
+    pub async fn list_skill_hub_lifecycle(&self) -> anyhow::Result<SkillHubLifecycleResponse> {
+        let url = server_url(&self.base_url, "/skill/hub/lifecycle");
+        let resp = self.client.get(&url).send().await?;
+        Self::json_ok(resp, "get skill hub lifecycle").await
+    }
+
+    pub async fn refresh_skill_hub_index(
+        &self,
+        req: &SkillHubIndexRefreshRequest,
+    ) -> anyhow::Result<SkillHubIndexRefreshResponse> {
+        let url = server_url(&self.base_url, "/skill/hub/index/refresh");
+        let resp = self.client.post(&url).json(req).send().await?;
+        Self::json_ok(resp, "refresh skill hub index").await
+    }
+
+    pub async fn list_skill_hub_audit(&self) -> anyhow::Result<SkillHubAuditResponse> {
+        let url = server_url(&self.base_url, "/skill/hub/audit");
+        let resp = self.client.get(&url).send().await?;
+        Self::json_ok(resp, "get skill hub audit").await
+    }
+
+    pub async fn list_skill_hub_timeline(
+        &self,
+        query: &SkillHubTimelineQuery,
+    ) -> anyhow::Result<SkillHubTimelineResponse> {
+        let url = server_url(&self.base_url, "/skill/hub/timeline");
+        let resp = self.client.get(&url).query(query).send().await?;
+        Self::json_ok(resp, "get skill hub timeline").await
+    }
+
+    pub async fn run_skill_hub_guard(
+        &self,
+        req: &SkillHubGuardRunRequest,
+    ) -> anyhow::Result<SkillHubGuardRunResponse> {
+        let url = server_url(&self.base_url, "/skill/hub/guard/run");
+        let resp = self.client.post(&url).json(req).send().await?;
+        Self::json_ok(resp, "run skill hub guard").await
+    }
+
+    pub async fn plan_skill_hub_sync(
+        &self,
+        req: &SkillHubSyncPlanRequest,
+    ) -> anyhow::Result<SkillHubSyncPlanResponse> {
+        let url = server_url(&self.base_url, "/skill/hub/sync/plan");
+        let resp = self.client.post(&url).json(req).send().await?;
+        Self::json_ok(resp, "plan skill hub sync").await
+    }
+
+    pub async fn apply_skill_hub_sync(
+        &self,
+        req: &SkillHubSyncApplyRequest,
+    ) -> anyhow::Result<SkillHubSyncPlanResponse> {
+        let url = server_url(&self.base_url, "/skill/hub/sync/apply");
+        let resp = self.client.post(&url).json(req).send().await?;
+        Self::json_ok(resp, "apply skill hub sync").await
+    }
+
+    pub async fn plan_skill_hub_remote_install(
+        &self,
+        req: &SkillHubRemoteInstallPlanRequest,
+    ) -> anyhow::Result<SkillRemoteInstallPlan> {
+        let url = server_url(&self.base_url, "/skill/hub/install/plan");
+        let resp = self.client.post(&url).json(req).send().await?;
+        Self::json_ok(resp, "plan skill hub remote install").await
+    }
+
+    pub async fn apply_skill_hub_remote_install(
+        &self,
+        req: &SkillHubRemoteInstallApplyRequest,
+    ) -> anyhow::Result<SkillRemoteInstallResponse> {
+        let url = server_url(&self.base_url, "/skill/hub/install/apply");
+        let resp = self.client.post(&url).json(req).send().await?;
+        Self::json_ok(resp, "apply skill hub remote install").await
+    }
+
+    pub async fn plan_skill_hub_remote_update(
+        &self,
+        req: &SkillHubRemoteUpdatePlanRequest,
+    ) -> anyhow::Result<SkillRemoteInstallPlan> {
+        let url = server_url(&self.base_url, "/skill/hub/update/plan");
+        let resp = self.client.post(&url).json(req).send().await?;
+        Self::json_ok(resp, "plan skill hub remote update").await
+    }
+
+    pub async fn apply_skill_hub_remote_update(
+        &self,
+        req: &SkillHubRemoteUpdateApplyRequest,
+    ) -> anyhow::Result<SkillRemoteInstallResponse> {
+        let url = server_url(&self.base_url, "/skill/hub/update/apply");
+        let resp = self.client.post(&url).json(req).send().await?;
+        Self::json_ok(resp, "apply skill hub remote update").await
+    }
+
+    pub async fn detach_skill_hub_managed(
+        &self,
+        req: &SkillHubManagedDetachRequest,
+    ) -> anyhow::Result<SkillHubManagedDetachResponse> {
+        let url = server_url(&self.base_url, "/skill/hub/detach");
+        let resp = self.client.post(&url).json(req).send().await?;
+        Self::json_ok(resp, "detach skill hub managed skill").await
+    }
+
+    pub async fn remove_skill_hub_managed(
+        &self,
+        req: &SkillHubManagedRemoveRequest,
+    ) -> anyhow::Result<SkillHubManagedRemoveResponse> {
+        let url = server_url(&self.base_url, "/skill/hub/remove");
+        let resp = self.client.post(&url).json(req).send().await?;
+        Self::json_ok(resp, "remove skill hub managed skill").await
     }
 
     // ── MCP ──────────────────────────────────────────────────────────

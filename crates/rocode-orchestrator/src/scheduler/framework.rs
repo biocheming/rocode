@@ -551,3 +551,50 @@ pub struct SchedulerFlowDefinition {
     pub execution_workflow_policy: SchedulerExecutionWorkflowPolicy,
     pub finalization_mode: SchedulerFinalizationMode,
 }
+
+/// Maximum number of children allowed in a single dynamic parallel plan.
+pub const DYNAMIC_AGENT_TREE_MAX_CHILDREN: usize = 5;
+
+/// LLM-emitted dynamic agent tree declaration.
+///
+/// During `ExecutionOrchestration` the coordinating agent may output a
+/// `<parallel_plan>` JSON block that defines a runtime-constructed
+/// `AgentTreeNode`. The scheduler parses, validates, and stores it in
+/// `SchedulerProfileState` so the *next* coordination round can execute
+/// it via `AgentTreeOrchestrator` with true parallel dispatch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DynamicAgentTreeDeclaration {
+    /// Description of the coordination / parent task.
+    pub root_task: String,
+    /// Parallel child agents.
+    pub children: Vec<DynamicChildAgent>,
+    /// How to aggregate child outputs (defaults to synthesis).
+    #[serde(default)]
+    pub aggregation: Option<AggregationStrategy>,
+}
+
+/// A single child agent in a dynamic parallel plan.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DynamicChildAgent {
+    /// Unique identifier for the child (used in output aggregation).
+    pub name: String,
+    /// System prompt / task description for the child.
+    pub task: String,
+    /// Tools the child is allowed to use (must be a subset of parent tools).
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+    /// Optional model override ("provider:model" format).
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+/// Aggregation strategy for merging parallel child outputs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AggregationStrategy {
+    /// Parent agent synthesizes child outputs into a unified result (default).
+    #[default]
+    Synthesize,
+    /// Concatenate child outputs verbatim.
+    Concatenate,
+}

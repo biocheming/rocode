@@ -1,6 +1,367 @@
 use super::*;
 
 impl App {
+    pub(super) fn submit_skill_guard_run(&mut self) -> anyhow::Result<String> {
+        let Some(client) = self.context.get_api_client() else {
+            anyhow::bail!("No active API client.");
+        };
+        let Some(skill_name) = self
+            .skill_list_dialog
+            .selected_skill()
+            .map(|value| value.to_string())
+        else {
+            anyhow::bail!("Select a skill before running guard.");
+        };
+        let response = client.run_skill_hub_guard(&crate::api::SkillHubGuardRunRequest {
+            skill_name: Some(skill_name.clone()),
+            source: None,
+        })?;
+        let report_count = response.reports.len();
+        let violation_count = response
+            .reports
+            .iter()
+            .map(|report| report.violations.len())
+            .sum::<usize>();
+        self.skill_list_dialog
+            .set_guard_reports(format!("skill `{}`", skill_name), response.reports);
+        self.refresh_skill_hub_state()?;
+        Ok(format!(
+            "Guard scanned skill {} ({} report{}, {} total violations).",
+            skill_name,
+            report_count,
+            if report_count == 1 { "" } else { "s" },
+            violation_count
+        ))
+    }
+
+    pub(super) fn submit_skill_source_guard_run(&mut self) -> anyhow::Result<String> {
+        let Some(client) = self.context.get_api_client() else {
+            anyhow::bail!("No active API client.");
+        };
+        let Some(source) = self.skill_list_dialog.selected_hub_source().cloned() else {
+            anyhow::bail!("No indexed skill hub source is available yet.");
+        };
+        let response = client.run_skill_hub_guard(&crate::api::SkillHubGuardRunRequest {
+            skill_name: None,
+            source: Some(source.clone()),
+        })?;
+        let report_count = response.reports.len();
+        let violation_count = response
+            .reports
+            .iter()
+            .map(|report| report.violations.len())
+            .sum::<usize>();
+        self.skill_list_dialog
+            .set_guard_reports(format!("source `{}`", source.source_id), response.reports);
+        self.refresh_skill_hub_state()?;
+        Ok(format!(
+            "Guard scanned source {} ({} report{}, {} total violations).",
+            source.source_id,
+            report_count,
+            if report_count == 1 { "" } else { "s" },
+            violation_count
+        ))
+    }
+
+    pub(super) fn submit_skill_hub_index_refresh(&mut self) -> anyhow::Result<String> {
+        let Some(client) = self.context.get_api_client() else {
+            anyhow::bail!("No active API client.");
+        };
+        let Some(source) = self.skill_list_dialog.selected_hub_source().cloned() else {
+            anyhow::bail!("No indexed skill hub source is available yet.");
+        };
+        let response =
+            client.refresh_skill_hub_index(&crate::api::SkillHubIndexRefreshRequest { source })?;
+        let source_id = response.snapshot.source.source_id.clone();
+        let skill_count = response.snapshot.entries.len();
+        self.refresh_skill_hub_state()?;
+        Ok(format!(
+            "Refreshed source index for {} ({} entries).",
+            source_id, skill_count
+        ))
+    }
+
+    pub(super) fn refresh_skill_hub_state(&mut self) -> anyhow::Result<()> {
+        let Some(client) = self.context.get_api_client() else {
+            return Ok(());
+        };
+        let managed = client.list_skill_hub_managed()?;
+        let index = client.list_skill_hub_index()?;
+        let distributions = client.list_skill_hub_distributions()?;
+        let artifact_cache = client.list_skill_hub_artifact_cache()?;
+        let policy = client.list_skill_hub_policy()?;
+        let lifecycle = client.list_skill_hub_lifecycle()?;
+        let audit = client.list_skill_hub_audit()?;
+        let timeline = client.list_skill_hub_timeline(&crate::api::SkillHubTimelineQuery {
+            skill_name: None,
+            source_id: None,
+            limit: Some(120),
+        })?;
+        self.skill_list_dialog.set_hub_state(
+            managed.managed_skills,
+            index.source_indices,
+            audit.audit_events,
+        );
+        self.skill_list_dialog.set_remote_hub_state(
+            distributions.distributions,
+            artifact_cache.artifact_cache,
+            policy.policy,
+            lifecycle.lifecycle,
+        );
+        self.skill_list_dialog
+            .set_governance_timeline(timeline.entries);
+        Ok(())
+    }
+
+    pub(super) fn submit_skill_hub_sync_plan(&mut self) -> anyhow::Result<String> {
+        let Some(client) = self.context.get_api_client() else {
+            anyhow::bail!("No active API client.");
+        };
+        let Some(source) = self.skill_list_dialog.selected_hub_source().cloned() else {
+            anyhow::bail!("No indexed skill hub source is available yet.");
+        };
+        let response =
+            client.plan_skill_hub_sync(&crate::api::SkillHubSyncPlanRequest { source })?;
+        let entry_count = response.plan.entries.len();
+        let source_id = response.plan.source_id.clone();
+        self.skill_list_dialog.set_hub_plan(response.plan);
+        self.refresh_skill_hub_state()?;
+        Ok(format!(
+            "Built hub sync plan for {} ({} entries).",
+            source_id, entry_count
+        ))
+    }
+
+    pub(super) fn submit_skill_hub_sync_apply(&mut self) -> anyhow::Result<String> {
+        let Some(session_id) = self.current_session_id() else {
+            anyhow::bail!("Select or create a session before applying skill hub sync.");
+        };
+        let Some(client) = self.context.get_api_client() else {
+            anyhow::bail!("No active API client.");
+        };
+        let Some(source) = self.skill_list_dialog.selected_hub_source().cloned() else {
+            anyhow::bail!("No indexed skill hub source is available yet.");
+        };
+        let response = client
+            .apply_skill_hub_sync(&crate::api::SkillHubSyncApplyRequest { session_id, source })?;
+        let entry_count = response.plan.entries.len();
+        let source_id = response.plan.source_id.clone();
+        let guard_count = response.guard_reports.len();
+        self.skill_list_dialog.set_hub_plan(response.plan);
+        self.refresh_skill_list_dialog()?;
+        Ok(if guard_count > 0 {
+            format!(
+                "Applied hub sync for {} ({} planned entries, {} guard warnings).",
+                source_id, entry_count, guard_count
+            )
+        } else {
+            format!(
+                "Applied hub sync for {} ({} planned entries).",
+                source_id, entry_count
+            )
+        })
+    }
+
+    pub(super) fn submit_skill_hub_remote_install_plan(&mut self) -> anyhow::Result<String> {
+        let Some(client) = self.context.get_api_client() else {
+            anyhow::bail!("No active API client.");
+        };
+        let Some(source) = self.skill_list_dialog.selected_hub_source().cloned() else {
+            anyhow::bail!("No indexed skill hub source is available yet.");
+        };
+        let Some(skill_name) = self.skill_list_dialog.resolve_remote_install_skill_name() else {
+            anyhow::bail!(
+                "No remote skill candidate resolved. Select a source and type a matching query or select an installed skill with the same name."
+            );
+        };
+        let response = client.plan_skill_hub_remote_install(
+            &crate::api::SkillHubRemoteInstallPlanRequest {
+                source,
+                skill_name: skill_name.clone(),
+            },
+        )?;
+        let action = response.entry.action.clone();
+        self.skill_list_dialog.set_remote_install_plan(response);
+        self.refresh_skill_hub_state()?;
+        Ok(format!(
+            "Built remote install plan for {} ({:?}).",
+            skill_name, action
+        ))
+    }
+
+    pub(super) fn submit_skill_hub_remote_install_apply(&mut self) -> anyhow::Result<String> {
+        let Some(session_id) = self.current_session_id() else {
+            anyhow::bail!("Select or create a session before applying remote installs.");
+        };
+        let Some(client) = self.context.get_api_client() else {
+            anyhow::bail!("No active API client.");
+        };
+        let Some(source) = self.skill_list_dialog.selected_hub_source().cloned() else {
+            anyhow::bail!("No indexed skill hub source is available yet.");
+        };
+        let Some(skill_name) = self.skill_list_dialog.resolve_remote_install_skill_name() else {
+            anyhow::bail!(
+                "No remote skill candidate resolved. Select a source and type a matching query or select an installed skill with the same name."
+            );
+        };
+        let response = client.apply_skill_hub_remote_install(
+            &crate::api::SkillHubRemoteInstallApplyRequest {
+                session_id,
+                source,
+                skill_name: skill_name.clone(),
+            },
+        )?;
+        let action = response.plan.entry.action.clone();
+        let guard_warnings = response
+            .guard_report
+            .as_ref()
+            .map(|report| report.violations.len())
+            .unwrap_or_default();
+        self.skill_list_dialog
+            .set_remote_install_plan(response.plan);
+        self.refresh_skill_list_dialog()?;
+        Ok(if guard_warnings > 0 {
+            format!(
+                "Applied remote {:?} for {} ({} guard warnings).",
+                action, skill_name, guard_warnings
+            )
+        } else {
+            format!("Applied remote {:?} for {}.", action, skill_name)
+        })
+    }
+
+    pub(super) fn submit_skill_hub_remote_update_plan(&mut self) -> anyhow::Result<String> {
+        let Some(client) = self.context.get_api_client() else {
+            anyhow::bail!("No active API client.");
+        };
+        let Some(source) = self.skill_list_dialog.selected_hub_source().cloned() else {
+            anyhow::bail!("No indexed skill hub source is available yet.");
+        };
+        let Some(skill_name) = self.skill_list_dialog.resolve_remote_install_skill_name() else {
+            anyhow::bail!(
+                "No remote skill candidate resolved. Select a source and type a matching query or select an installed skill with the same name."
+            );
+        };
+        let response =
+            client.plan_skill_hub_remote_update(&crate::api::SkillHubRemoteUpdatePlanRequest {
+                source,
+                skill_name: skill_name.clone(),
+            })?;
+        let action = response.entry.action.clone();
+        self.skill_list_dialog.set_remote_install_plan(response);
+        self.refresh_skill_hub_state()?;
+        Ok(format!(
+            "Built remote update plan for {} ({:?}).",
+            skill_name, action
+        ))
+    }
+
+    pub(super) fn submit_skill_hub_remote_update_apply(&mut self) -> anyhow::Result<String> {
+        let Some(session_id) = self.current_session_id() else {
+            anyhow::bail!("Select or create a session before applying remote updates.");
+        };
+        let Some(client) = self.context.get_api_client() else {
+            anyhow::bail!("No active API client.");
+        };
+        let Some(source) = self.skill_list_dialog.selected_hub_source().cloned() else {
+            anyhow::bail!("No indexed skill hub source is available yet.");
+        };
+        let Some(skill_name) = self.skill_list_dialog.resolve_remote_install_skill_name() else {
+            anyhow::bail!(
+                "No remote skill candidate resolved. Select a source and type a matching query or select an installed skill with the same name."
+            );
+        };
+        let response = client.apply_skill_hub_remote_update(
+            &crate::api::SkillHubRemoteUpdateApplyRequest {
+                session_id,
+                source,
+                skill_name: skill_name.clone(),
+            },
+        )?;
+        let guard_warnings = response
+            .guard_report
+            .as_ref()
+            .map(|report| report.violations.len())
+            .unwrap_or_default();
+        self.skill_list_dialog
+            .set_remote_install_plan(response.plan.clone());
+        self.refresh_skill_list_dialog()?;
+        Ok(if guard_warnings > 0 {
+            format!(
+                "Applied remote {:?} for {} ({} guard warnings).",
+                response.plan.entry.action, skill_name, guard_warnings
+            )
+        } else {
+            format!(
+                "Applied remote {:?} for {}.",
+                response.plan.entry.action, skill_name
+            )
+        })
+    }
+
+    pub(super) fn submit_skill_hub_managed_detach(&mut self) -> anyhow::Result<String> {
+        let Some(session_id) = self.current_session_id() else {
+            anyhow::bail!("Select or create a session before detaching managed skills.");
+        };
+        let Some(client) = self.context.get_api_client() else {
+            anyhow::bail!("No active API client.");
+        };
+        let Some(source) = self.skill_list_dialog.selected_hub_source().cloned() else {
+            anyhow::bail!("No indexed skill hub source is available yet.");
+        };
+        let Some(skill_name) = self.skill_list_dialog.resolve_remote_install_skill_name() else {
+            anyhow::bail!(
+                "No remote skill candidate resolved. Select a source and type a matching query or select an installed skill with the same name."
+            );
+        };
+        let response =
+            client.detach_skill_hub_managed(&crate::api::SkillHubManagedDetachRequest {
+                session_id,
+                source,
+                skill_name: skill_name.clone(),
+            })?;
+        self.refresh_skill_list_dialog()?;
+        Ok(format!(
+            "Detached managed skill {} ({:?}).",
+            skill_name, response.lifecycle.state
+        ))
+    }
+
+    pub(super) fn submit_skill_hub_managed_remove(&mut self) -> anyhow::Result<String> {
+        let Some(session_id) = self.current_session_id() else {
+            anyhow::bail!("Select or create a session before removing managed skills.");
+        };
+        let Some(client) = self.context.get_api_client() else {
+            anyhow::bail!("No active API client.");
+        };
+        let Some(source) = self.skill_list_dialog.selected_hub_source().cloned() else {
+            anyhow::bail!("No indexed skill hub source is available yet.");
+        };
+        let Some(skill_name) = self.skill_list_dialog.resolve_remote_install_skill_name() else {
+            anyhow::bail!(
+                "No remote skill candidate resolved. Select a source and type a matching query or select an installed skill with the same name."
+            );
+        };
+        let response =
+            client.remove_skill_hub_managed(&crate::api::SkillHubManagedRemoveRequest {
+                session_id,
+                source,
+                skill_name: skill_name.clone(),
+            })?;
+        self.refresh_skill_list_dialog()?;
+        Ok(if response.deleted_from_workspace {
+            format!(
+                "Removed managed skill {} and deleted workspace copy.",
+                skill_name
+            )
+        } else {
+            format!(
+                "Removed managed skill {} without deleting workspace copy.",
+                skill_name
+            )
+        })
+    }
+
     pub(super) fn submit_skill_create(&mut self) -> anyhow::Result<String> {
         let Some(session_id) = self.current_session_id() else {
             anyhow::bail!("Select or create a session before managing skills.");
@@ -30,7 +391,10 @@ impl App {
         })?;
         self.skill_list_dialog.cancel_manage_mode();
         self.refresh_skill_list_dialog()?;
-        Ok(format!("Created skill {}.", response.result.skill_name))
+        Ok(skill_manage_message(
+            format!("Created skill {}.", response.result.skill_name),
+            response.guard_report.as_ref(),
+        ))
     }
 
     pub(super) fn submit_skill_edit(&mut self) -> anyhow::Result<String> {
@@ -61,7 +425,10 @@ impl App {
         })?;
         self.skill_list_dialog.cancel_manage_mode();
         self.refresh_skill_list_dialog()?;
-        Ok(format!("Saved skill {}.", response.result.skill_name))
+        Ok(skill_manage_message(
+            format!("Saved skill {}.", response.result.skill_name),
+            response.guard_report.as_ref(),
+        ))
     }
 
     pub(super) fn submit_skill_delete(&mut self) -> anyhow::Result<String> {
@@ -106,7 +473,11 @@ impl App {
             return Ok(());
         };
 
-        match client.get_skill_detail(&skill_name) {
+        match client.get_skill_detail(&crate::api::SkillDetailQuery {
+            name: skill_name.clone(),
+            session_id: self.current_session_id(),
+            ..Default::default()
+        }) {
             Ok(detail) => {
                 self.skill_list_dialog.set_skill_detail(detail);
                 Ok(())
@@ -185,7 +556,6 @@ impl App {
             variants.sort();
         }
         self.model_select.set_models(models);
-        // Sync current model indicator
         let current_key = self.context.current_model.read().as_ref().map(|m| {
             let provider = self.context.current_provider.read();
             if let Some(ref p) = *provider {
@@ -195,7 +565,6 @@ impl App {
             }
         });
         self.model_select.set_current_model(current_key);
-        // Restore persisted recent models
         self.model_select
             .set_recent(self.context.load_recent_models());
         self.available_models = available_models;
@@ -213,8 +582,6 @@ impl App {
 
         let model_missing = self.context.current_model.read().is_none();
         if model_missing {
-            // Try to restore the most recently used model that is still
-            // available, mirroring TS local.tsx:175-179.
             let restored = self
                 .model_select
                 .recent()
@@ -380,6 +747,7 @@ impl App {
         let skills = client.list_skills(Some(&query))?;
         let suggestions = skills.iter().map(|skill| skill.name.clone()).collect();
         self.skill_list_dialog.set_skills(skills);
+        let _ = self.refresh_skill_hub_state();
         self.prompt.set_skill_suggestions(suggestions);
         let _ = self.refresh_skill_list_detail();
         Ok(())
@@ -434,4 +802,19 @@ impl App {
         *self.context.mcp_servers.write() = statuses;
         Ok(())
     }
+}
+
+fn skill_manage_message(
+    base: String,
+    guard_report: Option<&crate::api::SkillGuardReport>,
+) -> String {
+    if let Some(report) = guard_report {
+        return format!(
+            "{} Guard: {:?} ({} violations).",
+            base,
+            report.status,
+            report.violations.len()
+        );
+    }
+    base
 }

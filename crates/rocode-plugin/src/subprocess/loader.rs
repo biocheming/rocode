@@ -769,6 +769,14 @@ fn hook_io_from_context(context: &HookContext) -> (Value, Value) {
             copy_first(&source, &mut input, "partID", &["partID"]);
             copy_first(&source, &mut output, "text", &["text"]);
         }
+        HookEvent::TelemetrySnapshotUpdated => {
+            copy_first(&source, &mut input, "sessionID", &["sessionID"]);
+            copy_first(&source, &mut input, "snapshot", &["snapshot"]);
+        }
+        HookEvent::StageSummaryUpdated => {
+            copy_first(&source, &mut input, "sessionID", &["sessionID"]);
+            copy_first(&source, &mut input, "summary", &["summary"]);
+        }
         HookEvent::ShellEnv => {
             copy_first(&source, &mut input, "cwd", &["cwd"]);
             copy_first(&source, &mut input, "sessionID", &["sessionID"]);
@@ -950,5 +958,46 @@ mod tests {
         assert_eq!(parse_npm_spec("foo"), ("foo", "*"));
         assert_eq!(parse_npm_spec("@scope/foo@2.0"), ("@scope/foo", "2.0"));
         assert_eq!(parse_npm_spec("@scope/foo"), ("@scope/foo", "*"));
+    }
+
+    #[test]
+    fn telemetry_snapshot_hook_projects_authority_payload_into_input() {
+        let context = HookContext::new(HookEvent::TelemetrySnapshotUpdated)
+            .with_session("session-1")
+            .with_data(
+                "snapshot",
+                serde_json::json!({
+                    "usage": { "input_tokens": 1 },
+                    "stage_summaries": [],
+                }),
+            );
+
+        let (input, output) = hook_io_from_context(&context);
+
+        assert_eq!(input["sessionID"], serde_json::json!("session-1"));
+        assert_eq!(
+            input["snapshot"]["usage"]["input_tokens"],
+            serde_json::json!(1)
+        );
+        assert_eq!(output, Value::Object(Map::new()));
+    }
+
+    #[test]
+    fn stage_summary_hook_projects_authority_payload_into_input() {
+        let context = HookContext::new(HookEvent::StageSummaryUpdated)
+            .with_session("session-1")
+            .with_data(
+                "summary",
+                serde_json::json!({
+                    "stage_id": "stage-1",
+                    "stage_name": "plan",
+                }),
+            );
+
+        let (input, output) = hook_io_from_context(&context);
+
+        assert_eq!(input["sessionID"], serde_json::json!("session-1"));
+        assert_eq!(input["summary"]["stage_id"], serde_json::json!("stage-1"));
+        assert_eq!(output, Value::Object(Map::new()));
     }
 }

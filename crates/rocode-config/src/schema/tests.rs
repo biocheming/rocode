@@ -99,6 +99,88 @@ fn docs_config_merge_replaces_registry_path() {
 }
 
 #[test]
+fn skills_hub_config_deserializes_from_camel_and_snake_case() {
+    let camel: Config = serde_json::from_value(serde_json::json!({
+        "skills": {
+            "hub": {
+                "artifactCacheRetentionSeconds": 86400,
+                "fetchTimeoutMs": 15000,
+                "maxDownloadBytes": 1048576,
+                "maxExtractBytes": 2097152
+            }
+        }
+    }))
+    .expect("camelCase skills hub config should deserialize");
+    let camel_hub = camel
+        .skills
+        .and_then(|skills| skills.hub)
+        .expect("camelCase skills hub config should exist");
+    assert_eq!(camel_hub.artifact_cache_retention_seconds, Some(86400));
+    assert_eq!(camel_hub.fetch_timeout_ms, Some(15000));
+    assert_eq!(camel_hub.max_download_bytes, Some(1048576));
+    assert_eq!(camel_hub.max_extract_bytes, Some(2097152));
+
+    let snake: Config = serde_json::from_value(serde_json::json!({
+        "skills": {
+            "hub": {
+                "artifact_cache_retention_seconds": 3600,
+                "fetch_timeout_ms": 5000,
+                "max_download_bytes": 2048,
+                "max_extract_bytes": 4096
+            }
+        }
+    }))
+    .expect("snake_case skills hub config should deserialize");
+    let snake_hub = snake
+        .skills
+        .and_then(|skills| skills.hub)
+        .expect("snake_case skills hub config should exist");
+    assert_eq!(snake_hub.artifact_cache_retention_seconds, Some(3600));
+    assert_eq!(snake_hub.fetch_timeout_ms, Some(5000));
+    assert_eq!(snake_hub.max_download_bytes, Some(2048));
+    assert_eq!(snake_hub.max_extract_bytes, Some(4096));
+}
+
+#[test]
+fn skills_hub_config_merge_replaces_phase_seven_policy_fields() {
+    let mut base = Config {
+        skills: Some(SkillsConfig {
+            hub: Some(SkillHubConfig {
+                artifact_cache_retention_seconds: Some(86400),
+                fetch_timeout_ms: Some(10000),
+                max_download_bytes: Some(1_000_000),
+                max_extract_bytes: None,
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let overlay = Config {
+        skills: Some(SkillsConfig {
+            hub: Some(SkillHubConfig {
+                artifact_cache_retention_seconds: Some(600),
+                fetch_timeout_ms: None,
+                max_download_bytes: None,
+                max_extract_bytes: Some(2_000_000),
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    base.merge(overlay);
+    let hub = base
+        .skills
+        .and_then(|skills| skills.hub)
+        .expect("merged skills hub config should exist");
+    assert_eq!(hub.artifact_cache_retention_seconds, Some(600));
+    assert_eq!(hub.fetch_timeout_ms, Some(10000));
+    assert_eq!(hub.max_download_bytes, Some(1_000_000));
+    assert_eq!(hub.max_extract_bytes, Some(2_000_000));
+}
+
+#[test]
 fn plugin_map_merge_and_instruction_arrays_append_unique() {
     let mut base = Config {
         plugin: HashMap::from([

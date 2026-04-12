@@ -302,6 +302,19 @@ impl DeepMerge for SkillsConfig {
         if !other.urls.is_empty() {
             self.urls = other.urls;
         }
+        merge_option_deep(&mut self.hub, other.hub);
+    }
+}
+
+impl DeepMerge for SkillHubConfig {
+    fn deep_merge(&mut self, other: Self) {
+        merge_option_replace(
+            &mut self.artifact_cache_retention_seconds,
+            other.artifact_cache_retention_seconds,
+        );
+        merge_option_replace(&mut self.fetch_timeout_ms, other.fetch_timeout_ms);
+        merge_option_replace(&mut self.max_download_bytes, other.max_download_bytes);
+        merge_option_replace(&mut self.max_extract_bytes, other.max_extract_bytes);
     }
 }
 

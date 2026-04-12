@@ -6,7 +6,12 @@ use ratatui::{
     Frame,
 };
 
-use crate::api::{SkillCatalogEntry, SkillDetailResponse};
+use crate::api::{
+    ManagedSkillRecord, SkillArtifactCacheEntry, SkillAuditEvent, SkillCatalogEntry,
+    SkillDetailResponse, SkillDistributionRecord, SkillGovernanceTimelineEntry, SkillGuardReport,
+    SkillHubPolicy, SkillManagedLifecycleRecord, SkillRemoteInstallPlan, SkillSourceIndexSnapshot,
+    SkillSyncPlan,
+};
 use crate::theme::Theme;
 
 #[derive(Clone, Debug, Default)]
@@ -170,8 +175,27 @@ enum SkillListMode {
     ConfirmDelete { name: String },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SkillBrowsePane {
+    Preview,
+    Timeline,
+}
+
 pub struct SkillListDialog {
     skills: Vec<SkillCatalogEntry>,
+    managed_skills: Vec<ManagedSkillRecord>,
+    source_indices: Vec<SkillSourceIndexSnapshot>,
+    audit_events: Vec<SkillAuditEvent>,
+    governance_timeline: Vec<SkillGovernanceTimelineEntry>,
+    hub_plan: Option<SkillSyncPlan>,
+    remote_install_plan: Option<SkillRemoteInstallPlan>,
+    distributions: Vec<SkillDistributionRecord>,
+    artifact_cache: Vec<SkillArtifactCacheEntry>,
+    hub_policy: Option<SkillHubPolicy>,
+    lifecycle_records: Vec<SkillManagedLifecycleRecord>,
+    guard_reports: Vec<SkillGuardReport>,
+    guard_target_label: Option<String>,
+    selected_hub_source: usize,
     filtered: Vec<usize>,
     query: String,
     detail: Option<SkillDetailResponse>,
@@ -179,6 +203,7 @@ pub struct SkillListDialog {
     detail_scroll: u16,
     state: ListState,
     mode: SkillListMode,
+    browse_pane: SkillBrowsePane,
     open: bool,
 }
 
@@ -188,6 +213,19 @@ impl SkillListDialog {
         state.select(Some(0));
         Self {
             skills: Vec::new(),
+            managed_skills: Vec::new(),
+            source_indices: Vec::new(),
+            audit_events: Vec::new(),
+            governance_timeline: Vec::new(),
+            hub_plan: None,
+            remote_install_plan: None,
+            distributions: Vec::new(),
+            artifact_cache: Vec::new(),
+            hub_policy: None,
+            lifecycle_records: Vec::new(),
+            guard_reports: Vec::new(),
+            guard_target_label: None,
+            selected_hub_source: 0,
             filtered: Vec::new(),
             query: String::new(),
             detail: None,
@@ -195,6 +233,7 @@ impl SkillListDialog {
             detail_scroll: 0,
             state,
             mode: SkillListMode::Browse,
+            browse_pane: SkillBrowsePane::Preview,
             open: false,
         }
     }
@@ -207,9 +246,123 @@ impl SkillListDialog {
         self.filter();
     }
 
+    pub fn set_hub_state(
+        &mut self,
+        mut managed_skills: Vec<ManagedSkillRecord>,
+        mut source_indices: Vec<SkillSourceIndexSnapshot>,
+        mut audit_events: Vec<SkillAuditEvent>,
+    ) {
+        managed_skills.sort_by(|left, right| left.skill_name.cmp(&right.skill_name));
+        source_indices.sort_by(|left, right| left.source.source_id.cmp(&right.source.source_id));
+        audit_events.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+        self.managed_skills = managed_skills;
+        self.source_indices = source_indices;
+        self.audit_events = audit_events;
+        if self.selected_hub_source >= self.source_indices.len() {
+            self.selected_hub_source = 0;
+        }
+    }
+
+    pub fn set_hub_plan(&mut self, plan: SkillSyncPlan) {
+        self.hub_plan = Some(plan);
+    }
+
+    pub fn set_remote_install_plan(&mut self, plan: SkillRemoteInstallPlan) {
+        self.remote_install_plan = Some(plan);
+    }
+
+    pub fn set_remote_hub_state(
+        &mut self,
+        mut distributions: Vec<SkillDistributionRecord>,
+        mut artifact_cache: Vec<SkillArtifactCacheEntry>,
+        hub_policy: SkillHubPolicy,
+        mut lifecycle_records: Vec<SkillManagedLifecycleRecord>,
+    ) {
+        distributions.sort_by(|left, right| left.distribution_id.cmp(&right.distribution_id));
+        artifact_cache
+            .sort_by(|left, right| left.artifact.artifact_id.cmp(&right.artifact.artifact_id));
+        lifecycle_records.sort_by(|left, right| left.distribution_id.cmp(&right.distribution_id));
+        self.distributions = distributions;
+        self.artifact_cache = artifact_cache;
+        self.hub_policy = Some(hub_policy);
+        self.lifecycle_records = lifecycle_records;
+    }
+
+    pub fn set_governance_timeline(&mut self, mut entries: Vec<SkillGovernanceTimelineEntry>) {
+        entries.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+        self.governance_timeline = entries;
+    }
+
+    pub fn set_guard_reports(
+        &mut self,
+        target_label: impl Into<String>,
+        mut reports: Vec<SkillGuardReport>,
+    ) {
+        reports.sort_by(|left, right| left.skill_name.cmp(&right.skill_name));
+        self.guard_reports = reports;
+        self.guard_target_label = Some(target_label.into());
+    }
+
+    pub fn selected_hub_source(&self) -> Option<&crate::api::SkillSourceRef> {
+        self.source_indices
+            .get(self.selected_hub_source)
+            .map(|snapshot| &snapshot.source)
+    }
+
+    pub fn selected_hub_source_snapshot(&self) -> Option<&SkillSourceIndexSnapshot> {
+        self.source_indices.get(self.selected_hub_source)
+    }
+
+    pub fn cycle_hub_source(&mut self) {
+        if self.source_indices.is_empty() {
+            self.selected_hub_source = 0;
+            return;
+        }
+        self.selected_hub_source = (self.selected_hub_source + 1) % self.source_indices.len();
+    }
+
+    pub fn resolve_remote_install_skill_name(&self) -> Option<String> {
+        let source = self.selected_hub_source_snapshot()?;
+        if let Some(selected_skill) = self.selected_skill() {
+            if let Some(entry) = source
+                .entries
+                .iter()
+                .find(|entry| entry.skill_name.eq_ignore_ascii_case(selected_skill))
+            {
+                return Some(entry.skill_name.clone());
+            }
+        }
+
+        let query = self.query.trim();
+        if !query.is_empty() {
+            if let Some(entry) = source
+                .entries
+                .iter()
+                .find(|entry| entry.skill_name.eq_ignore_ascii_case(query))
+            {
+                return Some(entry.skill_name.clone());
+            }
+            let normalized = query.to_ascii_lowercase();
+            if let Some(entry) = source.entries.iter().find(|entry| {
+                entry.skill_name.to_ascii_lowercase().contains(&normalized)
+                    || entry
+                        .description
+                        .as_deref()
+                        .unwrap_or_default()
+                        .to_ascii_lowercase()
+                        .contains(&normalized)
+            }) {
+                return Some(entry.skill_name.clone());
+            }
+        }
+
+        source.entries.first().map(|entry| entry.skill_name.clone())
+    }
+
     pub fn open(&mut self) {
         self.open = true;
         self.mode = SkillListMode::Browse;
+        self.browse_pane = SkillBrowsePane::Preview;
         self.query.clear();
         self.detail_scroll = 0;
         self.filter();
@@ -276,6 +429,14 @@ impl SkillListDialog {
 
     pub fn preview_scroll_down(&mut self) {
         self.detail_scroll = self.detail_scroll.saturating_add(1);
+    }
+
+    pub fn toggle_browse_pane(&mut self) {
+        self.browse_pane = match self.browse_pane {
+            SkillBrowsePane::Preview => SkillBrowsePane::Timeline,
+            SkillBrowsePane::Timeline => SkillBrowsePane::Preview,
+        };
+        self.detail_scroll = 0;
     }
 
     pub fn selected_skill(&self) -> Option<&str> {
@@ -574,6 +735,8 @@ impl SkillListDialog {
                 .iter()
                 .filter_map(|idx| self.skills.get(*idx))
                 .map(|skill| {
+                    let managed_record = self.managed_record_for_skill(&skill.name);
+                    let latest_guard = self.latest_guard_report_for_skill(&skill.name);
                     let mut lines = vec![Line::from(vec![
                         Span::styled("/", Style::default().fg(theme.primary)),
                         Span::styled(
@@ -602,6 +765,17 @@ impl SkillListDialog {
                         detail,
                         Style::default().fg(theme.text_muted),
                     )));
+                    let governance = self.governance_summary_line(skill.name.as_str());
+                    if !governance.is_empty() {
+                        lines.push(Line::from(Span::styled(
+                            governance,
+                            Style::default().fg(governance_line_color(
+                                theme,
+                                managed_record,
+                                latest_guard,
+                            )),
+                        )));
+                    }
                     lines.push(Line::from(Span::styled(
                         skill.location.as_str(),
                         Style::default().fg(theme.text_muted),
@@ -621,9 +795,13 @@ impl SkillListDialog {
             &mut self.state.clone(),
         );
 
+        let pane_title = match self.browse_pane {
+            SkillBrowsePane::Preview => " Preview ",
+            SkillBrowsePane::Timeline => " Governance Timeline ",
+        };
         let preview_block = Block::default()
             .title(Span::styled(
-                " Preview ",
+                pane_title,
                 Style::default()
                     .fg(theme.primary)
                     .add_modifier(Modifier::BOLD),
@@ -634,53 +812,63 @@ impl SkillListDialog {
         let preview_inner = super::dialog_inner(preview_block.inner(content_layout[1]));
         frame.render_widget(preview_block, content_layout[1]);
 
-        let preview_lines = if let Some(detail) = &self.detail {
-            let meta = &detail.skill.meta;
-            let mut lines = vec![
-                Line::from(Span::styled(
-                    meta.name.as_str(),
-                    Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-                )),
-                Line::from(Span::styled(
-                    meta.description.as_str(),
-                    Style::default().fg(theme.text_muted),
-                )),
-                Line::from(Span::styled(
-                    format!(
-                        "{} · {} supporting files · {}",
-                        meta.category.as_deref().unwrap_or("uncategorized"),
-                        meta.supporting_files.len(),
-                        if detail.writable {
-                            "workspace writable"
-                        } else {
-                            "read-only"
-                        }
-                    ),
-                    Style::default().fg(theme.text_muted),
-                )),
-                Line::from(Span::styled(
-                    meta.location.as_str(),
-                    Style::default().fg(theme.text_muted),
-                )),
-                Line::from(""),
-            ];
-            lines.extend(detail.source.lines().map(|line| {
-                Line::from(Span::styled(
-                    line.to_string(),
-                    Style::default().fg(theme.text),
-                ))
-            }));
-            lines
-        } else if let Some(message) = &self.detail_error {
-            vec![Line::from(Span::styled(
-                message.as_str(),
-                Style::default().fg(theme.error),
-            ))]
-        } else {
-            vec![Line::from(Span::styled(
-                "Select a skill to load its raw SKILL.md preview.",
-                Style::default().fg(theme.text_muted),
-            ))]
+        let preview_lines = match self.browse_pane {
+            SkillBrowsePane::Preview => {
+                if let Some(detail) = &self.detail {
+                    let meta = &detail.skill.meta;
+                    let mut lines = self.hub_preview_lines(theme);
+                    lines.extend(vec![
+                        Line::from(Span::styled(
+                            meta.name.as_str(),
+                            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+                        )),
+                        Line::from(Span::styled(
+                            meta.description.as_str(),
+                            Style::default().fg(theme.text_muted),
+                        )),
+                        Line::from(Span::styled(
+                            format!(
+                                "{} · {} supporting files · {}",
+                                meta.category.as_deref().unwrap_or("uncategorized"),
+                                meta.supporting_files.len(),
+                                if detail.writable {
+                                    "workspace writable"
+                                } else {
+                                    "read-only"
+                                }
+                            ),
+                            Style::default().fg(theme.text_muted),
+                        )),
+                        Line::from(Span::styled(
+                            meta.location.as_str(),
+                            Style::default().fg(theme.text_muted),
+                        )),
+                        Line::from(""),
+                    ]);
+                    lines.extend(detail.source.lines().map(|line| {
+                        Line::from(Span::styled(
+                            line.to_string(),
+                            Style::default().fg(theme.text),
+                        ))
+                    }));
+                    lines
+                } else if let Some(message) = &self.detail_error {
+                    let mut lines = self.hub_preview_lines(theme);
+                    lines.push(Line::from(Span::styled(
+                        message.as_str(),
+                        Style::default().fg(theme.error),
+                    )));
+                    lines
+                } else {
+                    let mut lines = self.hub_preview_lines(theme);
+                    lines.push(Line::from(Span::styled(
+                        "Select a skill to load its raw SKILL.md preview.",
+                        Style::default().fg(theme.text_muted),
+                    )));
+                    lines
+                }
+            }
+            SkillBrowsePane::Timeline => self.timeline_lines(theme),
         };
 
         frame.render_widget(
@@ -692,7 +880,7 @@ impl SkillListDialog {
         );
 
         let footer = format!(
-            "Enter insert /skill  c create  e edit  d delete  PgUp/PgDn preview  Esc close  Matched: {}/{}",
+            "Enter insert /skill  c create  e edit  d delete  g guard-skill  G guard-source  i cycle-source  x refresh-index  p plan-sync  a apply-sync  u/U install plan/apply  v/V update plan/apply  D detach  R remove  r refresh-hub  t preview/timeline  PgUp/PgDn scroll  Esc close  Matched: {}/{}",
             matched_count, total_count
         );
         frame.render_widget(
@@ -863,7 +1051,7 @@ impl SkillListDialog {
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(2),
+                Constraint::Length(3),
                 Constraint::Min(10),
                 Constraint::Length(1),
             ])
@@ -872,6 +1060,10 @@ impl SkillListDialog {
         let header = vec![
             Line::from(Span::styled(
                 "Editing raw SKILL.md source from the workspace authority.",
+                Style::default().fg(theme.text_muted),
+            )),
+            Line::from(Span::styled(
+                "Preview/source reads follow the current session-aware catalog before loading detail.",
                 Style::default().fg(theme.text_muted),
             )),
             Line::from(Span::styled(
@@ -970,6 +1162,395 @@ impl SkillListDialog {
             layout[1],
         );
     }
+
+    fn hub_preview_lines(&self, theme: &Theme) -> Vec<Line<'static>> {
+        let pane_label = match self.browse_pane {
+            SkillBrowsePane::Preview => "preview",
+            SkillBrowsePane::Timeline => "timeline",
+        };
+        let selected_source = self.selected_hub_source().map(|source| {
+            format!(
+                "{} · {}",
+                source.source_id,
+                source
+                    .revision
+                    .as_deref()
+                    .unwrap_or(source.locator.as_str())
+            )
+        });
+        let mut lines = vec![
+            Line::from(Span::styled(
+                format!(
+                    "Hub: managed {} · indexed {} · distributions {} · artifacts {} · lifecycle {} · view {}",
+                    self.managed_skills.len(),
+                    self.source_indices.len(),
+                    self.distributions.len(),
+                    self.artifact_cache.len(),
+                    self.lifecycle_records.len(),
+                    pane_label
+                ),
+                Style::default()
+                    .fg(theme.primary)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                format!(
+                    "Selected source: {}",
+                    selected_source.unwrap_or_else(|| "none".to_string())
+                ),
+                Style::default().fg(theme.text_muted),
+            )),
+        ];
+        if let Some(policy) = &self.hub_policy {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "Policy: retention {} · timeout {} · download {} · extract {}",
+                    format_duration_seconds(policy.artifact_cache_retention_seconds),
+                    format_duration_ms(policy.fetch_timeout_ms),
+                    format_bytes(policy.max_download_bytes),
+                    format_bytes(policy.max_extract_bytes),
+                ),
+                Style::default().fg(theme.text_muted),
+            )));
+        }
+        if let Some(plan) = &self.hub_plan {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "Latest sync plan: {} entries for {}",
+                    plan.entries.len(),
+                    plan.source_id
+                ),
+                Style::default().fg(theme.text_muted),
+            )));
+            if let Some(entry) = plan.entries.first() {
+                lines.push(Line::from(Span::styled(
+                    format!("First action: {} -> {:?}", entry.skill_name, entry.action),
+                    Style::default().fg(theme.text_muted),
+                )));
+            }
+        }
+        if let Some(skill_name) = self.resolve_remote_install_skill_name() {
+            lines.push(Line::from(Span::styled(
+                format!("Remote target: {}", skill_name),
+                Style::default().fg(theme.text_muted),
+            )));
+            if let Some(plan) = &self.remote_install_plan {
+                if plan.entry.skill_name.eq_ignore_ascii_case(&skill_name) {
+                    lines.push(Line::from(Span::styled(
+                        format!(
+                            "Latest remote plan: {:?} via {}",
+                            plan.entry.action, plan.source_id
+                        ),
+                        Style::default().fg(theme.text_muted),
+                    )));
+                }
+            }
+            if let Some(source) = self.selected_hub_source_snapshot() {
+                if let Some(entry) = source
+                    .entries
+                    .iter()
+                    .find(|entry| entry.skill_name.eq_ignore_ascii_case(&skill_name))
+                {
+                    let mut entry_summary = String::new();
+                    if let Some(category) =
+                        entry.category.as_deref().filter(|value| !value.is_empty())
+                    {
+                        entry_summary.push_str(category);
+                    } else {
+                        entry_summary.push_str("uncategorized");
+                    }
+                    if let Some(revision) =
+                        entry.revision.as_deref().filter(|value| !value.is_empty())
+                    {
+                        entry_summary.push_str(" · ");
+                        entry_summary.push_str(revision);
+                    }
+                    if let Some(description) = entry
+                        .description
+                        .as_deref()
+                        .filter(|value| !value.is_empty())
+                    {
+                        entry_summary.push_str(" · ");
+                        entry_summary.push_str(description);
+                    }
+                    lines.push(Line::from(Span::styled(
+                        format!("Remote index: {}", entry_summary),
+                        Style::default().fg(theme.text_muted),
+                    )));
+                }
+                if let Some(distribution) = self.distributions.iter().rev().find(|record| {
+                    record.source.source_id == source.source.source_id
+                        && record.skill_name.eq_ignore_ascii_case(&skill_name)
+                }) {
+                    lines.push(Line::from(Span::styled(
+                        format!(
+                            "Distribution: {} · version {} · revision {} · {:?}",
+                            distribution.distribution_id,
+                            distribution.release.version.as_deref().unwrap_or("--"),
+                            distribution.release.revision.as_deref().unwrap_or("--"),
+                            distribution.lifecycle
+                        ),
+                        Style::default().fg(theme.text_muted),
+                    )));
+                    if let Some(cache_entry) = self.artifact_cache.iter().rev().find(|entry| {
+                        entry.artifact.artifact_id == distribution.resolution.artifact.artifact_id
+                    }) {
+                        lines.push(Line::from(Span::styled(
+                            format!(
+                                "Artifact cache: {:?} @ {}",
+                                cache_entry.status, cache_entry.cached_at
+                            ),
+                            Style::default().fg(theme.text_muted),
+                        )));
+                        if let Some(error) = cache_entry
+                            .error
+                            .as_deref()
+                            .filter(|value| !value.is_empty())
+                        {
+                            lines.push(Line::from(Span::styled(
+                                format!("Artifact error: {}", error),
+                                Style::default().fg(theme.error),
+                            )));
+                        }
+                    }
+                }
+                if let Some(lifecycle) = self.lifecycle_records.iter().rev().find(|record| {
+                    record.source_id == source.source.source_id
+                        && record.skill_name.eq_ignore_ascii_case(&skill_name)
+                }) {
+                    lines.push(Line::from(Span::styled(
+                        format!(
+                            "Lifecycle: {:?} @ {}",
+                            lifecycle.state, lifecycle.updated_at
+                        ),
+                        Style::default().fg(theme.text_muted),
+                    )));
+                    if let Some(error) =
+                        lifecycle.error.as_deref().filter(|value| !value.is_empty())
+                    {
+                        lines.push(Line::from(Span::styled(
+                            format!("Lifecycle error: {}", error),
+                            Style::default().fg(theme.error),
+                        )));
+                    }
+                }
+                let indexed = source
+                    .entries
+                    .iter()
+                    .take(6)
+                    .map(|entry| {
+                        let is_target = entry.skill_name.eq_ignore_ascii_case(&skill_name);
+                        Line::from(Span::styled(
+                            format!(
+                                "{} {} ({})",
+                                if is_target { ">" } else { "-" },
+                                entry.skill_name,
+                                entry.revision.as_deref().unwrap_or("unversioned")
+                            ),
+                            Style::default().fg(if is_target {
+                                theme.primary
+                            } else {
+                                theme.text_muted
+                            }),
+                        ))
+                    })
+                    .collect::<Vec<_>>();
+                if !indexed.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        "Indexed remote entries:",
+                        Style::default()
+                            .fg(theme.primary)
+                            .add_modifier(Modifier::BOLD),
+                    )));
+                    lines.extend(indexed);
+                }
+            }
+        }
+        if let Some(target_label) = &self.guard_target_label {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "Latest guard run: {} report(s) for {}",
+                    self.guard_reports.len(),
+                    target_label
+                ),
+                Style::default().fg(theme.text_muted),
+            )));
+            if let Some(report) = self.guard_reports.first() {
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "First guard status: {} -> {:?} ({} violations)",
+                        report.skill_name,
+                        report.status,
+                        report.violations.len()
+                    ),
+                    Style::default().fg(theme.text_muted),
+                )));
+            }
+        }
+        lines.push(Line::from(""));
+        lines
+    }
+
+    fn timeline_lines(&self, theme: &Theme) -> Vec<Line<'static>> {
+        let mut lines = self.hub_preview_lines(theme);
+        let focus_label = self.timeline_focus_label();
+        lines.push(Line::from(Span::styled(
+            format!("Timeline focus: {}", focus_label),
+            Style::default().fg(theme.text_muted),
+        )));
+        let entries = self.focused_timeline_entries();
+        if entries.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "No governance timeline entries for the current selection.",
+                Style::default().fg(theme.text_muted),
+            )));
+            return lines;
+        }
+
+        for entry in entries.iter().take(10) {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("[{}] ", timeline_status_label(entry)),
+                    Style::default().fg(timeline_status_color(theme, entry)),
+                ),
+                Span::styled(
+                    entry.title.clone(),
+                    Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "{} · {} · {}",
+                    timeline_timestamp_label(entry.created_at),
+                    entry.skill_name.as_deref().unwrap_or("--"),
+                    entry.source_id.as_deref().unwrap_or("--")
+                ),
+                Style::default().fg(theme.text_muted),
+            )));
+            lines.push(Line::from(Span::styled(
+                entry.summary.clone(),
+                Style::default().fg(theme.text_muted),
+            )));
+            if let Some(report) = entry.guard_report.as_ref() {
+                for violation in report.violations.iter().take(2) {
+                    lines.push(Line::from(Span::styled(
+                        format!("  - {}: {}", violation.rule_id, violation.message),
+                        Style::default().fg(theme.warning),
+                    )));
+                }
+            } else if let Some(record) = entry.managed_record.as_ref() {
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "  - revision {} · {}",
+                        record.installed_revision.as_deref().unwrap_or("--"),
+                        if record.deleted_locally {
+                            "deleted locally"
+                        } else if record.locally_modified {
+                            "locally modified"
+                        } else {
+                            "clean"
+                        }
+                    ),
+                    Style::default().fg(theme.text_muted),
+                )));
+            }
+            lines.push(Line::from(""));
+        }
+        lines
+    }
+
+    fn timeline_focus_label(&self) -> String {
+        if let Some(skill_name) = self.selected_skill() {
+            return format!("skill `{}`", skill_name);
+        }
+        if let Some(source) = self.selected_hub_source() {
+            return format!("source `{}`", source.source_id);
+        }
+        "all governance entries".to_string()
+    }
+
+    fn focused_timeline_entries(&self) -> Vec<&SkillGovernanceTimelineEntry> {
+        if let Some(skill_name) = self.selected_skill() {
+            let normalized = skill_name.trim().to_ascii_lowercase();
+            let entries = self
+                .governance_timeline
+                .iter()
+                .filter(|entry| {
+                    entry
+                        .skill_name
+                        .as_deref()
+                        .map(|name| name.trim().eq_ignore_ascii_case(&normalized))
+                        .unwrap_or(false)
+                })
+                .collect::<Vec<_>>();
+            if !entries.is_empty() {
+                return entries;
+            }
+        }
+
+        if let Some(source) = self.selected_hub_source() {
+            let entries = self
+                .governance_timeline
+                .iter()
+                .filter(|entry| entry.source_id.as_deref() == Some(source.source_id.as_str()))
+                .collect::<Vec<_>>();
+            if !entries.is_empty() {
+                return entries;
+            }
+        }
+
+        self.governance_timeline.iter().collect::<Vec<_>>()
+    }
+
+    fn managed_record_for_skill(&self, skill_name: &str) -> Option<&ManagedSkillRecord> {
+        self.managed_skills
+            .iter()
+            .find(|record| record.skill_name.eq_ignore_ascii_case(skill_name))
+    }
+
+    fn latest_guard_report_for_skill(
+        &self,
+        skill_name: &str,
+    ) -> Option<&crate::api::SkillGuardReport> {
+        self.governance_timeline
+            .iter()
+            .find(|entry| {
+                entry
+                    .skill_name
+                    .as_deref()
+                    .map(|name| name.eq_ignore_ascii_case(skill_name))
+                    .unwrap_or(false)
+                    && entry.guard_report.is_some()
+            })
+            .and_then(|entry| entry.guard_report.as_ref())
+    }
+
+    fn governance_summary_line(&self, skill_name: &str) -> String {
+        let mut parts = Vec::new();
+        if let Some(record) = self.managed_record_for_skill(skill_name) {
+            let source_label = record
+                .source
+                .as_ref()
+                .map(|source| source.source_id.as_str())
+                .unwrap_or("workspace-local");
+            parts.push(format!("source {}", source_label));
+            if record.deleted_locally {
+                parts.push("deleted locally".to_string());
+            } else if record.locally_modified {
+                parts.push("locally modified".to_string());
+            } else {
+                parts.push("managed clean".to_string());
+            }
+        }
+        if let Some(report) = self.latest_guard_report_for_skill(skill_name) {
+            parts.push(format!(
+                "guard {} ({})",
+                timeline_guard_status_label(report),
+                report.violations.len()
+            ));
+        }
+        parts.join(" · ")
+    }
 }
 
 impl Default for SkillListDialog {
@@ -1014,6 +1595,98 @@ fn field_block_style(theme: &Theme, active: bool) -> Style {
         Style::default().fg(theme.primary)
     } else {
         Style::default().fg(theme.border)
+    }
+}
+
+fn timeline_status_label(entry: &SkillGovernanceTimelineEntry) -> &'static str {
+    match entry.status {
+        crate::api::SkillGovernanceTimelineStatus::Info => "info",
+        crate::api::SkillGovernanceTimelineStatus::Success => "ok",
+        crate::api::SkillGovernanceTimelineStatus::Warn => "warn",
+        crate::api::SkillGovernanceTimelineStatus::Error => "error",
+    }
+}
+
+fn timeline_status_color(
+    theme: &Theme,
+    entry: &SkillGovernanceTimelineEntry,
+) -> ratatui::style::Color {
+    match entry.status {
+        crate::api::SkillGovernanceTimelineStatus::Info => theme.primary,
+        crate::api::SkillGovernanceTimelineStatus::Success => theme.success,
+        crate::api::SkillGovernanceTimelineStatus::Warn => theme.warning,
+        crate::api::SkillGovernanceTimelineStatus::Error => theme.error,
+    }
+}
+
+fn timeline_timestamp_label(timestamp: i64) -> String {
+    if timestamp <= 0 {
+        "timestamp --".to_string()
+    } else {
+        format!("timestamp {}", timestamp)
+    }
+}
+
+fn governance_line_color(
+    theme: &Theme,
+    managed_record: Option<&ManagedSkillRecord>,
+    latest_guard: Option<&crate::api::SkillGuardReport>,
+) -> ratatui::style::Color {
+    if latest_guard
+        .map(|report| report.status == crate::api::SkillGuardStatus::Blocked)
+        .unwrap_or(false)
+    {
+        return theme.error;
+    }
+    if latest_guard
+        .map(|report| report.status == crate::api::SkillGuardStatus::Warn)
+        .unwrap_or(false)
+        || managed_record
+            .map(|record| record.locally_modified || record.deleted_locally)
+            .unwrap_or(false)
+    {
+        return theme.warning;
+    }
+    theme.text_muted
+}
+
+fn timeline_guard_status_label(report: &crate::api::SkillGuardReport) -> &'static str {
+    match report.status {
+        crate::api::SkillGuardStatus::Passed => "passed",
+        crate::api::SkillGuardStatus::Warn => "warn",
+        crate::api::SkillGuardStatus::Blocked => "blocked",
+    }
+}
+
+fn format_duration_seconds(value: u64) -> String {
+    if value % 86_400 == 0 {
+        format!("{}d", value / 86_400)
+    } else if value % 3_600 == 0 {
+        format!("{}h", value / 3_600)
+    } else if value % 60 == 0 {
+        format!("{}m", value / 60)
+    } else {
+        format!("{}s", value)
+    }
+}
+
+fn format_duration_ms(value: u64) -> String {
+    if value % 1000 == 0 {
+        format!("{}s", value / 1000)
+    } else {
+        format!("{}ms", value)
+    }
+}
+
+fn format_bytes(value: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = 1024 * 1024;
+    if value >= MIB && value % MIB == 0 {
+        format!("{} MiB", value / MIB)
+    } else if value >= KIB && value % KIB == 0 {
+        format!("{} KiB", value / KIB)
+    } else {
+        format!("{} B", value)
     }
 }
 

@@ -13,12 +13,13 @@ impl StageSummaryStore {
         Self::default()
     }
 
-    pub(crate) async fn upsert(&self, session_id: &str, summary: StageSummary) {
+    pub(crate) async fn upsert(&self, session_id: &str, summary: StageSummary) -> bool {
         let mut guard = self.summaries.write().await;
-        guard
+        let previous = guard
             .entry(session_id.to_string())
             .or_default()
-            .insert(summary.stage_id.clone(), summary);
+            .insert(summary.stage_id.clone(), summary.clone());
+        previous.as_ref() != Some(&summary)
     }
 
     pub(crate) async fn list_for_session(&self, session_id: &str) -> Vec<StageSummary> {
@@ -91,9 +92,9 @@ mod tests {
     #[tokio::test]
     async fn lists_sorted_by_index_then_stage_id() {
         let store = StageSummaryStore::new();
-        store.upsert("s1", summary("b", Some(2))).await;
-        store.upsert("s1", summary("a", Some(1))).await;
-        store.upsert("s1", summary("z", None)).await;
+        assert!(store.upsert("s1", summary("b", Some(2))).await);
+        assert!(store.upsert("s1", summary("a", Some(1))).await);
+        assert!(store.upsert("s1", summary("z", None)).await);
 
         let ids = store
             .list_for_session("s1")
@@ -107,8 +108,17 @@ mod tests {
     #[tokio::test]
     async fn remove_stage_cleans_empty_session_bucket() {
         let store = StageSummaryStore::new();
-        store.upsert("s1", summary("a", Some(1))).await;
+        assert!(store.upsert("s1", summary("a", Some(1))).await);
         store.remove_stage("s1", "a").await;
         assert!(store.list_for_session("s1").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn upsert_reports_when_summary_is_unchanged() {
+        let store = StageSummaryStore::new();
+        let entry = summary("a", Some(1));
+
+        assert!(store.upsert("s1", entry.clone()).await);
+        assert!(!store.upsert("s1", entry).await);
     }
 }

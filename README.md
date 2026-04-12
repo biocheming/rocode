@@ -7,7 +7,7 @@ RustingOpenCode（简称 ROCode）是 OpenCode 的 Rust 实现与演进版本，
 ## 当前状态
 
 - 软件名：`RustingOpenCode` / `ROCode`
-- 版本标识：`v2026.4.4`
+- 版本标识：`v2026.4.12`
 - 可执行命令：`rocode`
 - 公共 scheduler presets：`sisyphus` / `prometheus` / `atlas` / `hephaestus`
 

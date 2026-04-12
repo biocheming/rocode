@@ -1,6 +1,6 @@
 # ROCode Docs
 
-文档基线：`v2026.4.4`（更新日期：`2026-04-04`）
+文档基线：`v2026.4.12`（更新日期：`2026-04-12`）
 
 This directory contains product-facing examples and design references for ROCode features.
 
@@ -95,3 +95,41 @@ The current schema IDs are:
 - `/` 是正式 Web 入口
 - `/web/*` 是正式静态资源前缀
 - `crates/rocode-server/web-ui` 已从主线构建中清理
+
+## Skill Hub CLI
+
+远程 skill distribution / artifact cache / managed lifecycle 的正式 CLI 入口现在是：
+
+```bash
+rocode skill hub status
+rocode skill hub distributions
+rocode skill hub artifact-cache
+rocode skill hub policy
+rocode skill hub lifecycle
+rocode skill hub install-plan --source-id <id> --source-kind registry --locator <locator> --skill-name <name>
+rocode skill hub install-apply --session-id <session> --source-id <id> --source-kind registry --locator <locator> --skill-name <name>
+rocode skill hub update-apply --session-id <session> --source-id <id> --source-kind registry --locator <locator> --skill-name <name>
+rocode skill hub detach --session-id <session> --source-id <id> --source-kind registry --locator <locator> --skill-name <name>
+rocode skill hub remove --session-id <session> --source-id <id> --source-kind registry --locator <locator> --skill-name <name>
+```
+
+所有读写命令都通过 `rocode-server` 的 `/skill/hub/*` 路由进入 authority，不在 CLI 侧直接执行副作用。
+
+## Skill Hub Policy
+
+第三卷 phase 7 的 artifact policy 通过唯一配置真相 `skills.hub` 提供，authority 会把当前生效值暴露到 `/skill/hub/policy`，CLI/TUI/Web 都应读取这一正式读面，而不是各端自己解析配置文件。
+
+`rocode.jsonc` 示例：
+
+```jsonc
+{
+  "skills": {
+    "hub": {
+      "artifactCacheRetentionSeconds": 604800,
+      "fetchTimeoutMs": 30000,
+      "maxDownloadBytes": 8388608,
+      "maxExtractBytes": 8388608
+    }
+  }
+}
+```

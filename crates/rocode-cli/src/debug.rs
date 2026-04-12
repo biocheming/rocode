@@ -162,10 +162,16 @@ fn resolve_context_docs_registry_path_from_config() -> anyhow::Result<PathBuf> {
     }
 }
 
-async fn resolve_server_skill_catalog() -> anyhow::Result<Vec<serde_json::Value>> {
+async fn resolve_server_skill_catalog(
+    session_id: Option<&str>,
+) -> anyhow::Result<Vec<serde_json::Value>> {
     let base_url = discover_or_start_server(None).await?;
     let client = CliApiClient::new(base_url);
-    let mut skills = client.list_skills(None).await?;
+    let query = session_id.map(|session_id| rocode_tui::api::SkillCatalogQuery {
+        session_id: Some(session_id.to_string()),
+        ..Default::default()
+    });
+    let mut skills = client.list_skills(query.as_ref()).await?;
     skills.sort_by(|left, right| {
         left.name
             .to_ascii_lowercase()
@@ -177,11 +183,344 @@ async fn resolve_server_skill_catalog() -> anyhow::Result<Vec<serde_json::Value>
         .collect())
 }
 
-async fn resolve_server_skill_detail(name: &str) -> anyhow::Result<serde_json::Value> {
+async fn resolve_server_skill_detail(
+    name: &str,
+    session_id: Option<&str>,
+) -> anyhow::Result<serde_json::Value> {
     let base_url = discover_or_start_server(None).await?;
     let client = CliApiClient::new(base_url);
-    let detail = client.get_skill_detail(name).await?;
+    let detail = client
+        .get_skill_detail(&rocode_tui::api::SkillDetailQuery {
+            name: name.to_string(),
+            session_id: session_id.map(ToOwned::to_owned),
+            ..Default::default()
+        })
+        .await?;
     Ok(serde_json::json!(detail))
+}
+
+fn debug_skill_source_kind_to_api(kind: SkillSourceKindArg) -> rocode_tui::api::SkillSourceKind {
+    match kind {
+        SkillSourceKindArg::Bundled => rocode_tui::api::SkillSourceKind::Bundled,
+        SkillSourceKindArg::LocalPath => rocode_tui::api::SkillSourceKind::LocalPath,
+        SkillSourceKindArg::Git => rocode_tui::api::SkillSourceKind::Git,
+        SkillSourceKindArg::Archive => rocode_tui::api::SkillSourceKind::Archive,
+        SkillSourceKindArg::Registry => rocode_tui::api::SkillSourceKind::Registry,
+    }
+}
+
+async fn resolve_server_skill_hub_managed() -> anyhow::Result<serde_json::Value> {
+    let base_url = discover_or_start_server(None).await?;
+    let client = CliApiClient::new(base_url);
+    Ok(serde_json::json!(client.list_skill_hub_managed().await?))
+}
+
+async fn resolve_server_skill_hub_index() -> anyhow::Result<serde_json::Value> {
+    let base_url = discover_or_start_server(None).await?;
+    let client = CliApiClient::new(base_url);
+    Ok(serde_json::json!(client.list_skill_hub_index().await?))
+}
+
+async fn resolve_server_skill_hub_index_refresh(
+    source_id: &str,
+    source_kind: SkillSourceKindArg,
+    locator: &str,
+    revision: Option<&str>,
+) -> anyhow::Result<serde_json::Value> {
+    let base_url = discover_or_start_server(None).await?;
+    let client = CliApiClient::new(base_url);
+    let response = client
+        .refresh_skill_hub_index(&rocode_tui::api::SkillHubIndexRefreshRequest {
+            source: rocode_tui::api::SkillSourceRef {
+                source_id: source_id.to_string(),
+                source_kind: debug_skill_source_kind_to_api(source_kind),
+                locator: locator.to_string(),
+                revision: revision.map(ToOwned::to_owned),
+            },
+        })
+        .await?;
+    Ok(serde_json::json!(response))
+}
+
+async fn resolve_server_skill_hub_audit() -> anyhow::Result<serde_json::Value> {
+    let base_url = discover_or_start_server(None).await?;
+    let client = CliApiClient::new(base_url);
+    Ok(serde_json::json!(client.list_skill_hub_audit().await?))
+}
+
+async fn resolve_server_skill_hub_timeline(
+    skill_name: Option<&str>,
+    source_id: Option<&str>,
+    limit: Option<usize>,
+) -> anyhow::Result<serde_json::Value> {
+    let base_url = discover_or_start_server(None).await?;
+    let client = CliApiClient::new(base_url);
+    let response = client
+        .list_skill_hub_timeline(&rocode_tui::api::SkillHubTimelineQuery {
+            skill_name: skill_name
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
+            source_id: source_id
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
+            limit,
+        })
+        .await?;
+    Ok(serde_json::json!(response))
+}
+
+async fn resolve_server_skill_hub_guard(
+    name: Option<&str>,
+    source_id: Option<&str>,
+    source_kind: Option<SkillSourceKindArg>,
+    locator: Option<&str>,
+    revision: Option<&str>,
+) -> anyhow::Result<serde_json::Value> {
+    let base_url = discover_or_start_server(None).await?;
+    let client = CliApiClient::new(base_url);
+    let request = if let Some(name) = name.map(str::trim).filter(|value| !value.is_empty()) {
+        rocode_tui::api::SkillHubGuardRunRequest {
+            skill_name: Some(name.to_string()),
+            source: None,
+        }
+    } else {
+        let source_id = source_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("--source-id is required when --name is not set"))?;
+        let source_kind = source_kind
+            .ok_or_else(|| anyhow::anyhow!("--source-kind is required when --name is not set"))?;
+        let locator = locator
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("--locator is required when --name is not set"))?;
+        rocode_tui::api::SkillHubGuardRunRequest {
+            skill_name: None,
+            source: Some(rocode_tui::api::SkillSourceRef {
+                source_id: source_id.to_string(),
+                source_kind: debug_skill_source_kind_to_api(source_kind),
+                locator: locator.to_string(),
+                revision: revision.map(ToOwned::to_owned),
+            }),
+        }
+    };
+    Ok(serde_json::json!(
+        client.run_skill_hub_guard(&request).await?
+    ))
+}
+
+async fn resolve_server_skill_hub_sync_plan(
+    source_id: &str,
+    source_kind: SkillSourceKindArg,
+    locator: &str,
+    revision: Option<&str>,
+) -> anyhow::Result<serde_json::Value> {
+    let base_url = discover_or_start_server(None).await?;
+    let client = CliApiClient::new(base_url);
+    let response = client
+        .plan_skill_hub_sync(&rocode_tui::api::SkillHubSyncPlanRequest {
+            source: rocode_tui::api::SkillSourceRef {
+                source_id: source_id.to_string(),
+                source_kind: debug_skill_source_kind_to_api(source_kind),
+                locator: locator.to_string(),
+                revision: revision.map(ToOwned::to_owned),
+            },
+        })
+        .await?;
+    Ok(serde_json::json!(response))
+}
+
+async fn resolve_server_skill_hub_sync_apply(
+    session_id: &str,
+    source_id: &str,
+    source_kind: SkillSourceKindArg,
+    locator: &str,
+    revision: Option<&str>,
+) -> anyhow::Result<serde_json::Value> {
+    let base_url = discover_or_start_server(None).await?;
+    let client = CliApiClient::new(base_url);
+    let response = client
+        .apply_skill_hub_sync(&rocode_tui::api::SkillHubSyncApplyRequest {
+            session_id: session_id.to_string(),
+            source: rocode_tui::api::SkillSourceRef {
+                source_id: source_id.to_string(),
+                source_kind: debug_skill_source_kind_to_api(source_kind),
+                locator: locator.to_string(),
+                revision: revision.map(ToOwned::to_owned),
+            },
+        })
+        .await?;
+    Ok(serde_json::json!(response))
+}
+
+async fn resolve_server_skill_hub_distributions() -> anyhow::Result<serde_json::Value> {
+    let base_url = discover_or_start_server(None).await?;
+    let client = CliApiClient::new(base_url);
+    Ok(serde_json::json!(
+        client.list_skill_hub_distributions().await?
+    ))
+}
+
+async fn resolve_server_skill_hub_artifact_cache() -> anyhow::Result<serde_json::Value> {
+    let base_url = discover_or_start_server(None).await?;
+    let client = CliApiClient::new(base_url);
+    Ok(serde_json::json!(
+        client.list_skill_hub_artifact_cache().await?
+    ))
+}
+
+async fn resolve_server_skill_hub_lifecycle() -> anyhow::Result<serde_json::Value> {
+    let base_url = discover_or_start_server(None).await?;
+    let client = CliApiClient::new(base_url);
+    Ok(serde_json::json!(client.list_skill_hub_lifecycle().await?))
+}
+
+async fn resolve_server_skill_hub_install_plan(
+    source_id: &str,
+    source_kind: SkillSourceKindArg,
+    locator: &str,
+    skill_name: &str,
+    revision: Option<&str>,
+) -> anyhow::Result<serde_json::Value> {
+    let base_url = discover_or_start_server(None).await?;
+    let client = CliApiClient::new(base_url);
+    let response = client
+        .plan_skill_hub_remote_install(&rocode_tui::api::SkillHubRemoteInstallPlanRequest {
+            source: rocode_tui::api::SkillSourceRef {
+                source_id: source_id.to_string(),
+                source_kind: debug_skill_source_kind_to_api(source_kind),
+                locator: locator.to_string(),
+                revision: revision.map(ToOwned::to_owned),
+            },
+            skill_name: skill_name.to_string(),
+        })
+        .await?;
+    Ok(serde_json::json!(response))
+}
+
+async fn resolve_server_skill_hub_install_apply(
+    session_id: &str,
+    source_id: &str,
+    source_kind: SkillSourceKindArg,
+    locator: &str,
+    skill_name: &str,
+    revision: Option<&str>,
+) -> anyhow::Result<serde_json::Value> {
+    let base_url = discover_or_start_server(None).await?;
+    let client = CliApiClient::new(base_url);
+    let response = client
+        .apply_skill_hub_remote_install(&rocode_tui::api::SkillHubRemoteInstallApplyRequest {
+            session_id: session_id.to_string(),
+            source: rocode_tui::api::SkillSourceRef {
+                source_id: source_id.to_string(),
+                source_kind: debug_skill_source_kind_to_api(source_kind),
+                locator: locator.to_string(),
+                revision: revision.map(ToOwned::to_owned),
+            },
+            skill_name: skill_name.to_string(),
+        })
+        .await?;
+    Ok(serde_json::json!(response))
+}
+
+async fn resolve_server_skill_hub_update_plan(
+    source_id: &str,
+    source_kind: SkillSourceKindArg,
+    locator: &str,
+    skill_name: &str,
+    revision: Option<&str>,
+) -> anyhow::Result<serde_json::Value> {
+    let base_url = discover_or_start_server(None).await?;
+    let client = CliApiClient::new(base_url);
+    let response = client
+        .plan_skill_hub_remote_update(&rocode_tui::api::SkillHubRemoteUpdatePlanRequest {
+            source: rocode_tui::api::SkillSourceRef {
+                source_id: source_id.to_string(),
+                source_kind: debug_skill_source_kind_to_api(source_kind),
+                locator: locator.to_string(),
+                revision: revision.map(ToOwned::to_owned),
+            },
+            skill_name: skill_name.to_string(),
+        })
+        .await?;
+    Ok(serde_json::json!(response))
+}
+
+async fn resolve_server_skill_hub_update_apply(
+    session_id: &str,
+    source_id: &str,
+    source_kind: SkillSourceKindArg,
+    locator: &str,
+    skill_name: &str,
+    revision: Option<&str>,
+) -> anyhow::Result<serde_json::Value> {
+    let base_url = discover_or_start_server(None).await?;
+    let client = CliApiClient::new(base_url);
+    let response = client
+        .apply_skill_hub_remote_update(&rocode_tui::api::SkillHubRemoteUpdateApplyRequest {
+            session_id: session_id.to_string(),
+            source: rocode_tui::api::SkillSourceRef {
+                source_id: source_id.to_string(),
+                source_kind: debug_skill_source_kind_to_api(source_kind),
+                locator: locator.to_string(),
+                revision: revision.map(ToOwned::to_owned),
+            },
+            skill_name: skill_name.to_string(),
+        })
+        .await?;
+    Ok(serde_json::json!(response))
+}
+
+async fn resolve_server_skill_hub_detach(
+    session_id: &str,
+    source_id: &str,
+    source_kind: SkillSourceKindArg,
+    locator: &str,
+    skill_name: &str,
+    revision: Option<&str>,
+) -> anyhow::Result<serde_json::Value> {
+    let base_url = discover_or_start_server(None).await?;
+    let client = CliApiClient::new(base_url);
+    let response = client
+        .detach_skill_hub_managed(&rocode_tui::api::SkillHubManagedDetachRequest {
+            session_id: session_id.to_string(),
+            source: rocode_tui::api::SkillSourceRef {
+                source_id: source_id.to_string(),
+                source_kind: debug_skill_source_kind_to_api(source_kind),
+                locator: locator.to_string(),
+                revision: revision.map(ToOwned::to_owned),
+            },
+            skill_name: skill_name.to_string(),
+        })
+        .await?;
+    Ok(serde_json::json!(response))
+}
+
+async fn resolve_server_skill_hub_remove(
+    session_id: &str,
+    source_id: &str,
+    source_kind: SkillSourceKindArg,
+    locator: &str,
+    skill_name: &str,
+    revision: Option<&str>,
+) -> anyhow::Result<serde_json::Value> {
+    let base_url = discover_or_start_server(None).await?;
+    let client = CliApiClient::new(base_url);
+    let response = client
+        .remove_skill_hub_managed(&rocode_tui::api::SkillHubManagedRemoveRequest {
+            session_id: session_id.to_string(),
+            source: rocode_tui::api::SkillSourceRef {
+                source_id: source_id.to_string(),
+                source_kind: debug_skill_source_kind_to_api(source_kind),
+                locator: locator.to_string(),
+                revision: revision.map(ToOwned::to_owned),
+            },
+            skill_name: skill_name.to_string(),
+        })
+        .await?;
+    Ok(serde_json::json!(response))
 }
 
 pub(crate) async fn handle_debug_command(action: DebugCommands) -> anyhow::Result<()> {
@@ -225,17 +564,228 @@ pub(crate) async fn handle_debug_command(action: DebugCommands) -> anyhow::Resul
             println!("{}", serde_json::to_string_pretty(&config)?);
         }
         DebugCommands::Skill => {
-            let list = resolve_server_skill_catalog().await?;
+            let list = resolve_server_skill_catalog(None).await?;
             println!("{}", serde_json::to_string_pretty(&list)?);
         }
         DebugCommands::Skills { action } => match action {
-            DebugSkillsCommands::List => {
-                let list = resolve_server_skill_catalog().await?;
+            DebugSkillsCommands::List { session_id } => {
+                let list = resolve_server_skill_catalog(session_id.as_deref()).await?;
                 println!("{}", serde_json::to_string_pretty(&list)?);
             }
-            DebugSkillsCommands::View { name } => {
-                let detail = resolve_server_skill_detail(&name).await?;
+            DebugSkillsCommands::View { name, session_id } => {
+                let detail = resolve_server_skill_detail(&name, session_id.as_deref()).await?;
                 println!("{}", serde_json::to_string_pretty(&detail)?);
+            }
+            DebugSkillsCommands::Managed => {
+                let value = resolve_server_skill_hub_managed().await?;
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
+            DebugSkillsCommands::Index => {
+                let value = resolve_server_skill_hub_index().await?;
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
+            DebugSkillsCommands::Distributions => {
+                let value = resolve_server_skill_hub_distributions().await?;
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
+            DebugSkillsCommands::ArtifactCache => {
+                let value = resolve_server_skill_hub_artifact_cache().await?;
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
+            DebugSkillsCommands::Lifecycle => {
+                let value = resolve_server_skill_hub_lifecycle().await?;
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
+            DebugSkillsCommands::IndexRefresh {
+                source_id,
+                source_kind,
+                locator,
+                revision,
+            } => {
+                let value = resolve_server_skill_hub_index_refresh(
+                    &source_id,
+                    source_kind,
+                    &locator,
+                    revision.as_deref(),
+                )
+                .await?;
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
+            DebugSkillsCommands::Audit => {
+                let value = resolve_server_skill_hub_audit().await?;
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
+            DebugSkillsCommands::Timeline {
+                skill_name,
+                source_id,
+                limit,
+            } => {
+                let value = resolve_server_skill_hub_timeline(
+                    skill_name.as_deref(),
+                    source_id.as_deref(),
+                    limit,
+                )
+                .await?;
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
+            DebugSkillsCommands::Guard {
+                name,
+                source_id,
+                source_kind,
+                locator,
+                revision,
+            } => {
+                let value = resolve_server_skill_hub_guard(
+                    name.as_deref(),
+                    source_id.as_deref(),
+                    source_kind,
+                    locator.as_deref(),
+                    revision.as_deref(),
+                )
+                .await?;
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
+            DebugSkillsCommands::SyncPlan {
+                source_id,
+                source_kind,
+                locator,
+                revision,
+            } => {
+                let value = resolve_server_skill_hub_sync_plan(
+                    &source_id,
+                    source_kind,
+                    &locator,
+                    revision.as_deref(),
+                )
+                .await?;
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
+            DebugSkillsCommands::SyncApply {
+                session_id,
+                source_id,
+                source_kind,
+                locator,
+                revision,
+            } => {
+                let value = resolve_server_skill_hub_sync_apply(
+                    &session_id,
+                    &source_id,
+                    source_kind,
+                    &locator,
+                    revision.as_deref(),
+                )
+                .await?;
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
+            DebugSkillsCommands::InstallPlan {
+                source_id,
+                source_kind,
+                locator,
+                skill_name,
+                revision,
+            } => {
+                let value = resolve_server_skill_hub_install_plan(
+                    &source_id,
+                    source_kind,
+                    &locator,
+                    &skill_name,
+                    revision.as_deref(),
+                )
+                .await?;
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
+            DebugSkillsCommands::InstallApply {
+                session_id,
+                source_id,
+                source_kind,
+                locator,
+                skill_name,
+                revision,
+            } => {
+                let value = resolve_server_skill_hub_install_apply(
+                    &session_id,
+                    &source_id,
+                    source_kind,
+                    &locator,
+                    &skill_name,
+                    revision.as_deref(),
+                )
+                .await?;
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
+            DebugSkillsCommands::UpdatePlan {
+                source_id,
+                source_kind,
+                locator,
+                skill_name,
+                revision,
+            } => {
+                let value = resolve_server_skill_hub_update_plan(
+                    &source_id,
+                    source_kind,
+                    &locator,
+                    &skill_name,
+                    revision.as_deref(),
+                )
+                .await?;
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
+            DebugSkillsCommands::UpdateApply {
+                session_id,
+                source_id,
+                source_kind,
+                locator,
+                skill_name,
+                revision,
+            } => {
+                let value = resolve_server_skill_hub_update_apply(
+                    &session_id,
+                    &source_id,
+                    source_kind,
+                    &locator,
+                    &skill_name,
+                    revision.as_deref(),
+                )
+                .await?;
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
+            DebugSkillsCommands::Detach {
+                session_id,
+                source_id,
+                source_kind,
+                locator,
+                skill_name,
+                revision,
+            } => {
+                let value = resolve_server_skill_hub_detach(
+                    &session_id,
+                    &source_id,
+                    source_kind,
+                    &locator,
+                    &skill_name,
+                    revision.as_deref(),
+                )
+                .await?;
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
+            DebugSkillsCommands::Remove {
+                session_id,
+                source_id,
+                source_kind,
+                locator,
+                skill_name,
+                revision,
+            } => {
+                let value = resolve_server_skill_hub_remove(
+                    &session_id,
+                    &source_id,
+                    source_kind,
+                    &locator,
+                    &skill_name,
+                    revision.as_deref(),
+                )
+                .await?;
+                println!("{}", serde_json::to_string_pretty(&value)?);
             }
         },
         DebugCommands::Scrap => {

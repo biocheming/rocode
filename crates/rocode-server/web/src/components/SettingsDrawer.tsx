@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
+import { SkillGovernanceTimeline } from "./SkillGovernanceTimeline";
 
 type SettingsTabId =
   | "general"
@@ -169,6 +170,238 @@ interface SkillManageResponseLike {
     location: string;
     supporting_file?: string | null;
   };
+  guard_report?: SkillGuardReportLike | null;
+}
+
+interface SkillGuardViolationLike {
+  rule_id: string;
+  severity: "info" | "warn" | "error";
+  message: string;
+  file_path?: string | null;
+}
+
+interface SkillGuardReportLike {
+  skill_name: string;
+  status: "passed" | "warn" | "blocked";
+  violations: SkillGuardViolationLike[];
+  scanned_at: number;
+}
+
+interface SkillSourceRefLike {
+  source_id: string;
+  source_kind: "bundled" | "local_path" | "git" | "archive" | "registry";
+  locator: string;
+  revision?: string | null;
+}
+
+interface ManagedSkillRecordLike {
+  skill_name: string;
+  source?: SkillSourceRefLike | null;
+  installed_revision?: string | null;
+  local_hash?: string | null;
+  last_synced_at?: number | null;
+  locally_modified: boolean;
+  deleted_locally: boolean;
+}
+
+interface SkillSourceIndexEntryLike {
+  skill_name: string;
+  description?: string | null;
+  category?: string | null;
+  revision?: string | null;
+}
+
+interface SkillSourceIndexSnapshotLike {
+  source: SkillSourceRefLike;
+  updated_at: number;
+  entries: SkillSourceIndexEntryLike[];
+}
+
+interface SkillAuditEventLike {
+  event_id: string;
+  kind: string;
+  skill_name?: string | null;
+  source_id?: string | null;
+  actor: string;
+  created_at: number;
+  payload: unknown;
+}
+
+interface SkillHubManagedResponseLike {
+  managed_skills: ManagedSkillRecordLike[];
+}
+
+interface SkillHubIndexResponseLike {
+  source_indices: SkillSourceIndexSnapshotLike[];
+}
+
+interface SkillHubIndexRefreshResponseLike {
+  snapshot: SkillSourceIndexSnapshotLike;
+}
+
+interface SkillArtifactRefLike {
+  artifact_id: string;
+  kind: string;
+  locator: string;
+  checksum?: string | null;
+  size_bytes?: number | null;
+}
+
+interface SkillDistributionReleaseLike {
+  version?: string | null;
+  revision?: string | null;
+  checksum?: string | null;
+  manifest_path?: string | null;
+  published_at?: number | null;
+}
+
+interface SkillDistributionResolutionLike {
+  resolved_at: number;
+  resolver_kind: string;
+  artifact: SkillArtifactRefLike;
+}
+
+interface SkillInstalledDistributionLike {
+  installed_at: number;
+  workspace_skill_path: string;
+  installed_revision?: string | null;
+  local_hash?: string | null;
+}
+
+interface SkillDistributionRecordLike {
+  distribution_id: string;
+  source: SkillSourceRefLike;
+  skill_name: string;
+  release: SkillDistributionReleaseLike;
+  resolution: SkillDistributionResolutionLike;
+  installed?: SkillInstalledDistributionLike | null;
+  lifecycle: string;
+}
+
+interface SkillManagedLifecycleRecordLike {
+  distribution_id: string;
+  source_id: string;
+  skill_name: string;
+  state: string;
+  updated_at: number;
+  error?: string | null;
+}
+
+interface SkillHubDistributionResponseLike {
+  distributions: SkillDistributionRecordLike[];
+}
+
+interface SkillHubArtifactCacheResponseLike {
+  artifact_cache: SkillArtifactCacheEntryLike[];
+}
+
+interface SkillHubPolicyLike {
+  artifact_cache_retention_seconds: number;
+  fetch_timeout_ms: number;
+  max_download_bytes: number;
+  max_extract_bytes: number;
+}
+
+interface SkillHubPolicyResponseLike {
+  policy: SkillHubPolicyLike;
+}
+
+interface SkillHubLifecycleResponseLike {
+  lifecycle: SkillManagedLifecycleRecordLike[];
+}
+
+interface SkillHubAuditResponseLike {
+  audit_events: SkillAuditEventLike[];
+}
+
+interface SkillGovernanceTimelineEntryLike {
+  entry_id: string;
+  kind: string;
+  created_at: number;
+  skill_name?: string | null;
+  source_id?: string | null;
+  actor?: string | null;
+  title: string;
+  summary: string;
+  status: "info" | "success" | "warn" | "error";
+  managed_record?: ManagedSkillRecordLike | null;
+  guard_report?: SkillGuardReportLike | null;
+}
+
+interface SkillHubTimelineResponseLike {
+  entries: SkillGovernanceTimelineEntryLike[];
+}
+
+interface SkillSyncEntryLike {
+  skill_name: string;
+  action: string;
+  reason: string;
+}
+
+interface SkillSyncPlanLike {
+  source_id: string;
+  entries: SkillSyncEntryLike[];
+}
+
+interface SkillHubSyncPlanResponseLike {
+  plan: SkillSyncPlanLike;
+  guard_reports?: SkillGuardReportLike[];
+}
+
+interface SkillHubGuardRunRequestLike {
+  skill_name?: string;
+  source?: SkillSourceRefLike;
+}
+
+interface SkillHubGuardRunResponseLike {
+  reports: SkillGuardReportLike[];
+}
+
+interface SkillRemoteInstallEntryLike {
+  distribution_id: string;
+  source_id: string;
+  skill_name: string;
+  action: "install" | "update";
+  reason: string;
+}
+
+interface SkillRemoteInstallPlanLike {
+  source_id: string;
+  distribution: SkillDistributionRecordLike;
+  entry: SkillRemoteInstallEntryLike;
+}
+
+interface SkillArtifactCacheEntryLike {
+  artifact: SkillArtifactRefLike;
+  cached_at: number;
+  local_path: string;
+  extracted_path?: string | null;
+  status: string;
+  error?: string | null;
+}
+
+interface SkillGovernanceWriteResultLike {
+  action: string;
+  skill_name: string;
+  location: string;
+  supporting_file?: string | null;
+}
+
+interface SkillRemoteInstallResponseLike {
+  plan: SkillRemoteInstallPlanLike;
+  artifact_cache: SkillArtifactCacheEntryLike;
+  guard_report?: SkillGuardReportLike | null;
+  result: SkillGovernanceWriteResultLike;
+}
+
+interface SkillHubManagedDetachResponseLike {
+  lifecycle: SkillManagedLifecycleRecordLike;
+}
+
+interface SkillHubManagedRemoveResponseLike {
+  lifecycle: SkillManagedLifecycleRecordLike;
+  deleted_from_workspace: boolean;
+  result?: SkillGovernanceWriteResultLike | null;
 }
 
 interface RefreshProviderCatalogueResponse {
@@ -256,6 +489,53 @@ function isolatedWorkspaceNotice(tab: SettingsTabId): string | null {
   }
 }
 
+function managedSkillStateLabel(record: ManagedSkillRecordLike): string {
+  if (record.deleted_locally) return "deleted locally";
+  if (record.locally_modified) return "locally modified";
+  return "managed clean";
+}
+
+function latestGuardStatusLabel(report: SkillGuardReportLike): string {
+  switch (report.status) {
+    case "blocked":
+      return "guard blocked";
+    case "warn":
+      return "guard warn";
+    default:
+      return "guard passed";
+  }
+}
+
+function lifecycleStatusClass(state: string): string {
+  const normalized = state.trim().toLowerCase();
+  if (normalized.includes("failed") || normalized === "diverged") {
+    return "border-red-300 bg-red-50 text-red-800 dark:border-red-700 dark:bg-red-950/60 dark:text-red-300";
+  }
+  if (
+    normalized === "updateavailable" ||
+    normalized === "update_available" ||
+    normalized === "plannedinstall" ||
+    normalized === "planned_install" ||
+    normalized === "removepending" ||
+    normalized === "remove_pending"
+  ) {
+    return "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200";
+  }
+  if (normalized === "installed" || normalized === "fetched" || normalized === "resolved") {
+    return "border-green-300 bg-green-50 text-green-800 dark:border-green-700 dark:bg-green-950 dark:text-green-300";
+  }
+  return "border-border bg-card/80 text-muted-foreground";
+}
+
+function unixTimeLabel(value?: number | null): string {
+  if (!value) return "--";
+  try {
+    return new Date(value * 1000).toLocaleString();
+  } catch {
+    return String(value);
+  }
+}
+
 function formatError(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error ?? "Unknown error");
@@ -263,6 +543,31 @@ function formatError(error: unknown): string {
 
 function stringifyJson(value: unknown) {
   return JSON.stringify(value ?? {}, null, 2);
+}
+
+function formatHubDurationSeconds(value?: number | null): string {
+  if (!value) return "--";
+  if (value % 86400 === 0) return `${value / 86400}d`;
+  if (value % 3600 === 0) return `${value / 3600}h`;
+  if (value % 60 === 0) return `${value / 60}m`;
+  return `${value}s`;
+}
+
+function formatHubDurationMs(value?: number | null): string {
+  if (!value) return "--";
+  if (value % 1000 === 0) return `${value / 1000}s`;
+  return `${value}ms`;
+}
+
+function formatHubBytes(value?: number | null): string {
+  if (!value) return "--";
+  if (value >= 1024 * 1024 && value % (1024 * 1024) === 0) {
+    return `${value / (1024 * 1024)} MiB`;
+  }
+  if (value >= 1024 && value % 1024 === 0) {
+    return `${value / 1024} KiB`;
+  }
+  return `${value} bytes`;
 }
 
 function objectRecord(value: unknown): Record<string, unknown> {
@@ -361,6 +666,23 @@ export function SettingsDrawer({
   const [lspStatus, setLspStatus] = useState<LspStatus | null>(null);
   const [formatterStatus, setFormatterStatus] = useState<FormatterStatus | null>(null);
   const [skillCatalog, setSkillCatalog] = useState<SkillCatalogEntry[]>([]);
+  const [managedSkills, setManagedSkills] = useState<ManagedSkillRecordLike[]>([]);
+  const [skillSourceIndices, setSkillSourceIndices] = useState<SkillSourceIndexSnapshotLike[]>([]);
+  const [skillDistributions, setSkillDistributions] = useState<SkillDistributionRecordLike[]>([]);
+  const [skillArtifactCache, setSkillArtifactCache] = useState<SkillArtifactCacheEntryLike[]>([]);
+  const [skillHubPolicy, setSkillHubPolicy] = useState<SkillHubPolicyLike | null>(null);
+  const [skillLifecycle, setSkillLifecycle] = useState<SkillManagedLifecycleRecordLike[]>([]);
+  const [skillAuditEvents, setSkillAuditEvents] = useState<SkillAuditEventLike[]>([]);
+  const [skillGovernanceTimeline, setSkillGovernanceTimeline] = useState<SkillGovernanceTimelineEntryLike[]>([]);
+  const [skillSyncSourceId, setSkillSyncSourceId] = useState("");
+  const [skillSyncSourceKind, setSkillSyncSourceKind] = useState<SkillSourceRefLike["source_kind"]>("local_path");
+  const [skillSyncLocator, setSkillSyncLocator] = useState("");
+  const [skillSyncRevision, setSkillSyncRevision] = useState("");
+  const [skillSyncPlan, setSkillSyncPlan] = useState<SkillSyncPlanLike | null>(null);
+  const [remoteInstallSkillName, setRemoteInstallSkillName] = useState("");
+  const [remoteInstallPlan, setRemoteInstallPlan] = useState<SkillRemoteInstallPlanLike | null>(null);
+  const [skillGuardReports, setSkillGuardReports] = useState<SkillGuardReportLike[]>([]);
+  const [skillGuardTarget, setSkillGuardTarget] = useState<string | null>(null);
   const [selectedSkillName, setSelectedSkillName] = useState<string | null>(null);
   const [skillDetail, setSkillDetail] = useState<SkillDetailResponse | null>(null);
   const [skillDetailLoading, setSkillDetailLoading] = useState(false);
@@ -389,6 +711,91 @@ export function SettingsDrawer({
       ) ?? null,
     [selectedSkillName, skillCatalog],
   );
+  const managedRecordBySkill = useMemo(
+    () =>
+      new Map(
+        managedSkills.map((record) => [record.skill_name.trim().toLowerCase(), record] as const),
+      ),
+    [managedSkills],
+  );
+  const selectedHubSourceSnapshot = useMemo(
+    () =>
+      skillSourceIndices.find(
+        (snapshot) =>
+          snapshot.source.source_id.trim().toLowerCase() ===
+          skillSyncSourceId.trim().toLowerCase(),
+      ) ?? null,
+    [skillSourceIndices, skillSyncSourceId],
+  );
+  const selectedRemoteSourceEntries = useMemo(
+    () => selectedHubSourceSnapshot?.entries ?? [],
+    [selectedHubSourceSnapshot],
+  );
+  const selectedRemoteSourceEntry = useMemo(
+    () =>
+      selectedRemoteSourceEntries.find(
+        (entry) =>
+          entry.skill_name.trim().toLowerCase() ===
+          remoteInstallSkillName.trim().toLowerCase(),
+      ) ?? null,
+    [remoteInstallSkillName, selectedRemoteSourceEntries],
+  );
+  const selectedRemoteDistribution = useMemo(() => {
+    const matches = skillDistributions
+      .filter(
+        (record) =>
+          record.source.source_id.trim().toLowerCase() ===
+            skillSyncSourceId.trim().toLowerCase() &&
+          record.skill_name.trim().toLowerCase() ===
+            remoteInstallSkillName.trim().toLowerCase(),
+      )
+      .sort(
+        (left, right) =>
+          (right.resolution?.resolved_at ?? 0) - (left.resolution?.resolved_at ?? 0),
+      );
+    return matches[0] ?? null;
+  }, [remoteInstallSkillName, skillDistributions, skillSyncSourceId]);
+  const selectedRemoteLifecycle = useMemo(() => {
+    if (selectedRemoteDistribution) {
+      return (
+        skillLifecycle.find(
+          (record) => record.distribution_id === selectedRemoteDistribution.distribution_id,
+        ) ?? null
+      );
+    }
+    const matches = skillLifecycle
+      .filter(
+        (record) =>
+          record.source_id.trim().toLowerCase() === skillSyncSourceId.trim().toLowerCase() &&
+          record.skill_name.trim().toLowerCase() ===
+            remoteInstallSkillName.trim().toLowerCase(),
+      )
+      .sort((left, right) => right.updated_at - left.updated_at);
+    return matches[0] ?? null;
+  }, [remoteInstallSkillName, selectedRemoteDistribution, skillLifecycle, skillSyncSourceId]);
+  const selectedRemoteArtifactCache = useMemo(() => {
+    if (!selectedRemoteDistribution) {
+      return null;
+    }
+    return (
+      skillArtifactCache.find(
+        (entry) =>
+          entry.artifact.artifact_id ===
+          selectedRemoteDistribution.resolution.artifact.artifact_id,
+      ) ?? null
+    );
+  }, [selectedRemoteDistribution, skillArtifactCache]);
+  const latestGuardBySkill = useMemo(() => {
+    const result = new Map<string, SkillGuardReportLike>();
+    for (const entry of skillGovernanceTimeline) {
+      const key = entry.skill_name?.trim().toLowerCase();
+      if (!key || result.has(key) || !entry.guard_report) {
+        continue;
+      }
+      result.set(key, entry.guard_report);
+    }
+    return result;
+  }, [skillGovernanceTimeline]);
   const skillWorkspaceRoot = useMemo(() => {
     const trimmed = workspaceRootPath.trim();
     if (!trimmed) return ".rocode/skills";
@@ -403,7 +810,7 @@ export function SettingsDrawer({
       const skillCatalogPath = selectedSessionId
         ? `/skill/catalog?session_id=${encodeURIComponent(selectedSessionId)}`
         : "/skill/catalog";
-      const [config, managed, scheduler, mcp, plugins, lsp, formatter, skills] =
+      const [config, managed, scheduler, mcp, plugins, lsp, formatter, skills, skillHubManaged, skillHubIndex, skillHubDistributions, skillHubArtifactCache, skillHubPolicyResponse, skillHubLifecycle, skillHubAudit, skillHubTimeline] =
         await Promise.all([
           apiJson<AppConfigSnapshot>("/config"),
           apiJson<{ providers: ManagedProviderInfo[] }>("/provider/managed"),
@@ -413,6 +820,14 @@ export function SettingsDrawer({
           apiJson<LspStatus>("/lsp"),
           apiJson<FormatterStatus>("/formatter"),
           apiJson<SkillCatalogEntry[]>(skillCatalogPath),
+          apiJson<SkillHubManagedResponseLike>("/skill/hub/managed"),
+          apiJson<SkillHubIndexResponseLike>("/skill/hub/index"),
+          apiJson<SkillHubDistributionResponseLike>("/skill/hub/distributions"),
+          apiJson<SkillHubArtifactCacheResponseLike>("/skill/hub/artifact-cache"),
+          apiJson<SkillHubPolicyResponseLike>("/skill/hub/policy"),
+          apiJson<SkillHubLifecycleResponseLike>("/skill/hub/lifecycle"),
+          apiJson<SkillHubAuditResponseLike>("/skill/hub/audit"),
+          apiJson<SkillHubTimelineResponseLike>("/skill/hub/timeline?limit=120"),
         ]);
       setConfigSnapshot(config);
       setManagedProviders(managed.providers ?? []);
@@ -434,6 +849,14 @@ export function SettingsDrawer({
       setLspStatus(lsp);
       setFormatterStatus(formatter);
       setSkillCatalog(skills ?? []);
+      setManagedSkills(skillHubManaged.managed_skills ?? []);
+      setSkillSourceIndices(skillHubIndex.source_indices ?? []);
+      setSkillDistributions(skillHubDistributions.distributions ?? []);
+      setSkillArtifactCache(skillHubArtifactCache.artifact_cache ?? []);
+      setSkillHubPolicy(skillHubPolicyResponse.policy ?? null);
+      setSkillLifecycle(skillHubLifecycle.lifecycle ?? []);
+      setSkillAuditEvents(skillHubAudit.audit_events ?? []);
+      setSkillGovernanceTimeline(skillHubTimeline.entries ?? []);
     } catch (error) {
       const message = `Failed to load settings data: ${formatError(error)}`;
       setFeedback(message);
@@ -470,6 +893,33 @@ export function SettingsDrawer({
   }, [selectedSkillName, skillCatalog]);
 
   useEffect(() => {
+    if (skillSyncSourceId.trim() || skillSourceIndices.length === 0) {
+      return;
+    }
+    const firstSource = skillSourceIndices[0]?.source;
+    if (!firstSource) {
+      return;
+    }
+    setSkillSyncSourceId(firstSource.source_id);
+    setSkillSyncSourceKind(firstSource.source_kind);
+    setSkillSyncLocator(firstSource.locator);
+    setSkillSyncRevision(firstSource.revision ?? "");
+  }, [skillSourceIndices, skillSyncLocator, skillSyncRevision, skillSyncSourceId]);
+
+  useEffect(() => {
+    if (!selectedHubSourceSnapshot) {
+      return;
+    }
+    const current = remoteInstallSkillName.trim().toLowerCase();
+    const exactMatch = selectedHubSourceSnapshot.entries.some(
+      (entry) => entry.skill_name.trim().toLowerCase() === current,
+    );
+    if (!current || !exactMatch) {
+      setRemoteInstallSkillName(selectedHubSourceSnapshot.entries[0]?.skill_name ?? "");
+    }
+  }, [remoteInstallSkillName, selectedHubSourceSnapshot]);
+
+  useEffect(() => {
     if (!selectedSkillName) {
       setSkillDetail(null);
       setSkillDetailLoading(false);
@@ -482,8 +932,11 @@ export function SettingsDrawer({
 
     void (async () => {
       try {
+        const detailPath = selectedSessionId
+          ? `/skill/detail?name=${encodeURIComponent(selectedSkillName)}&session_id=${encodeURIComponent(selectedSessionId)}`
+          : `/skill/detail?name=${encodeURIComponent(selectedSkillName)}`;
         const detail = await apiJson<SkillDetailResponse>(
-          `/skill/detail?name=${encodeURIComponent(selectedSkillName)}`,
+          detailPath,
         );
         if (cancelled) return;
         setSkillDetail(detail);
@@ -505,16 +958,16 @@ export function SettingsDrawer({
     return () => {
       cancelled = true;
     };
-  }, [apiJson, onBanner, selectedSkillName]);
+  }, [apiJson, onBanner, selectedSessionId, selectedSkillName]);
 
   const runMutation = useCallback(
-    async (key: string, action: () => Promise<void>, success: string) => {
+    async (key: string, action: () => Promise<string | void>, success: string) => {
       setBusyKey(key);
       setFeedback(null);
       try {
-        await action();
+        const actionSuccess = await action();
         await Promise.all([reloadSettingsData(), onReloadCoreData()]);
-        setFeedback(success);
+        setFeedback(actionSuccess ?? success);
       } catch (error) {
         const message = formatError(error);
         setFeedback(message);
@@ -638,6 +1091,275 @@ export function SettingsDrawer({
     );
   };
 
+  const buildSkillSyncSource = useCallback((): SkillSourceRefLike => {
+    if (!skillSyncSourceId.trim()) {
+      throw new Error("Skill hub source_id is required.");
+    }
+    if (!skillSyncLocator.trim()) {
+      throw new Error("Skill hub locator is required.");
+    }
+    return {
+      source_id: skillSyncSourceId.trim(),
+      source_kind: skillSyncSourceKind,
+      locator: skillSyncLocator.trim(),
+      revision: skillSyncRevision.trim() || undefined,
+    };
+  }, [skillSyncLocator, skillSyncRevision, skillSyncSourceId, skillSyncSourceKind]);
+
+  const planSkillSync = async () => {
+    const source = buildSkillSyncSource();
+    setBusyKey(`skill:sync:plan:${source.source_id}`);
+    setFeedback(null);
+    try {
+      const response = await apiJson<SkillHubSyncPlanResponseLike>("/skill/hub/sync/plan", {
+        method: "POST",
+        body: JSON.stringify({ source }),
+      });
+      setSkillSyncPlan(response.plan);
+      await reloadSettingsData();
+      setFeedback(`Built skill sync plan for ${source.source_id}.`);
+    } catch (error) {
+      const message = formatError(error);
+      setFeedback(message);
+      onBanner(message);
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const refreshSkillSourceIndex = async () => {
+    const source = buildSkillSyncSource();
+    setBusyKey(`skill:index:refresh:${source.source_id}`);
+    setFeedback(null);
+    try {
+      const response = await apiJson<SkillHubIndexRefreshResponseLike>("/skill/hub/index/refresh", {
+        method: "POST",
+        body: JSON.stringify({ source }),
+      });
+      await reloadSettingsData();
+      setFeedback(
+        `Refreshed source index for ${response.snapshot.source.source_id} (${response.snapshot.entries.length} entries).`,
+      );
+    } catch (error) {
+      const message = formatError(error);
+      setFeedback(message);
+      onBanner(message);
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const runGuard = async (request: SkillHubGuardRunRequestLike, targetLabel: string) => {
+    await runMutation(
+      `skill:guard:${targetLabel}`,
+      async () => {
+        const response = await apiJson<SkillHubGuardRunResponseLike>("/skill/hub/guard/run", {
+          method: "POST",
+          body: JSON.stringify(request),
+        });
+        setSkillGuardTarget(targetLabel);
+        setSkillGuardReports(response.reports);
+        const violationCount = response.reports.reduce(
+          (total, report) => total + report.violations.length,
+          0,
+        );
+        return `Guard scanned ${targetLabel} (${response.reports.length} report${response.reports.length === 1 ? "" : "s"}, ${violationCount} total violations).`;
+      },
+      `Guard scanned ${targetLabel}.`,
+    );
+  };
+
+  const applySkillSync = async () => {
+    if (!selectedSessionId) return;
+    const source = buildSkillSyncSource();
+    await runMutation(
+      `skill:sync:apply:${source.source_id}`,
+      async () => {
+        const response = await apiJson<SkillHubSyncPlanResponseLike>("/skill/hub/sync/apply", {
+          method: "POST",
+          body: JSON.stringify({
+            session_id: selectedSessionId,
+            source,
+          }),
+        });
+        setSkillSyncPlan(response.plan);
+        if ((response.guard_reports?.length ?? 0) > 0) {
+          return `Applied skill sync for ${source.source_id} with ${response.guard_reports?.length ?? 0} guard warnings.`;
+        }
+      },
+      `Applied skill sync for ${source.source_id}.`,
+    );
+  };
+
+  const planRemoteInstall = async () => {
+    const source = buildSkillSyncSource();
+    const skillName = remoteInstallSkillName.trim();
+    if (!skillName) {
+      throw new Error("Select or type a remote skill name first.");
+    }
+    setBusyKey(`skill:install:plan:${source.source_id}:${skillName}`);
+    setFeedback(null);
+    try {
+      const response = await apiJson<SkillRemoteInstallPlanLike>("/skill/hub/install/plan", {
+        method: "POST",
+        body: JSON.stringify({
+          source,
+          skill_name: skillName,
+        }),
+      });
+      setRemoteInstallPlan(response);
+      await reloadSettingsData();
+      setFeedback(
+        `Built remote install plan for ${response.entry.skill_name} from ${source.source_id} (${response.entry.action}).`,
+      );
+    } catch (error) {
+      const message = formatError(error);
+      setFeedback(message);
+      onBanner(message);
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const applyRemoteInstall = async () => {
+    if (!selectedSessionId) return;
+    const source = buildSkillSyncSource();
+    const skillName = remoteInstallSkillName.trim();
+    if (!skillName) {
+      throw new Error("Select or type a remote skill name first.");
+    }
+    await runMutation(
+      `skill:install:apply:${source.source_id}:${skillName}`,
+      async () => {
+        const response = await apiJson<SkillRemoteInstallResponseLike>("/skill/hub/install/apply", {
+          method: "POST",
+          body: JSON.stringify({
+            session_id: selectedSessionId,
+            source,
+            skill_name: skillName,
+          }),
+        });
+        setRemoteInstallPlan(response.plan);
+        const violationCount = response.guard_report?.violations.length ?? 0;
+        if (violationCount > 0) {
+          return `Applied remote ${response.plan.entry.action} for ${response.result.skill_name} with ${violationCount} guard warnings.`;
+        }
+        return `Applied remote ${response.plan.entry.action} for ${response.result.skill_name}.`;
+      },
+      `Applied remote install for ${skillName}.`,
+    );
+  };
+
+  const planRemoteUpdate = async () => {
+    const source = buildSkillSyncSource();
+    const skillName = remoteInstallSkillName.trim();
+    if (!skillName) {
+      throw new Error("Select or type a remote skill name first.");
+    }
+    setBusyKey(`skill:update:plan:${source.source_id}:${skillName}`);
+    setFeedback(null);
+    try {
+      const response = await apiJson<SkillRemoteInstallPlanLike>("/skill/hub/update/plan", {
+        method: "POST",
+        body: JSON.stringify({
+          source,
+          skill_name: skillName,
+        }),
+      });
+      setRemoteInstallPlan(response);
+      await reloadSettingsData();
+      setFeedback(
+        `Built remote update plan for ${response.entry.skill_name} from ${source.source_id} (${response.entry.action}).`,
+      );
+    } catch (error) {
+      const message = formatError(error);
+      setFeedback(message);
+      onBanner(message);
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const applyRemoteUpdate = async () => {
+    if (!selectedSessionId) return;
+    const source = buildSkillSyncSource();
+    const skillName = remoteInstallSkillName.trim();
+    if (!skillName) {
+      throw new Error("Select or type a remote skill name first.");
+    }
+    await runMutation(
+      `skill:update:apply:${source.source_id}:${skillName}`,
+      async () => {
+        const response = await apiJson<SkillRemoteInstallResponseLike>("/skill/hub/update/apply", {
+          method: "POST",
+          body: JSON.stringify({
+            session_id: selectedSessionId,
+            source,
+            skill_name: skillName,
+          }),
+        });
+        setRemoteInstallPlan(response.plan);
+        const violationCount = response.guard_report?.violations.length ?? 0;
+        if (violationCount > 0) {
+          return `Applied remote ${response.plan.entry.action} for ${response.result.skill_name} with ${violationCount} guard warnings.`;
+        }
+        return `Applied remote ${response.plan.entry.action} for ${response.result.skill_name}.`;
+      },
+      `Applied remote update for ${skillName}.`,
+    );
+  };
+
+  const detachManagedSkill = async () => {
+    if (!selectedSessionId) return;
+    const source = buildSkillSyncSource();
+    const skillName = remoteInstallSkillName.trim();
+    if (!skillName) {
+      throw new Error("Select or type a remote skill name first.");
+    }
+    await runMutation(
+      `skill:detach:${source.source_id}:${skillName}`,
+      async () => {
+        const response = await apiJson<SkillHubManagedDetachResponseLike>("/skill/hub/detach", {
+          method: "POST",
+          body: JSON.stringify({
+            session_id: selectedSessionId,
+            source,
+            skill_name: skillName,
+          }),
+        });
+        return `Detached managed skill ${response.lifecycle.skill_name}; workspace content was preserved.`;
+      },
+      `Detached managed skill ${skillName}.`,
+    );
+  };
+
+  const removeManagedSkill = async () => {
+    if (!selectedSessionId) return;
+    const source = buildSkillSyncSource();
+    const skillName = remoteInstallSkillName.trim();
+    if (!skillName) {
+      throw new Error("Select or type a remote skill name first.");
+    }
+    await runMutation(
+      `skill:remove:${source.source_id}:${skillName}`,
+      async () => {
+        const response = await apiJson<SkillHubManagedRemoveResponseLike>("/skill/hub/remove", {
+          method: "POST",
+          body: JSON.stringify({
+            session_id: selectedSessionId,
+            source,
+            skill_name: skillName,
+          }),
+        });
+        if (response.deleted_from_workspace) {
+          return `Removed managed skill ${response.lifecycle.skill_name} and deleted the clean workspace copy.`;
+        }
+        return `Removed managed skill ${response.lifecycle.skill_name} without deleting the workspace copy.`;
+      },
+      `Removed managed skill ${skillName}.`,
+    );
+  };
+
   const createSkill = async () => {
     if (!selectedSessionId) return;
     await runMutation(
@@ -659,6 +1381,9 @@ export function SettingsDrawer({
         setNewSkillDescription("");
         setNewSkillCategory("");
         setNewSkillBody("");
+        if (response.guard_report) {
+          return `Created skill ${response.result.skill_name} with ${response.guard_report.violations.length} guard warnings.`;
+        }
       },
       `Created skill ${newSkillName.trim()}.`,
     );
@@ -669,7 +1394,7 @@ export function SettingsDrawer({
     await runMutation(
       `skill:edit:${selectedSkillName}`,
       async () => {
-        await apiJson<SkillManageResponseLike>("/skill/manage", {
+        const response = await apiJson<SkillManageResponseLike>("/skill/manage", {
           method: "POST",
           body: JSON.stringify({
             session_id: selectedSessionId,
@@ -678,6 +1403,9 @@ export function SettingsDrawer({
             content: skillEditorContent,
           }),
         });
+        if (response.guard_report) {
+          return `Saved skill ${selectedSkillName} with ${response.guard_report.violations.length} guard warnings.`;
+        }
       },
       `Saved skill ${selectedSkillName}.`,
     );
@@ -701,6 +1429,16 @@ export function SettingsDrawer({
       },
       `Deleted skill ${deletedSkillName}.`,
     );
+  };
+
+  const runSelectedSkillGuard = async () => {
+    if (!selectedSkillName) return;
+    await runGuard({ skill_name: selectedSkillName }, `skill ${selectedSkillName}`);
+  };
+
+  const runSelectedSourceGuard = async () => {
+    const source = buildSkillSyncSource();
+    await runGuard({ source }, `source ${source.source_id}`);
   };
 
   const providerSummary = `${providers.length} connected / ${knownProviders.length} known`;
@@ -1132,7 +1870,8 @@ export function SettingsDrawer({
                   <div className="rounded-2xl border border-border bg-card/70 px-4 py-3 text-sm leading-relaxed text-muted-foreground">
                     Catalog reads now go through <code>/skill/catalog?session_id=...</code>, so the
                     visible skill set follows the active session's scheduler stage when a stage is
-                    currently constraining tools.
+                    currently constraining tools. Detail preview now uses the same session-aware
+                    scope through <code>/skill/detail?session_id=...</code>.
                   </div>
                 ) : null}
                 {!skillsMutationsEnabled ? (
@@ -1141,6 +1880,531 @@ export function SettingsDrawer({
                     routed to the active session.
                   </div>
                 ) : null}
+              </div>
+
+              <div className="grid gap-4 rounded-2xl border border-border bg-card/70 p-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="m-0 text-xs tracking-widest uppercase text-muted-foreground font-semibold">Skill Hub / Sync</p>
+                    <h3 className="m-0 mt-1">Managed provenance and authority sync</h3>
+                  </div>
+                  <div className="text-sm text-muted-foreground">
+                    managed {managedSkills.length} · sources {skillSourceIndices.length} · distributions {skillDistributions.length} · artifacts {skillArtifactCache.length} · lifecycle {skillLifecycle.length}
+                  </div>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <input
+                    type="text"
+                    placeholder="source_id"
+                    value={skillSyncSourceId}
+                    onChange={(event) => setSkillSyncSourceId(event.target.value)}
+                  />
+                  <select
+                    value={skillSyncSourceKind}
+                    onChange={(event) => setSkillSyncSourceKind(event.target.value as SkillSourceRefLike["source_kind"])}
+                  >
+                    <option value="local_path">local_path</option>
+                    <option value="bundled">bundled</option>
+                    <option value="git">git</option>
+                    <option value="archive">archive</option>
+                    <option value="registry">registry</option>
+                  </select>
+                  <input
+                    type="text"
+                    placeholder="locator"
+                    value={skillSyncLocator}
+                    onChange={(event) => setSkillSyncLocator(event.target.value)}
+                  />
+                  <input
+                    type="text"
+                    placeholder="revision (optional)"
+                    value={skillSyncRevision}
+                    onChange={(event) => setSkillSyncRevision(event.target.value)}
+                  />
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    className="min-h-[36px] rounded-full px-5 bg-foreground border-foreground text-background text-sm font-semibold inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px disabled:cursor-not-allowed disabled:opacity-60"
+                    type="button"
+                    disabled={!skillSyncSourceId.trim() || !skillSyncLocator.trim() || busyKey === `skill:sync:plan:${skillSyncSourceId.trim()}`}
+                    onClick={() => void planSkillSync()}
+                  >
+                    {busyKey === `skill:sync:plan:${skillSyncSourceId.trim()}` ? "Planning..." : "Preview Sync Plan"}
+                  </button>
+                  <button
+                    className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                    type="button"
+                    disabled={
+                      !skillsMutationsEnabled ||
+                      !skillSyncSourceId.trim() ||
+                      !skillSyncLocator.trim() ||
+                      busyKey === `skill:sync:apply:${skillSyncSourceId.trim()}`
+                    }
+                    onClick={() => void applySkillSync()}
+                  >
+                    {busyKey === `skill:sync:apply:${skillSyncSourceId.trim()}` ? "Applying..." : "Apply Sync"}
+                  </button>
+                  <button
+                    className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                    type="button"
+                    disabled={!skillSyncSourceId.trim() || !skillSyncLocator.trim() || busyKey === `skill:index:refresh:${skillSyncSourceId.trim()}`}
+                    onClick={() => void refreshSkillSourceIndex()}
+                  >
+                    {busyKey === `skill:index:refresh:${skillSyncSourceId.trim()}` ? "Refreshing Index..." : "Refresh Source Index"}
+                  </button>
+                  <button
+                    className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                    type="button"
+                    disabled={!skillSyncSourceId.trim() || !skillSyncLocator.trim() || busyKey === `skill:guard:source ${skillSyncSourceId.trim()}`}
+                    onClick={() => void runSelectedSourceGuard()}
+                  >
+                    {busyKey === `skill:guard:source ${skillSyncSourceId.trim()}` ? "Scanning..." : "Run Source Guard"}
+                  </button>
+                </div>
+
+                <div className="grid gap-4 xl:grid-cols-2">
+                  <div className="grid gap-3">
+                    <div className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Managed Skills</div>
+                    {managedSkills.length ? managedSkills.slice(0, 8).map((record) => (
+                      <div key={record.skill_name} className="rounded-xl border border-border bg-muted/10 p-3 text-sm">
+                        <div className="flex items-start justify-between gap-3">
+                          <strong>{record.skill_name}</strong>
+                          <span className="text-muted-foreground">{record.installed_revision || "--"}</span>
+                        </div>
+                        <div className="mt-2 text-muted-foreground">
+                          {(record.source?.source_id ?? "unmanaged")} · {record.locally_modified ? "locally modified" : record.deleted_locally ? "deleted locally" : "clean"}
+                        </div>
+                      </div>
+                    )) : (
+                      <div className="rounded-xl border border-border bg-muted/10 p-3 text-sm text-muted-foreground">No managed records yet.</div>
+                    )}
+                  </div>
+
+                  <div className="grid gap-3">
+                    <div className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Indexed Sources</div>
+                    {skillSourceIndices.length ? skillSourceIndices.slice(0, 6).map((snapshot) => (
+                      <button
+                        key={snapshot.source.source_id}
+                        type="button"
+                        className="rounded-xl border border-border bg-muted/10 p-3 text-left transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                        onClick={() => {
+                          setSkillSyncSourceId(snapshot.source.source_id);
+                          setSkillSyncSourceKind(snapshot.source.source_kind);
+                          setSkillSyncLocator(snapshot.source.locator);
+                          setSkillSyncRevision(snapshot.source.revision ?? "");
+                          setRemoteInstallSkillName(snapshot.entries[0]?.skill_name ?? "");
+                        }}
+                      >
+                        <strong>{snapshot.source.source_id}</strong>
+                        <div className="mt-2 text-sm text-muted-foreground">
+                          {snapshot.source.source_kind} · {snapshot.entries.length} skills
+                        </div>
+                        <div className="mt-1 break-all text-xs text-muted-foreground">{snapshot.source.locator}</div>
+                      </button>
+                    )) : (
+                      <div className="rounded-xl border border-border bg-muted/10 p-3 text-sm text-muted-foreground">No source index cached yet.</div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid gap-4 rounded-2xl border border-border bg-muted/10 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="m-0 text-xs tracking-widest uppercase text-muted-foreground font-semibold">Remote Install</p>
+                      <h4 className="m-0 mt-1">Remote distribution plan and apply</h4>
+                    </div>
+                    <div className="text-sm text-muted-foreground">
+                      source {selectedHubSourceSnapshot?.source.source_id ?? "--"}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1.2fr)_repeat(2,minmax(0,1fr))] xl:grid-cols-[minmax(0,1.4fr)_repeat(4,minmax(0,0.8fr))]">
+                    <input
+                      type="text"
+                      placeholder="remote skill name"
+                      value={remoteInstallSkillName}
+                      onChange={(event) => setRemoteInstallSkillName(event.target.value)}
+                    />
+                    <button
+                      className="min-h-[36px] rounded-full px-5 bg-foreground border-foreground text-background text-sm font-semibold inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px disabled:cursor-not-allowed disabled:opacity-60"
+                      type="button"
+                      disabled={
+                        !skillSyncSourceId.trim() ||
+                        !skillSyncLocator.trim() ||
+                        !remoteInstallSkillName.trim() ||
+                        busyKey === `skill:install:plan:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
+                      }
+                      onClick={() => void planRemoteInstall()}
+                    >
+                      {busyKey === `skill:install:plan:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
+                        ? "Planning..."
+                        : "Preview Install"}
+                    </button>
+                    <button
+                      className="min-h-[36px] rounded-full px-5 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                      type="button"
+                      disabled={
+                        !skillSyncSourceId.trim() ||
+                        !skillSyncLocator.trim() ||
+                        !remoteInstallSkillName.trim() ||
+                        busyKey === `skill:update:plan:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
+                      }
+                      onClick={() => void planRemoteUpdate()}
+                    >
+                      {busyKey === `skill:update:plan:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
+                        ? "Planning..."
+                        : "Preview Update"}
+                    </button>
+                    <button
+                      className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                      type="button"
+                      disabled={
+                        !skillsMutationsEnabled ||
+                        !skillSyncSourceId.trim() ||
+                        !skillSyncLocator.trim() ||
+                        !remoteInstallSkillName.trim() ||
+                        busyKey === `skill:install:apply:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
+                      }
+                      onClick={() => void applyRemoteInstall()}
+                    >
+                      {busyKey === `skill:install:apply:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
+                        ? "Installing..."
+                        : "Install To Workspace"}
+                    </button>
+                    <button
+                      className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                      type="button"
+                      disabled={
+                        !skillsMutationsEnabled ||
+                        !skillSyncSourceId.trim() ||
+                        !skillSyncLocator.trim() ||
+                        !remoteInstallSkillName.trim() ||
+                        busyKey === `skill:update:apply:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
+                      }
+                      onClick={() => void applyRemoteUpdate()}
+                    >
+                      {busyKey === `skill:update:apply:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
+                        ? "Updating..."
+                        : "Update Workspace"}
+                    </button>
+                    <button
+                      className="min-h-[36px] rounded-full px-4 border border-amber-300 bg-amber-50/80 text-amber-950 text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200 dark:hover:bg-amber-950/60"
+                      type="button"
+                      disabled={
+                        !skillsMutationsEnabled ||
+                        !skillSyncSourceId.trim() ||
+                        !skillSyncLocator.trim() ||
+                        !remoteInstallSkillName.trim() ||
+                        busyKey === `skill:detach:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
+                      }
+                      onClick={() => void detachManagedSkill()}
+                    >
+                      {busyKey === `skill:detach:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
+                        ? "Detaching..."
+                        : "Detach Managed"}
+                    </button>
+                    <button
+                      className="min-h-[36px] rounded-full px-4 border border-red-300 bg-red-50/80 text-red-900 text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-700 dark:bg-red-950/40 dark:text-red-200 dark:hover:bg-red-950/60"
+                      type="button"
+                      disabled={
+                        !skillsMutationsEnabled ||
+                        !skillSyncSourceId.trim() ||
+                        !skillSyncLocator.trim() ||
+                        !remoteInstallSkillName.trim() ||
+                        busyKey === `skill:remove:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
+                      }
+                      onClick={() => void removeManagedSkill()}
+                    >
+                      {busyKey === `skill:remove:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
+                        ? "Removing..."
+                        : "Remove Managed"}
+                    </button>
+                  </div>
+
+                  <div className="text-xs text-muted-foreground">
+                    Update re-applies the selected managed source through the unified lifecycle pipeline. Detach drops managed ownership but keeps workspace files. Remove clears managed state and only deletes the workspace copy when the local skill is still clean.
+                  </div>
+
+                  {selectedRemoteSourceEntry ? (
+                    <div className="rounded-xl border border-border bg-card/60 p-3 text-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <strong>{selectedRemoteSourceEntry.skill_name}</strong>
+                        <span className="text-muted-foreground">
+                          {selectedRemoteSourceEntry.revision || "--"}
+                        </span>
+                      </div>
+                      <div className="mt-2 text-muted-foreground">
+                        {selectedRemoteSourceEntry.category
+                          ? `${selectedRemoteSourceEntry.category} · `
+                          : ""}
+                        {selectedRemoteSourceEntry.description || "No remote description provided."}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-border bg-card/60 p-3 text-sm text-muted-foreground">
+                      Type a skill name from the selected source index to preview or apply a remote install.
+                    </div>
+                  )}
+
+                  {selectedHubSourceSnapshot?.entries.length ? (
+                    <div className="grid gap-3">
+                      <div className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">
+                        Indexed Entries for Selected Source
+                      </div>
+                      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                        {selectedHubSourceSnapshot.entries.slice(0, 12).map((entry) => {
+                          const selected =
+                            entry.skill_name.trim().toLowerCase() ===
+                            remoteInstallSkillName.trim().toLowerCase();
+                          return (
+                            <button
+                              key={entry.skill_name}
+                              type="button"
+                              className={cn(
+                                "rounded-xl border p-3 text-left transition-all duration-150",
+                                selected
+                                  ? "border-foreground bg-accent"
+                                  : "border-border bg-card/60 hover:-translate-y-px hover:bg-accent",
+                              )}
+                              onClick={() => setRemoteInstallSkillName(entry.skill_name)}
+                            >
+                              <strong>{entry.skill_name}</strong>
+                              <div className="mt-1 text-xs text-muted-foreground">
+                                {entry.category ? `${entry.category} · ` : ""}
+                                {entry.revision || "unversioned"}
+                              </div>
+                              <div className="mt-2 text-sm text-muted-foreground">
+                                {entry.description || "No description"}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="grid gap-4 xl:grid-cols-4">
+                    <div className="grid gap-3">
+                      <div className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">
+                        Hub Policy
+                      </div>
+                      <div className="rounded-xl border border-border bg-card/60 p-3 text-sm">
+                        {skillHubPolicy ? (
+                          <div className="grid gap-2 text-muted-foreground">
+                            <div>
+                              retention {formatHubDurationSeconds(skillHubPolicy.artifact_cache_retention_seconds)}
+                            </div>
+                            <div>
+                              timeout {formatHubDurationMs(skillHubPolicy.fetch_timeout_ms)}
+                            </div>
+                            <div>
+                              max download {formatHubBytes(skillHubPolicy.max_download_bytes)}
+                            </div>
+                            <div>
+                              max extract {formatHubBytes(skillHubPolicy.max_extract_bytes)}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-muted-foreground">
+                            No hub policy payload loaded yet.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3">
+                      <div className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">
+                        Distribution Snapshot
+                      </div>
+                      {selectedRemoteDistribution ? (
+                        <div className="rounded-xl border border-border bg-card/60 p-3 text-sm">
+                          <div className="flex items-center justify-between gap-3">
+                            <strong>{selectedRemoteDistribution.skill_name}</strong>
+                            <span
+                              className={cn(
+                                "rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide",
+                                lifecycleStatusClass(selectedRemoteDistribution.lifecycle),
+                              )}
+                            >
+                              {selectedRemoteDistribution.lifecycle}
+                            </span>
+                          </div>
+                          <div className="mt-2 text-muted-foreground">
+                            release {selectedRemoteDistribution.release.version || "--"} · revision{" "}
+                            {selectedRemoteDistribution.release.revision || "--"}
+                          </div>
+                          <div className="mt-1 break-all text-xs text-muted-foreground">
+                            artifact {selectedRemoteDistribution.resolution.artifact.artifact_id} ·{" "}
+                            {selectedRemoteDistribution.resolution.artifact.locator}
+                          </div>
+                          {selectedRemoteDistribution.installed ? (
+                            <div className="mt-2 text-xs text-muted-foreground">
+                              installed at {unixTimeLabel(selectedRemoteDistribution.installed.installed_at)} ·{" "}
+                              {selectedRemoteDistribution.installed.workspace_skill_path}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <div className="rounded-xl border border-border bg-card/60 p-3 text-sm text-muted-foreground">
+                          No resolved distribution recorded for the current remote skill yet.
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="grid gap-3">
+                      <div className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">
+                        Artifact Cache
+                      </div>
+                      {selectedRemoteArtifactCache ? (
+                        <div className="rounded-xl border border-border bg-card/60 p-3 text-sm">
+                          <div className="flex items-center justify-between gap-3">
+                            <strong>{selectedRemoteArtifactCache.artifact.artifact_id}</strong>
+                            <span
+                              className={cn(
+                                "rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide",
+                                lifecycleStatusClass(selectedRemoteArtifactCache.status),
+                              )}
+                            >
+                              {selectedRemoteArtifactCache.status}
+                            </span>
+                          </div>
+                          <div className="mt-2 text-muted-foreground">
+                            cached {unixTimeLabel(selectedRemoteArtifactCache.cached_at)}
+                          </div>
+                          <div className="mt-1 break-all text-xs text-muted-foreground">
+                            local {selectedRemoteArtifactCache.local_path}
+                          </div>
+                          {selectedRemoteArtifactCache.extracted_path ? (
+                            <div className="mt-1 break-all text-xs text-muted-foreground">
+                              extracted {selectedRemoteArtifactCache.extracted_path}
+                            </div>
+                          ) : null}
+                          {selectedRemoteArtifactCache.error ? (
+                            <div className="mt-2 rounded-xl border border-red-300 bg-red-50/80 px-3 py-2 text-xs leading-relaxed text-red-800 dark:border-red-700 dark:bg-red-950/60 dark:text-red-300">
+                              {selectedRemoteArtifactCache.error}
+                            </div>
+                          ) : (
+                            <div className="mt-2 text-xs text-muted-foreground">
+                              No artifact fetch error recorded for this distribution.
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="rounded-xl border border-border bg-card/60 p-3 text-sm text-muted-foreground">
+                          No artifact cache entry captured yet for the current remote skill.
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="grid gap-3">
+                      <div className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">
+                        Lifecycle State
+                      </div>
+                      {selectedRemoteLifecycle ? (
+                        <div className="rounded-xl border border-border bg-card/60 p-3 text-sm">
+                          <div className="flex items-center justify-between gap-3">
+                            <strong>{selectedRemoteLifecycle.skill_name}</strong>
+                            <span
+                              className={cn(
+                                "rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide",
+                                lifecycleStatusClass(selectedRemoteLifecycle.state),
+                              )}
+                            >
+                              {selectedRemoteLifecycle.state}
+                            </span>
+                          </div>
+                          <div className="mt-2 text-muted-foreground">
+                            updated {unixTimeLabel(selectedRemoteLifecycle.updated_at)}
+                          </div>
+                          {selectedRemoteLifecycle.error ? (
+                            <div className="mt-2 rounded-xl border border-red-300 bg-red-50/80 px-3 py-2 text-xs leading-relaxed text-red-800 dark:border-red-700 dark:bg-red-950/60 dark:text-red-300">
+                              {selectedRemoteLifecycle.error}
+                            </div>
+                          ) : (
+                            <div className="mt-2 text-xs text-muted-foreground">
+                              No lifecycle error recorded for this distribution.
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="rounded-xl border border-border bg-card/60 p-3 text-sm text-muted-foreground">
+                          No lifecycle record captured yet for the current remote skill.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {skillSyncPlan ? (
+                  <div className="grid gap-3 rounded-2xl border border-border bg-muted/10 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <strong>Sync Plan · {skillSyncPlan.source_id}</strong>
+                      <span className="text-sm text-muted-foreground">{skillSyncPlan.entries.length} entries</span>
+                    </div>
+                    {skillSyncPlan.entries.length ? skillSyncPlan.entries.map((entry) => (
+                      <div key={`${entry.skill_name}:${entry.action}`} className="rounded-xl border border-border bg-card/60 p-3 text-sm">
+                        <div className="flex items-start justify-between gap-3">
+                          <strong>{entry.skill_name}</strong>
+                          <span className="text-xs uppercase tracking-wide text-muted-foreground">{entry.action}</span>
+                        </div>
+                        <div className="mt-2 text-muted-foreground">{entry.reason}</div>
+                      </div>
+                    )) : (
+                      <div className="rounded-xl border border-border bg-card/60 p-3 text-sm text-muted-foreground">This source currently produces an empty plan.</div>
+                    )}
+                  </div>
+                ) : null}
+
+                {remoteInstallPlan ? (
+                  <div className="grid gap-3 rounded-2xl border border-border bg-muted/10 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <strong>
+                        Remote Install Plan · {remoteInstallPlan.entry.skill_name}
+                      </strong>
+                      <span
+                        className={cn(
+                          "rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide",
+                          lifecycleStatusClass(remoteInstallPlan.entry.action),
+                        )}
+                      >
+                        {remoteInstallPlan.entry.action}
+                      </span>
+                    </div>
+                    <div className="text-sm text-muted-foreground">
+                      {remoteInstallPlan.entry.reason}
+                    </div>
+                    <div className="grid gap-2 text-sm text-muted-foreground">
+                      <div>
+                        source <code>{remoteInstallPlan.source_id}</code>
+                      </div>
+                      <div>
+                        distribution <code>{remoteInstallPlan.distribution.distribution_id}</code>
+                      </div>
+                      <div>
+                        artifact <code>{remoteInstallPlan.distribution.resolution.artifact.artifact_id}</code>
+                      </div>
+                      <div>
+                        locator <code>{remoteInstallPlan.distribution.resolution.artifact.locator}</code>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                {skillGuardTarget ? (
+                  <div className="rounded-2xl border border-border bg-muted/10 px-4 py-3 text-sm text-muted-foreground">
+                    Latest guard run targeted <code>{skillGuardTarget}</code> and returned{" "}
+                    {skillGuardReports.length} report{skillGuardReports.length === 1 ? "" : "s"}.
+                    The full result is now folded into the governance timeline below.
+                  </div>
+                ) : null}
+
+                <SkillGovernanceTimeline
+                  entries={skillGovernanceTimeline}
+                  selectedSkillName={selectedSkillName}
+                  selectedSourceId={skillSyncSourceId.trim() || null}
+                />
               </div>
 
               <div className="grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
@@ -1152,6 +2416,10 @@ export function SettingsDrawer({
                   {skillCatalog.length ? (
                     skillCatalog.map((skill) => {
                       const selected = selectedSkillEntry?.name === skill.name;
+                      const managedRecord =
+                        managedRecordBySkill.get(skill.name.trim().toLowerCase()) ?? null;
+                      const latestGuard =
+                        latestGuardBySkill.get(skill.name.trim().toLowerCase()) ?? null;
                       return (
                         <button
                           key={skill.name}
@@ -1184,6 +2452,39 @@ export function SettingsDrawer({
                             {skill.category ? `${skill.category} · ` : ""}
                             {skill.supporting_files.length} supporting files
                           </p>
+                          <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
+                            {managedRecord ? (
+                              <>
+                                <span className="rounded-full border border-border bg-card/80 px-2.5 py-1 text-muted-foreground">
+                                  source {managedRecord.source?.source_id || "workspace-local"}
+                                </span>
+                                <span
+                                  className={cn(
+                                    "rounded-full border px-2.5 py-1",
+                                    managedRecord.locally_modified || managedRecord.deleted_locally
+                                      ? "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200"
+                                      : "border-border bg-card/80 text-muted-foreground",
+                                  )}
+                                >
+                                  {managedSkillStateLabel(managedRecord)}
+                                </span>
+                              </>
+                            ) : null}
+                            {latestGuard ? (
+                              <span
+                                className={cn(
+                                  "rounded-full border px-2.5 py-1",
+                                  latestGuard.status === "blocked"
+                                    ? "border-red-300 bg-red-50 text-red-800 dark:border-red-700 dark:bg-red-950/60 dark:text-red-300"
+                                    : latestGuard.status === "warn"
+                                      ? "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200"
+                                      : "border-border bg-card/80 text-muted-foreground",
+                                )}
+                              >
+                                {latestGuardStatusLabel(latestGuard)} · {latestGuard.violations.length}
+                              </span>
+                            ) : null}
+                          </div>
                           <p className="m-0 mt-2 break-all text-xs leading-relaxed text-muted-foreground">
                             {skill.location}
                           </p>
@@ -1272,6 +2573,52 @@ export function SettingsDrawer({
 
                     {selectedSkillEntry ? (
                       <>
+                        {(() => {
+                          const managedRecord =
+                            managedRecordBySkill.get(
+                              selectedSkillEntry.name.trim().toLowerCase(),
+                            ) ?? null;
+                          const latestGuard =
+                            latestGuardBySkill.get(
+                              selectedSkillEntry.name.trim().toLowerCase(),
+                            ) ?? null;
+                          return (
+                            <div className="flex flex-wrap gap-2 text-xs">
+                              {managedRecord ? (
+                                <>
+                                  <span className="rounded-full border border-border bg-card/80 px-2.5 py-1 text-muted-foreground">
+                                    source {managedRecord.source?.source_id || "workspace-local"}
+                                  </span>
+                                  <span
+                                    className={cn(
+                                      "rounded-full border px-2.5 py-1",
+                                      managedRecord.locally_modified ||
+                                        managedRecord.deleted_locally
+                                        ? "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200"
+                                        : "border-border bg-card/80 text-muted-foreground",
+                                    )}
+                                  >
+                                    {managedSkillStateLabel(managedRecord)}
+                                  </span>
+                                </>
+                              ) : null}
+                              {latestGuard ? (
+                                <span
+                                  className={cn(
+                                    "rounded-full border px-2.5 py-1",
+                                    latestGuard.status === "blocked"
+                                      ? "border-red-300 bg-red-50 text-red-800 dark:border-red-700 dark:bg-red-950/60 dark:text-red-300"
+                                      : latestGuard.status === "warn"
+                                        ? "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200"
+                                        : "border-border bg-card/80 text-muted-foreground",
+                                  )}
+                                >
+                                  {latestGuardStatusLabel(latestGuard)} · {latestGuard.violations.length} violations
+                                </span>
+                              ) : null}
+                            </div>
+                          );
+                        })()}
                         <div className="grid gap-2 rounded-xl border border-border bg-muted/10 p-3 text-sm text-muted-foreground">
                           <div className="break-all">
                             <strong>Location:</strong> {selectedSkillEntry.location}
@@ -1307,6 +2654,14 @@ export function SettingsDrawer({
                         )}
 
                         <div className="flex items-center gap-2">
+                          <button
+                            className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                            type="button"
+                            disabled={busyKey === `skill:guard:skill ${selectedSkillEntry.name}`}
+                            onClick={() => void runSelectedSkillGuard()}
+                          >
+                            {busyKey === `skill:guard:skill ${selectedSkillEntry.name}` ? "Scanning..." : "Run Guard Check"}
+                          </button>
                           <button
                             className="min-h-[36px] rounded-full px-5 bg-foreground border-foreground text-background text-sm font-semibold inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px disabled:cursor-not-allowed disabled:opacity-60"
                             type="button"

@@ -1,4 +1,9 @@
-use super::super::{SchedulerExecutionGateDecision, SchedulerExecutionGateStatus};
+use super::super::{
+    DynamicAgentTreeDeclaration, SchedulerExecutionGateDecision, SchedulerExecutionGateStatus,
+    DYNAMIC_AGENT_TREE_MAX_CHILDREN,
+};
+use crate::agent_tree::AgentTreeNode;
+use crate::types::{AgentDescriptor, ModelRef};
 use serde_json::Value;
 
 pub fn parse_execution_gate_decision(output: &str) -> Option<SchedulerExecutionGateDecision> {
@@ -252,4 +257,287 @@ fn profile_find_balanced_json_object(input: &str) -> Option<(usize, usize)> {
     }
 
     None
+}
+
+/// Attempt to extract a dynamic agent tree declaration from LLM output.
+///
+/// Looks for a `<parallel_plan>` XML block first, then falls back to
+/// scanning for a top-level JSON object with a `children` field.
+/// Returns `None` gracefully on parse failure so the scheduler can
+/// continue with the standard delegation path.
+pub fn parse_dynamic_agent_tree(output: &str) -> Option<AgentTreeNode> {
+    let trimmed = output.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // Priority 1: <parallel_plan>...</parallel_plan> XML block
+    if let Some(json_str) = extract_xml_block(trimmed, "parallel_plan") {
+        if let Some(node) = try_parse_declaration(json_str) {
+            return Some(node);
+        }
+    }
+
+    // Priority 2: scan JSON candidates for a declaration
+    for candidate in profile_json_candidates(trimmed) {
+        if let Some(node) = try_parse_declaration(&candidate) {
+            return Some(node);
+        }
+    }
+
+    None
+}
+
+fn extract_xml_block<'a>(input: &'a str, tag: &str) -> Option<&'a str> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = input.find(&open)?;
+    let content_start = start + open.len();
+    let end = input[content_start..].find(&close)?;
+    Some(&input[content_start..content_start + end])
+}
+
+fn try_parse_declaration(json_str: &str) -> Option<AgentTreeNode> {
+    let decl: DynamicAgentTreeDeclaration = serde_json::from_str(json_str).ok()?;
+    validate_declaration(&decl)?;
+    Some(declaration_to_node(&decl))
+}
+
+fn validate_declaration(decl: &DynamicAgentTreeDeclaration) -> Option<()> {
+    if decl.children.is_empty() {
+        tracing::warn!("dynamic agent tree rejected: no children");
+        return None;
+    }
+    if decl.children.len() > DYNAMIC_AGENT_TREE_MAX_CHILDREN {
+        tracing::warn!(
+            count = decl.children.len(),
+            max = DYNAMIC_AGENT_TREE_MAX_CHILDREN,
+            "dynamic agent tree rejected: too many children"
+        );
+        return None;
+    }
+    let mut seen = std::collections::HashSet::new();
+    for child in &decl.children {
+        let name = child.name.trim();
+        if name.is_empty() {
+            tracing::warn!("dynamic agent tree rejected: child with empty name");
+            return None;
+        }
+        if !seen.insert(name.to_string()) {
+            tracing::warn!(name, "dynamic agent tree rejected: duplicate child name");
+            return None;
+        }
+    }
+    Some(())
+}
+
+fn declaration_to_node(decl: &DynamicAgentTreeDeclaration) -> AgentTreeNode {
+    let root = AgentTreeNode::new(AgentDescriptor {
+        name: "coordinator".to_string(),
+        system_prompt: Some(decl.root_task.clone()),
+        model: None,
+        max_steps: None,
+        temperature: None,
+        allowed_tools: Vec::new(),
+    });
+
+    let children: Vec<AgentTreeNode> = decl
+        .children
+        .iter()
+        .map(|child| {
+            AgentTreeNode::new(AgentDescriptor {
+                name: child.name.clone(),
+                system_prompt: Some(child.task.clone()),
+                model: child.model.as_deref().and_then(parse_model_ref),
+                max_steps: None,
+                temperature: None,
+                allowed_tools: child.allowed_tools.clone(),
+            })
+        })
+        .collect();
+
+    root.with_children(children)
+}
+
+/// Parse a "provider:model" string into a ModelRef.
+fn parse_model_ref(raw: &str) -> Option<ModelRef> {
+    let (provider, model) = raw
+        .trim()
+        .split_once(':')
+        .or_else(|| raw.trim().split_once('/'))?;
+    let provider = provider.trim();
+    let model = model.trim();
+    if provider.is_empty() || model.is_empty() {
+        return None;
+    }
+    Some(ModelRef {
+        provider_id: provider.to_string(),
+        model_id: model.to_string(),
+    })
+}
+
+#[cfg(test)]
+mod dynamic_tree_tests {
+    use super::*;
+
+    #[test]
+    fn parse_dynamic_agent_tree_from_xml_block() {
+        let output = r#"Here is the plan analysis.
+
+<parallel_plan>
+{
+  "root_task": "Coordinate the migration cleanup",
+  "children": [
+    {
+      "name": "worker-alpha",
+      "task": "Update schema files",
+      "allowed_tools": ["read", "write", "glob"]
+    },
+    {
+      "name": "worker-beta",
+      "task": "Verify migration paths",
+      "allowed_tools": ["read", "bash"]
+    }
+  ]
+}
+</parallel_plan>
+
+Now waiting for verification."#;
+
+        let node = parse_dynamic_agent_tree(output).expect("should parse");
+        assert_eq!(node.agent.name, "coordinator");
+        assert_eq!(
+            node.agent.system_prompt.as_deref(),
+            Some("Coordinate the migration cleanup")
+        );
+        assert_eq!(node.children.len(), 2);
+        assert_eq!(node.children[0].agent.name, "worker-alpha");
+        assert_eq!(node.children[1].agent.name, "worker-beta");
+    }
+
+    #[test]
+    fn parse_dynamic_agent_tree_from_json_code_block() {
+        let output = r#"Analysis done.
+
+```json
+{
+  "root_task": "Refactor module",
+  "children": [
+    {
+      "name": "refactor-core",
+      "task": "Refactor core module"
+    },
+    {
+      "name": "refactor-tests",
+      "task": "Update tests"
+    }
+  ]
+}
+```
+
+Done."#;
+
+        let node = parse_dynamic_agent_tree(output).expect("should parse");
+        assert_eq!(node.children.len(), 2);
+    }
+
+    #[test]
+    fn parse_dynamic_agent_tree_rejects_too_many_children() {
+        let output = r#"<parallel_plan>
+{
+  "root_task": "Too many workers",
+  "children": [
+    {"name": "a", "task": "Task A"},
+    {"name": "b", "task": "Task B"},
+    {"name": "c", "task": "Task C"},
+    {"name": "d", "task": "Task D"},
+    {"name": "e", "task": "Task E"},
+    {"name": "f", "task": "Task F"}
+  ]
+}
+</parallel_plan>"#;
+
+        assert!(parse_dynamic_agent_tree(output).is_none());
+    }
+
+    #[test]
+    fn parse_dynamic_agent_tree_rejects_duplicate_names() {
+        let output = r#"<parallel_plan>
+{
+  "root_task": "Duplicate names",
+  "children": [
+    {"name": "worker", "task": "Task A"},
+    {"name": "worker", "task": "Task B"}
+  ]
+}
+</parallel_plan>"#;
+
+        assert!(parse_dynamic_agent_tree(output).is_none());
+    }
+
+    #[test]
+    fn parse_dynamic_agent_tree_rejects_empty_children() {
+        let output = r#"<parallel_plan>
+{
+  "root_task": "No children",
+  "children": []
+}
+</parallel_plan>"#;
+
+        assert!(parse_dynamic_agent_tree(output).is_none());
+    }
+
+    #[test]
+    fn parse_dynamic_agent_tree_returns_none_on_no_json() {
+        let output = "This is just plain text with no JSON at all.";
+        assert!(parse_dynamic_agent_tree(output).is_none());
+    }
+
+    #[test]
+    fn parse_dynamic_agent_tree_handles_model_override() {
+        let output = r#"<parallel_plan>
+{
+  "root_task": "Mixed work",
+  "children": [
+    {
+      "name": "fast-worker",
+      "task": "Quick analysis",
+      "model": "openai:gpt-4o-mini"
+    }
+  ]
+}
+</parallel_plan>"#;
+
+        let node = parse_dynamic_agent_tree(output).expect("should parse");
+        assert_eq!(node.children.len(), 1);
+        let model = node.children[0]
+            .agent
+            .model
+            .as_ref()
+            .expect("should have model");
+        assert_eq!(model.provider_id, "openai");
+        assert_eq!(model.model_id, "gpt-4o-mini");
+    }
+
+    #[test]
+    fn parse_dynamic_agent_tree_preserves_allowed_tools() {
+        let output = r#"<parallel_plan>
+{
+  "root_task": "Tool check",
+  "children": [
+    {
+      "name": "reader",
+      "task": "Read-only analysis",
+      "allowed_tools": ["read", "glob", "grep"]
+    }
+  ]
+}
+</parallel_plan>"#;
+
+        let node = parse_dynamic_agent_tree(output).expect("should parse");
+        assert_eq!(
+            node.children[0].agent.allowed_tools,
+            vec!["read", "glob", "grep"]
+        );
+    }
 }

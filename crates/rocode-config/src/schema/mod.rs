@@ -563,6 +563,36 @@ pub struct SkillsConfig {
     pub paths: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub urls: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hub: Option<SkillHubConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SkillHubConfig {
+    #[serde(
+        rename = "artifactCacheRetentionSeconds",
+        alias = "artifact_cache_retention_seconds",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub artifact_cache_retention_seconds: Option<u64>,
+    #[serde(
+        rename = "fetchTimeoutMs",
+        alias = "fetch_timeout_ms",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub fetch_timeout_ms: Option<u64>,
+    #[serde(
+        rename = "maxDownloadBytes",
+        alias = "max_download_bytes",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_download_bytes: Option<u64>,
+    #[serde(
+        rename = "maxExtractBytes",
+        alias = "max_extract_bytes",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_extract_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

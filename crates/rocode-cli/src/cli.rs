@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -142,6 +142,11 @@ pub(crate) enum Commands {
     Session {
         #[command(subcommand)]
         action: SessionCommands,
+    },
+    #[command(about = "Manage skill catalog and remote hub", alias = "skills")]
+    Skill {
+        #[command(subcommand)]
+        action: SkillCommands,
     },
     #[command(about = "Show token usage and cost statistics")]
     Stats {
@@ -289,6 +294,165 @@ pub(crate) enum SessionCommands {
 }
 
 #[derive(Subcommand)]
+pub(crate) enum SkillCommands {
+    #[command(about = "Remote distribution, lifecycle, and managed source operations")]
+    Hub {
+        #[command(subcommand)]
+        action: SkillHubCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum SkillHubCommands {
+    #[command(
+        about = "Show a combined view of distributions, artifact cache, and lifecycle state"
+    )]
+    Status {
+        #[command(flatten)]
+        output: SkillHubOutputArgs,
+    },
+    #[command(about = "Show managed skill provenance records")]
+    Managed {
+        #[command(flatten)]
+        output: SkillHubOutputArgs,
+    },
+    #[command(about = "Show cached skill source indices")]
+    Index {
+        #[command(flatten)]
+        output: SkillHubOutputArgs,
+    },
+    #[command(about = "Show resolved remote distribution records")]
+    Distributions {
+        #[command(flatten)]
+        output: SkillHubOutputArgs,
+    },
+    #[command(about = "Show artifact cache entries and fetch failure reasons")]
+    ArtifactCache {
+        #[command(flatten)]
+        output: SkillHubOutputArgs,
+    },
+    #[command(about = "Show current skill hub artifact policy")]
+    Policy {
+        #[command(flatten)]
+        output: SkillHubOutputArgs,
+    },
+    #[command(about = "Show managed lifecycle records")]
+    Lifecycle {
+        #[command(flatten)]
+        output: SkillHubOutputArgs,
+    },
+    #[command(about = "Refresh one source index cache entry")]
+    IndexRefresh {
+        #[command(flatten)]
+        source: SkillSourceArgs,
+        #[command(flatten)]
+        output: SkillHubOutputArgs,
+    },
+    #[command(about = "Create a hub sync plan for one source")]
+    SyncPlan {
+        #[command(flatten)]
+        source: SkillSourceArgs,
+        #[command(flatten)]
+        output: SkillHubOutputArgs,
+    },
+    #[command(about = "Apply a hub sync plan for one source")]
+    SyncApply {
+        #[arg(long)]
+        session_id: String,
+        #[command(flatten)]
+        source: SkillSourceArgs,
+        #[command(flatten)]
+        output: SkillHubOutputArgs,
+    },
+    #[command(about = "Plan one remote distribution install")]
+    InstallPlan {
+        #[command(flatten)]
+        source: SkillSourceArgs,
+        #[arg(long)]
+        skill_name: String,
+        #[command(flatten)]
+        output: SkillHubOutputArgs,
+    },
+    #[command(about = "Apply one remote distribution install")]
+    InstallApply {
+        #[arg(long)]
+        session_id: String,
+        #[command(flatten)]
+        source: SkillSourceArgs,
+        #[arg(long)]
+        skill_name: String,
+        #[command(flatten)]
+        output: SkillHubOutputArgs,
+    },
+    #[command(about = "Plan one managed remote update")]
+    UpdatePlan {
+        #[command(flatten)]
+        source: SkillSourceArgs,
+        #[arg(long)]
+        skill_name: String,
+        #[command(flatten)]
+        output: SkillHubOutputArgs,
+    },
+    #[command(about = "Apply one managed remote update")]
+    UpdateApply {
+        #[arg(long)]
+        session_id: String,
+        #[command(flatten)]
+        source: SkillSourceArgs,
+        #[arg(long)]
+        skill_name: String,
+        #[command(flatten)]
+        output: SkillHubOutputArgs,
+    },
+    #[command(about = "Detach one managed skill from its source while keeping workspace files")]
+    Detach {
+        #[arg(long)]
+        session_id: String,
+        #[command(flatten)]
+        source: SkillSourceArgs,
+        #[arg(long)]
+        skill_name: String,
+        #[command(flatten)]
+        output: SkillHubOutputArgs,
+    },
+    #[command(about = "Remove one managed skill and delete the workspace copy only when clean")]
+    Remove {
+        #[arg(long)]
+        session_id: String,
+        #[command(flatten)]
+        source: SkillSourceArgs,
+        #[arg(long)]
+        skill_name: String,
+        #[command(flatten)]
+        output: SkillHubOutputArgs,
+    },
+}
+
+#[derive(Args, Clone, Debug)]
+pub(crate) struct SkillHubOutputArgs {
+    #[arg(long, default_value = "text")]
+    pub format: SkillHubOutputFormat,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub(crate) enum SkillHubOutputFormat {
+    Text,
+    Json,
+}
+
+#[derive(Args, Clone, Debug)]
+pub(crate) struct SkillSourceArgs {
+    #[arg(long)]
+    pub source_id: String,
+    #[arg(long, value_enum)]
+    pub source_kind: SkillSourceKindArg,
+    #[arg(long)]
+    pub locator: String,
+    #[arg(long)]
+    pub revision: Option<String>,
+}
+
+#[derive(Subcommand)]
 pub(crate) enum AuthCommands {
     #[command(
         about = "List supported auth providers and current environment status",
@@ -403,12 +567,181 @@ pub(crate) enum DebugCommands {
 #[derive(Subcommand)]
 pub(crate) enum DebugSkillsCommands {
     #[command(about = "List the resolved skill catalog")]
-    List,
+    List {
+        #[arg(long)]
+        session_id: Option<String>,
+    },
     #[command(about = "Show raw detail for one resolved skill")]
     View {
         #[arg(value_name = "NAME")]
         name: String,
+        #[arg(long)]
+        session_id: Option<String>,
     },
+    #[command(about = "Show managed skill provenance records")]
+    Managed,
+    #[command(about = "Show cached skill source indices")]
+    Index,
+    #[command(about = "Show resolved remote distribution records")]
+    Distributions,
+    #[command(about = "Show artifact cache entries and fetch failure reasons")]
+    ArtifactCache,
+    #[command(about = "Show managed lifecycle records")]
+    Lifecycle,
+    #[command(about = "Refresh one source index cache entry")]
+    IndexRefresh {
+        #[arg(long)]
+        source_id: String,
+        #[arg(long, value_enum)]
+        source_kind: SkillSourceKindArg,
+        #[arg(long)]
+        locator: String,
+        #[arg(long)]
+        revision: Option<String>,
+    },
+    #[command(about = "Show recent skill governance audit events")]
+    Audit,
+    #[command(about = "Show unified skill governance timeline")]
+    Timeline {
+        #[arg(long)]
+        skill_name: Option<String>,
+        #[arg(long)]
+        source_id: Option<String>,
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    #[command(about = "Run guard scan for one resolved skill or one source")]
+    Guard {
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        source_id: Option<String>,
+        #[arg(long, value_enum)]
+        source_kind: Option<SkillSourceKindArg>,
+        #[arg(long)]
+        locator: Option<String>,
+        #[arg(long)]
+        revision: Option<String>,
+    },
+    #[command(about = "Create a hub sync plan for one source")]
+    SyncPlan {
+        #[arg(long)]
+        source_id: String,
+        #[arg(long, value_enum)]
+        source_kind: SkillSourceKindArg,
+        #[arg(long)]
+        locator: String,
+        #[arg(long)]
+        revision: Option<String>,
+    },
+    #[command(about = "Apply a hub sync plan for one source")]
+    SyncApply {
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        source_id: String,
+        #[arg(long, value_enum)]
+        source_kind: SkillSourceKindArg,
+        #[arg(long)]
+        locator: String,
+        #[arg(long)]
+        revision: Option<String>,
+    },
+    #[command(about = "Plan one remote distribution install")]
+    InstallPlan {
+        #[arg(long)]
+        source_id: String,
+        #[arg(long, value_enum)]
+        source_kind: SkillSourceKindArg,
+        #[arg(long)]
+        locator: String,
+        #[arg(long)]
+        skill_name: String,
+        #[arg(long)]
+        revision: Option<String>,
+    },
+    #[command(about = "Apply one remote distribution install")]
+    InstallApply {
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        source_id: String,
+        #[arg(long, value_enum)]
+        source_kind: SkillSourceKindArg,
+        #[arg(long)]
+        locator: String,
+        #[arg(long)]
+        skill_name: String,
+        #[arg(long)]
+        revision: Option<String>,
+    },
+    #[command(about = "Plan one managed remote update")]
+    UpdatePlan {
+        #[arg(long)]
+        source_id: String,
+        #[arg(long, value_enum)]
+        source_kind: SkillSourceKindArg,
+        #[arg(long)]
+        locator: String,
+        #[arg(long)]
+        skill_name: String,
+        #[arg(long)]
+        revision: Option<String>,
+    },
+    #[command(about = "Apply one managed remote update")]
+    UpdateApply {
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        source_id: String,
+        #[arg(long, value_enum)]
+        source_kind: SkillSourceKindArg,
+        #[arg(long)]
+        locator: String,
+        #[arg(long)]
+        skill_name: String,
+        #[arg(long)]
+        revision: Option<String>,
+    },
+    #[command(about = "Detach one managed skill from its source while keeping workspace files")]
+    Detach {
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        source_id: String,
+        #[arg(long, value_enum)]
+        source_kind: SkillSourceKindArg,
+        #[arg(long)]
+        locator: String,
+        #[arg(long)]
+        skill_name: String,
+        #[arg(long)]
+        revision: Option<String>,
+    },
+    #[command(about = "Remove one managed skill and delete the workspace copy only when clean")]
+    Remove {
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        source_id: String,
+        #[arg(long, value_enum)]
+        source_kind: SkillSourceKindArg,
+        #[arg(long)]
+        locator: String,
+        #[arg(long)]
+        skill_name: String,
+        #[arg(long)]
+        revision: Option<String>,
+    },
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub(crate) enum SkillSourceKindArg {
+    Bundled,
+    LocalPath,
+    Git,
+    Archive,
+    Registry,
 }
 
 #[derive(Subcommand)]

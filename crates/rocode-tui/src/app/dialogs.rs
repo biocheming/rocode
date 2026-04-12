@@ -598,6 +598,224 @@ impl App {
                         self.alert_dialog.open();
                     }
                 }
+                KeyCode::Char('g')
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    match self.submit_skill_guard_run() {
+                        Ok(message) => {
+                            self.alert_dialog.set_message(&message);
+                            self.alert_dialog.open();
+                        }
+                        Err(error) => {
+                            self.alert_dialog
+                                .set_message(&format!("Failed to run skill guard:\n{}", error));
+                            self.alert_dialog.open();
+                        }
+                    }
+                }
+                KeyCode::Char('G')
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    match self.submit_skill_source_guard_run() {
+                        Ok(message) => {
+                            self.alert_dialog.set_message(&message);
+                            self.alert_dialog.open();
+                        }
+                        Err(error) => {
+                            self.alert_dialog
+                                .set_message(&format!("Failed to run source guard:\n{}", error));
+                            self.alert_dialog.open();
+                        }
+                    }
+                }
+                KeyCode::Char('i')
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    self.skill_list_dialog.cycle_hub_source();
+                }
+                KeyCode::Char('x')
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    match self.submit_skill_hub_index_refresh() {
+                        Ok(message) => {
+                            self.alert_dialog.set_message(&message);
+                            self.alert_dialog.open();
+                        }
+                        Err(error) => {
+                            self.alert_dialog.set_message(&format!(
+                                "Failed to refresh source index:\n{}",
+                                error
+                            ));
+                            self.alert_dialog.open();
+                        }
+                    }
+                }
+                KeyCode::Char('r')
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    match self.refresh_skill_hub_state() {
+                        Ok(()) => {
+                            self.alert_dialog.set_message("Refreshed skill hub state.");
+                            self.alert_dialog.open();
+                        }
+                        Err(error) => {
+                            self.alert_dialog.set_message(&format!(
+                                "Failed to refresh skill hub state:\n{}",
+                                error
+                            ));
+                            self.alert_dialog.open();
+                        }
+                    }
+                }
+                KeyCode::Char('p')
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    match self.submit_skill_hub_sync_plan() {
+                        Ok(message) => {
+                            self.alert_dialog.set_message(&message);
+                            self.alert_dialog.open();
+                        }
+                        Err(error) => {
+                            self.alert_dialog
+                                .set_message(&format!("Failed to build hub sync plan:\n{}", error));
+                            self.alert_dialog.open();
+                        }
+                    }
+                }
+                KeyCode::Char('a')
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    match self.submit_skill_hub_sync_apply() {
+                        Ok(message) => {
+                            self.alert_dialog.set_message(&message);
+                            self.alert_dialog.open();
+                        }
+                        Err(error) => {
+                            self.alert_dialog
+                                .set_message(&format!("Failed to apply hub sync:\n{}", error));
+                            self.alert_dialog.open();
+                        }
+                    }
+                }
+                KeyCode::Char('u')
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    match self.submit_skill_hub_remote_install_plan() {
+                        Ok(message) => {
+                            self.alert_dialog.set_message(&message);
+                            self.alert_dialog.open();
+                        }
+                        Err(error) => {
+                            self.alert_dialog.set_message(&format!(
+                                "Failed to build remote install plan:\n{}",
+                                error
+                            ));
+                            self.alert_dialog.open();
+                        }
+                    }
+                }
+                KeyCode::Char('U')
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    match self.submit_skill_hub_remote_install_apply() {
+                        Ok(message) => {
+                            self.alert_dialog.set_message(&message);
+                            self.alert_dialog.open();
+                        }
+                        Err(error) => {
+                            self.alert_dialog.set_message(&format!(
+                                "Failed to apply remote install:\n{}",
+                                error
+                            ));
+                            self.alert_dialog.open();
+                        }
+                    }
+                }
+                KeyCode::Char('v')
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    match self.submit_skill_hub_remote_update_plan() {
+                        Ok(message) => {
+                            self.alert_dialog.set_message(&message);
+                            self.alert_dialog.open();
+                        }
+                        Err(error) => {
+                            self.alert_dialog.set_message(&format!(
+                                "Failed to build remote update plan:\n{}",
+                                error
+                            ));
+                            self.alert_dialog.open();
+                        }
+                    }
+                }
+                KeyCode::Char('V')
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    match self.submit_skill_hub_remote_update_apply() {
+                        Ok(message) => {
+                            self.alert_dialog.set_message(&message);
+                            self.alert_dialog.open();
+                        }
+                        Err(error) => {
+                            self.alert_dialog
+                                .set_message(&format!("Failed to apply remote update:\n{}", error));
+                            self.alert_dialog.open();
+                        }
+                    }
+                }
+                KeyCode::Char('D')
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    match self.submit_skill_hub_managed_detach() {
+                        Ok(message) => {
+                            self.alert_dialog.set_message(&message);
+                            self.alert_dialog.open();
+                        }
+                        Err(error) => {
+                            self.alert_dialog.set_message(&format!(
+                                "Failed to detach managed skill:\n{}",
+                                error
+                            ));
+                            self.alert_dialog.open();
+                        }
+                    }
+                }
+                KeyCode::Char('R')
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    match self.submit_skill_hub_managed_remove() {
+                        Ok(message) => {
+                            self.alert_dialog.set_message(&message);
+                            self.alert_dialog.open();
+                        }
+                        Err(error) => {
+                            self.alert_dialog.set_message(&format!(
+                                "Failed to remove managed skill:\n{}",
+                                error
+                            ));
+                            self.alert_dialog.open();
+                        }
+                    }
+                }
+                KeyCode::Char('t')
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    self.skill_list_dialog.toggle_browse_pane();
+                }
                 KeyCode::Char(c)
                     if !key.modifiers.contains(KeyModifiers::CONTROL)
                         && !key.modifiers.contains(KeyModifiers::ALT) =>

@@ -2,6 +2,7 @@ use super::{
     RouteDecision, SchedulerExecutionOutputSlot, SchedulerExecutionPlacement,
     SchedulerFinalOutputSource, SchedulerPresetRuntimeFields, SchedulerPresetRuntimeUpdate,
 };
+use crate::agent_tree::AgentTreeNode;
 use crate::output_metadata::OutputUsage;
 use crate::OrchestratorOutput;
 
@@ -34,6 +35,10 @@ pub(super) struct SchedulerPresetRuntimeState {
     pub(super) user_choice: Option<String>,
     pub(super) review_gate_approved: Option<bool>,
     pub(super) workflow_todos_registered: bool,
+    /// Runtime-constructed agent tree parsed from LLM output.
+    /// When present, the next execution round uses this tree via
+    /// `AgentTreeOrchestrator` for true parallel child dispatch.
+    pub(super) dynamic_agent_tree: Option<AgentTreeNode>,
 }
 
 #[derive(Default)]

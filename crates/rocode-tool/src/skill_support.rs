@@ -1,7 +1,7 @@
 use rocode_config::ConfigStore;
 use rocode_skill::{
     infer_toolsets_from_tools, LoadedSkill, LoadedSkillFile, SkillAuthority, SkillError,
-    SkillFilter, SkillMetaView,
+    SkillFilter, SkillGovernanceAuthority, SkillMetaView,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -69,10 +69,51 @@ pub(crate) fn map_skill_error(err: SkillError) -> ToolError {
         SkillError::SkillAlreadyExists { name } => {
             ToolError::InvalidArguments(format!("Skill already exists: {}", name))
         }
+        SkillError::GuardBlocked { report } => ToolError::InvalidArguments(format!(
+            "Skill guard blocked {}: {}",
+            report.skill_name,
+            summarize_guard_report(&report)
+        )),
         SkillError::SkillWriteSizeExceeded { path, size, limit } => {
             ToolError::InvalidArguments(format!(
                 "Skill write exceeds size limit for {}: {} bytes > {} bytes",
                 path, size, limit
+            ))
+        }
+        SkillError::ArtifactFetchTimeout {
+            locator,
+            timeout_ms,
+        } => ToolError::Timeout(format!(
+            "Artifact fetch timed out for {} after {}ms",
+            locator, timeout_ms
+        )),
+        SkillError::ArtifactDownloadSizeExceeded {
+            locator,
+            size,
+            limit,
+        } => ToolError::InvalidArguments(format!(
+            "Artifact download size limit exceeded for {}: {} bytes > {} bytes",
+            locator, size, limit
+        )),
+        SkillError::ArtifactExtractSizeExceeded { path, size, limit } => {
+            ToolError::InvalidArguments(format!(
+                "Artifact extract size limit exceeded for {}: {} bytes > {} bytes",
+                path.display(),
+                size,
+                limit
+            ))
+        }
+        SkillError::ArtifactChecksumMismatch { expected, actual } => {
+            ToolError::InvalidArguments(format!(
+                "Artifact checksum mismatch: expected sha256:{}, got sha256:{}",
+                expected, actual
+            ))
+        }
+        SkillError::ArtifactLayoutMismatch { path, message } => {
+            ToolError::InvalidArguments(format!(
+                "Artifact layout mismatch at {}: {}",
+                path.display(),
+                message
             ))
         }
         SkillError::ReadFailed { path, message } => {
@@ -84,8 +125,24 @@ pub(crate) fn map_skill_error(err: SkillError) -> ToolError {
     }
 }
 
+fn summarize_guard_report(report: &rocode_types::SkillGuardReport) -> String {
+    report
+        .violations
+        .iter()
+        .map(|violation| violation.message.as_str())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 pub(crate) fn authority_for(base: &Path, config_store: Option<Arc<ConfigStore>>) -> SkillAuthority {
     SkillAuthority::new(base.to_path_buf(), config_store)
+}
+
+pub(crate) fn governance_authority_for(
+    base: &Path,
+    config_store: Option<Arc<ConfigStore>>,
+) -> SkillGovernanceAuthority {
+    SkillGovernanceAuthority::new(base.to_path_buf(), config_store)
 }
 
 #[derive(Debug, Clone, Default)]

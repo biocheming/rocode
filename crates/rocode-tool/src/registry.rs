@@ -643,6 +643,7 @@ pub async fn create_default_registry_with_config(
     registry.register(crate::skills_list::SkillsListTool).await;
     registry.register(crate::skill_view::SkillViewTool).await;
     registry.register(crate::skill::SkillTool).await;
+    registry.register(crate::skill_hub::SkillHubTool).await;
     registry
         .register(crate::skill_manage::SkillManageTool)
         .await;

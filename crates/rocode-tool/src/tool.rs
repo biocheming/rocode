@@ -111,6 +111,23 @@ pub type PromptSubsessionCallback = Arc<
         + Sync,
 >;
 
+/// Callback for runtime agent construction. When a task tool encounters an
+/// unknown `subagent_type` and the caller provides an inline agent spec
+/// (prompt, tools, model), this callback is invoked to dynamically build
+/// a `TaskAgentInfo` without polluting the global `AgentRegistry`.
+pub type BuildAgentCallback = Arc<
+    dyn (Fn(
+            String,         // agent name
+            Option<String>, // system prompt override
+            Option<String>, // model override (provider:model)
+            Option<u32>,    // max_steps override
+            Vec<String>,    // allowed_tools override
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<TaskAgentInfo, ToolError>> + Send>,
+        >) + Send
+        + Sync,
+>;
+
 pub type FileTimeAssertCallback = Arc<
     dyn (Fn(
             String,
@@ -422,6 +439,7 @@ pub struct ToolContext {
     pub get_last_model: Option<GetLastModelCallback>,
     pub get_agent_info: Option<GetAgentInfoCallback>,
     pub resolve_category: Option<ResolveCategoryCallback>,
+    pub build_agent: Option<BuildAgentCallback>,
     pub create_synthetic_message: Option<CreateSyntheticMessageCallback>,
     pub project_root: String,
     pub runtime_config: ToolRuntimeConfig,
@@ -458,6 +476,7 @@ impl ToolContext {
             get_last_model: None,
             get_agent_info: None,
             resolve_category: None,
+            build_agent: None,
             create_synthetic_message: None,
             project_root: directory,
             runtime_config: ToolRuntimeConfig::default(),
@@ -814,6 +833,37 @@ impl ToolContext {
         }
     }
 
+    pub fn with_build_agent<F, Fut>(mut self, callback: F) -> Self
+    where
+        F: Fn(String, Option<String>, Option<String>, Option<u32>, Vec<String>) -> Fut
+            + Send
+            + Sync
+            + 'static,
+        Fut: std::future::Future<Output = Result<TaskAgentInfo, ToolError>> + Send + 'static,
+    {
+        self.build_agent = Some(Arc::new(move |name, prompt, model, max_steps, tools| {
+            Box::pin(callback(name, prompt, model, max_steps, tools))
+        }));
+        self
+    }
+
+    pub async fn do_build_agent(
+        &self,
+        name: String,
+        system_prompt: Option<String>,
+        model: Option<String>,
+        max_steps: Option<u32>,
+        allowed_tools: Vec<String>,
+    ) -> Result<TaskAgentInfo, ToolError> {
+        if let Some(ref callback) = self.build_agent {
+            callback(name, system_prompt, model, max_steps, allowed_tools).await
+        } else {
+            Err(ToolError::ExecutionError(
+                "Build agent callback not configured".to_string(),
+            ))
+        }
+    }
+
     pub fn with_create_synthetic_message<F, Fut>(mut self, callback: F) -> Self
     where
         F: Fn(String, Option<String>, String, Vec<SyntheticAttachment>) -> Fut
@@ -875,6 +925,7 @@ impl std::fmt::Debug for ToolContext {
             .field("worktree", &self.worktree)
             .field("get_agent_info", &self.get_agent_info.is_some())
             .field("resolve_category", &self.resolve_category.is_some())
+            .field("build_agent", &self.build_agent.is_some())
             .finish()
     }
 }

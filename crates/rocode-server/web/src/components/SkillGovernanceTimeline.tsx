@@ -1,0 +1,290 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { cn } from "@/lib/utils";
+
+type TimelineScope = "all" | "skill" | "source";
+
+interface SkillGuardViolationLike {
+  rule_id: string;
+  severity: "info" | "warn" | "error";
+  message: string;
+  file_path?: string | null;
+}
+
+interface SkillGuardReportLike {
+  skill_name: string;
+  status: "passed" | "warn" | "blocked";
+  violations: SkillGuardViolationLike[];
+  scanned_at: number;
+}
+
+interface SkillSourceRefLike {
+  source_id: string;
+  source_kind: "bundled" | "local_path" | "git" | "archive" | "registry";
+  locator: string;
+  revision?: string | null;
+}
+
+interface ManagedSkillRecordLike {
+  skill_name: string;
+  source?: SkillSourceRefLike | null;
+  installed_revision?: string | null;
+  local_hash?: string | null;
+  last_synced_at?: number | null;
+  locally_modified: boolean;
+  deleted_locally: boolean;
+}
+
+interface SkillGovernanceTimelineEntryLike {
+  entry_id: string;
+  kind: string;
+  created_at: number;
+  skill_name?: string | null;
+  source_id?: string | null;
+  actor?: string | null;
+  title: string;
+  summary: string;
+  status: "info" | "success" | "warn" | "error";
+  managed_record?: ManagedSkillRecordLike | null;
+  guard_report?: SkillGuardReportLike | null;
+}
+
+interface SkillGovernanceTimelineProps {
+  entries: SkillGovernanceTimelineEntryLike[];
+  selectedSkillName?: string | null;
+  selectedSourceId?: string | null;
+}
+
+function formatTimestamp(ts: number): string {
+  if (!ts) return "timestamp --";
+  return new Date(ts * 1000).toLocaleString();
+}
+
+function statusClasses(status: SkillGovernanceTimelineEntryLike["status"]): string {
+  switch (status) {
+    case "success":
+      return "border-green-300 bg-green-50 text-green-800 dark:border-green-700 dark:bg-green-950/60 dark:text-green-300";
+    case "warn":
+      return "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200";
+    case "error":
+      return "border-red-300 bg-red-50 text-red-800 dark:border-red-700 dark:bg-red-950/60 dark:text-red-300";
+    default:
+      return "border-border bg-muted text-muted-foreground";
+  }
+}
+
+function managedStateLabel(record: ManagedSkillRecordLike): string {
+  if (record.deleted_locally) return "deleted locally";
+  if (record.locally_modified) return "locally modified";
+  return "clean";
+}
+
+function matchesSkill(
+  entry: SkillGovernanceTimelineEntryLike,
+  selectedSkillName: string | null | undefined,
+): boolean {
+  if (!selectedSkillName?.trim()) return false;
+  return entry.skill_name?.trim().toLowerCase() === selectedSkillName.trim().toLowerCase();
+}
+
+function matchesSource(
+  entry: SkillGovernanceTimelineEntryLike,
+  selectedSourceId: string | null | undefined,
+): boolean {
+  if (!selectedSourceId?.trim()) return false;
+  return entry.source_id?.trim() === selectedSourceId.trim();
+}
+
+export function SkillGovernanceTimeline({
+  entries,
+  selectedSkillName,
+  selectedSourceId,
+}: SkillGovernanceTimelineProps) {
+  const [scope, setScope] = useState<TimelineScope>("all");
+
+  const counts = useMemo(() => {
+    let skill = 0;
+    let source = 0;
+    for (const entry of entries) {
+      if (matchesSkill(entry, selectedSkillName)) skill += 1;
+      if (matchesSource(entry, selectedSourceId)) source += 1;
+    }
+    return { skill, source };
+  }, [entries, selectedSkillName, selectedSourceId]);
+
+  useEffect(() => {
+    if (scope === "skill" && counts.skill === 0) {
+      setScope(counts.source > 0 ? "source" : "all");
+      return;
+    }
+    if (scope === "source" && counts.source === 0) {
+      setScope(counts.skill > 0 ? "skill" : "all");
+    }
+  }, [counts.skill, counts.source, scope]);
+
+  const filteredEntries = useMemo(() => {
+    if (scope === "skill") {
+      return entries.filter((entry) => matchesSkill(entry, selectedSkillName));
+    }
+    if (scope === "source") {
+      return entries.filter((entry) => matchesSource(entry, selectedSourceId));
+    }
+    return entries;
+  }, [entries, scope, selectedSkillName, selectedSourceId]);
+
+  return (
+    <div className="grid gap-4 rounded-2xl border border-border bg-card/70 p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="m-0 text-xs tracking-widest uppercase text-muted-foreground font-semibold">
+            Governance Timeline
+          </p>
+          <h3 className="m-0 mt-1">Guard, audit, and managed provenance in one read model</h3>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className={cn(
+              "min-h-[34px] rounded-full px-4 text-sm transition-all duration-150",
+              scope === "all"
+                ? "bg-foreground text-background"
+                : "border border-border bg-card/70 text-foreground hover:bg-accent",
+            )}
+            onClick={() => setScope("all")}
+          >
+            All · {entries.length}
+          </button>
+          <button
+            type="button"
+            disabled={counts.skill === 0}
+            className={cn(
+              "min-h-[34px] rounded-full px-4 text-sm transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-50",
+              scope === "skill"
+                ? "bg-foreground text-background"
+                : "border border-border bg-card/70 text-foreground hover:bg-accent",
+            )}
+            onClick={() => setScope("skill")}
+          >
+            Skill · {counts.skill}
+          </button>
+          <button
+            type="button"
+            disabled={counts.source === 0}
+            className={cn(
+              "min-h-[34px] rounded-full px-4 text-sm transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-50",
+              scope === "source"
+                ? "bg-foreground text-background"
+                : "border border-border bg-card/70 text-foreground hover:bg-accent",
+            )}
+            onClick={() => setScope("source")}
+          >
+            Source · {counts.source}
+          </button>
+        </div>
+      </div>
+
+      <div className="text-sm text-muted-foreground">
+        {scope === "skill" && selectedSkillName ? (
+          <span>Focused on selected skill <code>{selectedSkillName}</code>.</span>
+        ) : null}
+        {scope === "source" && selectedSourceId ? (
+          <span>Focused on selected source <code>{selectedSourceId}</code>.</span>
+        ) : null}
+        {scope === "all" ? (
+          <span>Showing the current workspace governance history tail.</span>
+        ) : null}
+      </div>
+
+      <div className="grid gap-3 max-h-[34rem] overflow-y-auto pr-1">
+        {filteredEntries.length ? (
+          filteredEntries.map((entry) => (
+            <article
+              key={entry.entry_id}
+              className="rounded-2xl border border-border bg-muted/10 p-4 text-sm"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="grid gap-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <strong>{entry.title}</strong>
+                    <span
+                      className={cn(
+                        "rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide",
+                        statusClasses(entry.status),
+                      )}
+                    >
+                      {entry.status}
+                    </span>
+                    <span className="rounded-full border border-border bg-card/80 px-2.5 py-1 text-[11px] uppercase tracking-wide text-muted-foreground">
+                      {entry.kind}
+                    </span>
+                  </div>
+                  <div className="text-muted-foreground">{entry.summary}</div>
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  {formatTimestamp(entry.created_at)}
+                </span>
+              </div>
+
+              <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                {entry.skill_name ? (
+                  <span className="rounded-full border border-border bg-card/70 px-2.5 py-1">
+                    skill {entry.skill_name}
+                  </span>
+                ) : null}
+                {entry.source_id ? (
+                  <span className="rounded-full border border-border bg-card/70 px-2.5 py-1">
+                    source {entry.source_id}
+                  </span>
+                ) : null}
+                {entry.actor ? (
+                  <span className="rounded-full border border-border bg-card/70 px-2.5 py-1 text-muted-foreground">
+                    actor {entry.actor}
+                  </span>
+                ) : null}
+              </div>
+
+              {entry.managed_record ? (
+                <div className="mt-3 rounded-xl border border-border/70 bg-card/70 p-3 text-xs text-muted-foreground">
+                  <div>
+                    managed revision {entry.managed_record.installed_revision || "--"} ·{" "}
+                    {managedStateLabel(entry.managed_record)}
+                  </div>
+                  <div className="mt-1 break-all">
+                    locator {entry.managed_record.source?.locator || "--"}
+                  </div>
+                </div>
+              ) : null}
+
+              {entry.guard_report?.violations?.length ? (
+                <div className="mt-3 grid gap-2">
+                  {entry.guard_report.violations.slice(0, 3).map((violation, index) => (
+                    <div
+                      key={`${entry.entry_id}:${violation.rule_id}:${index}`}
+                      className="rounded-xl border border-border/70 bg-card/70 p-3 text-xs"
+                    >
+                      <div className="flex items-center gap-2">
+                        <strong>{violation.rule_id}</strong>
+                        <span className="text-muted-foreground">{violation.severity}</span>
+                      </div>
+                      <div className="mt-1 text-muted-foreground">{violation.message}</div>
+                      {violation.file_path ? (
+                        <div className="mt-1 break-all text-muted-foreground">
+                          {violation.file_path}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </article>
+          ))
+        ) : (
+          <div className="rounded-xl border border-border bg-muted/10 p-4 text-sm text-muted-foreground">
+            No timeline entries for the current focus.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
