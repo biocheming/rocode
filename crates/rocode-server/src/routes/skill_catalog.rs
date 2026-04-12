@@ -157,6 +157,8 @@ pub(crate) struct SkillManageRequest {
     #[serde(default)]
     pub body: Option<String>,
     #[serde(default)]
+    pub frontmatter: Option<rocode_skill::SkillFrontmatterPatch>,
+    #[serde(default)]
     pub content: Option<String>,
     #[serde(default)]
     pub category: Option<String>,
@@ -575,6 +577,7 @@ where
                     name: required_string(req.name, "name")?,
                     description: required_string(req.description, "description")?,
                     body: required_string(req.body, "body")?,
+                    frontmatter: req.frontmatter.clone(),
                     category: optional_trimmed(req.category),
                     directory_name: optional_trimmed(req.directory_name),
                 },
@@ -588,6 +591,7 @@ where
                     new_name: optional_trimmed(req.new_name),
                     description: optional_trimmed(req.description),
                     body: optional_trimmed_multiline(req.body),
+                    frontmatter: req.frontmatter.clone(),
                 },
                 "route:/skill/manage",
             )
