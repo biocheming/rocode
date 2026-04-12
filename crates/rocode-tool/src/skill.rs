@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use crate::skill_support::{
-    authority_for, format_loaded_skill_output, map_skill_error, resolve_skill_filter,
+    authority_for, format_loaded_skill_output, load_skill_with_runtime_materialization,
+    resolve_skill_filter,
 };
 use crate::{PermissionRequest, Tool, ToolContext, ToolError, ToolResult};
 
@@ -26,31 +27,16 @@ impl Tool for SkillTool {
     }
 
     fn description(&self) -> &str {
-        "Deprecated compatibility wrapper around skill_view. Load and execute a skill (predefined expertise module)."
+        "Deprecated compatibility wrapper around skill_view. Load a specific skill only after discovering the correct name via skills_categories and skills_list."
     }
 
     fn parameters(&self) -> serde_json::Value {
-        let base = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let authority = authority_for(
-            &base,
-            rocode_config::ConfigStore::from_project_dir(&base)
-                .ok()
-                .map(std::sync::Arc::new),
-        );
-        let skill_names: Vec<String> = authority
-            .list_skill_meta(None)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|skill| skill.name)
-            .collect();
-
         serde_json::json!({
             "type": "object",
             "properties": {
                 "skill_name": {
                     "type": "string",
-                    "description": "Name of the skill to load",
-                    "enum": skill_names
+                    "description": "Exact skill name to load. First call skills_categories and skills_list to inspect names and descriptions; do not guess from memory."
                 },
                 "arguments": {
                     "type": "object",
@@ -76,9 +62,14 @@ impl Tool for SkillTool {
         let authority = authority_for(Path::new(&ctx.directory), ctx.config_store.clone());
         let resolved_filter = resolve_skill_filter(&ctx, None).await;
         let filter = resolved_filter.as_filter();
-        let skill = authority
-            .load_skill(&input.skill_name, Some(&filter))
-            .map_err(map_skill_error)?;
+        let skill = load_skill_with_runtime_materialization(
+            &authority,
+            Path::new(&ctx.directory),
+            ctx.config_store.clone(),
+            &input.skill_name,
+            Some(&filter),
+            Some(&ctx.extra),
+        )?;
 
         ctx.ask_permission(
             PermissionRequest::new("skill")
@@ -87,9 +78,13 @@ impl Tool for SkillTool {
                 .with_metadata("description", serde_json::json!(&skill.meta.description)),
         )
         .await?;
+        let detail = authority
+            .load_skill_detail_for_meta(&skill.meta)
+            .map_err(crate::skill_support::map_skill_error)?;
 
         let (output, metadata) = format_loaded_skill_output(
             &skill,
+            Some(&detail),
             Path::new(&ctx.directory),
             input.arguments.as_ref(),
             input.prompt.as_deref(),
@@ -107,5 +102,21 @@ impl Tool for SkillTool {
 impl Default for SkillTool {
     fn default() -> Self {
         Self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skill_parameters_do_not_inline_skill_catalog_enum() {
+        let schema = SkillTool.parameters();
+        let skill_name = &schema["properties"]["skill_name"];
+        assert!(skill_name.get("enum").is_none());
+        assert!(skill_name["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("skills_categories"));
     }
 }

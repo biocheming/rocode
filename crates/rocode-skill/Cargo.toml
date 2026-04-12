@@ -10,6 +10,7 @@ rocode-config = { path = "../rocode-config" }
 rocode-types = { path = "../rocode-types" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 walkdir = { workspace = true }
@@ -17,6 +18,7 @@ dirs = { workspace = true }
 sha2 = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
 flate2 = "1"
+which = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

@@ -34,6 +34,7 @@ pub mod skill_hub;
 pub mod skill_manage;
 pub mod skill_support;
 pub mod skill_view;
+pub mod skills_categories;
 pub mod skills_list;
 pub mod task;
 pub mod task_flow;

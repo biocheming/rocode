@@ -360,6 +360,7 @@ impl Tool for TaskTool {
             Path::new(&ctx.directory),
             ctx.config_store.clone(),
             input.load_skills.as_deref(),
+            Some(&ctx.extra),
         )?;
         let loaded_skill_names = loaded_skills_context.loaded_skill_names();
         let subtask_prompt = if loaded_skills_context.is_empty() {

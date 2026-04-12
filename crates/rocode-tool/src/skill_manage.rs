@@ -34,6 +34,8 @@ struct SkillManageInput {
     #[serde(default)]
     body: Option<String>,
     #[serde(default)]
+    frontmatter: Option<rocode_skill::SkillFrontmatterPatch>,
+    #[serde(default)]
     content: Option<String>,
     #[serde(default)]
     category: Option<String>,
@@ -78,6 +80,10 @@ impl Tool for SkillManageTool {
                     "type": "string",
                     "description": "Skill markdown body for create or patch."
                 },
+                "frontmatter": {
+                    "type": "object",
+                    "description": "Optional structured YAML frontmatter patch for rich skill metadata such as version, author, license, tags, prerequisites, required_commands, and metadata blocks."
+                },
                 "content": {
                     "type": "string",
                     "description": "Full SKILL.md content for edit, or file content for write_file."
@@ -119,6 +125,7 @@ impl Tool for SkillManageTool {
                         name: required_string(input.name, "name")?,
                         description: required_string(input.description, "description")?,
                         body: required_string(input.body, "body")?,
+                        frontmatter: input.frontmatter.clone(),
                         category: optional_trimmed(input.category),
                         directory_name: optional_trimmed(input.directory_name),
                     },
@@ -132,6 +139,7 @@ impl Tool for SkillManageTool {
                         new_name: optional_trimmed(input.new_name),
                         description: optional_trimmed(input.description),
                         body: optional_trimmed_multiline(input.body),
+                        frontmatter: input.frontmatter.clone(),
                     },
                     "tool:skill_manage",
                 )

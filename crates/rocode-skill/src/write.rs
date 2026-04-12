@@ -1,5 +1,5 @@
 use crate::discovery::is_valid_relative_skill_path;
-use crate::{SkillError, SkillMeta};
+use crate::{SkillError, SkillFrontmatter, SkillFrontmatterPatch, SkillMeta};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,6 +14,8 @@ pub struct CreateSkillRequest {
     pub name: String,
     pub description: String,
     pub body: String,
+    #[serde(default)]
+    pub frontmatter: Option<SkillFrontmatterPatch>,
     pub category: Option<String>,
     pub directory_name: Option<String>,
 }
@@ -24,6 +26,8 @@ pub struct PatchSkillRequest {
     pub new_name: Option<String>,
     pub description: Option<String>,
     pub body: Option<String>,
+    #[serde(default)]
+    pub frontmatter: Option<SkillFrontmatterPatch>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -216,13 +220,22 @@ pub(crate) fn validate_supporting_file_size(path: &str, content: &str) -> Result
     ensure_size_limit(path, content.len(), MAX_SUPPORTING_FILE_BYTES)
 }
 
-pub(crate) fn build_skill_document(name: &str, description: &str, body: &str) -> String {
-    format!(
-        "---\nname: {}\ndescription: {}\n---\n\n{}\n",
-        quote_yaml_string(name),
-        quote_yaml_string(description),
-        body.trim()
-    )
+pub(crate) fn build_skill_document(
+    frontmatter: &SkillFrontmatter,
+    body: &str,
+) -> Result<String, SkillError> {
+    let frontmatter = validate_skill_frontmatter(frontmatter)?;
+    let mut yaml = serde_yaml::to_string(&frontmatter).map_err(|error| {
+        SkillError::InvalidSkillFrontmatter {
+            message: error.to_string(),
+        }
+    })?;
+    if yaml.starts_with("---\n") {
+        yaml = yaml.trim_start_matches("---\n").to_string();
+    }
+    let yaml = yaml.trim_end();
+    let body = validate_skill_body(body)?;
+    Ok(format!("---\n{}\n---\n\n{}\n", yaml, body))
 }
 
 pub(crate) fn load_skill_document(path: &Path) -> Result<ParsedSkillDocument, SkillError> {
@@ -280,16 +293,129 @@ pub(crate) fn render_skill_document(document: &ParsedSkillDocument) -> String {
     out
 }
 
-pub(crate) fn upsert_frontmatter_value(lines: &mut Vec<String>, key: &str, value: &str) {
-    let rendered = format!("{key}: {}", quote_yaml_string(value));
-    if let Some(line) = lines.iter_mut().find(|line| {
-        let trimmed = line.trim_start();
-        trimmed.starts_with(&format!("{key}:"))
-    }) {
-        *line = rendered;
-    } else {
-        lines.push(rendered);
+pub(crate) fn parse_skill_frontmatter(
+    document: &ParsedSkillDocument,
+) -> Result<SkillFrontmatter, SkillError> {
+    parse_skill_frontmatter_lines(&document.frontmatter_lines)
+}
+
+pub(crate) fn parse_skill_frontmatter_lines(
+    lines: &[String],
+) -> Result<SkillFrontmatter, SkillError> {
+    let yaml = lines.join("\n");
+    if let Ok(frontmatter) = serde_yaml::from_str::<SkillFrontmatter>(&yaml) {
+        return validate_skill_frontmatter(&frontmatter);
     }
+
+    // Best-effort fallback for malformed YAML: preserve minimum required fields.
+    let name = read_frontmatter_value(lines, "name").ok_or_else(|| {
+        SkillError::InvalidSkillFrontmatter {
+            message: "missing `name`".to_string(),
+        }
+    })?;
+    let description = read_frontmatter_value(lines, "description").ok_or_else(|| {
+        SkillError::InvalidSkillFrontmatter {
+            message: "missing `description`".to_string(),
+        }
+    })?;
+    validate_skill_frontmatter(&SkillFrontmatter {
+        name,
+        description,
+        ..SkillFrontmatter::default()
+    })
+}
+
+pub(crate) fn render_skill_frontmatter_lines(
+    frontmatter: &SkillFrontmatter,
+) -> Result<Vec<String>, SkillError> {
+    let frontmatter = validate_skill_frontmatter(frontmatter)?;
+    let mut yaml = serde_yaml::to_string(&frontmatter).map_err(|error| {
+        SkillError::InvalidSkillFrontmatter {
+            message: error.to_string(),
+        }
+    })?;
+    if yaml.starts_with("---\n") {
+        yaml = yaml.trim_start_matches("---\n").to_string();
+    }
+    Ok(yaml
+        .trim_end()
+        .lines()
+        .map(|line| line.to_string())
+        .collect())
+}
+
+pub(crate) fn apply_frontmatter_patch(
+    frontmatter: &mut SkillFrontmatter,
+    patch: &SkillFrontmatterPatch,
+) {
+    if let Some(version) = normalize_optional_scalar(patch.version.as_deref()) {
+        frontmatter.version = Some(version);
+    }
+    if patch
+        .version
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        frontmatter.version = None;
+    }
+    if let Some(author) = normalize_optional_scalar(patch.author.as_deref()) {
+        frontmatter.author = Some(author);
+    }
+    if patch
+        .author
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        frontmatter.author = None;
+    }
+    if let Some(license) = normalize_optional_scalar(patch.license.as_deref()) {
+        frontmatter.license = Some(license);
+    }
+    if patch
+        .license
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        frontmatter.license = None;
+    }
+    if let Some(platforms) = patch.platforms.as_ref() {
+        frontmatter.platforms = normalize_string_list(platforms);
+    }
+    if let Some(tags) = patch.tags.as_ref() {
+        frontmatter.tags = normalize_string_list(tags);
+    }
+    if let Some(related_skills) = patch.related_skills.as_ref() {
+        frontmatter.related_skills = normalize_string_list(related_skills);
+    }
+    if let Some(prerequisites) = patch.prerequisites.as_ref() {
+        frontmatter.prerequisites = Some(normalize_prerequisites(prerequisites.clone()));
+    }
+    if let Some(required_environment_variables) = patch.required_environment_variables.as_ref() {
+        frontmatter.required_environment_variables =
+            normalize_required_environment_variables(required_environment_variables.clone());
+    }
+    if let Some(required_commands) = patch.required_commands.as_ref() {
+        frontmatter.required_commands = normalize_string_list(required_commands);
+    }
+    if let Some(metadata) = patch.metadata.as_ref() {
+        frontmatter.metadata = Some(normalize_metadata_blocks(metadata.clone()));
+    }
+}
+
+pub(crate) fn build_create_frontmatter(
+    name: &str,
+    description: &str,
+    patch: Option<&SkillFrontmatterPatch>,
+) -> Result<SkillFrontmatter, SkillError> {
+    let mut frontmatter = SkillFrontmatter {
+        name: validate_skill_name(name)?,
+        description: validate_skill_description(name, description)?,
+        ..SkillFrontmatter::default()
+    };
+    if let Some(patch) = patch {
+        apply_frontmatter_patch(&mut frontmatter, patch);
+    }
+    validate_skill_frontmatter(&frontmatter)
 }
 
 pub(crate) fn read_frontmatter_value(lines: &[String], key: &str) -> Option<String> {
@@ -385,6 +511,114 @@ pub(crate) fn prune_empty_skill_parent_dirs(path: &Path, stop_at: &Path) {
     }
 }
 
+fn validate_skill_frontmatter(
+    frontmatter: &SkillFrontmatter,
+) -> Result<SkillFrontmatter, SkillError> {
+    let name = validate_skill_name(&frontmatter.name)?;
+    let description = validate_skill_description(&name, &frontmatter.description)?;
+    let mut normalized = frontmatter.clone();
+    normalized.name = name;
+    normalized.description = description;
+    normalized.version = normalize_optional_scalar(normalized.version.as_deref());
+    normalized.author = normalize_optional_scalar(normalized.author.as_deref());
+    normalized.license = normalize_optional_scalar(normalized.license.as_deref());
+    normalized.platforms = normalize_string_list(&normalized.platforms);
+    normalized.tags = normalize_string_list(&normalized.tags);
+    normalized.related_skills = normalize_string_list(&normalized.related_skills);
+    normalized.required_commands = normalize_string_list(&normalized.required_commands);
+    normalized.required_environment_variables =
+        normalize_required_environment_variables(normalized.required_environment_variables);
+    normalized.prerequisites = normalized
+        .prerequisites
+        .map(normalize_prerequisites)
+        .filter(|value| !value.env_vars.is_empty() || !value.commands.is_empty());
+    normalized.metadata = normalized
+        .metadata
+        .map(normalize_metadata_blocks)
+        .filter(|value| value.hermes.is_some() || value.rocode.is_some());
+    Ok(normalized)
+}
+
+fn normalize_optional_scalar(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn normalize_string_list(values: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for value in values {
+        let trimmed = value.trim();
+        if trimmed.is_empty() || out.iter().any(|seen: &String| seen == trimmed) {
+            continue;
+        }
+        out.push(trimmed.to_string());
+    }
+    out
+}
+
+fn normalize_required_environment_variables(
+    values: Vec<crate::SkillRequiredEnvironmentVariable>,
+) -> Vec<crate::SkillRequiredEnvironmentVariable> {
+    let mut out = Vec::new();
+    for mut value in values {
+        let Some(name) = normalize_optional_scalar(Some(&value.name)) else {
+            continue;
+        };
+        if out
+            .iter()
+            .any(|seen: &crate::SkillRequiredEnvironmentVariable| seen.name == name)
+        {
+            continue;
+        }
+        value.name = name;
+        value.description = normalize_optional_scalar(value.description.as_deref());
+        value.prompt = normalize_optional_scalar(value.prompt.as_deref());
+        value.help = normalize_optional_scalar(value.help.as_deref());
+        value.required_for = normalize_optional_scalar(value.required_for.as_deref());
+        out.push(value);
+    }
+    out
+}
+
+fn normalize_prerequisites(mut value: crate::SkillPrerequisites) -> crate::SkillPrerequisites {
+    value.env_vars = normalize_string_list(&value.env_vars);
+    value.commands = normalize_string_list(&value.commands);
+    value
+}
+
+fn normalize_metadata_blocks(mut value: crate::SkillMetadataBlocks) -> crate::SkillMetadataBlocks {
+    value.hermes = value
+        .hermes
+        .map(|mut hermes| {
+            hermes.tags = normalize_string_list(&hermes.tags);
+            hermes.related_skills = normalize_string_list(&hermes.related_skills);
+            hermes
+        })
+        .filter(|hermes| !hermes.tags.is_empty() || !hermes.related_skills.is_empty());
+
+    value.rocode = value
+        .rocode
+        .map(|mut rocode| {
+            rocode.requires_tools = normalize_string_list(&rocode.requires_tools);
+            rocode.fallback_for_tools = normalize_string_list(&rocode.fallback_for_tools);
+            rocode.requires_toolsets = normalize_string_list(&rocode.requires_toolsets);
+            rocode.fallback_for_toolsets = normalize_string_list(&rocode.fallback_for_toolsets);
+            rocode.stage_filter = normalize_string_list(&rocode.stage_filter);
+            rocode
+        })
+        .filter(|rocode| {
+            !rocode.requires_tools.is_empty()
+                || !rocode.fallback_for_tools.is_empty()
+                || !rocode.requires_toolsets.is_empty()
+                || !rocode.fallback_for_toolsets.is_empty()
+                || !rocode.stage_filter.is_empty()
+        });
+
+    value
+}
+
 fn ensure_size_limit(path: &str, size: usize, limit: usize) -> Result<(), SkillError> {
     if size > limit {
         return Err(SkillError::SkillWriteSizeExceeded {
@@ -458,10 +692,6 @@ fn normalize_directory_name(
     Ok(slug)
 }
 
-fn quote_yaml_string(value: &str) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| format!("\"{}\"", value))
-}
-
 fn temp_path_for(path: &Path) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -492,6 +722,7 @@ mod tests {
                 name: "workspace-reviewer".to_string(),
                 description: "review things".to_string(),
                 body: "Check correctness first.".to_string(),
+                frontmatter: None,
                 category: Some("analysis".to_string()),
                 directory_name: None,
             })
@@ -536,6 +767,7 @@ mod tests {
                 new_name: None,
                 description: Some("new".to_string()),
                 body: None,
+                frontmatter: None,
             })
             .unwrap_err();
 
@@ -551,6 +783,7 @@ mod tests {
                 name: "review-skill".to_string(),
                 description: "review".to_string(),
                 body: "Old body.".to_string(),
+                frontmatter: None,
                 category: None,
                 directory_name: None,
             })
@@ -562,6 +795,7 @@ mod tests {
                 new_name: Some("review-skill-v2".to_string()),
                 description: Some("better review".to_string()),
                 body: Some("New body.".to_string()),
+                frontmatter: None,
             })
             .unwrap();
 
@@ -573,6 +807,68 @@ mod tests {
     }
 
     #[test]
+    fn create_and_patch_skill_supports_rich_frontmatter() {
+        let dir = tempdir().unwrap();
+        let authority = SkillAuthority::new(dir.path(), None);
+
+        authority
+            .create_skill(CreateSkillRequest {
+                name: "rich-skill".to_string(),
+                description: "rich".to_string(),
+                body: "Use carefully.".to_string(),
+                frontmatter: Some(SkillFrontmatterPatch {
+                    version: Some("1.2.0".to_string()),
+                    author: Some("ROCode".to_string()),
+                    license: Some("MIT".to_string()),
+                    required_commands: Some(vec!["cargo".to_string()]),
+                    tags: Some(vec!["chemistry".to_string(), "design".to_string()]),
+                    related_skills: Some(vec!["molecule-report".to_string()]),
+                    metadata: Some(crate::SkillMetadataBlocks {
+                        hermes: Some(crate::SkillHermesMetadata {
+                            tags: vec!["chemistry".to_string(), "design".to_string()],
+                            related_skills: vec!["molecule-report".to_string()],
+                        }),
+                        rocode: None,
+                    }),
+                    ..SkillFrontmatterPatch::default()
+                }),
+                category: None,
+                directory_name: None,
+            })
+            .unwrap();
+
+        authority
+            .patch_skill(PatchSkillRequest {
+                name: "rich-skill".to_string(),
+                new_name: None,
+                description: None,
+                body: None,
+                frontmatter: Some(SkillFrontmatterPatch {
+                    required_commands: Some(vec!["cargo".to_string(), "just".to_string()]),
+                    ..SkillFrontmatterPatch::default()
+                }),
+            })
+            .unwrap();
+
+        let document =
+            load_skill_document(&dir.path().join(".rocode/skills/rich-skill/SKILL.md")).unwrap();
+        let frontmatter = parse_skill_frontmatter(&document).unwrap();
+        assert_eq!(frontmatter.version.as_deref(), Some("1.2.0"));
+        assert_eq!(frontmatter.author.as_deref(), Some("ROCode"));
+        assert_eq!(frontmatter.license.as_deref(), Some("MIT"));
+        assert_eq!(frontmatter.required_commands, vec!["cargo", "just"]);
+        assert_eq!(
+            frontmatter
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.hermes.as_ref())
+                .map(|hermes| hermes.related_skills.clone())
+                .unwrap_or_default(),
+            vec!["molecule-report".to_string()]
+        );
+    }
+
+    #[test]
     fn supporting_file_write_and_remove_rejects_path_escape() {
         let dir = tempdir().unwrap();
         let authority = SkillAuthority::new(dir.path(), None);
@@ -581,6 +877,7 @@ mod tests {
                 name: "writer".to_string(),
                 description: "writer".to_string(),
                 body: "Base body.".to_string(),
+                frontmatter: None,
                 category: None,
                 directory_name: None,
             })
@@ -613,6 +910,7 @@ mod tests {
                 name: "delete-me".to_string(),
                 description: "delete".to_string(),
                 body: "Soon gone.".to_string(),
+                frontmatter: None,
                 category: None,
                 directory_name: None,
             })

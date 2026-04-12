@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::skill_support::{
-    authority_for, format_skill_list_output, map_skill_error, resolve_skill_filter,
+    authority_for, collect_skill_categories, format_skill_list_output, map_skill_error,
+    resolve_skill_filter,
 };
 use crate::{Tool, ToolContext, ToolError, ToolResult};
 
@@ -24,7 +25,7 @@ impl Tool for SkillsListTool {
     }
 
     fn description(&self) -> &str {
-        "List available skills with name and description. Use skill_view(name) to load full content."
+        "Second-step skill discovery. After skills_categories, list available skills with name, description, and category before using skill_view(name) or skill(name)."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -32,12 +33,10 @@ impl Tool for SkillsListTool {
         let config_store = ConfigStore::from_project_dir(&base).ok().map(Arc::new);
         let authority = authority_for(&base, config_store);
         let categories = authority
-            .list_skill_meta(None)
+            .list_skill_categories(None)
             .unwrap_or_default()
             .into_iter()
-            .filter_map(|skill| skill.category)
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
+            .map(|category| category.name)
             .collect::<Vec<_>>();
 
         serde_json::json!({
@@ -45,7 +44,7 @@ impl Tool for SkillsListTool {
             "properties": {
                 "category": {
                     "type": "string",
-                    "description": "Optional category filter",
+                    "description": "Optional category filter. Use skills_categories first if you do not know the category names.",
                     "enum": categories
                 }
             }
@@ -68,9 +67,10 @@ impl Tool for SkillsListTool {
         let skills = authority
             .list_skill_meta(Some(&filter))
             .map_err(map_skill_error)?;
+        let categories = collect_skill_categories(&skills);
         let output = format_skill_list_output(&skills);
 
-        Ok(ToolResult::simple("Available skills", output)
+        let mut result = ToolResult::simple("Available skills", output)
             .with_metadata("count", serde_json::json!(skills.len()))
             .with_metadata(
                 "skills",
@@ -82,6 +82,30 @@ impl Tool for SkillsListTool {
                         "category": skill.category,
                     }))
                     .collect::<Vec<_>>()),
-            ))
+            )
+            .with_metadata("categories", serde_json::json!(categories))
+            .with_metadata(
+                "hint",
+                serde_json::json!(
+                    "Use skill_view(name) to see full content, tags, and linked files"
+                ),
+            );
+
+        if skills.is_empty() {
+            result = result.with_metadata("message", serde_json::json!("No skills found."));
+        }
+
+        Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skills_list_description_points_to_skills_categories() {
+        let tool = SkillsListTool;
+        assert!(tool.description().contains("skills_categories"));
     }
 }

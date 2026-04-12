@@ -364,7 +364,10 @@ async fn get_file_tree(Query(query): Query<FileTreeQuery>) -> Result<Json<FileTr
     let default_root = project_root()?;
     if let Some(input) = query.path.as_deref() {
         let root = effective_root_for_input(input, &default_root)?;
-        Ok(Json(build_tree_node(&resolve_existing_input_path(input, &root)?, &root)?))
+        Ok(Json(build_tree_node(
+            &resolve_existing_input_path(input, &root)?,
+            &root,
+        )?))
     } else {
         let root = canonical_root(&default_root)?;
         Ok(Json(build_tree_node(&root, &root)?))
@@ -757,8 +760,8 @@ mod tests {
         std::fs::create_dir_all(&default_root).expect("mkdir default");
         std::fs::write(&file, "fn main() {}").expect("write file");
 
-        let resolved = effective_root_for_input(file.to_string_lossy().as_ref(), &default_root)
-            .expect("root");
+        let resolved =
+            effective_root_for_input(file.to_string_lossy().as_ref(), &default_root).expect("root");
         assert_eq!(
             resolved,
             file.parent()

@@ -640,6 +640,9 @@ pub async fn create_default_registry_with_config(
     registry.register(crate::todo::TodoWriteTool).await;
     registry.register(crate::multiedit::MultiEditTool).await;
     registry.register(crate::apply_patch::ApplyPatchTool).await;
+    registry
+        .register(crate::skills_categories::SkillsCategoriesTool)
+        .await;
     registry.register(crate::skills_list::SkillsListTool).await;
     registry.register(crate::skill_view::SkillViewTool).await;
     registry.register(crate::skill::SkillTool).await;

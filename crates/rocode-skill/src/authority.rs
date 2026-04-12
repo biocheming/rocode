@@ -1,23 +1,30 @@
 use crate::catalog::{
     load_snapshot_from_disk, persist_snapshot_to_disk, SkillCatalogCache, SkillCatalogSnapshot,
 };
+use crate::detail::read_skill_detail;
 use crate::discovery::{
     collect_skill_roots, compute_root_signature, config_for_skill_discovery,
     is_valid_relative_skill_path, read_skill_body, root_signature_is_current, scan_skill_roots,
 };
 use crate::write::{
-    atomic_write_string, build_skill_document, delete_file, delete_skill_directory,
-    ensure_workspace_skill_markdown, load_skill_document, parse_skill_document,
-    prune_empty_skill_parent_dirs, read_frontmatter_value, render_skill_document,
-    resolve_create_skill_markdown_path, supporting_file_path, upsert_frontmatter_value,
-    validate_skill_body, validate_skill_description, validate_skill_markdown_size,
-    validate_skill_name, validate_supporting_file_size, workspace_skill_root, CreateSkillRequest,
-    DeleteSkillRequest, EditSkillRequest, PatchSkillRequest, RemoveSkillFileRequest,
-    SkillWriteAction, SkillWriteResult, WriteSkillFileRequest,
+    apply_frontmatter_patch, atomic_write_string, build_create_frontmatter, build_skill_document,
+    delete_file, delete_skill_directory, ensure_workspace_skill_markdown, load_skill_document,
+    parse_skill_document, parse_skill_frontmatter, prune_empty_skill_parent_dirs,
+    render_skill_document, render_skill_frontmatter_lines, resolve_create_skill_markdown_path,
+    supporting_file_path, validate_skill_body, validate_skill_description,
+    validate_skill_markdown_size, validate_skill_name, validate_supporting_file_size,
+    workspace_skill_root, CreateSkillRequest, DeleteSkillRequest, EditSkillRequest,
+    PatchSkillRequest, RemoveSkillFileRequest, SkillWriteAction, SkillWriteResult,
+    WriteSkillFileRequest,
 };
-use crate::{LoadedSkill, LoadedSkillFile, SkillError, SkillMeta, SkillMetaView, SkillSummary};
+use crate::{
+    LoadedSkill, LoadedSkillFile, SkillCategoryView, SkillDetailView, SkillError, SkillMeta,
+    SkillMetaView, SkillSummary,
+};
 use rocode_config::{Config, ConfigStore};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
@@ -69,6 +76,36 @@ impl SkillAuthority {
         filter: Option<&SkillFilter<'_>>,
     ) -> Result<Vec<SkillMeta>, SkillError> {
         self.filtered_skills(filter)
+    }
+
+    pub fn list_skill_categories(
+        &self,
+        filter: Option<&SkillFilter<'_>>,
+    ) -> Result<Vec<SkillCategoryView>, SkillError> {
+        let snapshot = self.current_snapshot()?;
+        let mut categories = BTreeMap::<String, usize>::new();
+        for skill in snapshot
+            .skills
+            .iter()
+            .filter(|skill| skill_matches_filter(skill, filter))
+        {
+            let Some(category) = skill.category.as_deref().filter(|value| !value.is_empty()) else {
+                continue;
+            };
+            *categories.entry(category.to_string()).or_default() += 1;
+        }
+
+        Ok(categories
+            .into_iter()
+            .map(|(name, skill_count)| SkillCategoryView {
+                description: snapshot
+                    .roots
+                    .iter()
+                    .find_map(|root| load_category_description(&root.path, &name)),
+                name,
+                skill_count,
+            })
+            .collect())
     }
 
     pub fn list_skills(&self) -> Vec<SkillSummary> {
@@ -132,8 +169,31 @@ impl SkillAuthority {
         })
     }
 
+    pub fn load_skill_detail(
+        &self,
+        name: &str,
+        filter: Option<&SkillFilter<'_>>,
+    ) -> Result<SkillDetailView, SkillError> {
+        let meta = self.resolve_skill(name, filter)?;
+        self.load_skill_detail_for_meta(&meta)
+    }
+
+    pub fn load_skill_detail_for_meta(
+        &self,
+        meta: &SkillMeta,
+    ) -> Result<SkillDetailView, SkillError> {
+        read_skill_detail(&meta.location).map_err(|error| SkillError::ReadFailed {
+            path: meta.location.clone(),
+            message: error.to_string(),
+        })
+    }
+
     pub fn workspace_skill_root(&self) -> PathBuf {
         workspace_skill_root(&self.base_dir)
+    }
+
+    pub fn base_dir(&self) -> &std::path::Path {
+        &self.base_dir
     }
 
     pub fn is_skill_meta_writable(&self, meta: &SkillMeta) -> bool {
@@ -259,6 +319,7 @@ impl SkillAuthority {
                 name: name.clone(),
                 description: description.clone(),
                 body: body.clone(),
+                frontmatter: req.frontmatter.clone(),
                 category: req.category.clone(),
                 directory_name: req.directory_name.clone(),
             },
@@ -267,7 +328,8 @@ impl SkillAuthority {
             return Err(SkillError::InvalidWriteTarget { path: target });
         }
 
-        let content = build_skill_document(&name, &description, &body);
+        let frontmatter = build_create_frontmatter(&name, &description, req.frontmatter.as_ref())?;
+        let content = build_skill_document(&frontmatter, &body)?;
         validate_skill_markdown_size(&content, &target.to_string_lossy())?;
         atomic_write_string(&target, &content)?;
 
@@ -290,13 +352,18 @@ impl SkillAuthority {
         let meta = self.resolve_skill(&req.name, None)?;
         ensure_workspace_skill_markdown(&self.base_dir, &meta.name, &meta.location)?;
 
-        if req.new_name.is_none() && req.description.is_none() && req.body.is_none() {
+        if req.new_name.is_none()
+            && req.description.is_none()
+            && req.body.is_none()
+            && req.frontmatter.is_none()
+        {
             return Err(SkillError::InvalidSkillContent {
                 message: "patch requires at least one field".to_string(),
             });
         }
 
         let mut document = load_skill_document(&meta.location)?;
+        let mut frontmatter = parse_skill_frontmatter(&document)?;
         let next_name = match req.new_name.as_deref() {
             Some(value) => validate_skill_name(value)?,
             None => meta.name.clone(),
@@ -319,12 +386,12 @@ impl SkillAuthority {
             None => document.body.clone(),
         };
 
-        upsert_frontmatter_value(&mut document.frontmatter_lines, "name", &next_name);
-        upsert_frontmatter_value(
-            &mut document.frontmatter_lines,
-            "description",
-            &next_description,
-        );
+        frontmatter.name = next_name.clone();
+        frontmatter.description = next_description;
+        if let Some(patch) = req.frontmatter.as_ref() {
+            apply_frontmatter_patch(&mut frontmatter, patch);
+        }
+        document.frontmatter_lines = render_skill_frontmatter_lines(&frontmatter)?;
         document.body = next_body;
 
         let content = render_skill_document(&document);
@@ -352,21 +419,9 @@ impl SkillAuthority {
         validate_skill_markdown_size(&req.content, &meta.location.to_string_lossy())?;
 
         let mut document = parse_skill_document(&req.content)?;
-        let next_name = validate_skill_name(
-            &read_frontmatter_value(&document.frontmatter_lines, "name").ok_or_else(|| {
-                SkillError::InvalidSkillFrontmatter {
-                    message: "missing `name`".to_string(),
-                }
-            })?,
-        )?;
-        let next_description = validate_skill_description(
-            &next_name,
-            &read_frontmatter_value(&document.frontmatter_lines, "description").ok_or_else(
-                || SkillError::InvalidSkillFrontmatter {
-                    message: "missing `description`".to_string(),
-                },
-            )?,
-        )?;
+        let frontmatter = parse_skill_frontmatter(&document)?;
+        let next_name = validate_skill_name(&frontmatter.name)?;
+        let next_description = validate_skill_description(&next_name, &frontmatter.description)?;
         let next_body = validate_skill_body(&document.body)?;
         if !next_name.eq_ignore_ascii_case(&meta.name)
             && self
@@ -377,12 +432,10 @@ impl SkillAuthority {
             return Err(SkillError::SkillAlreadyExists { name: next_name });
         }
 
-        upsert_frontmatter_value(&mut document.frontmatter_lines, "name", &next_name);
-        upsert_frontmatter_value(
-            &mut document.frontmatter_lines,
-            "description",
-            &next_description,
-        );
+        let mut frontmatter = frontmatter;
+        frontmatter.name = next_name.clone();
+        frontmatter.description = next_description;
+        document.frontmatter_lines = render_skill_frontmatter_lines(&frontmatter)?;
         document.body = next_body;
 
         let content = render_skill_document(&document);
@@ -752,6 +805,67 @@ fn skill_matches_filter(skill: &SkillMeta, filter: Option<&SkillFilter<'_>>) -> 
     }
 
     true
+}
+
+fn load_category_description(root: &Path, category: &str) -> Option<String> {
+    let description_path = root.join(category).join("DESCRIPTION.md");
+    let content = fs::read_to_string(description_path).ok()?;
+    extract_category_description(&content)
+}
+
+fn extract_category_description(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Some(frontmatter_description) = extract_frontmatter_description(trimmed) {
+        return Some(crate::types::truncate_catalog_description(
+            &frontmatter_description,
+        ));
+    }
+
+    let mut in_frontmatter = false;
+    for line in trimmed.lines() {
+        let candidate = line.trim();
+        if candidate == "---" {
+            in_frontmatter = !in_frontmatter;
+            continue;
+        }
+        if in_frontmatter || candidate.is_empty() || candidate.starts_with('#') {
+            continue;
+        }
+        return Some(crate::types::truncate_catalog_description(candidate));
+    }
+
+    None
+}
+
+fn extract_frontmatter_description(content: &str) -> Option<String> {
+    let mut lines = content.lines();
+    if lines.next()?.trim() != "---" {
+        return None;
+    }
+
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed == "---" {
+            break;
+        }
+        let Some((key, value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        if key.trim() != "description" {
+            continue;
+        }
+        let value = value.trim().trim_matches('"').trim_matches('\'').trim();
+        if value.is_empty() {
+            return None;
+        }
+        return Some(value.to_string());
+    }
+
+    None
 }
 
 fn unknown_skill_error(requested: &str, skills: &[SkillMeta]) -> SkillError {

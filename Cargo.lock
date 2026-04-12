@@ -3264,6 +3264,7 @@ dependencies = [
  "rocode-orchestrator",
  "rocode-plugin",
  "rocode-provider",
+ "rocode-skill",
  "rocode-storage",
  "rocode-tool",
  "rocode-types",
@@ -3291,11 +3292,13 @@ dependencies = [
  "rocode-types",
  "serde",
  "serde_json",
+ "serde_yaml",
  "sha2",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
  "walkdir",
+ "which",
 ]
 
 [[package]]

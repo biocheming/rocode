@@ -61,7 +61,12 @@ impl SkillGuardEngine {
             ));
         }
 
-        let markdown = build_skill_document(skill_name, description, body);
+        let markdown = build_skill_document(
+            &crate::write::build_create_frontmatter(skill_name, description, None)
+                .expect("guard create frontmatter should be valid"),
+            body,
+        )
+        .expect("guard create markdown should render");
         evaluate_markdown_content(&mut violations, skill_name, &markdown, Some(body));
         if duplicate_conflict {
             violations.push(error_violation(
@@ -97,7 +102,12 @@ impl SkillGuardEngine {
             evaluate_markdown_content(
                 &mut violations,
                 next_name,
-                &build_skill_document(next_name, "patched", body),
+                &build_skill_document(
+                    &crate::write::build_create_frontmatter(next_name, "patched", None)
+                        .expect("guard patch frontmatter should be valid"),
+                    body,
+                )
+                .expect("guard patch markdown should render"),
                 Some(body),
             );
         }

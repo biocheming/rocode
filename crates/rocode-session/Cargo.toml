@@ -15,6 +15,7 @@ rocode-execution-types = { path = "../rocode-execution-types" }
 rocode-storage = { path = "../rocode-storage" }
 rocode-provider = { path = "../rocode-provider" }
 rocode-orchestrator = { path = "../rocode-orchestrator" }
+rocode-skill = { path = "../rocode-skill" }
 rocode-tool = { path = "../rocode-tool" }
 rocode-mcp = { path = "../rocode-mcp" }
 rocode-lsp = { path = "../rocode-lsp" }

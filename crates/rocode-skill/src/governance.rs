@@ -1,8 +1,10 @@
 use crate::{
     CreateSkillRequest, DeleteSkillRequest, EditSkillRequest, PatchSkillRequest,
-    RemoveSkillFileRequest, SkillArtifactStore, SkillAuthority, SkillDistributionResolver,
-    SkillError, SkillGuardEngine, SkillHubSnapshot, SkillHubStore, SkillLifecycleCoordinator,
-    SkillSyncPlanner, SkillWriteAction, SkillWriteResult, WriteSkillFileRequest,
+    RemoveSkillFileRequest, RuntimeInstructionSource, RuntimeSkillBootstrapReport,
+    RuntimeSkillMaterialization, RuntimeSkillMaterializationAction, RuntimeSkillSourceKind,
+    SkillArtifactStore, SkillAuthority, SkillDistributionResolver, SkillError, SkillGuardEngine,
+    SkillHubSnapshot, SkillHubStore, SkillLifecycleCoordinator, SkillSyncPlanner, SkillWriteAction,
+    SkillWriteResult, WriteSkillFileRequest,
 };
 use rocode_config::ConfigStore;
 use rocode_types::{
@@ -776,6 +778,133 @@ impl SkillGovernanceAuthority {
         })
     }
 
+    pub fn materialize_runtime_skills(
+        &self,
+        instructions: &[RuntimeInstructionSource],
+        actor: &str,
+    ) -> Result<RuntimeSkillBootstrapReport, SkillError> {
+        let (specs, warnings) = crate::runtime::collect_runtime_skill_specs(
+            self.skill_authority.base_dir(),
+            instructions,
+        );
+        self.materialize_runtime_specs(specs, warnings, actor)
+    }
+
+    pub fn materialize_runtime_skill_by_name(
+        &self,
+        skill_name: &str,
+        instructions: &[RuntimeInstructionSource],
+        actor: &str,
+    ) -> Result<RuntimeSkillBootstrapReport, SkillError> {
+        let (specs, warnings) = crate::runtime::collect_runtime_skill_specs(
+            self.skill_authority.base_dir(),
+            instructions,
+        );
+        let filtered = specs
+            .into_iter()
+            .filter(|spec| spec.name.eq_ignore_ascii_case(skill_name))
+            .collect::<Vec<_>>();
+        self.materialize_runtime_specs(filtered, warnings, actor)
+    }
+
+    fn materialize_runtime_specs(
+        &self,
+        specs: Vec<crate::runtime::RuntimeSkillSpec>,
+        warnings: Vec<String>,
+        actor: &str,
+    ) -> Result<RuntimeSkillBootstrapReport, SkillError> {
+        let mut report = RuntimeSkillBootstrapReport {
+            materializations: Vec::new(),
+            imported_legacy_sources: specs
+                .iter()
+                .filter(|spec| matches!(spec.source_kind, RuntimeSkillSourceKind::LegacyMarkdown))
+                .filter_map(|spec| spec.source_path.clone())
+                .collect(),
+            warnings,
+        };
+
+        for spec in specs {
+            let existing = self.skill_authority.resolve_skill(&spec.name, None);
+            match existing {
+                Ok(meta) => {
+                    if !self.skill_authority.is_skill_meta_writable(&meta) {
+                        report.materializations.push(RuntimeSkillMaterialization {
+                            skill_name: spec.name.clone(),
+                            action: RuntimeSkillMaterializationAction::Skipped,
+                            source_kind: spec.source_kind,
+                            source_path: spec.source_path.clone(),
+                            detail: Some(format!(
+                                "existing skill is outside the workspace sandbox: {}",
+                                meta.location.display()
+                            )),
+                        });
+                        continue;
+                    }
+
+                    let loaded = self.skill_authority.load_skill(&spec.name, None)?;
+                    let description_matches = meta.description.trim() == spec.description.trim();
+                    let body_matches = loaded.content.trim() == spec.body.trim();
+                    if description_matches && body_matches {
+                        report.materializations.push(RuntimeSkillMaterialization {
+                            skill_name: spec.name.clone(),
+                            action: RuntimeSkillMaterializationAction::Unchanged,
+                            source_kind: spec.source_kind,
+                            source_path: spec.source_path.clone(),
+                            detail: None,
+                        });
+                        continue;
+                    }
+
+                    let content = crate::write::build_skill_document(
+                        &crate::write::build_create_frontmatter(
+                            &spec.name,
+                            &spec.description,
+                            None,
+                        )?,
+                        &spec.body,
+                    )?;
+                    let _ = self.edit_skill(
+                        EditSkillRequest {
+                            name: spec.name.clone(),
+                            content,
+                        },
+                        actor,
+                    )?;
+                    report.materializations.push(RuntimeSkillMaterialization {
+                        skill_name: spec.name.clone(),
+                        action: RuntimeSkillMaterializationAction::Refreshed,
+                        source_kind: spec.source_kind,
+                        source_path: spec.source_path.clone(),
+                        detail: None,
+                    });
+                }
+                Err(SkillError::UnknownSkill { .. }) => {
+                    let _ = self.create_skill(
+                        CreateSkillRequest {
+                            name: spec.name.clone(),
+                            description: spec.description.clone(),
+                            body: spec.body.clone(),
+                            frontmatter: None,
+                            category: None,
+                            directory_name: None,
+                        },
+                        actor,
+                    )?;
+                    report.materializations.push(RuntimeSkillMaterialization {
+                        skill_name: spec.name.clone(),
+                        action: RuntimeSkillMaterializationAction::Created,
+                        source_kind: spec.source_kind,
+                        source_path: spec.source_path.clone(),
+                        detail: None,
+                    });
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        Ok(report)
+    }
+
     pub fn edit_skill(
         &self,
         req: EditSkillRequest,
@@ -1269,6 +1398,7 @@ impl SkillGovernanceAuthority {
             name: entry.skill_name.clone(),
             description: entry.description.clone(),
             body: entry.body.clone(),
+            frontmatter: None,
             category,
             directory_name,
         })?;
@@ -1450,6 +1580,7 @@ impl SkillGovernanceAuthority {
                         body: package.body.clone().unwrap_or_else(|| {
                             extract_body_from_markdown(&package.markdown_content())
                         }),
+                        frontmatter: None,
                         category: package.category.clone(),
                         directory_name: package.directory_name.clone(),
                     })?

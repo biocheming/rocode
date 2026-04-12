@@ -271,10 +271,11 @@ impl SkillArtifactPackage {
         }
 
         build_skill_document(
-            &self.skill_name,
-            &self.description,
+            &crate::write::build_create_frontmatter(&self.skill_name, &self.description, None)
+                .expect("artifact package frontmatter should be valid"),
             self.body.as_deref().unwrap_or_default(),
         )
+        .expect("artifact package markdown should render")
     }
 }
 

@@ -149,7 +149,12 @@ fn preferred_tool_order_key(name: &str) -> (u8, &str) {
     match name {
         "task_flow" => (0, name),
         "task" => (1, name),
-        _ => (2, name),
+        "skills_categories" => (2, name),
+        "skills_list" => (3, name),
+        "skill_view" => (4, name),
+        "skill" => (5, name),
+        "skill_manage" => (6, name),
+        _ => (7, name),
     }
 }
 
@@ -242,6 +247,56 @@ mod title_tests {
         prioritize_tool_definitions(&mut tools);
         let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
         assert_eq!(names, vec!["task_flow", "task", "websearch"]);
+    }
+
+    #[test]
+    fn prioritize_tool_definitions_prefers_skill_discovery_before_skill_loading_tools() {
+        let mut tools = vec![
+            ToolDefinition {
+                name: "skill".to_string(),
+                description: None,
+                parameters: serde_json::json!({}),
+            },
+            ToolDefinition {
+                name: "websearch".to_string(),
+                description: None,
+                parameters: serde_json::json!({}),
+            },
+            ToolDefinition {
+                name: "skill_manage".to_string(),
+                description: None,
+                parameters: serde_json::json!({}),
+            },
+            ToolDefinition {
+                name: "skill_view".to_string(),
+                description: None,
+                parameters: serde_json::json!({}),
+            },
+            ToolDefinition {
+                name: "skills_list".to_string(),
+                description: None,
+                parameters: serde_json::json!({}),
+            },
+            ToolDefinition {
+                name: "skills_categories".to_string(),
+                description: None,
+                parameters: serde_json::json!({}),
+            },
+        ];
+
+        prioritize_tool_definitions(&mut tools);
+        let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "skills_categories",
+                "skills_list",
+                "skill_view",
+                "skill",
+                "skill_manage",
+                "websearch"
+            ]
+        );
     }
 }
 

@@ -49,9 +49,12 @@ use rocode_orchestrator::runtime::{SimpleModelCaller, SimpleModelCallerConfig};
 use rocode_plugin::{HookContext, HookEvent};
 use rocode_provider::transform::{apply_caching, ProviderType};
 use rocode_provider::{Provider, ToolDefinition};
+use rocode_skill::RuntimeInstructionSource;
 
 use crate::compaction::{run_compaction, CompactionResult};
+use crate::instruction::{InstructionLoader, InstructionSource};
 use crate::message_v2::ModelRef as V2ModelRef;
+use crate::system::SystemPrompt;
 use crate::{MessageRole, PartType, Session, SessionMessage, SessionStateManager};
 
 const MAX_STEPS: u32 = 100;
@@ -411,6 +414,7 @@ struct SessionStepToolDispatcher {
     publish_bus_hook: Option<PublishBusHook>,
     tool_runtime_config: rocode_tool::ToolRuntimeConfig,
     config_store: Option<Arc<rocode_config::ConfigStore>>,
+    runtime_skill_instructions: Option<serde_json::Value>,
 }
 
 #[async_trait::async_trait]
@@ -439,6 +443,7 @@ impl ToolDispatcher for SessionStepToolDispatcher {
         let call_id = call.id.clone();
         let tool_runtime_config = self.tool_runtime_config.clone();
         let config_store = self.config_store.clone();
+        let runtime_skill_instructions = self.runtime_skill_instructions.clone();
 
         let tool_ctx_builder = Arc::new(move || {
             let mut base_ctx = rocode_tool::ToolContext::new(
@@ -451,6 +456,12 @@ impl ToolDispatcher for SessionStepToolDispatcher {
             .with_abort(abort_token.clone());
             if let Some(config_store) = config_store.clone() {
                 base_ctx = base_ctx.with_config_store(config_store);
+            }
+            if let Some(runtime_skill_instructions) = runtime_skill_instructions.clone() {
+                base_ctx.extra.insert(
+                    "runtime_skill_instructions".to_string(),
+                    runtime_skill_instructions,
+                );
             }
             base_ctx.call_id = Some(call_id.clone());
             let ctx = SessionPrompt::with_persistent_subsession_callbacks(
@@ -1157,6 +1168,71 @@ fn tool_result_detail(title: Option<&str>, content: &str) -> Option<String> {
 }
 
 impl SessionPrompt {
+    async fn apply_runtime_workspace_context(&self, session: &mut Session) -> anyhow::Result<()> {
+        let project_dir = std::path::PathBuf::from(&session.directory);
+        let config_instructions = self
+            .config_store
+            .as_ref()
+            .map(|store| store.config().instructions.clone())
+            .unwrap_or_default();
+        let mut loader = InstructionLoader::new();
+        let instructions = loader.load_all(&project_dir, &config_instructions).await;
+
+        let runtime_instruction_sources = instructions
+            .iter()
+            .filter_map(|instruction| {
+                let path = std::path::PathBuf::from(&instruction.path);
+                match instruction.source {
+                    InstructionSource::AgentsMd
+                    | InstructionSource::ClaudeMd
+                    | InstructionSource::ContextMd
+                    | InstructionSource::Custom(_) => {
+                        if path.starts_with(&project_dir) {
+                            Some(RuntimeInstructionSource {
+                                path,
+                                content: instruction.content.clone(),
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        if runtime_instruction_sources.is_empty() {
+            session.remove_metadata("runtime_skill_instructions");
+        } else {
+            session.insert_metadata(
+                "runtime_skill_instructions",
+                serde_json::to_value(&runtime_instruction_sources)?,
+            );
+        }
+
+        let Some(user_msg) = session
+            .messages_mut()
+            .iter_mut()
+            .rfind(|message| matches!(message.role, MessageRole::User))
+        else {
+            return Ok(());
+        };
+
+        if !instructions.is_empty() {
+            let merged = InstructionLoader::merge_instructions(&instructions);
+            if !merged.trim().is_empty() {
+                user_msg.add_text(SystemPrompt::system_reminder(&merged));
+            }
+            let loaded_paths = instructions
+                .iter()
+                .map(|instruction| instruction.path.clone())
+                .collect::<std::collections::HashSet<_>>();
+            Self::store_loaded_instruction_paths(user_msg, loaded_paths);
+        }
+
+        Ok(())
+    }
+
     fn text_from_prompt_parts(parts: &[PartInput]) -> String {
         parts
             .iter()
@@ -1219,6 +1295,23 @@ impl SessionPrompt {
                 serde_json::json!(Self::truncate_debug_text(&user_prompt, 8000)),
             );
         }
+    }
+
+    fn maybe_append_runtime_skill_save_suggestion(session: &mut Session, turn_start_index: usize) {
+        if !turn_looks_complex(session, turn_start_index)
+            || turn_used_skill_manage(session, turn_start_index)
+        {
+            return;
+        }
+
+        let note = session.add_assistant_message();
+        note.metadata.insert(
+            "runtime_hint".to_string(),
+            serde_json::json!("skill_save_suggestion"),
+        );
+        note.add_text(
+            "System suggestion: this turn established a reusable multi-step workflow. Consider saving or refining it as a workspace skill with `skill_manage`.",
+        );
     }
 
     pub fn new(session_state: Arc<RwLock<SessionStateManager>>) -> Self {
@@ -1461,6 +1554,7 @@ impl SessionPrompt {
             .unwrap_or_else(|| "ethnopic".to_string());
 
         self.create_user_message(&input, session).await?;
+        self.apply_runtime_workspace_context(session).await?;
         Self::annotate_latest_user_message(session, &input, system_prompt.as_deref());
 
         // Set an immediate title from the first user message when the title is
@@ -1675,6 +1769,7 @@ impl SessionPrompt {
             publish_bus_hook: input.step_ctx.hooks.publish_bus_hook.clone(),
             tool_runtime_config: self.tool_runtime_config.clone(),
             config_store: input.step_ctx.config_store.clone(),
+            runtime_skill_instructions: session.metadata.get("runtime_skill_instructions").cloned(),
         };
 
         let mut sink = SessionStepSink::new(
@@ -1961,6 +2056,7 @@ impl SessionPrompt {
         let mut step = 0u32;
         let provider_type = ProviderType::from_provider_id(&prompt_ctx.provider_id);
         let mut post_first_step_ran = false;
+        let turn_start_index = session.messages.len().saturating_sub(1);
 
         loop {
             if token.is_cancelled() {
@@ -2172,6 +2268,8 @@ impl SessionPrompt {
             }
 
             if is_terminal_finish(finish_reason.as_deref()) {
+                Self::maybe_append_runtime_skill_save_suggestion(session, turn_start_index);
+                Self::emit_session_update(prompt_ctx.hooks.update_hook.as_ref(), session);
                 tracing::info!(
                     "Prompt loop complete for session {} with finish: {:?}",
                     session_id,
@@ -2419,6 +2517,35 @@ impl SessionPrompt {
 
         Ok(true)
     }
+}
+
+fn turn_looks_complex(session: &Session, turn_start_index: usize) -> bool {
+    let slice = session.messages.get(turn_start_index..).unwrap_or(&[]);
+    let assistant_count = slice
+        .iter()
+        .filter(|message| matches!(message.role, MessageRole::Assistant))
+        .count();
+    let tool_result_count = slice
+        .iter()
+        .flat_map(|message| message.parts.iter())
+        .filter(|part| matches!(part.part_type, PartType::ToolResult { .. }))
+        .count();
+    assistant_count >= 2 || tool_result_count >= 3
+}
+
+fn turn_used_skill_manage(session: &Session, turn_start_index: usize) -> bool {
+    session
+        .messages
+        .get(turn_start_index..)
+        .unwrap_or(&[])
+        .iter()
+        .flat_map(|message| message.parts.iter())
+        .any(|part| {
+            matches!(
+                &part.part_type,
+                PartType::ToolCall { name, .. } if name == "skill_manage"
+            )
+        })
 }
 
 impl Default for SessionPrompt {
@@ -3970,5 +4097,85 @@ mod tests {
             !create_user_section.contains("HookEvent::ChatMessage"),
             "ChatMessage hook should not be in create_user_message"
         );
+    }
+
+    #[test]
+    fn runtime_skill_save_suggestion_only_triggers_for_complex_turns() {
+        let mut session = Session::new("proj", ".");
+        session.add_user_message("optimize this workflow");
+        let assistant = session.add_assistant_message();
+        assistant.finish = Some("stop".to_string());
+        let tool = SessionMessage::tool(session.id.clone());
+        session.messages_mut().push(tool);
+
+        let tool_msg = session.messages_mut().last_mut().unwrap();
+        for index in 0..3 {
+            tool_msg.parts.push(MessagePart {
+                id: format!("prt_tool_{index}"),
+                part_type: PartType::ToolResult {
+                    tool_call_id: format!("call_{index}"),
+                    content: "ok".to_string(),
+                    is_error: false,
+                    title: None,
+                    metadata: None,
+                    attachments: None,
+                },
+                created_at: chrono::Utc::now(),
+                message_id: None,
+            });
+        }
+
+        SessionPrompt::maybe_append_runtime_skill_save_suggestion(&mut session, 0);
+
+        assert!(session.messages.iter().any(|message| {
+            matches!(message.role, MessageRole::Assistant)
+                && message
+                    .metadata
+                    .get("runtime_hint")
+                    .and_then(|value| value.as_str())
+                    == Some("skill_save_suggestion")
+        }));
+    }
+
+    #[test]
+    fn runtime_skill_save_suggestion_skips_turns_that_already_used_skill_manage() {
+        let mut session = Session::new("proj", ".");
+        session.add_user_message("optimize this workflow");
+        let assistant = session.add_assistant_message();
+        assistant.finish = Some("stop".to_string());
+        assistant.parts.push(MessagePart {
+            id: "prt_tool_call".to_string(),
+            part_type: PartType::ToolCall {
+                id: "call_skill".to_string(),
+                name: "skill_manage".to_string(),
+                input: serde_json::json!({ "action": "create" }),
+                raw: None,
+                status: crate::ToolCallStatus::Completed,
+                state: Some(crate::ToolState::Completed {
+                    input: serde_json::json!({ "action": "create" }),
+                    output: "created".to_string(),
+                    title: "Skill created".to_string(),
+                    metadata: std::collections::HashMap::new(),
+                    time: crate::CompletedTime {
+                        start: chrono::Utc::now().timestamp_millis(),
+                        end: chrono::Utc::now().timestamp_millis(),
+                        compacted: None,
+                    },
+                    attachments: None,
+                }),
+            },
+            created_at: chrono::Utc::now(),
+            message_id: None,
+        });
+
+        SessionPrompt::maybe_append_runtime_skill_save_suggestion(&mut session, 0);
+
+        assert!(!session.messages.iter().any(|message| {
+            message
+                .metadata
+                .get("runtime_hint")
+                .and_then(|value| value.as_str())
+                == Some("skill_save_suggestion")
+        }));
     }
 }

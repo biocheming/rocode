@@ -3,8 +3,9 @@ use serde::Deserialize;
 use std::path::Path;
 
 use crate::skill_support::{
-    authority_for, format_loaded_skill_file_output, format_loaded_skill_output, map_skill_error,
-    resolve_skill_filter,
+    authority_for, format_loaded_skill_file_output, format_loaded_skill_output,
+    load_skill_with_runtime_materialization, map_skill_error, resolve_skill_filter,
+    resolve_skill_with_runtime_materialization,
 };
 use crate::{PermissionRequest, Tool, ToolContext, ToolError, ToolResult};
 
@@ -24,7 +25,7 @@ impl Tool for SkillViewTool {
     }
 
     fn description(&self) -> &str {
-        "Load a skill's full SKILL.md content or one of its supporting files."
+        "Load a specific skill's full SKILL.md content or one supporting file. Use skills_categories, then skills_list, to choose the correct skill."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -33,7 +34,7 @@ impl Tool for SkillViewTool {
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "The skill name. Use skills_list to see available skills."
+                    "description": "Exact skill name. Use skills_categories and skills_list first to inspect names, descriptions, and categories."
                 },
                 "file_path": {
                     "type": "string",
@@ -56,9 +57,14 @@ impl Tool for SkillViewTool {
         let filter = resolved_filter.as_filter();
 
         if let Some(file_path) = input.file_path.as_deref() {
-            let meta = authority
-                .resolve_skill(&input.name, Some(&filter))
-                .map_err(map_skill_error)?;
+            let meta = resolve_skill_with_runtime_materialization(
+                &authority,
+                Path::new(&ctx.directory),
+                ctx.config_store.clone(),
+                &input.name,
+                Some(&filter),
+                Some(&ctx.extra),
+            )?;
             ctx.ask_permission(
                 PermissionRequest::new("skill")
                     .with_pattern(&meta.name)
@@ -87,11 +93,24 @@ impl Tool for SkillViewTool {
         )
         .await?;
 
-        let loaded = authority
-            .load_skill(&input.name, Some(&filter))
+        let loaded = load_skill_with_runtime_materialization(
+            &authority,
+            Path::new(&ctx.directory),
+            ctx.config_store.clone(),
+            &input.name,
+            Some(&filter),
+            Some(&ctx.extra),
+        )?;
+        let detail = authority
+            .load_skill_detail_for_meta(&loaded.meta)
             .map_err(map_skill_error)?;
-        let (output, metadata) =
-            format_loaded_skill_output(&loaded, Path::new(&ctx.directory), None, None);
+        let (output, metadata) = format_loaded_skill_output(
+            &loaded,
+            Some(&detail),
+            Path::new(&ctx.directory),
+            None,
+            None,
+        );
         Ok(ToolResult {
             title: format!("Loaded skill: {}", loaded.meta.name),
             output,
