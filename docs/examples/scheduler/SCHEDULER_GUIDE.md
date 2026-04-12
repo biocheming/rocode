@@ -181,8 +181,8 @@ Scheduler 通过 JSON/JSONC 文件配置。JSONC 支持注释和尾逗号。
       "orchestrator": "sisyphus",   // 基于哪个 preset
       "description": "...",         // 人类可读描述
       "model": {                    // 可选：覆盖 scheduler 使用的模型
-        "providerId": "ethnopic",
-        "modelId": "your-model-id"
+        "providerId": "zhipuai",
+        "modelId": "glm-5.1"
       },
       "skillList": ["request-analysis", "execution-orchestration"],
       "stages": [...],              // stage 序列（见下文）
@@ -739,8 +739,8 @@ docs/examples/scheduler/
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `providerId` | `string` | ✅ | 提供商（如 `"ethnopic"`、`"openai"`） |
-| `modelId` | `string` | ✅ | 模型 ID（如 `"your-model-id"`) |
+| `providerId` | `string` | ✅ | 提供商（如 `"zhipuai"`、`"alibaba-cn"`、`"kimi-for-coding"`） |
+| `modelId` | `string` | ✅ | 模型 ID（如 `"glm-5.1"`、`"qwen3.6-plus"`、`"kimi-k2.5"`) |
 
 ### 模型优先级
 

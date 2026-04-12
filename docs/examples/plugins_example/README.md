@@ -22,7 +22,7 @@
 - 典型放置目录：`.rocode/skills/<skill-name>/SKILL.md`
 - 特点：不改运行时代码，主要给模型注入流程和约束
 
-本目录示例：`docs/plugins_example/skill/SKILL.md`
+本目录示例：`./skill/SKILL.md`
 
 ## 2) TS Plugin 是运行时 Hook / Auth 扩展
 
@@ -34,19 +34,19 @@
 ```json
 {
   "plugin": [
-    "file:///ABS/PATH/TO/docs/plugins_example/ts/example-plugin.ts"
+    "file://./docs/examples/plugins_example/ts/example-plugin.ts"
   ]
 }
 ```
 
-本目录示例：`docs/plugins_example/ts/example-plugin.ts`
+本目录示例：`./ts/example-plugin.ts`
 
 ## 3) Rust 示例是编译期扩展
 
 - Rust 代码不会像 TS 插件那样被动态 `import`
 - 需要你在 Rust 工程里显式注册并重新编译
 
-本目录示例：`docs/plugins_example/rust/example_plugin.rs`
+本目录示例：`./rust/src/lib.rs`
 
 ## 推荐实践
 

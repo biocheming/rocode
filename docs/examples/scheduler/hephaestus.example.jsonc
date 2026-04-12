@@ -13,8 +13,8 @@
       // Optional: override the model used by the scheduler for this profile.
       // Deep autonomous execution benefits from strong coding models.
       "model": {
-        "providerId": "openai",
-        "modelId": "gpt-5.2"
+        "providerId": "zhipuai",
+        "modelId": "glm-5.1"
       },
       "skillList": [
         "request-analysis",
@@ -50,7 +50,7 @@
             "agent": {
               "name": "autonomous-executor",
               "maxSteps": 12,
-              "model": { "providerId": "your-provider", "modelId": "your-model-id" }
+              "model": { "providerId": "kimi-for-coding", "modelId": "kimi-k2.5" }
             },
             "children": [
               {
