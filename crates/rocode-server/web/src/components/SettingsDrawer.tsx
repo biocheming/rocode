@@ -153,9 +153,9 @@ interface MemoryCardViewLike {
 }
 
 interface MemoryContractLike {
-  filter_query_parameters: string[];
-  search_fields: string[];
-  non_search_fields: string[];
+  filter_query_parameters?: string[];
+  search_fields?: string[];
+  non_search_fields?: string[];
   note: string;
 }
 
@@ -179,13 +179,13 @@ interface MemoryDetailRecordLike {
   status: string;
   title: string;
   summary: string;
-  trigger_conditions: string[];
-  normalized_facts: string[];
-  boundaries: string[];
+  trigger_conditions?: string[];
+  normalized_facts?: string[];
+  boundaries?: string[];
   derived_skill_name?: string | null;
   linked_skill_name?: string | null;
   confidence?: number | null;
-  evidence_refs: MemoryEvidenceRefLike[];
+  evidence_refs?: MemoryEvidenceRefLike[];
   source_session_id?: string | null;
   workspace_identity?: string | null;
   created_at: number;
@@ -201,7 +201,7 @@ interface MemoryDetailResponseLike {
 interface MemoryValidationReportLike {
   record_id?: { 0: string } | string | null;
   status: string;
-  issues: string[];
+  issues?: string[];
   checked_at: number;
 }
 
@@ -221,7 +221,7 @@ interface MemoryConflictViewLike {
 
 interface MemoryConflictResponseLike {
   record_id: { 0: string } | string;
-  conflicts: MemoryConflictViewLike[];
+  conflicts?: MemoryConflictViewLike[];
 }
 
 interface MemoryRecallViewLike {
@@ -234,8 +234,8 @@ interface MemoryRetrievalPacketLike {
   generated_at: number;
   snapshot: boolean;
   query?: string | null;
-  scopes: string[];
-  items: MemoryRecallViewLike[];
+  scopes?: string[];
+  items?: MemoryRecallViewLike[];
   note?: string | null;
   budget_limit?: number | null;
 }
@@ -256,13 +256,13 @@ interface MemoryRulePackLike {
   id: string;
   rule_pack_kind: string;
   version: string;
-  rules: MemoryRuleDefinitionLike[];
+  rules?: MemoryRuleDefinitionLike[];
   created_at: number;
   updated_at: number;
 }
 
 interface MemoryRulePackListResponseLike {
-  items: MemoryRulePackLike[];
+  items?: MemoryRulePackLike[];
 }
 
 interface MemoryRuleHitLike {
@@ -276,7 +276,7 @@ interface MemoryRuleHitLike {
 }
 
 interface MemoryRuleHitListResponseLike {
-  items: MemoryRuleHitLike[];
+  items?: MemoryRuleHitLike[];
 }
 
 interface MemoryConsolidationRunLike {
@@ -289,16 +289,16 @@ interface MemoryConsolidationRunLike {
 }
 
 interface MemoryConsolidationRunListResponseLike {
-  items: MemoryConsolidationRunLike[];
+  items?: MemoryConsolidationRunLike[];
 }
 
 interface MemoryConsolidationResponseLike {
   run: MemoryConsolidationRunLike;
-  merged_record_ids: Array<{ 0: string } | string>;
-  promoted_record_ids: Array<{ 0: string } | string>;
-  archived_record_ids: Array<{ 0: string } | string>;
-  reflection_notes: string[];
-  rule_hits: MemoryRuleHitLike[];
+  merged_record_ids?: Array<{ 0: string } | string>;
+  promoted_record_ids?: Array<{ 0: string } | string>;
+  archived_record_ids?: Array<{ 0: string } | string>;
+  reflection_notes?: string[];
+  rule_hits?: MemoryRuleHitLike[];
 }
 
 interface SkillCatalogEntry {
@@ -715,7 +715,8 @@ function lifecycleStatusClass(state: string): string {
 function unixTimeLabel(value?: number | null): string {
   if (!value) return "--";
   try {
-    return new Date(value * 1000).toLocaleString();
+    const timestamp = value > 1_000_000_000_000 ? value : value * 1000;
+    return new Date(timestamp).toLocaleString();
   } catch {
     return String(value);
   }
@@ -729,6 +730,10 @@ function formatError(error: unknown): string {
 function memoryRecordIdValue(value: { 0: string } | string | null | undefined): string {
   if (!value) return "";
   return typeof value === "string" ? value : value[0] ?? "";
+}
+
+function arrayOrEmpty<T>(value: T[] | null | undefined): T[] {
+  return Array.isArray(value) ? value : [];
 }
 
 function stringifyJson(value: unknown) {
@@ -1138,6 +1143,14 @@ export function SettingsDrawer({
       const route = memorySearchDraft.trim() ? "/memory/search" : "/memory/list";
       const path = `${route}${params.toString() ? `?${params.toString()}` : ""}`;
       const response = await apiJson<MemoryListResponseLike>(path);
+      response.items = arrayOrEmpty(response.items);
+      if (response.contract) {
+        response.contract.search_fields = arrayOrEmpty(response.contract.search_fields);
+        response.contract.filter_query_parameters = arrayOrEmpty(
+          response.contract.filter_query_parameters,
+        );
+        response.contract.non_search_fields = arrayOrEmpty(response.contract.non_search_fields);
+      }
       setMemoryListResponse(response);
       setSelectedMemoryId((current) => {
         if (
@@ -1170,6 +1183,15 @@ export function SettingsDrawer({
       }
       const path = `/memory/retrieval-preview?${params.toString()}`;
       const response = await apiJson<MemoryRetrievalPreviewResponseLike>(path);
+      response.packet.items = arrayOrEmpty(response.packet.items);
+      response.packet.scopes = arrayOrEmpty(response.packet.scopes);
+      if (response.contract) {
+        response.contract.search_fields = arrayOrEmpty(response.contract.search_fields);
+        response.contract.filter_query_parameters = arrayOrEmpty(
+          response.contract.filter_query_parameters,
+        );
+        response.contract.non_search_fields = arrayOrEmpty(response.contract.non_search_fields);
+      }
       setMemoryPreview(response);
     } catch (error) {
       const message = `Failed to load memory retrieval preview: ${formatError(error)}`;
@@ -1188,6 +1210,12 @@ export function SettingsDrawer({
         apiJson<MemoryRuleHitListResponseLike>("/memory/rule-hits?limit=30"),
         apiJson<MemoryConsolidationRunListResponseLike>("/memory/consolidation/runs?limit=20"),
       ]);
+      rulePacks.items = arrayOrEmpty(rulePacks.items).map((pack) => ({
+        ...pack,
+        rules: arrayOrEmpty(pack.rules),
+      }));
+      ruleHits.items = arrayOrEmpty(ruleHits.items);
+      runs.items = arrayOrEmpty(runs.items);
       setMemoryRulePacks(rulePacks);
       setMemoryRuleHits(ruleHits);
       setMemoryConsolidationRuns(runs);
@@ -1209,6 +1237,11 @@ export function SettingsDrawer({
           include_candidates: memoryConsolidateIncludeCandidates,
         }),
       });
+      response.merged_record_ids = arrayOrEmpty(response.merged_record_ids);
+      response.promoted_record_ids = arrayOrEmpty(response.promoted_record_ids);
+      response.archived_record_ids = arrayOrEmpty(response.archived_record_ids);
+      response.reflection_notes = arrayOrEmpty(response.reflection_notes);
+      response.rule_hits = arrayOrEmpty(response.rule_hits);
       setMemoryConsolidationResult(response);
       await loadMemoryGovernance();
       await loadMemoryList();
@@ -1280,6 +1313,14 @@ export function SettingsDrawer({
           ),
         ]);
         if (cancelled) return;
+        detail.record.trigger_conditions = arrayOrEmpty(detail.record.trigger_conditions);
+        detail.record.boundaries = arrayOrEmpty(detail.record.boundaries);
+        detail.record.normalized_facts = arrayOrEmpty(detail.record.normalized_facts);
+        detail.record.evidence_refs = arrayOrEmpty(detail.record.evidence_refs);
+        if (validation.latest) {
+          validation.latest.issues = arrayOrEmpty(validation.latest.issues);
+        }
+        conflicts.conflicts = arrayOrEmpty(conflicts.conflicts);
         setMemoryDetail(detail);
         setMemoryValidationReport(validation);
         setMemoryConflicts(conflicts);
@@ -2238,13 +2279,13 @@ export function SettingsDrawer({
                   <div className={summaryCardClass}>
                     <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Search Fields</span>
                     <strong className="text-sm">
-                      {memoryListResponse?.contract.search_fields.join(", ") || "--"}
+                      {arrayOrEmpty(memoryListResponse?.contract.search_fields).join(", ") || "--"}
                     </strong>
                   </div>
                   <div className={summaryCardClass}>
                     <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Contract</span>
                     <strong className="text-sm">
-                      {memoryListResponse?.contract.filter_query_parameters.join(", ") || "--"}
+                      {arrayOrEmpty(memoryListResponse?.contract.filter_query_parameters).join(", ") || "--"}
                     </strong>
                   </div>
                   <div className={summaryCardClass}>
@@ -2367,8 +2408,8 @@ export function SettingsDrawer({
                         <div className={summaryCardClass}>
                           <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Triggers</span>
                           <div className="grid gap-1 text-sm">
-                            {memoryDetail.record.trigger_conditions.length
-                              ? memoryDetail.record.trigger_conditions.map((value) => (
+                            {arrayOrEmpty(memoryDetail.record.trigger_conditions).length
+                              ? arrayOrEmpty(memoryDetail.record.trigger_conditions).map((value) => (
                                   <span key={value}>{value}</span>
                                 ))
                               : <span className="text-muted-foreground">--</span>}
@@ -2377,8 +2418,8 @@ export function SettingsDrawer({
                         <div className={summaryCardClass}>
                           <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Boundaries</span>
                           <div className="grid gap-1 text-sm">
-                            {memoryDetail.record.boundaries.length
-                              ? memoryDetail.record.boundaries.map((value) => (
+                            {arrayOrEmpty(memoryDetail.record.boundaries).length
+                              ? arrayOrEmpty(memoryDetail.record.boundaries).map((value) => (
                                   <span key={value}>{value}</span>
                                 ))
                               : <span className="text-muted-foreground">--</span>}
@@ -2389,8 +2430,8 @@ export function SettingsDrawer({
                       <div className={summaryCardClass}>
                         <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Normalized Facts</span>
                         <div className="grid gap-1 text-sm">
-                          {memoryDetail.record.normalized_facts.length
-                            ? memoryDetail.record.normalized_facts.map((value) => (
+                          {arrayOrEmpty(memoryDetail.record.normalized_facts).length
+                            ? arrayOrEmpty(memoryDetail.record.normalized_facts).map((value) => (
                                 <span key={value}>{value}</span>
                               ))
                             : <span className="text-muted-foreground">--</span>}
@@ -2407,8 +2448,8 @@ export function SettingsDrawer({
                                 Checked: {unixTimeLabel(memoryValidationReport.latest.checked_at)}
                               </span>
                               <div className="grid gap-1">
-                                {memoryValidationReport.latest.issues.length
-                                  ? memoryValidationReport.latest.issues.map((issue) => (
+                                {arrayOrEmpty(memoryValidationReport.latest.issues).length
+                                  ? arrayOrEmpty(memoryValidationReport.latest.issues).map((issue) => (
                                       <span key={issue}>{issue}</span>
                                     ))
                                   : <span className="text-muted-foreground">No issues.</span>}
@@ -2424,8 +2465,8 @@ export function SettingsDrawer({
                         <div className={summaryCardClass}>
                           <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Conflicts</span>
                           <div className="grid gap-2 text-sm">
-                            {memoryConflicts?.conflicts.length ? (
-                              memoryConflicts.conflicts.map((conflict) => (
+                            {arrayOrEmpty(memoryConflicts?.conflicts).length ? (
+                              arrayOrEmpty(memoryConflicts?.conflicts).map((conflict) => (
                                 <div key={conflict.id} className="rounded-lg border border-border/35 bg-muted/10 p-3">
                                   <strong className="block">{conflict.conflict_kind}</strong>
                                   <span className="block text-muted-foreground">
@@ -2447,8 +2488,8 @@ export function SettingsDrawer({
                       <div className={summaryCardClass}>
                         <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Evidence</span>
                         <div className="grid gap-2 text-sm">
-                          {memoryDetail.record.evidence_refs.length ? (
-                            memoryDetail.record.evidence_refs.map((ref, index) => (
+                          {arrayOrEmpty(memoryDetail.record.evidence_refs).length ? (
+                            arrayOrEmpty(memoryDetail.record.evidence_refs).map((ref, index) => (
                               <div key={`${ref.session_id ?? "session"}-${index}`} className="rounded-lg border border-border/35 bg-muted/10 p-3">
                                 <div>session: {ref.session_id || "--"}</div>
                                 <div>message: {ref.message_id || "--"}</div>
@@ -2479,7 +2520,7 @@ export function SettingsDrawer({
                   <span className="text-xs text-muted-foreground">
                     {memoryPreviewLoading
                       ? "Loading preview..."
-                      : `${memoryPreview?.packet.items.length ?? 0} recalled`}
+                      : `${arrayOrEmpty(memoryPreview?.packet.items).length} recalled`}
                   </span>
                 </div>
                 <div className={mutedCardClass}>
@@ -2487,8 +2528,8 @@ export function SettingsDrawer({
                     "Formal preview of which memory records would be injected into the current turn and why."}
                 </div>
                 <div className="grid gap-3">
-                  {memoryPreview?.packet.items.length ? (
-                    memoryPreview.packet.items.map((item) => (
+                  {arrayOrEmpty(memoryPreview?.packet.items).length ? (
+                    arrayOrEmpty(memoryPreview?.packet.items).map((item) => (
                       <div
                         key={memoryRecordIdValue(item.card.id)}
                         className="rounded-xl border border-border/40 bg-card/55 p-4"
@@ -2538,8 +2579,8 @@ export function SettingsDrawer({
                           </div>
                           <strong className="mt-2 block text-sm">{pack.id}</strong>
                           <div className="mt-3 grid gap-2 text-sm">
-                            {pack.rules.length ? (
-                              pack.rules.map((rule) => (
+                            {arrayOrEmpty(pack.rules).length ? (
+                              arrayOrEmpty(pack.rules).map((rule) => (
                                 <div key={rule.id} className="rounded-lg border border-border/35 bg-muted/10 p-3">
                                   <strong className="block">{rule.id}</strong>
                                   <span className="block text-muted-foreground">{rule.description}</span>
@@ -2577,8 +2618,8 @@ export function SettingsDrawer({
                       </span>
                     </div>
                     <div className="grid gap-3">
-                      {memoryRuleHits?.items.length ? (
-                        memoryRuleHits.items.map((hit) => (
+                      {arrayOrEmpty(memoryRuleHits?.items).length ? (
+                        arrayOrEmpty(memoryRuleHits?.items).map((hit) => (
                           <div
                             key={hit.id}
                             className="rounded-xl border border-border/40 bg-card/55 p-4"
@@ -2625,9 +2666,9 @@ export function SettingsDrawer({
                               {memoryConsolidationResult.run.promoted_count} · conflicts{" "}
                               {memoryConsolidationResult.run.conflict_count}
                             </span>
-                            {memoryConsolidationResult.reflection_notes.length ? (
+                            {arrayOrEmpty(memoryConsolidationResult.reflection_notes).length ? (
                               <div className="mt-2 grid gap-1">
-                                {memoryConsolidationResult.reflection_notes.map((note) => (
+                                {arrayOrEmpty(memoryConsolidationResult.reflection_notes).map((note) => (
                                   <span key={note}>{note}</span>
                                 ))}
                               </div>
@@ -2636,8 +2677,8 @@ export function SettingsDrawer({
                         </div>
                       ) : null}
 
-                      {memoryConsolidationRuns?.items.length ? (
-                        memoryConsolidationRuns.items.map((run) => (
+                      {arrayOrEmpty(memoryConsolidationRuns?.items).length ? (
+                        arrayOrEmpty(memoryConsolidationRuns?.items).map((run) => (
                           <div
                             key={run.run_id}
                             className="rounded-xl border border-border/40 bg-card/55 p-4"
