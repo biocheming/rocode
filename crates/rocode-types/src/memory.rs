@@ -106,6 +106,10 @@ pub struct MemoryCardView {
     pub title: String,
     pub summary: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derived_skill_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_skill_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f32>,
     #[serde(default)]
     pub validation_status: MemoryValidationStatus,
@@ -122,6 +126,8 @@ impl From<&MemoryRecord> for MemoryCardView {
             status: value.status.clone(),
             title: value.title.clone(),
             summary: value.summary.clone(),
+            derived_skill_name: value.derived_skill_name.clone(),
+            linked_skill_name: value.linked_skill_name.clone(),
             confidence: value.confidence,
             validation_status: value.validation_status.clone(),
             last_validated_at: value.last_validated_at,
@@ -172,6 +178,10 @@ pub struct MemoryListQuery {
     pub limit: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derived_skill_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_skill_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -380,6 +390,12 @@ pub struct SessionMemoryTelemetrySummary {
     pub validated_count: u32,
     #[serde(default)]
     pub rejected_count: u32,
+    #[serde(default)]
+    pub warning_count: u32,
+    #[serde(default)]
+    pub methodology_candidate_count: u32,
+    #[serde(default)]
+    pub derived_skill_candidate_count: u32,
     #[serde(default)]
     pub linked_skill_count: u32,
     #[serde(default)]

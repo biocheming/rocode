@@ -1195,6 +1195,13 @@ fn tui_memory_list_status_lines(
             "{} · {:?} · {:?} · {:?}",
             item.id.0, item.kind, item.status, item.validation_status
         )));
+        if item.linked_skill_name.is_some() || item.derived_skill_name.is_some() {
+            lines.push(StatusLine::muted(format!(
+                "  skills: linked={} · target={}",
+                item.linked_skill_name.as_deref().unwrap_or("--"),
+                item.derived_skill_name.as_deref().unwrap_or("--")
+            )));
+        }
         lines.push(StatusLine::muted(format!("  {}", item.title)));
         lines.push(StatusLine::muted(format!("  {}", item.summary)));
     }
@@ -1663,6 +1670,12 @@ fn tui_runtime_status_lines(
             memory.candidate_count, memory.validated_count, memory.rejected_count
         )));
         lines.push(StatusLine::normal(format!(
+            "Validation pressure: warnings {} · methodology {} · skill targets {}",
+            memory.warning_count,
+            memory.methodology_candidate_count,
+            memory.derived_skill_candidate_count
+        )));
+        lines.push(StatusLine::normal(format!(
             "Skill linkage: linked {} · feedback lessons {}",
             memory.linked_skill_count, memory.skill_feedback_lesson_count
         )));
@@ -1791,6 +1804,12 @@ fn tui_session_insights_lines(
         if let Some(query) = memory.summary.last_prefetch_query.as_deref() {
             lines.push(StatusLine::muted(format!("Prefetch query: {}", query)));
         }
+        lines.push(StatusLine::normal(format!(
+            "Validation pressure: warnings {} · methodology {} · skill targets {}",
+            memory.summary.warning_count,
+            memory.summary.methodology_candidate_count,
+            memory.summary.derived_skill_candidate_count
+        )));
         if let Some(run) = memory.summary.latest_consolidation_run.as_ref() {
             lines.push(StatusLine::normal(format!(
                 "Latest consolidation: {} · merged {} · promoted {} · conflicts {}",
@@ -1830,6 +1849,23 @@ fn tui_session_insights_lines(
                     .collect::<Vec<_>>()
                     .join(", ")
             )));
+        }
+        let skill_linked = memory
+            .recent_session_records
+            .iter()
+            .filter(|item| item.linked_skill_name.is_some() || item.derived_skill_name.is_some())
+            .take(3)
+            .collect::<Vec<_>>();
+        if !skill_linked.is_empty() {
+            lines.push(StatusLine::title("Skill-Linked Recent Records"));
+            for item in skill_linked {
+                lines.push(StatusLine::normal(format!("- {}", item.title)));
+                lines.push(StatusLine::muted(format!(
+                    "  linked={} · target={}",
+                    item.linked_skill_name.as_deref().unwrap_or("--"),
+                    item.derived_skill_name.as_deref().unwrap_or("--")
+                )));
+            }
         }
         let suggested_ids = memory
             .summary

@@ -146,6 +146,8 @@ interface MemoryCardViewLike {
   status: string;
   title: string;
   summary: string;
+  derived_skill_name?: string | null;
+  linked_skill_name?: string | null;
   confidence?: number | null;
   validation_status: string;
 }
@@ -180,6 +182,8 @@ interface MemoryDetailRecordLike {
   trigger_conditions: string[];
   normalized_facts: string[];
   boundaries: string[];
+  derived_skill_name?: string | null;
+  linked_skill_name?: string | null;
   confidence?: number | null;
   evidence_refs: MemoryEvidenceRefLike[];
   source_session_id?: string | null;
@@ -2294,6 +2298,18 @@ export function SettingsDrawer({
                               <span>{item.status}</span>
                               <span>·</span>
                               <span>{item.validation_status}</span>
+                              {item.linked_skill_name ? (
+                                <>
+                                  <span>·</span>
+                                  <span>linked {item.linked_skill_name}</span>
+                                </>
+                              ) : null}
+                              {item.derived_skill_name ? (
+                                <>
+                                  <span>·</span>
+                                  <span>target {item.derived_skill_name}</span>
+                                </>
+                              ) : null}
                             </div>
                             <strong className="text-sm">{item.title}</strong>
                             <span className={active ? "text-background/85 text-sm" : "text-muted-foreground text-sm"}>
@@ -2340,6 +2356,11 @@ export function SettingsDrawer({
                       <div className={mutedCardClass}>
                         <strong className="block text-foreground">{memoryDetail.record.title}</strong>
                         <span>{memoryDetail.record.summary}</span>
+                        {memoryDetail.record.linked_skill_name || memoryDetail.record.derived_skill_name ? (
+                          <span className="block text-xs text-muted-foreground mt-2">
+                            linked {memoryDetail.record.linked_skill_name || "--"} · target {memoryDetail.record.derived_skill_name || "--"}
+                          </span>
+                        ) : null}
                       </div>
 
                       <div className="grid gap-4 sm:grid-cols-2">

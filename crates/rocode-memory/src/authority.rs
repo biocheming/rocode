@@ -30,6 +30,8 @@ pub struct MemoryFilter<'a> {
     pub statuses: Option<&'a [MemoryStatus]>,
     pub search: Option<&'a str>,
     pub source_session_id: Option<&'a str>,
+    pub derived_skill_name: Option<&'a str>,
+    pub linked_skill_name: Option<&'a str>,
     pub limit: Option<u32>,
 }
 
@@ -59,6 +61,18 @@ pub struct SkillWriteObservation<'a> {
     pub location: Option<&'a str>,
     pub supporting_file: Option<&'a str>,
     pub guard_report: Option<&'a SkillGuardReport>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SkillUsageObservation<'a> {
+    pub session_id: &'a str,
+    pub tool_call_id: &'a str,
+    pub tool_name: &'a str,
+    pub stage_id: Option<&'a str>,
+    pub skill_name: &'a str,
+    pub category: Option<&'a str>,
+    pub output: &'a str,
+    pub is_error: bool,
 }
 
 pub const MEMORY_FROZEN_SNAPSHOT_METADATA_KEY: &str = "memory_frozen_snapshot";
@@ -149,6 +163,9 @@ impl MemoryAuthority {
                     "kind".to_string(),
                     "status".to_string(),
                     "search".to_string(),
+                    "source_session_id".to_string(),
+                    "derived_skill_name".to_string(),
+                    "linked_skill_name".to_string(),
                     "limit".to_string(),
                 ],
                 search_fields: vec![
@@ -161,6 +178,8 @@ impl MemoryAuthority {
                     "boundaries".to_string(),
                     "evidence_refs".to_string(),
                     "workspace_identity".to_string(),
+                    "derived_skill_name".to_string(),
+                    "linked_skill_name".to_string(),
                 ],
                 note: "Memory list search is limited to lightweight recalled fields. Provenance and validation detail remain detail-only surfaces.".to_string(),
             },
@@ -177,6 +196,8 @@ impl MemoryAuthority {
             statuses: (!query.statuses.is_empty()).then_some(query.statuses.as_slice()),
             search: query.search.as_deref(),
             source_session_id: query.source_session_id.as_deref(),
+            derived_skill_name: query.derived_skill_name.as_deref(),
+            linked_skill_name: query.linked_skill_name.as_deref(),
             limit: query.limit,
         };
         self.list_memory_response(Some(&filter)).await
@@ -782,6 +803,19 @@ impl MemoryAuthority {
         Ok(records)
     }
 
+    pub async fn ingest_skill_usage_observation(
+        &self,
+        observation: &SkillUsageObservation<'_>,
+    ) -> Result<Option<MemoryRecord>> {
+        if self.repository.is_none() {
+            return Ok(None);
+        }
+
+        let context = self.resolve_context().await?;
+        let record = build_skill_usage_record(observation, &context);
+        Ok(Some(self.persist_candidate_record(record, &context).await?))
+    }
+
     pub async fn validate_record(
         &self,
         record_id: &MemoryRecordId,
@@ -1034,6 +1068,8 @@ fn repository_filter(
         search: filter.search.map(ToOwned::to_owned),
         workspace_identity: Some(context.workspace_key.clone()),
         source_session_id: filter.source_session_id.map(ToOwned::to_owned),
+        derived_skill_name: filter.derived_skill_name.map(ToOwned::to_owned),
+        linked_skill_name: filter.linked_skill_name.map(ToOwned::to_owned),
         limit: Some(filter.limit.unwrap_or(100) as i64),
     }
 }
@@ -1209,6 +1245,21 @@ impl MemoryAuthority {
                 )
             })
             .count() as u32;
+        let warning_count = session_records
+            .iter()
+            .filter(|record| record.validation_status == MemoryValidationStatus::Warning)
+            .count() as u32;
+        let methodology_candidate_count = session_records
+            .iter()
+            .filter(|record| record.kind == MemoryKind::MethodologyCandidate)
+            .count() as u32;
+        let derived_skill_candidate_count = session_records
+            .iter()
+            .filter(|record| {
+                record.kind == MemoryKind::MethodologyCandidate
+                    && record.derived_skill_name.is_some()
+            })
+            .count() as u32;
         let linked_skill_count = session_records
             .iter()
             .filter(|record| record.linked_skill_name.is_some())
@@ -1258,6 +1309,9 @@ impl MemoryAuthority {
             candidate_count,
             validated_count,
             rejected_count,
+            warning_count,
+            methodology_candidate_count,
+            derived_skill_candidate_count,
             linked_skill_count,
             skill_feedback_lesson_count,
             retrieval_run_count,
@@ -1598,6 +1652,112 @@ fn build_skill_feedback_lesson_record(
             tool_call_id: observation.tool_call_id.map(ToOwned::to_owned),
             stage_id: None,
             note: Some("skill_manage.feedback".to_string()),
+        }],
+        source_session_id: Some(observation.session_id.to_string()),
+        workspace_identity: Some(context.workspace_key.clone()),
+        created_at: now,
+        updated_at: now,
+        last_validated_at: None,
+        expires_at: None,
+        derived_skill_name: None,
+        linked_skill_name: Some(observation.skill_name.to_string()),
+        validation_status: MemoryValidationStatus::Pending,
+    }
+}
+
+fn build_skill_usage_record(
+    observation: &SkillUsageObservation<'_>,
+    context: &ResolvedMemoryContext,
+) -> MemoryRecord {
+    let now = chrono::Utc::now().timestamp_millis();
+    let tool_name = observation.tool_name.trim();
+    let outcome = if observation.is_error {
+        "error"
+    } else {
+        "success"
+    };
+    let summary = if observation.is_error {
+        format!(
+            "Skill `{}` was used through `{}` and ended with an error. {}",
+            observation.skill_name,
+            tool_name,
+            summarize_tool_output(observation.output)
+        )
+    } else {
+        format!(
+            "Skill `{}` was used through `{}` and completed successfully. {}",
+            observation.skill_name,
+            tool_name,
+            summarize_tool_output(observation.output)
+        )
+    };
+    let mut trigger_conditions = vec![
+        format!("skill:{}", observation.skill_name),
+        format!("tool:{}", tool_name),
+    ];
+    if let Some(stage_id) = observation.stage_id {
+        trigger_conditions.push(format!("stage_id:{}", stage_id));
+    }
+    if let Some(category) = observation.category {
+        trigger_conditions.push(format!("category:{}", category));
+    }
+
+    let mut normalized_facts = vec![
+        format!("skill_name={}", observation.skill_name),
+        format!(
+            "skill_name_normalized={}",
+            normalize_skill_name(observation.skill_name)
+        ),
+        format!("tool_name={}", tool_name),
+        format!("tool_outcome={}", outcome),
+        "memory_source=skill_runtime_usage".to_string(),
+    ];
+    if let Some(stage_id) = observation.stage_id {
+        normalized_facts.push(format!("stage_id={}", stage_id));
+    }
+    if let Some(category) = observation.category {
+        normalized_facts.push(format!("category={}", category));
+    }
+
+    MemoryRecord {
+        id: hashed_record_id(
+            "mem_skill_usage",
+            &[
+                observation.session_id,
+                observation.tool_call_id,
+                observation.skill_name,
+                tool_name,
+                outcome,
+            ],
+        ),
+        kind: if observation.is_error {
+            MemoryKind::Lesson
+        } else {
+            MemoryKind::Pattern
+        },
+        scope: candidate_scope_for_mode(context.workspace_mode),
+        status: MemoryStatus::Candidate,
+        title: if observation.is_error {
+            format!("Skill usage lesson: {}", observation.skill_name)
+        } else {
+            format!("Skill usage pattern: {}", observation.skill_name)
+        },
+        summary: truncate(&summary, 320),
+        trigger_conditions,
+        normalized_facts,
+        boundaries: vec![
+            "Derived from explicit runtime skill loading, not inferred from generic tool use."
+                .to_string(),
+            "Re-check the current skill body and workspace state before reusing this feedback."
+                .to_string(),
+        ],
+        confidence: Some(if observation.is_error { 0.7 } else { 0.5 }),
+        evidence_refs: vec![MemoryEvidenceRef {
+            session_id: Some(observation.session_id.to_string()),
+            message_id: None,
+            tool_call_id: Some(observation.tool_call_id.to_string()),
+            stage_id: observation.stage_id.map(ToOwned::to_owned),
+            note: Some("skill_runtime_usage".to_string()),
         }],
         source_session_id: Some(observation.session_id.to_string()),
         workspace_identity: Some(context.workspace_key.clone()),
@@ -2326,10 +2486,72 @@ mod tests {
             .await
             .expect("telemetry should build")
             .expect("telemetry should exist");
+        assert!(telemetry.warning_count >= 1);
+        assert!(telemetry.methodology_candidate_count >= 1);
+        assert!(telemetry.derived_skill_candidate_count >= 1);
         assert!(telemetry.linked_skill_count >= 2);
         assert!(telemetry.skill_feedback_lesson_count >= 1);
         assert_eq!(telemetry.retrieval_run_count, 1);
         assert!(telemetry.retrieval_hit_count >= 1);
         assert!(telemetry.retrieval_use_count >= 1);
+
+        let filtered = authority
+            .list_memory_for_query(&MemoryListQuery {
+                linked_skill_name: Some("provider-refresh".to_string()),
+                derived_skill_name: Some("provider-refresh".to_string()),
+                limit: Some(10),
+                ..Default::default()
+            })
+            .await
+            .expect("filtered list should succeed");
+        assert!(!filtered.items.is_empty());
+        assert!(filtered.items.iter().all(|item| {
+            item.linked_skill_name.as_deref() == Some("provider-refresh")
+                && item.derived_skill_name.as_deref() == Some("provider-refresh")
+        }));
+    }
+
+    #[tokio::test]
+    async fn skill_usage_observation_creates_linked_runtime_feedback_record() {
+        let dir = TestDir::new("rocode_memory_skill_usage");
+        let db = Database::in_memory().await.expect("db should initialize");
+        let repository = Arc::new(MemoryRepository::new(db.pool().clone()));
+        let authority = authority_with_repository(&dir.path, false, repository.clone());
+
+        let record = authority
+            .ingest_skill_usage_observation(&SkillUsageObservation {
+                session_id: "ses_usage",
+                tool_call_id: "call_usage",
+                tool_name: "task",
+                stage_id: Some("stage_usage"),
+                skill_name: "frontend-ui-ux",
+                category: Some("frontend"),
+                output: "Subtask completed after applying the frontend skill.",
+                is_error: false,
+            })
+            .await
+            .expect("skill usage should ingest")
+            .expect("skill usage record should exist");
+
+        assert_eq!(record.linked_skill_name.as_deref(), Some("frontend-ui-ux"));
+        assert_eq!(record.kind, MemoryKind::Pattern);
+        assert!(record
+            .normalized_facts
+            .iter()
+            .any(|fact| fact == "memory_source=skill_runtime_usage"));
+
+        let persisted = repository
+            .get_record(&record.id.0)
+            .await
+            .expect("lookup should succeed")
+            .expect("persisted record should exist");
+        assert_eq!(
+            persisted.linked_skill_name.as_deref(),
+            Some("frontend-ui-ux")
+        );
+        assert!(persisted
+            .trigger_conditions
+            .iter()
+            .any(|trigger| trigger == "category:frontend"));
     }
 }

@@ -551,6 +551,12 @@ fn cli_runtime_snapshot_lines(
             memory.candidate_count, memory.validated_count, memory.rejected_count
         ));
         lines.push(format!(
+            "  Validation pressure: warnings {} · methodology {} · skill targets {}",
+            memory.warning_count,
+            memory.methodology_candidate_count,
+            memory.derived_skill_candidate_count
+        ));
+        lines.push(format!(
             "  Skill linkage: linked {} · feedback lessons {}",
             memory.linked_skill_count, memory.skill_feedback_lesson_count
         ));
@@ -687,6 +693,12 @@ fn cli_session_insights_lines(
         if let Some(query) = memory.summary.last_prefetch_query.as_deref() {
             lines.push(format!("  Prefetch query: {}", truncate_text(query, 120)));
         }
+        lines.push(format!(
+            "  Validation pressure: warnings {} · methodology {} · skill targets {}",
+            memory.summary.warning_count,
+            memory.summary.methodology_candidate_count,
+            memory.summary.derived_skill_candidate_count
+        ));
         if let Some(run) = memory.summary.latest_consolidation_run.as_ref() {
             lines.push(format!(
                 "  Latest consolidation: {} · merged {} · promoted {} · conflicts {}",
@@ -728,6 +740,23 @@ fn cli_session_insights_lines(
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
+        }
+        let skill_linked = memory
+            .recent_session_records
+            .iter()
+            .filter(|item| item.linked_skill_name.is_some() || item.derived_skill_name.is_some())
+            .take(3)
+            .collect::<Vec<_>>();
+        if !skill_linked.is_empty() {
+            lines.push("  Skill-linked recent records:".to_string());
+            for item in skill_linked {
+                lines.push(format!(
+                    "    {} · linked={} · target={}",
+                    truncate_text(&item.title, 72),
+                    item.linked_skill_name.as_deref().unwrap_or("--"),
+                    item.derived_skill_name.as_deref().unwrap_or("--")
+                ));
+            }
         }
         let suggested_ids = memory
             .summary
@@ -1193,6 +1222,13 @@ async fn cli_print_memory_list(
                         "{} · {:?} · {:?} · {:?}",
                         item.id.0, item.kind, item.status, item.validation_status
                     ));
+                    if item.linked_skill_name.is_some() || item.derived_skill_name.is_some() {
+                        lines.push(format!(
+                            "  skills: linked={} · target={}",
+                            item.linked_skill_name.as_deref().unwrap_or("--"),
+                            item.derived_skill_name.as_deref().unwrap_or("--")
+                        ));
+                    }
                     lines.push(format!("  {}", item.title));
                     lines.push(format!("  {}", item.summary));
                 }

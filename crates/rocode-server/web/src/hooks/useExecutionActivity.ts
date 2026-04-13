@@ -66,6 +66,9 @@ export interface SessionMemoryTelemetryRecord {
   candidate_count: number;
   validated_count: number;
   rejected_count: number;
+  warning_count: number;
+  methodology_candidate_count: number;
+  derived_skill_candidate_count: number;
   linked_skill_count: number;
   skill_feedback_lesson_count: number;
   retrieval_run_count: number;
@@ -82,6 +85,8 @@ export interface MemoryCardRecord {
   status: string;
   title: string;
   summary: string;
+  derived_skill_name?: string | null;
+  linked_skill_name?: string | null;
   confidence?: number | null;
   validation_status: string;
   last_validated_at?: number | null;
@@ -100,6 +105,8 @@ export interface MemoryRetrievalPacketRecord {
       status: string;
       title: string;
       summary: string;
+      derived_skill_name?: string | null;
+      linked_skill_name?: string | null;
       confidence?: number | null;
       validation_status: string;
       last_validated_at?: number | null;

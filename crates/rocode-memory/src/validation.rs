@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use rocode_storage::{MemoryConflictRecord, MemoryRepository, MemoryRepositoryFilter};
 use rocode_types::{
-    MemoryRecord, MemoryRecordId, MemoryScope, MemoryStatus, MemoryValidationReport,
+    MemoryKind, MemoryRecord, MemoryRecordId, MemoryScope, MemoryStatus, MemoryValidationReport,
     MemoryValidationStatus,
 };
 use sha2::{Digest, Sha256};
@@ -76,6 +76,42 @@ impl MemoryValidationEngine {
         {
             failed = true;
             issues.push("scope:missing_workspace_identity".to_string());
+        }
+        if candidate.kind == MemoryKind::MethodologyCandidate {
+            if count_validation_terms(&candidate) == 0 {
+                warning = true;
+                issues.push("methodology:missing_validation_recipe".to_string());
+            }
+            if !has_non_goal_boundary(&candidate) {
+                warning = true;
+                issues.push("methodology:missing_non_goal_boundary".to_string());
+            }
+        }
+        if let Some(linked_skill_name) = normalized_optional(&candidate.linked_skill_name) {
+            match linked_skill_signal(&candidate) {
+                Some(signal) if signal != linked_skill_name => {
+                    failed = true;
+                    issues.push(format!(
+                        "skill_link:mismatch:{}!={}",
+                        signal, linked_skill_name
+                    ));
+                }
+                None => {
+                    warning = true;
+                    issues.push("skill_link:missing_skill_signal".to_string());
+                }
+                _ => {}
+            }
+        }
+        if candidate.kind == MemoryKind::Lesson
+            && candidate
+                .linked_skill_name
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            && !has_skill_feedback_signal(&candidate)
+        {
+            warning = true;
+            issues.push("skill_feedback:missing_failure_or_change_signal".to_string());
         }
 
         if candidate
@@ -240,6 +276,136 @@ fn contains_unsafe_memory_content(record: &MemoryRecord) -> bool {
     .any(|needle| haystack.contains(needle))
 }
 
+fn normalized_optional(value: &Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+}
+
+fn linked_skill_signal(record: &MemoryRecord) -> Option<String> {
+    for trigger in &record.trigger_conditions {
+        let trimmed = trigger.trim();
+        if let Some(skill_name) = trimmed.strip_prefix("skill:") {
+            let normalized = skill_name.trim().to_ascii_lowercase();
+            if !normalized.is_empty() {
+                return Some(normalized);
+            }
+        }
+    }
+    for fact in &record.normalized_facts {
+        if let Some((key, value)) = fact.split_once('=') {
+            let key = key.trim().to_ascii_lowercase();
+            if matches!(key.as_str(), "skill_name" | "linked_skill_name") {
+                let normalized = value.trim().to_ascii_lowercase();
+                if !normalized.is_empty() {
+                    return Some(normalized);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn has_non_goal_boundary(record: &MemoryRecord) -> bool {
+    record.boundaries.iter().any(|boundary| {
+        let normalized = boundary.trim().to_ascii_lowercase();
+        [
+            "do not",
+            "don't",
+            "only",
+            "unless",
+            "requires",
+            "avoid",
+            "non-goal",
+            "out of scope",
+            "not for",
+        ]
+        .iter()
+        .any(|term| normalized.contains(term))
+    })
+}
+
+fn has_skill_feedback_signal(record: &MemoryRecord) -> bool {
+    [
+        record.title.as_str(),
+        record.summary.as_str(),
+        &record.trigger_conditions.join("\n"),
+        &record.normalized_facts.join("\n"),
+        &record.boundaries.join("\n"),
+    ]
+    .join("\n")
+    .to_ascii_lowercase()
+    .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'))
+    .any(skill_feedback_word_matches)
+}
+
+fn count_validation_terms(record: &MemoryRecord) -> usize {
+    record
+        .trigger_conditions
+        .iter()
+        .chain(record.normalized_facts.iter())
+        .map(|value| value.to_ascii_lowercase())
+        .map(|value| {
+            value
+                .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'))
+                .filter(|word| validation_word_matches(word))
+                .count()
+        })
+        .sum()
+}
+
+fn validation_word_matches(word: &str) -> bool {
+    matches!(
+        word,
+        "test"
+            | "tests"
+            | "check"
+            | "checks"
+            | "verify"
+            | "verified"
+            | "validate"
+            | "validation"
+            | "audit"
+            | "probe"
+            | "lint"
+            | "diagnostic"
+            | "diagnostics"
+            | "doctor"
+            | "healthcheck"
+            | "health-check"
+            | "smoketest"
+            | "smoke-test"
+            | "selftest"
+            | "self-test"
+    )
+}
+
+fn skill_feedback_word_matches(word: &str) -> bool {
+    matches!(
+        word,
+        "fail"
+            | "failed"
+            | "failure"
+            | "error"
+            | "warn"
+            | "warning"
+            | "patch"
+            | "patched"
+            | "fix"
+            | "fixed"
+            | "change"
+            | "changed"
+            | "update"
+            | "updated"
+            | "guard"
+            | "violation"
+            | "regression"
+            | "supporting_file"
+    )
+}
+
 fn canonical_signature(record: &MemoryRecord) -> String {
     let mut hasher = Sha256::new();
     hasher.update(scope_label(&record.scope).as_bytes());
@@ -341,5 +507,117 @@ fn scope_label(scope: &MemoryScope) -> &'static str {
         MemoryScope::WorkspaceShared => "workspace_shared",
         MemoryScope::WorkspaceSandbox => "workspace_sandbox",
         MemoryScope::SessionEphemeral => "session_ephemeral",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use rocode_config::WorkspaceMode;
+    use rocode_storage::{Database, MemoryRepository};
+    use rocode_types::{MemoryEvidenceRef, MemoryKind};
+
+    use super::*;
+
+    fn context() -> ResolvedMemoryContext {
+        ResolvedMemoryContext {
+            workspace_key: "ws:test".to_string(),
+            workspace_mode: WorkspaceMode::Shared,
+            allowed_scopes: vec![
+                MemoryScope::GlobalUser,
+                MemoryScope::GlobalWorkspace,
+                MemoryScope::WorkspaceShared,
+            ],
+        }
+    }
+
+    fn base_record(id: &str, kind: MemoryKind) -> MemoryRecord {
+        MemoryRecord {
+            id: MemoryRecordId(id.to_string()),
+            kind,
+            scope: MemoryScope::WorkspaceShared,
+            status: MemoryStatus::Candidate,
+            title: "Reusable provider refresh workflow".to_string(),
+            summary: "Refresh provider catalog, validate the response, and patch related skill guidance when the runtime changes.".to_string(),
+            trigger_conditions: vec!["provider:refresh".to_string()],
+            normalized_facts: vec!["step=refresh".to_string(), "workspace_mode=shared".to_string()],
+            boundaries: vec!["Only use in this workspace.".to_string()],
+            confidence: Some(0.7),
+            evidence_refs: vec![MemoryEvidenceRef {
+                session_id: Some("ses_validation".to_string()),
+                message_id: None,
+                tool_call_id: Some("call_validation".to_string()),
+                stage_id: Some("stage_validation".to_string()),
+                note: Some("fixture".to_string()),
+            }],
+            source_session_id: Some("ses_validation".to_string()),
+            workspace_identity: Some("ws:test".to_string()),
+            created_at: 10,
+            updated_at: 10,
+            last_validated_at: None,
+            expires_at: None,
+            derived_skill_name: None,
+            linked_skill_name: None,
+            validation_status: MemoryValidationStatus::Pending,
+        }
+    }
+
+    #[tokio::test]
+    async fn methodology_without_validation_recipe_warns() {
+        let db = Database::in_memory().await.expect("db should initialize");
+        let engine =
+            MemoryValidationEngine::new(Arc::new(MemoryRepository::new(db.pool().clone())));
+
+        let mut record = base_record("mem_methodology_warning", MemoryKind::MethodologyCandidate);
+        record.boundaries = vec!["Use this flow when provider metadata drifts.".to_string()];
+
+        let outcome = engine
+            .validate_record(&record, &context())
+            .await
+            .expect("validation should succeed");
+
+        assert_eq!(outcome.report.status, MemoryValidationStatus::Warning);
+        assert!(outcome
+            .report
+            .issues
+            .iter()
+            .any(|issue| issue == "methodology:missing_validation_recipe"));
+        assert!(outcome
+            .report
+            .issues
+            .iter()
+            .any(|issue| issue == "methodology:missing_non_goal_boundary"));
+    }
+
+    #[tokio::test]
+    async fn linked_skill_signal_mismatch_fails() {
+        let db = Database::in_memory().await.expect("db should initialize");
+        let engine =
+            MemoryValidationEngine::new(Arc::new(MemoryRepository::new(db.pool().clone())));
+
+        let mut record = base_record("mem_skill_link_fail", MemoryKind::Lesson);
+        record.linked_skill_name = Some("provider-refresh".to_string());
+        record
+            .trigger_conditions
+            .push("skill:frontend-ui-ux".to_string());
+        record
+            .normalized_facts
+            .push("linked_skill_name=frontend-ui-ux".to_string());
+        record.summary =
+            "Skill patch failed and required a new supporting file before validation passed."
+                .to_string();
+
+        let outcome = engine
+            .validate_record(&record, &context())
+            .await
+            .expect("validation should succeed");
+
+        assert_eq!(outcome.report.status, MemoryValidationStatus::Failed);
+        assert!(outcome
+            .report
+            .issues
+            .iter()
+            .any(|issue| issue.starts_with("skill_link:mismatch:")));
     }
 }

@@ -86,6 +86,8 @@ pub struct MemoryRepositoryFilter {
     pub search: Option<String>,
     pub workspace_identity: Option<String>,
     pub source_session_id: Option<String>,
+    pub derived_skill_name: Option<String>,
+    pub linked_skill_name: Option<String>,
     pub limit: Option<i64>,
 }
 
@@ -337,6 +339,12 @@ impl MemoryRepository {
         if filter.source_session_id.is_some() {
             sql.push_str(" AND source_session_id = ?");
         }
+        if filter.derived_skill_name.is_some() {
+            sql.push_str(" AND derived_skill_name = ?");
+        }
+        if filter.linked_skill_name.is_some() {
+            sql.push_str(" AND linked_skill_name = ?");
+        }
         sql.push_str(" ORDER BY updated_at DESC LIMIT ?");
 
         let mut query = sqlx::query_as::<_, MemoryRecordRow>(&sql);
@@ -361,6 +369,12 @@ impl MemoryRepository {
         }
         if let Some(source_session_id) = filter.source_session_id.as_deref() {
             query = query.bind(source_session_id);
+        }
+        if let Some(derived_skill_name) = filter.derived_skill_name.as_deref() {
+            query = query.bind(derived_skill_name);
+        }
+        if let Some(linked_skill_name) = filter.linked_skill_name.as_deref() {
+            query = query.bind(linked_skill_name);
         }
         query = query.bind(filter.limit.unwrap_or(100));
 

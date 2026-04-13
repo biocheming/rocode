@@ -133,6 +133,19 @@ impl MemoryConsolidationEngine {
                 promoted_record_ids.push(pattern.id.clone());
                 promoted_count += 1;
             }
+            if let Some(linked_skill_name) = pattern.linked_skill_name.as_deref() {
+                rule_hits.push(rule_hit(
+                    &run_id,
+                    Some(CONSOLIDATION_PACK_ID),
+                    Some(pattern.id.clone()),
+                    "promotion.pattern.from_skill_feedback",
+                    Some(format!(
+                        "Repeated lesson cluster converged on linked skill `{}` and produced pattern {}.",
+                        linked_skill_name, pattern.id.0
+                    )),
+                    now,
+                ));
+            }
 
             for lesson in cluster {
                 let consolidated = mark_record_as_consolidated_source(
@@ -176,6 +189,19 @@ impl MemoryConsolidationEngine {
                 )),
                 now,
             ));
+            if let Some(linked_skill_name) = methodology.linked_skill_name.as_deref() {
+                rule_hits.push(rule_hit(
+                    &run_id,
+                    Some(REFLECTION_PACK_ID),
+                    Some(methodology.id.clone()),
+                    "reflection.methodology.skill_patch_candidate",
+                    Some(format!(
+                        "Methodology candidate {} looks ready to patch or refine existing skill `{}`.",
+                        methodology.id.0, linked_skill_name
+                    )),
+                    now,
+                ));
+            }
         }
 
         reflection_notes.extend(build_reflection_notes(
@@ -322,6 +348,7 @@ fn methodology_ready(record: &MemoryRecord) -> bool {
     record.trigger_conditions.len() >= 1
         && record.normalized_facts.len() >= 2
         && record.boundaries.len() >= 2
+        && has_non_goal_boundary(record)
         && record.evidence_refs.len() >= 2
         && validation_terms >= 1
 }
@@ -389,18 +416,32 @@ fn build_pattern_record(cluster: &[MemoryRecord], workspace_key: &str, now: i64)
         last_validated_at: Some(now),
         expires_at: None,
         derived_skill_name: None,
-        linked_skill_name: None,
+        linked_skill_name: shared_linked_skill_name(cluster),
         validation_status: MemoryValidationStatus::Passed,
     }
 }
 
 fn build_methodology_record(pattern: &MemoryRecord, workspace_key: &str, now: i64) -> MemoryRecord {
-    let derived_skill_name = slugify(
-        pattern
-            .title
-            .strip_prefix("Pattern: ")
-            .unwrap_or(pattern.title.as_str()),
-    );
+    let derived_skill_name = pattern
+        .derived_skill_name
+        .clone()
+        .or_else(|| pattern.linked_skill_name.clone())
+        .or_else(|| {
+            let value = slugify(
+                pattern
+                    .title
+                    .strip_prefix("Pattern: ")
+                    .unwrap_or(pattern.title.as_str()),
+            );
+            (!value.is_empty()).then_some(value)
+        });
+    let derived_skill_fact = derived_skill_name
+        .as_deref()
+        .map(|skill_name| format!("derived_skill_name={skill_name}"));
+    let linked_skill_fact = pattern
+        .linked_skill_name
+        .as_deref()
+        .map(|skill_name| format!("linked_skill_name={skill_name}"));
 
     MemoryRecord {
         id: stable_id("mem_methodology", &[workspace_key, &pattern.id.0]),
@@ -425,7 +466,9 @@ fn build_methodology_record(pattern: &MemoryRecord, workspace_key: &str, now: i6
                 .normalized_facts
                 .iter()
                 .cloned()
-                .chain(std::iter::once(format!("source_pattern_id={}", pattern.id.0))),
+                .chain(std::iter::once(format!("source_pattern_id={}", pattern.id.0)))
+                .chain(derived_skill_fact)
+                .chain(linked_skill_fact),
         ),
         boundaries: unique_values(
             pattern
@@ -435,7 +478,13 @@ fn build_methodology_record(pattern: &MemoryRecord, workspace_key: &str, now: i6
                 .chain(std::iter::once(
                     "Still requires explicit skill extraction before becoming executable."
                         .to_string(),
-                )),
+                ))
+                .chain(pattern.linked_skill_name.as_deref().map(|skill_name| {
+                    format!(
+                        "Likely patches existing skill `{}`; verify current skill body, validation commands, and non-goals before patching.",
+                        skill_name
+                    )
+                })),
         ),
         confidence: Some(0.84),
         evidence_refs: pattern.evidence_refs.clone(),
@@ -445,8 +494,8 @@ fn build_methodology_record(pattern: &MemoryRecord, workspace_key: &str, now: i6
         updated_at: now,
         last_validated_at: Some(now),
         expires_at: None,
-        derived_skill_name: (!derived_skill_name.is_empty()).then_some(derived_skill_name),
-        linked_skill_name: None,
+        derived_skill_name,
+        linked_skill_name: pattern.linked_skill_name.clone(),
         validation_status: MemoryValidationStatus::Passed,
     }
 }
@@ -555,6 +604,12 @@ fn build_reflection_notes(
         .values()
         .filter(|record| record.kind == MemoryKind::MethodologyCandidate)
         .count();
+    let linked_skill_methodology_count = record_index
+        .values()
+        .filter(|record| {
+            record.kind == MemoryKind::MethodologyCandidate && record.linked_skill_name.is_some()
+        })
+        .count();
 
     let mut notes = Vec::new();
     if merged_count > 0 {
@@ -573,6 +628,12 @@ fn build_reflection_notes(
         notes.push(format!(
             "{} methodology candidates now exist; next step is explicit skill extraction with validation commands and non-goals.",
             methodology_count
+        ));
+    }
+    if linked_skill_methodology_count > 0 {
+        notes.push(format!(
+            "{} skill-linked methodology candidates look more like patch/refinement work than brand-new skills; review existing SKILL.md before extraction.",
+            linked_skill_methodology_count
         ));
     }
     if candidate_count > 0 && !include_candidates {
@@ -652,7 +713,7 @@ fn collect_validation_clues(record: &MemoryRecord) -> String {
     let mut clues = record
         .normalized_facts
         .iter()
-        .filter(|fact| fact.contains("test") || fact.contains("check") || fact.contains("verify"))
+        .filter(|fact| contains_validation_signal(fact))
         .cloned()
         .collect::<Vec<_>>();
     if clues.is_empty() {
@@ -660,9 +721,7 @@ fn collect_validation_clues(record: &MemoryRecord) -> String {
             record
                 .trigger_conditions
                 .iter()
-                .filter(|value| {
-                    value.contains("test") || value.contains("check") || value.contains("verify")
-                })
+                .filter(|value| contains_validation_signal(value))
                 .cloned(),
         );
     }
@@ -677,14 +736,77 @@ fn count_validation_terms(record: &MemoryRecord) -> usize {
         .trigger_conditions
         .iter()
         .chain(record.normalized_facts.iter())
-        .filter(|value| {
-            let normalized = value.to_ascii_lowercase();
-            normalized.contains("test")
-                || normalized.contains("check")
-                || normalized.contains("verify")
-                || normalized.contains("validation")
-        })
+        .filter(|value| contains_validation_signal(value))
         .count()
+}
+
+fn contains_validation_signal(value: &str) -> bool {
+    value
+        .to_ascii_lowercase()
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'))
+        .any(validation_word_matches)
+}
+
+fn validation_word_matches(word: &str) -> bool {
+    matches!(
+        word,
+        "test"
+            | "tests"
+            | "check"
+            | "checks"
+            | "verify"
+            | "verified"
+            | "validate"
+            | "validation"
+            | "audit"
+            | "probe"
+            | "lint"
+            | "diagnostic"
+            | "diagnostics"
+            | "doctor"
+            | "healthcheck"
+            | "health-check"
+            | "smoketest"
+            | "smoke-test"
+            | "selftest"
+            | "self-test"
+    )
+}
+
+fn has_non_goal_boundary(record: &MemoryRecord) -> bool {
+    record.boundaries.iter().any(|boundary| {
+        let normalized = boundary.trim().to_ascii_lowercase();
+        [
+            "do not",
+            "don't",
+            "only",
+            "unless",
+            "requires",
+            "avoid",
+            "non-goal",
+            "out of scope",
+            "not for",
+        ]
+        .iter()
+        .any(|term| normalized.contains(term))
+    })
+}
+
+fn shared_linked_skill_name(cluster: &[MemoryRecord]) -> Option<String> {
+    let mut values = cluster
+        .iter()
+        .filter_map(|record| {
+            record
+                .linked_skill_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .collect::<Vec<_>>();
+    values.sort();
+    values.dedup();
+    (values.len() == 1).then(|| values.remove(0))
 }
 
 fn join_top_values<'a, I>(values: I) -> String
@@ -917,5 +1039,40 @@ mod tests {
         });
 
         assert!(methodology_ready(&pattern));
+    }
+
+    #[test]
+    fn linked_skill_feedback_cluster_promotes_into_linked_methodology() {
+        let mut left = lesson("mem_a", "cargo test failed because fixtures were missing");
+        left.linked_skill_name = Some("provider-refresh".to_string());
+        left.normalized_facts
+            .push("linked_skill_name=provider-refresh".to_string());
+        left.trigger_conditions
+            .push("skill:provider-refresh".to_string());
+
+        let mut right = lesson("mem_b", "cargo test failed because fixtures were stale");
+        right.linked_skill_name = Some("provider-refresh".to_string());
+        right
+            .normalized_facts
+            .push("linked_skill_name=provider-refresh".to_string());
+        right
+            .trigger_conditions
+            .push("skill:provider-refresh".to_string());
+
+        let pattern = build_pattern_record(&[left, right], "ws:test", 10);
+        assert_eq!(
+            pattern.linked_skill_name.as_deref(),
+            Some("provider-refresh")
+        );
+
+        let methodology = build_methodology_record(&pattern, "ws:test", 10);
+        assert_eq!(
+            methodology.linked_skill_name.as_deref(),
+            Some("provider-refresh")
+        );
+        assert_eq!(
+            methodology.derived_skill_name.as_deref(),
+            Some("provider-refresh")
+        );
     }
 }

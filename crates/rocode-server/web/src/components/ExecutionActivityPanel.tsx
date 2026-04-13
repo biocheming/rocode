@@ -237,6 +237,10 @@ export function ExecutionActivityPanel({
 
   const actionButtonClass =
     "roc-action min-h-[36px] px-4 text-sm cursor-pointer transition-colors";
+  const recentSkillRecords =
+    activity.sessionInsights?.memory?.recent_session_records.filter(
+      (item) => item.linked_skill_name || item.derived_skill_name,
+    ) ?? [];
 
   return (
     <div className="roc-panel p-5 grid gap-4">
@@ -346,6 +350,9 @@ export function ExecutionActivityPanel({
                 <span className="roc-pill px-3 py-1.5 text-xs">prefetch {activity.sessionMemory.last_prefetch_items}</span>
                 <span className="roc-pill px-3 py-1.5 text-xs">rule hits {activity.sessionMemory.recent_rule_hits.length}</span>
                 <span className="roc-pill px-3 py-1.5 text-xs">session writes {activity.sessionMemory.candidate_count + activity.sessionMemory.validated_count + activity.sessionMemory.rejected_count}</span>
+                <span className="roc-pill px-3 py-1.5 text-xs">warnings {activity.sessionMemory.warning_count}</span>
+                <span className="roc-pill px-3 py-1.5 text-xs">methodology {activity.sessionMemory.methodology_candidate_count}</span>
+                <span className="roc-pill px-3 py-1.5 text-xs">skill targets {activity.sessionMemory.derived_skill_candidate_count}</span>
                 <span className="roc-pill px-3 py-1.5 text-xs">linked skills {activity.sessionMemory.linked_skill_count}</span>
                 {activity.sessionMemory.latest_consolidation_run ? (
                   <span className="roc-pill px-3 py-1.5 text-xs">
@@ -364,12 +371,27 @@ export function ExecutionActivityPanel({
                   Session memory records: candidate {activity.sessionMemory.candidate_count} · validated {activity.sessionMemory.validated_count} · rejected {activity.sessionMemory.rejected_count}
                 </p>
                 <p>
+                  Validation pressure: warnings {activity.sessionMemory.warning_count} · methodology {activity.sessionMemory.methodology_candidate_count} · skill targets {activity.sessionMemory.derived_skill_candidate_count}
+                </p>
+                <p>
                   Skill linkage: linked {activity.sessionMemory.linked_skill_count} · feedback lessons {activity.sessionMemory.skill_feedback_lesson_count}
                 </p>
                 <p>
                   Retrieval: runs {activity.sessionMemory.retrieval_run_count} · hits {activity.sessionMemory.retrieval_hit_count} · used {activity.sessionMemory.retrieval_use_count}
                 </p>
               </div>
+              {recentSkillRecords.length ? (
+                <div className="grid gap-2">
+                  <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Recent Skill-Linked Memory</p>
+                  <div className="flex flex-wrap gap-2">
+                    {recentSkillRecords.slice(0, 4).map((item) => (
+                      <span key={item.id} className="roc-pill px-3 py-1.5 text-xs">
+                        {item.linked_skill_name || item.derived_skill_name}: {item.title}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               {activity.sessionMemory.latest_consolidation_run ? (
                 <div className="grid gap-1 text-sm text-muted-foreground">
                   <p>

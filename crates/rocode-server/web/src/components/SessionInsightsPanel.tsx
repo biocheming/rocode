@@ -24,6 +24,16 @@ interface MemoryDetailResponseLike {
   };
 }
 
+function skillBadgeLabel(
+  item:
+    | { linked_skill_name?: string | null; derived_skill_name?: string | null; title: string }
+    | null
+    | undefined,
+) {
+  if (!item) return null;
+  return item.linked_skill_name || item.derived_skill_name || null;
+}
+
 function formatDateTime(ts?: number | null) {
   if (!ts) return "--";
   return new Date(ts).toLocaleString();
@@ -66,6 +76,13 @@ export function SessionInsightsPanel({ activity, apiJson }: SessionInsightsPanel
     insights?.memory?.recent_session_records.forEach((item) => ids.add(item.id));
     return ids;
   }, [insights]);
+  const skillLinkedRecords = useMemo(
+    () =>
+      insights?.memory?.recent_session_records.filter(
+        (item) => item.linked_skill_name || item.derived_skill_name,
+      ) ?? [],
+    [insights],
+  );
 
   return (
     <div className="roc-panel p-5 grid gap-4 min-h-0">
@@ -130,6 +147,9 @@ export function SessionInsightsPanel({ activity, apiJson }: SessionInsightsPanel
                 <span className="roc-pill px-3 py-1.5 text-xs">snapshot {insights.memory.summary.frozen_snapshot_items}</span>
                 <span className="roc-pill px-3 py-1.5 text-xs">prefetch {insights.memory.summary.last_prefetch_items}</span>
                 <span className="roc-pill px-3 py-1.5 text-xs">rule hits {insights.memory.summary.recent_rule_hits.length}</span>
+                <span className="roc-pill px-3 py-1.5 text-xs">warnings {insights.memory.summary.warning_count}</span>
+                <span className="roc-pill px-3 py-1.5 text-xs">methodology {insights.memory.summary.methodology_candidate_count}</span>
+                <span className="roc-pill px-3 py-1.5 text-xs">skill targets {insights.memory.summary.derived_skill_candidate_count}</span>
                 <span className="roc-pill px-3 py-1.5 text-xs">linked skills {insights.memory.summary.linked_skill_count}</span>
                 <span className="roc-pill px-3 py-1.5 text-xs">feedback lessons {insights.memory.summary.skill_feedback_lesson_count}</span>
               </div>
@@ -143,9 +163,37 @@ export function SessionInsightsPanel({ activity, apiJson }: SessionInsightsPanel
                   Session records: candidate {insights.memory.summary.candidate_count} · validated {insights.memory.summary.validated_count} · rejected {insights.memory.summary.rejected_count}
                 </p>
                 <p>
+                  Validation pressure: warnings {insights.memory.summary.warning_count} · methodology {insights.memory.summary.methodology_candidate_count} · skill targets {insights.memory.summary.derived_skill_candidate_count}
+                </p>
+                <p>
                   Retrieval: runs {insights.memory.summary.retrieval_run_count} · hits {insights.memory.summary.retrieval_hit_count} · used {insights.memory.summary.retrieval_use_count}
                 </p>
               </div>
+              {skillLinkedRecords.length ? (
+                <div className="grid gap-2">
+                  <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Skill-Linked Recent Records</p>
+                  <div className="grid gap-2 md:grid-cols-2">
+                    {skillLinkedRecords.map((item) => (
+                      <div key={`skill:${item.id}`} className="roc-item p-3 grid gap-1 bg-card/45">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <strong>{item.title}</strong>
+                          {skillBadgeLabel(item) ? (
+                            <span className="roc-pill px-2.5 py-1 text-xs">{skillBadgeLabel(item)}</span>
+                          ) : null}
+                        </div>
+                        <p className="text-xs text-muted-foreground">{item.summary}</p>
+                        <button
+                          className="roc-action min-h-[32px] px-3 text-xs cursor-pointer transition-colors justify-self-start"
+                          type="button"
+                          onClick={() => void loadMemoryDetail(item.id)}
+                        >
+                          Inspect Memory
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               {insights.memory.summary.latest_consolidation_run ? (
                 <div className="grid gap-1 text-sm text-muted-foreground">
                   <p>Latest consolidation: {insights.memory.summary.latest_consolidation_run.run_id}</p>

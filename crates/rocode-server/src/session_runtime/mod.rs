@@ -719,6 +719,28 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
                 );
             }
         }
+        if let Err(error) = self
+            .state
+            .runtime_memory
+            .ingest_runtime_loaded_skills(
+                &self.session_id,
+                tool_call_id,
+                tool_name,
+                stage_id.as_deref(),
+                tool_output.metadata.as_ref(),
+                &tool_output.output,
+                tool_output.is_error,
+            )
+            .await
+        {
+            tracing::warn!(
+                session_id = %self.session_id,
+                tool_call_id,
+                tool_name,
+                %error,
+                "failed to persist runtime loaded skill memory usage"
+            );
+        }
 
         self.update_active_stage_message(
             |message, _active| {
