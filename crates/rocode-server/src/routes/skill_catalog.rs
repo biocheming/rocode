@@ -806,6 +806,7 @@ mod tests {
                 category: Some("http".to_string()),
                 directory_name: None,
                 file_path: None,
+                frontmatter: None,
             },
             move |_state, _session_id, permission| {
                 let seen_permission_clone = seen_permission_clone.clone();
@@ -861,6 +862,7 @@ mod tests {
                 category: None,
                 directory_name: None,
                 file_path: None,
+                frontmatter: None,
             },
             |_state, _session_id, _permission| async move {
                 Err(rocode_tool::ToolError::PermissionDenied("no".to_string()))
@@ -892,6 +894,7 @@ mod tests {
                 category: None,
                 directory_name: None,
                 file_path: None,
+                frontmatter: None,
             },
             |_state, _session_id, _permission| async move { Ok(()) },
         )

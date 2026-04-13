@@ -164,6 +164,7 @@ fn part_type_name(part_type: &rocode_session::PartType) -> &'static str {
 
 fn part_to_info(
     part: &rocode_session::MessagePart,
+    message_metadata: &HashMap<String, serde_json::Value>,
     tool_names: &HashMap<String, String>,
     pending_questions: &mut Vec<super::super::tui::QuestionInfo>,
 ) -> PartInfo {
@@ -338,9 +339,10 @@ fn part_to_info(
         id: part.id.clone(),
         part_type: part_type_name(&part.part_type).to_string(),
         text: match &part.part_type {
-            rocode_session::PartType::Text { text, .. } => {
-                Some(rocode_session::sanitize_display_text(text))
-            }
+            rocode_session::PartType::Text { text, .. } => Some(
+                compact_instruction_system_reminder(text, message_metadata)
+                    .unwrap_or_else(|| rocode_session::sanitize_display_text(text)),
+            ),
             rocode_session::PartType::Reasoning { text } => Some(text.clone()),
             rocode_session::PartType::Compaction { summary } => {
                 Some(rocode_session::sanitize_display_text(summary))
@@ -367,6 +369,30 @@ fn part_to_info(
         synthetic,
         ignored,
     }
+}
+
+fn compact_instruction_system_reminder(
+    text: &str,
+    metadata: &HashMap<String, serde_json::Value>,
+) -> Option<String> {
+    let trimmed = text.trim();
+    if !(trimmed.starts_with("<system-reminder>") && trimmed.ends_with("</system-reminder>")) {
+        return None;
+    }
+
+    let files = metadata
+        .get("loaded_instruction_files")?
+        .as_array()?
+        .iter()
+        .filter_map(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if files.is_empty() {
+        return None;
+    }
+
+    Some(format!("System Reminder Sent: {}", files.join(", ")))
 }
 
 fn message_to_info(
@@ -410,7 +436,7 @@ fn message_to_info(
         parts: message
             .parts
             .iter()
-            .map(|part| part_to_info(part, tool_names, pending_questions))
+            .map(|part| part_to_info(part, &message.metadata, tool_names, pending_questions))
             .collect(),
         created_at: message.created_at.timestamp_millis(),
         completed_at: message
@@ -937,4 +963,60 @@ pub(super) async fn delete_part(
         "message_id": msg_id,
         "part_id": part_id,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::message_to_info;
+    use std::collections::HashMap;
+
+    use rocode_session::{MessagePart, PartType, SessionMessage};
+
+    #[test]
+    fn message_to_info_compacts_instruction_system_reminder_display() {
+        let reminder_text = "<system-reminder>\nInstructions from: /tmp/project/AGENTS.md\nBe strict.\n</system-reminder>";
+        let mut message = SessionMessage::assistant("ses_test");
+        message.metadata.insert(
+            "loaded_instruction_files".to_string(),
+            serde_json::json!(["/tmp/project/AGENTS.md"]),
+        );
+        message.parts.push(MessagePart {
+            id: "prt_text".to_string(),
+            part_type: PartType::Text {
+                text: reminder_text.to_string(),
+                synthetic: None,
+                ignored: None,
+            },
+            created_at: chrono::Utc::now(),
+            message_id: Some(message.id.clone()),
+        });
+
+        let info = message_to_info("ses_test", &message, &HashMap::new(), &mut Vec::new());
+
+        assert_eq!(
+            info.parts[0].text.as_deref(),
+            Some("System Reminder Sent: /tmp/project/AGENTS.md")
+        );
+    }
+
+    #[test]
+    fn message_to_info_keeps_full_system_reminder_without_instruction_metadata() {
+        let reminder_text = "<system-reminder>\nInstructions from: /tmp/project/AGENTS.md\nBe strict.\n</system-reminder>";
+        let mut message = SessionMessage::assistant("ses_test");
+        message.parts.push(MessagePart {
+            id: "prt_text".to_string(),
+            part_type: PartType::Text {
+                text: reminder_text.to_string(),
+                synthetic: None,
+                ignored: None,
+            },
+            created_at: chrono::Utc::now(),
+            message_id: Some(message.id.clone()),
+        });
+
+        let info = message_to_info("ses_test", &message, &HashMap::new(), &mut Vec::new());
+        let expected = rocode_session::sanitize_display_text(reminder_text);
+
+        assert_eq!(info.parts[0].text.as_deref(), Some(expected.as_str()));
+    }
 }
