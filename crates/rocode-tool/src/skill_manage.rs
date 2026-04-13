@@ -34,6 +34,8 @@ struct SkillManageInput {
     #[serde(default)]
     body: Option<String>,
     #[serde(default)]
+    methodology: Option<rocode_skill::SkillMethodologyTemplate>,
+    #[serde(default)]
     frontmatter: Option<rocode_skill::SkillFrontmatterPatch>,
     #[serde(default)]
     content: Option<String>,
@@ -52,7 +54,7 @@ impl Tool for SkillManageTool {
     }
 
     fn description(&self) -> &str {
-        "Create, patch, edit, delete, or manage supporting files for workspace-local skills under .rocode/skills. Create when a complex task succeeded (5+ tool calls), you overcame errors, a user-corrected approach worked, you discovered a non-trivial workflow, or the user asks you to remember a procedure. Patch when instructions are stale or wrong, a skill fails on a specific OS or environment, steps or pitfalls are missing, or you used a skill and found gaps not covered by it. After difficult or iterative tasks, offer to save the approach as a skill. Skip simple one-offs. Confirm with the user before creating or deleting skills."
+        "Create, patch, edit, delete, or manage supporting files for workspace-local skills under .rocode/skills. Create when a complex task succeeded (5+ tool calls), you overcame errors, a user-corrected approach worked, you discovered a non-trivial workflow, or the user asks you to remember a procedure. Prefer the structured `methodology` shape when creating or patching a skill so the result includes trigger conditions, core steps, success criteria, validation, and boundaries. Patch when instructions are stale or wrong, a skill fails on a specific OS or environment, steps or pitfalls are missing, or you used a skill and found gaps not covered by it. After difficult or iterative tasks, offer to save the approach as a skill. Skip simple one-offs. Confirm with the user before creating or deleting skills."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -79,6 +81,10 @@ impl Tool for SkillManageTool {
                 "body": {
                     "type": "string",
                     "description": "Skill markdown body for create or patch."
+                },
+                "methodology": {
+                    "type": "object",
+                    "description": "Structured methodology template for create or patch. Use this when you want skill_manage to generate a rubric-shaped SKILL body with trigger conditions, core steps, success criteria, validation, and boundaries."
                 },
                 "frontmatter": {
                     "type": "object",
@@ -122,9 +128,14 @@ impl Tool for SkillManageTool {
             SkillManageAction::Create => authority
                 .create_skill(
                     CreateSkillRequest {
-                        name: required_string(input.name, "name")?,
+                        name: required_string(input.name.clone(), "name")?,
                         description: required_string(input.description, "description")?,
-                        body: required_string(input.body, "body")?,
+                        body: resolve_skill_body(
+                            required_string(input.name, "name")?.as_str(),
+                            input.body,
+                            input.methodology,
+                            "create",
+                        )?,
                         frontmatter: input.frontmatter.clone(),
                         category: optional_trimmed(input.category),
                         directory_name: optional_trimmed(input.directory_name),
@@ -135,10 +146,18 @@ impl Tool for SkillManageTool {
             SkillManageAction::Patch => authority
                 .patch_skill(
                     PatchSkillRequest {
-                        name: required_string(input.name, "name")?,
-                        new_name: optional_trimmed(input.new_name),
+                        name: required_string(input.name.clone(), "name")?,
+                        new_name: optional_trimmed(input.new_name.clone()),
                         description: optional_trimmed(input.description),
-                        body: optional_trimmed_multiline(input.body),
+                        body: resolve_optional_skill_body(
+                            optional_trimmed(input.new_name)
+                                .or_else(|| optional_trimmed(input.name))
+                                .unwrap_or_else(|| "patched-skill".to_string())
+                                .as_str(),
+                            input.body,
+                            input.methodology,
+                            "patch",
+                        )?,
                         frontmatter: input.frontmatter.clone(),
                     },
                     "tool:skill_manage",
@@ -225,10 +244,11 @@ fn build_permission_request(input: &SkillManageInput) -> Result<PermissionReques
         SkillManageAction::Create => {
             required_string(input.name.clone(), "name")?;
             required_string(input.description.clone(), "description")?;
-            required_string(input.body.clone(), "body")?;
+            require_skill_body_or_methodology(&input.body, &input.methodology, "create")?;
         }
         SkillManageAction::Patch => {
             required_string(input.name.clone(), "name")?;
+            ensure_body_and_methodology_not_both_set(&input.body, &input.methodology, "patch")?;
         }
         SkillManageAction::Edit => {
             required_string(input.name.clone(), "name")?;
@@ -280,6 +300,63 @@ fn required_string(value: Option<String>, field: &str) -> Result<String, ToolErr
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| ToolError::InvalidArguments(format!("{field} is required")))
+}
+
+fn require_skill_body_or_methodology(
+    body: &Option<String>,
+    methodology: &Option<rocode_skill::SkillMethodologyTemplate>,
+    action: &str,
+) -> Result<(), ToolError> {
+    ensure_body_and_methodology_not_both_set(body, methodology, action)?;
+    let has_body = body.as_ref().is_some_and(|value| !value.trim().is_empty());
+    if has_body || methodology.is_some() {
+        return Ok(());
+    }
+    Err(ToolError::InvalidArguments(format!(
+        "{action} requires either `body` or `methodology`"
+    )))
+}
+
+fn ensure_body_and_methodology_not_both_set(
+    body: &Option<String>,
+    methodology: &Option<rocode_skill::SkillMethodologyTemplate>,
+    action: &str,
+) -> Result<(), ToolError> {
+    if body.as_ref().is_some_and(|value| !value.trim().is_empty()) && methodology.is_some() {
+        return Err(ToolError::InvalidArguments(format!(
+            "{action} accepts either `body` or `methodology`, not both"
+        )));
+    }
+    Ok(())
+}
+
+fn resolve_skill_body(
+    skill_name: &str,
+    body: Option<String>,
+    methodology: Option<rocode_skill::SkillMethodologyTemplate>,
+    action: &str,
+) -> Result<String, ToolError> {
+    ensure_body_and_methodology_not_both_set(&body, &methodology, action)?;
+    if let Some(methodology) = methodology {
+        return rocode_skill::render_methodology_skill_body(skill_name, &methodology)
+            .map_err(|error| ToolError::InvalidArguments(error.to_string()));
+    }
+    required_string(body, "body")
+}
+
+fn resolve_optional_skill_body(
+    skill_name: &str,
+    body: Option<String>,
+    methodology: Option<rocode_skill::SkillMethodologyTemplate>,
+    action: &str,
+) -> Result<Option<String>, ToolError> {
+    ensure_body_and_methodology_not_both_set(&body, &methodology, action)?;
+    if let Some(methodology) = methodology {
+        return rocode_skill::render_methodology_skill_body(skill_name, &methodology)
+            .map(Some)
+            .map_err(|error| ToolError::InvalidArguments(error.to_string()));
+    }
+    Ok(optional_trimmed_multiline(body))
 }
 
 fn optional_trimmed(value: Option<String>) -> Option<String> {
@@ -471,10 +548,56 @@ mod tests {
         assert_eq!(permissions[0].permission, "skill_manage");
     }
 
+    #[tokio::test]
+    async fn create_accepts_methodology_template_without_raw_body() {
+        let dir = tempdir().unwrap();
+        let tool = SkillManageTool;
+        let ctx = ToolContext::new(
+            "session".to_string(),
+            "message".to_string(),
+            dir.path().to_string_lossy().to_string(),
+        )
+        .with_ask(|_| async { Ok(()) });
+
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "action": "create",
+                    "name": "structured-skill",
+                    "description": "structured",
+                    "methodology": {
+                        "when_to_use": ["Use when a provider refresh workflow must be repeated."],
+                        "when_not_to_use": ["Do not use for one-off local experiments."],
+                        "core_steps": [
+                            {
+                                "title": "Refresh",
+                                "action": "Run the refresh flow and capture the diff.",
+                                "outcome": "Provider inventory is updated."
+                            }
+                        ],
+                        "success_criteria": ["The expected provider ids are visible after refresh."],
+                        "validation": ["Re-open the provider list and confirm the new ids appear."],
+                        "pitfalls": ["Do not overwrite workspace-local sandbox overrides."]
+                    }
+                }),
+                ctx,
+            )
+            .await
+            .unwrap();
+
+        assert!(result.output.contains("structured-skill"));
+        let authority = crate::skill_support::authority_for(dir.path(), None);
+        let loaded = authority.load_skill("structured-skill", None).unwrap();
+        assert!(loaded.content.contains("## When To Use"));
+        assert!(loaded.content.contains("## Core Steps"));
+        assert!(loaded.content.contains("## Validation"));
+    }
+
     #[test]
     fn description_includes_self_improvement_guidance() {
         let description = SkillManageTool.description();
         assert!(description.contains("complex task succeeded (5+ tool calls)"));
+        assert!(description.contains("structured `methodology` shape"));
         assert!(description.contains("After difficult or iterative tasks"));
         assert!(description.contains("Patch when instructions are stale or wrong"));
         assert!(description.contains("Confirm with the user before creating or deleting"));

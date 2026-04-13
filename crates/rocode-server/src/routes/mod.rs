@@ -22,8 +22,8 @@ mod workspace;
 use self::plugin_auth::{ensure_plugin_loader_active, plugin_auth_routes};
 use self::process::process_routes;
 use self::skill_catalog::{
-    get_skill_detail, list_skill_catalog_entries, manage_skill, resolve_skill_catalog,
-    SkillCatalogQuery,
+    extract_skill_methodology, get_skill_detail, list_skill_catalog_entries, manage_skill,
+    preview_skill_methodology, resolve_skill_catalog, SkillCatalogQuery,
 };
 use self::skill_hub::skill_hub_routes;
 use self::task::task_routes;
@@ -84,6 +84,14 @@ pub fn router() -> Router<Arc<ServerState>> {
         .route("/skill", get(list_skills))
         .route("/skill/catalog", get(list_skill_catalog_entries))
         .route("/skill/detail", get(get_skill_detail))
+        .route(
+            "/skill/methodology/extract",
+            post(extract_skill_methodology),
+        )
+        .route(
+            "/skill/methodology/preview",
+            post(preview_skill_methodology),
+        )
         .route("/skill/manage", post(manage_skill))
         .nest("/skill/hub", skill_hub_routes())
         .route("/lsp", get(get_lsp_status))

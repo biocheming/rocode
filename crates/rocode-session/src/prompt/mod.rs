@@ -1298,7 +1298,7 @@ impl SessionPrompt {
     }
 
     fn maybe_append_runtime_skill_save_suggestion(session: &mut Session, turn_start_index: usize) {
-        if !turn_looks_complex(session, turn_start_index)
+        if !turn_looks_skillworthy(session, turn_start_index)
             || turn_used_skill_manage(session, turn_start_index)
         {
             return;
@@ -1310,7 +1310,7 @@ impl SessionPrompt {
             serde_json::json!("skill_save_suggestion"),
         );
         note.add_text(
-            "System suggestion: this turn established a reusable multi-step workflow. Consider saving or refining it as a workspace skill with `skill_manage`.",
+            "System suggestion: this turn may be a good skill candidate. Save it only if you can express reusable triggers, steps, validation, and boundaries with `skill_manage`.",
         );
     }
 
@@ -2531,6 +2531,220 @@ fn turn_looks_complex(session: &Session, turn_start_index: usize) -> bool {
         .filter(|part| matches!(part.part_type, PartType::ToolResult { .. }))
         .count();
     assistant_count >= 2 || tool_result_count >= 3
+}
+
+#[derive(Default)]
+struct TurnSkillSignals {
+    assistant_count: usize,
+    user_count: usize,
+    tool_result_count: usize,
+    tool_names: HashSet<String>,
+    has_error_signal: bool,
+    has_validation_signal: bool,
+    has_mutation_signal: bool,
+}
+
+fn turn_looks_skillworthy(session: &Session, turn_start_index: usize) -> bool {
+    if !turn_looks_complex(session, turn_start_index) {
+        return false;
+    }
+
+    let signals = collect_turn_skill_signals(session, turn_start_index);
+    let tool_kind_count = signals.tool_names.len();
+
+    let has_edit_then_validate = signals.has_mutation_signal && signals.has_validation_signal;
+    let has_error_recovery_pattern = signals.has_error_signal
+        && (signals.has_validation_signal
+            || (signals.has_mutation_signal && signals.assistant_count >= 2));
+    let has_user_guided_refinement =
+        signals.user_count >= 2 && tool_kind_count >= 2 && signals.tool_result_count >= 3;
+    let has_diverse_execution_flow =
+        signals.has_mutation_signal && tool_kind_count >= 2 && signals.tool_result_count >= 3;
+
+    has_edit_then_validate
+        || has_error_recovery_pattern
+        || has_user_guided_refinement
+        || has_diverse_execution_flow
+}
+
+fn collect_turn_skill_signals(session: &Session, turn_start_index: usize) -> TurnSkillSignals {
+    let mut signals = TurnSkillSignals::default();
+
+    for message in session.messages.get(turn_start_index..).unwrap_or(&[]) {
+        match message.role {
+            MessageRole::Assistant => signals.assistant_count += 1,
+            MessageRole::User => signals.user_count += 1,
+            _ => {}
+        }
+
+        for part in &message.parts {
+            match &part.part_type {
+                PartType::ToolCall {
+                    name,
+                    input,
+                    status,
+                    state,
+                    ..
+                } => {
+                    signals.tool_names.insert(name.clone());
+                    signals.has_mutation_signal |= tool_is_mutation(name);
+                    signals.has_validation_signal |= tool_is_validation(name, input);
+                    signals.has_error_signal |= matches!(status, crate::ToolCallStatus::Error)
+                        || matches!(state, Some(crate::ToolState::Error { .. }));
+                }
+                PartType::ToolResult { is_error, .. } => {
+                    signals.tool_result_count += 1;
+                    signals.has_error_signal |= *is_error;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    signals
+}
+
+fn tool_is_mutation(name: &str) -> bool {
+    matches!(
+        name,
+        "edit" | "write" | "apply_patch" | "ast_grep_replace" | "skill_manage"
+    )
+}
+
+fn tool_is_validation(name: &str, input: &serde_json::Value) -> bool {
+    if tool_name_looks_validation(name) {
+        return true;
+    }
+
+    if name != "bash" {
+        return false;
+    }
+
+    let command = input
+        .get("command")
+        .or_else(|| input.get("cmd"))
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+
+    bash_command_looks_validation(command)
+}
+
+fn tool_name_looks_validation(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+
+    validation_word_matches(&lower)
+        || lower
+            .split(|ch: char| !(ch.is_ascii_alphanumeric()))
+            .filter(|token| !token.is_empty())
+            .any(validation_word_matches)
+}
+
+fn bash_command_looks_validation(command: &str) -> bool {
+    let lower = command.to_ascii_lowercase();
+
+    if [
+        "--dry-run",
+        "--check",
+        "--verify",
+        "--validate",
+        "--validation",
+        "--audit",
+        "--probe",
+        "--health-check",
+        "--smoke-test",
+    ]
+    .iter()
+    .any(|flag| lower.contains(flag))
+    {
+        return true;
+    }
+
+    let words: Vec<&str> = lower
+        .split_whitespace()
+        .map(trim_shell_word)
+        .filter(|word| !word.is_empty())
+        .collect();
+
+    let Some(exec_index) = words.iter().position(|word| !is_shell_wrapper_word(word)) else {
+        return false;
+    };
+
+    let executable = words[exec_index];
+    if validation_word_matches(executable) {
+        return true;
+    }
+
+    if shell_output_emitter_word(executable) {
+        return false;
+    }
+
+    words[exec_index + 1..]
+        .iter()
+        .any(|word| validation_word_matches(word))
+}
+
+fn trim_shell_word(word: &str) -> &str {
+    word.trim_matches(|ch: char| {
+        matches!(
+            ch,
+            '"' | '\'' | '`' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';'
+        )
+    })
+}
+
+fn is_shell_wrapper_word(word: &str) -> bool {
+    matches!(word, "env" | "command" | "sudo" | "time")
+        || (word.contains('=')
+            && !word.starts_with('-')
+            && word
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_'))
+}
+
+fn shell_output_emitter_word(word: &str) -> bool {
+    matches!(
+        word,
+        "echo"
+            | "printf"
+            | "cat"
+            | "sed"
+            | "awk"
+            | "jq"
+            | "yq"
+            | "rg"
+            | "grep"
+            | "ls"
+            | "find"
+            | "pwd"
+            | "which"
+    )
+}
+
+fn validation_word_matches(word: &str) -> bool {
+    matches!(
+        word,
+        "test"
+            | "tests"
+            | "check"
+            | "checks"
+            | "verify"
+            | "verified"
+            | "validate"
+            | "validation"
+            | "audit"
+            | "probe"
+            | "lint"
+            | "diagnostic"
+            | "diagnostics"
+            | "doctor"
+            | "healthcheck"
+            | "health-check"
+            | "smoketest"
+            | "smoke-test"
+            | "selftest"
+            | "self-test"
+    )
 }
 
 fn turn_used_skill_manage(session: &Session, turn_start_index: usize) -> bool {
@@ -4100,7 +4314,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_skill_save_suggestion_only_triggers_for_complex_turns() {
+    fn runtime_skill_save_suggestion_skips_turns_that_are_only_complex() {
         let mut session = Session::new("proj", ".");
         session.add_user_message("optimize this workflow");
         let assistant = session.add_assistant_message();
@@ -4127,7 +4341,7 @@ mod tests {
 
         SessionPrompt::maybe_append_runtime_skill_save_suggestion(&mut session, 0);
 
-        assert!(session.messages.iter().any(|message| {
+        assert!(!session.messages.iter().any(|message| {
             matches!(message.role, MessageRole::Assistant)
                 && message
                     .metadata
@@ -4135,6 +4349,137 @@ mod tests {
                     .and_then(|value| value.as_str())
                     == Some("skill_save_suggestion")
         }));
+    }
+
+    #[test]
+    fn runtime_skill_save_suggestion_triggers_for_methodology_shaped_turns() {
+        let mut session = Session::new("proj", ".");
+        session.add_user_message("fix the failing parser and verify it");
+
+        let assistant = session.add_assistant_message();
+        assistant.finish = Some("tool-calls".to_string());
+        assistant.parts.push(MessagePart {
+            id: "prt_tool_edit".to_string(),
+            part_type: PartType::ToolCall {
+                id: "call_edit".to_string(),
+                name: "edit".to_string(),
+                input: serde_json::json!({
+                    "file_path": "src/parser.rs",
+                    "old_string": "broken()",
+                    "new_string": "fixed()"
+                }),
+                raw: None,
+                status: crate::ToolCallStatus::Completed,
+                state: Some(crate::ToolState::Completed {
+                    input: serde_json::json!({
+                        "file_path": "src/parser.rs",
+                        "old_string": "broken()",
+                        "new_string": "fixed()"
+                    }),
+                    output: "patched parser".to_string(),
+                    title: "Edited parser".to_string(),
+                    metadata: std::collections::HashMap::new(),
+                    time: crate::CompletedTime {
+                        start: chrono::Utc::now().timestamp_millis(),
+                        end: chrono::Utc::now().timestamp_millis(),
+                        compacted: None,
+                    },
+                    attachments: None,
+                }),
+            },
+            created_at: chrono::Utc::now(),
+            message_id: None,
+        });
+        assistant.parts.push(MessagePart {
+            id: "prt_tool_bash_failed".to_string(),
+            part_type: PartType::ToolCall {
+                id: "call_bash_failed".to_string(),
+                name: "bash".to_string(),
+                input: serde_json::json!({
+                    "command": "cargo test parser",
+                    "description": "Run parser tests"
+                }),
+                raw: None,
+                status: crate::ToolCallStatus::Error,
+                state: Some(crate::ToolState::Error {
+                    input: serde_json::json!({
+                        "command": "cargo test parser",
+                        "description": "Run parser tests"
+                    }),
+                    error: "parser test still failing".to_string(),
+                    metadata: None,
+                    time: crate::ErrorTime {
+                        start: chrono::Utc::now().timestamp_millis(),
+                        end: chrono::Utc::now().timestamp_millis(),
+                    },
+                }),
+            },
+            created_at: chrono::Utc::now(),
+            message_id: None,
+        });
+
+        let followup = session.add_assistant_message();
+        followup.finish = Some("stop".to_string());
+        followup
+            .add_text("Patched the parser and verified the failure mode; this flow is reusable.");
+
+        SessionPrompt::maybe_append_runtime_skill_save_suggestion(&mut session, 0);
+
+        let note = session
+            .messages
+            .iter()
+            .find(|message| {
+                message
+                    .metadata
+                    .get("runtime_hint")
+                    .and_then(|value| value.as_str())
+                    == Some("skill_save_suggestion")
+            })
+            .expect("runtime hint note should be appended");
+
+        assert!(note.parts.iter().any(|part| {
+            matches!(
+                &part.part_type,
+                PartType::Text { text, .. }
+                    if text.contains("reusable triggers, steps, validation, and boundaries")
+            )
+        }));
+    }
+
+    #[test]
+    fn tool_is_validation_accepts_generic_validation_signals() {
+        assert!(tool_is_validation(
+            "health_check",
+            &serde_json::json!({ "operation": "status" })
+        ));
+        assert!(tool_is_validation(
+            "bash",
+            &serde_json::json!({
+                "command": "kubectl apply -f deploy.yaml --dry-run=client"
+            })
+        ));
+        assert!(tool_is_validation(
+            "bash",
+            &serde_json::json!({
+                "command": "acme-cli verify dataset"
+            })
+        ));
+    }
+
+    #[test]
+    fn tool_is_validation_rejects_plain_output_commands() {
+        assert!(!tool_is_validation(
+            "bash",
+            &serde_json::json!({
+                "command": "echo verify deployment"
+            })
+        ));
+        assert!(!tool_is_validation(
+            "bash",
+            &serde_json::json!({
+                "command": "cat verify.txt"
+            })
+        ));
     }
 
     #[test]

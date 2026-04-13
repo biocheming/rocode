@@ -84,7 +84,7 @@ pub use recovery_action::{RecoveryActionDialog, RecoveryActionItem};
 pub use session_export::SessionExportDialog;
 pub use session_list::{DeleteState as SessionDeleteState, SessionItem, SessionListDialog};
 pub use session_rename::SessionRenameDialog;
-pub use skill_list::SkillListDialog;
+pub use skill_list::{SkillCreatePayload, SkillEditPayload, SkillListDialog};
 pub use status::{StatusDialog, StatusLine};
 pub use subagent::{SubagentDialog, SubagentInfo, SubagentMessage};
 pub use tag::{Tag, TagDialog};

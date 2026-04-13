@@ -493,6 +493,8 @@ impl App {
             if self.skill_list_dialog.is_create_mode() || self.skill_list_dialog.is_edit_mode() {
                 match key.code {
                     KeyCode::Esc => self.skill_list_dialog.cancel_manage_mode(),
+                    KeyCode::Up => self.skill_list_dialog.handle_manage_up(),
+                    KeyCode::Down => self.skill_list_dialog.handle_manage_down(),
                     KeyCode::Tab => self.skill_list_dialog.handle_manage_tab(false),
                     KeyCode::BackTab => self.skill_list_dialog.handle_manage_tab(true),
                     KeyCode::Left => self.skill_list_dialog.handle_manage_left(),

@@ -369,26 +369,60 @@ impl App {
         let Some(client) = self.context.get_api_client() else {
             anyhow::bail!("No active API client.");
         };
-        let Some((name, description, category, body)) = self.skill_list_dialog.create_payload()
-        else {
+        let Some(payload) = self.skill_list_dialog.create_payload() else {
             anyhow::bail!("Skill create draft is not active.");
         };
-        if name.trim().is_empty() || description.trim().is_empty() || body.trim().is_empty() {
-            anyhow::bail!("Name, description, and body are required.");
-        }
+        let payload = payload.map_err(anyhow::Error::msg)?;
 
-        let response = client.manage_skill(&crate::api::SkillManageRequest {
-            session_id,
-            action: crate::api::SkillManageAction::Create,
-            name: Some(name.clone()),
-            new_name: None,
-            description: Some(description),
-            body: Some(body),
-            content: None,
-            category,
-            directory_name: None,
-            file_path: None,
-        })?;
+        let response = match payload {
+            crate::components::SkillCreatePayload::Raw {
+                name,
+                description,
+                category,
+                body,
+            } => {
+                if name.trim().is_empty() || description.trim().is_empty() || body.trim().is_empty()
+                {
+                    anyhow::bail!("Name, description, and body are required.");
+                }
+                client.manage_skill(&crate::api::SkillManageRequest {
+                    session_id,
+                    action: crate::api::SkillManageAction::Create,
+                    name: Some(name.clone()),
+                    new_name: None,
+                    description: Some(description),
+                    body: Some(body),
+                    methodology: None,
+                    content: None,
+                    category,
+                    directory_name: None,
+                    file_path: None,
+                })?
+            }
+            crate::components::SkillCreatePayload::Methodology {
+                name,
+                description,
+                category,
+                methodology,
+            } => {
+                if name.trim().is_empty() || description.trim().is_empty() {
+                    anyhow::bail!("Name and description are required.");
+                }
+                client.manage_skill(&crate::api::SkillManageRequest {
+                    session_id,
+                    action: crate::api::SkillManageAction::Create,
+                    name: Some(name.clone()),
+                    new_name: None,
+                    description: Some(description),
+                    body: None,
+                    methodology: Some(methodology),
+                    content: None,
+                    category,
+                    directory_name: None,
+                    file_path: None,
+                })?
+            }
+        };
         self.skill_list_dialog.cancel_manage_mode();
         self.refresh_skill_list_dialog()?;
         Ok(skill_manage_message(
@@ -404,25 +438,53 @@ impl App {
         let Some(client) = self.context.get_api_client() else {
             anyhow::bail!("No active API client.");
         };
-        let Some((name, content)) = self.skill_list_dialog.edit_payload() else {
+        let Some(payload) = self.skill_list_dialog.edit_payload() else {
             anyhow::bail!("Skill edit draft is not active.");
         };
-        if content.trim().is_empty() {
-            anyhow::bail!("Skill source cannot be empty.");
-        }
+        let payload = payload.map_err(anyhow::Error::msg)?;
 
-        let response = client.manage_skill(&crate::api::SkillManageRequest {
-            session_id,
-            action: crate::api::SkillManageAction::Edit,
-            name: Some(name.clone()),
-            new_name: None,
-            description: None,
-            body: None,
-            content: Some(content),
-            category: None,
-            directory_name: None,
-            file_path: None,
-        })?;
+        let response = match payload {
+            crate::components::SkillEditPayload::Raw { name, content } => {
+                if content.trim().is_empty() {
+                    anyhow::bail!("Skill source cannot be empty.");
+                }
+                client.manage_skill(&crate::api::SkillManageRequest {
+                    session_id,
+                    action: crate::api::SkillManageAction::Edit,
+                    name: Some(name.clone()),
+                    new_name: None,
+                    description: None,
+                    body: None,
+                    methodology: None,
+                    content: Some(content),
+                    category: None,
+                    directory_name: None,
+                    file_path: None,
+                })?
+            }
+            crate::components::SkillEditPayload::Methodology {
+                name,
+                description,
+                methodology,
+            } => {
+                if description.trim().is_empty() {
+                    anyhow::bail!("Description is required for methodology patch mode.");
+                }
+                client.manage_skill(&crate::api::SkillManageRequest {
+                    session_id,
+                    action: crate::api::SkillManageAction::Patch,
+                    name: Some(name.clone()),
+                    new_name: None,
+                    description: Some(description),
+                    body: None,
+                    methodology: Some(methodology),
+                    content: None,
+                    category: None,
+                    directory_name: None,
+                    file_path: None,
+                })?
+            }
+        };
         self.skill_list_dialog.cancel_manage_mode();
         self.refresh_skill_list_dialog()?;
         Ok(skill_manage_message(
@@ -449,6 +511,7 @@ impl App {
             new_name: None,
             description: None,
             body: None,
+            methodology: None,
             content: None,
             category: None,
             directory_name: None,

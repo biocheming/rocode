@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import { SkillGovernanceTimeline } from "./SkillGovernanceTimeline";
+import {
+  buildMethodologyTemplateFromDraft,
+  emptySkillMethodologyDraft,
+  methodologyDraftFromTemplate,
+  SkillMethodologyDraft,
+  SkillMethodologyEditor,
+  SkillMethodologyTemplateLike,
+} from "./SkillMethodologyEditor";
 
 type SettingsTabId =
   | "general"
@@ -172,6 +180,17 @@ interface SkillManageResponseLike {
   };
   guard_report?: SkillGuardReportLike | null;
 }
+
+interface SkillMethodologyPreviewResponseLike {
+  body: string;
+}
+
+interface SkillMethodologyExtractResponseLike {
+  matched: boolean;
+  methodology?: SkillMethodologyTemplateLike | null;
+}
+
+type SkillEditorMode = "methodology" | "raw";
 
 interface SkillGuardViolationLike {
   rule_id: string;
@@ -687,10 +706,24 @@ export function SettingsDrawer({
   const [skillDetail, setSkillDetail] = useState<SkillDetailResponse | null>(null);
   const [skillDetailLoading, setSkillDetailLoading] = useState(false);
   const [skillEditorContent, setSkillEditorContent] = useState("");
+  const [editSkillEditorMode, setEditSkillEditorMode] = useState<SkillEditorMode>("raw");
+  const [editSkillDescription, setEditSkillDescription] = useState("");
+  const [editSkillMethodologyDraft, setEditSkillMethodologyDraft] =
+    useState<SkillMethodologyDraft>(emptySkillMethodologyDraft);
+  const [editSkillMethodologyMatched, setEditSkillMethodologyMatched] = useState(false);
+  const [editSkillMethodologyPreview, setEditSkillMethodologyPreview] = useState("");
+  const [editSkillMethodologyPreviewError, setEditSkillMethodologyPreviewError] =
+    useState<string | null>(null);
   const [newSkillName, setNewSkillName] = useState("");
   const [newSkillDescription, setNewSkillDescription] = useState("");
   const [newSkillCategory, setNewSkillCategory] = useState("");
   const [newSkillBody, setNewSkillBody] = useState("");
+  const [newSkillEditorMode, setNewSkillEditorMode] = useState<SkillEditorMode>("methodology");
+  const [newSkillMethodologyDraft, setNewSkillMethodologyDraft] =
+    useState<SkillMethodologyDraft>(emptySkillMethodologyDraft);
+  const [newSkillMethodologyPreview, setNewSkillMethodologyPreview] = useState("");
+  const [newSkillMethodologyPreviewError, setNewSkillMethodologyPreviewError] =
+    useState<string | null>(null);
 
   const mcpConfigs = useMemo(
     () => objectRecord(configSnapshot?.mcp),
@@ -867,6 +900,31 @@ export function SettingsDrawer({
     }
   }, [apiJson, onBanner, selectedSessionId]);
 
+  const requestSkillMethodologyPreview = useCallback(
+    async (
+      skillName: string,
+      draft: SkillMethodologyDraft,
+      applyPreview: (body: string, error: string | null) => void,
+    ) => {
+      try {
+        const response = await apiJson<SkillMethodologyPreviewResponseLike>(
+          "/skill/methodology/preview",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              skill_name: skillName.trim() || "draft-skill",
+              methodology: buildMethodologyTemplateFromDraft(draft),
+            }),
+          },
+        );
+        applyPreview(response.body, null);
+      } catch (error) {
+        applyPreview("", formatError(error));
+      }
+    },
+    [apiJson],
+  );
+
   useEffect(() => {
     void reloadSettingsData();
   }, [reloadSettingsData]);
@@ -877,6 +935,12 @@ export function SettingsDrawer({
       setSkillDetail(null);
       setSkillDetailLoading(false);
       setSkillEditorContent("");
+      setEditSkillDescription("");
+      setEditSkillEditorMode("raw");
+      setEditSkillMethodologyDraft(emptySkillMethodologyDraft());
+      setEditSkillMethodologyMatched(false);
+      setEditSkillMethodologyPreview("");
+      setEditSkillMethodologyPreviewError(null);
       return;
     }
 
@@ -924,6 +988,12 @@ export function SettingsDrawer({
       setSkillDetail(null);
       setSkillDetailLoading(false);
       setSkillEditorContent("");
+      setEditSkillDescription("");
+      setEditSkillEditorMode("raw");
+      setEditSkillMethodologyDraft(emptySkillMethodologyDraft());
+      setEditSkillMethodologyMatched(false);
+      setEditSkillMethodologyPreview("");
+      setEditSkillMethodologyPreviewError(null);
       return;
     }
 
@@ -939,13 +1009,43 @@ export function SettingsDrawer({
           detailPath,
         );
         if (cancelled) return;
+        let extractedMethodology: SkillMethodologyTemplateLike | null = null;
+        try {
+          const extracted = await apiJson<SkillMethodologyExtractResponseLike>(
+            "/skill/methodology/extract",
+            {
+              method: "POST",
+              body: JSON.stringify({
+                content: detail.source ?? "",
+              }),
+            },
+          );
+          extractedMethodology = extracted.matched ? extracted.methodology ?? null : null;
+        } catch {
+          extractedMethodology = null;
+        }
+        if (cancelled) return;
         setSkillDetail(detail);
         setSkillEditorContent(detail.source ?? "");
+        setEditSkillDescription(detail.skill.meta.description ?? "");
+        setEditSkillMethodologyMatched(Boolean(extractedMethodology));
+        setEditSkillMethodologyDraft(
+          extractedMethodology
+            ? methodologyDraftFromTemplate(extractedMethodology)
+            : emptySkillMethodologyDraft(),
+        );
+        setEditSkillEditorMode(extractedMethodology ? "methodology" : "raw");
       } catch (error) {
         if (cancelled) return;
         const message = `Failed to load skill ${selectedSkillName}: ${formatError(error)}`;
         setSkillDetail(null);
         setSkillEditorContent("");
+        setEditSkillDescription("");
+        setEditSkillEditorMode("raw");
+        setEditSkillMethodologyDraft(emptySkillMethodologyDraft());
+        setEditSkillMethodologyMatched(false);
+        setEditSkillMethodologyPreview("");
+        setEditSkillMethodologyPreviewError(null);
         setFeedback(message);
         onBanner(message);
       } finally {
@@ -959,6 +1059,58 @@ export function SettingsDrawer({
       cancelled = true;
     };
   }, [apiJson, onBanner, selectedSessionId, selectedSkillName]);
+
+  useEffect(() => {
+    if (newSkillEditorMode !== "methodology") {
+      setNewSkillMethodologyPreview("");
+      setNewSkillMethodologyPreviewError(null);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void requestSkillMethodologyPreview(
+        newSkillName,
+        newSkillMethodologyDraft,
+        (body, error) => {
+          setNewSkillMethodologyPreview(body);
+          setNewSkillMethodologyPreviewError(error);
+        },
+      );
+    }, 120);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    newSkillEditorMode,
+    newSkillMethodologyDraft,
+    newSkillName,
+    requestSkillMethodologyPreview,
+  ]);
+
+  useEffect(() => {
+    if (editSkillEditorMode !== "methodology" || !selectedSkillName) {
+      setEditSkillMethodologyPreview("");
+      setEditSkillMethodologyPreviewError(null);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void requestSkillMethodologyPreview(
+        selectedSkillName,
+        editSkillMethodologyDraft,
+        (body, error) => {
+          setEditSkillMethodologyPreview(body);
+          setEditSkillMethodologyPreviewError(error);
+        },
+      );
+    }, 120);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    editSkillEditorMode,
+    editSkillMethodologyDraft,
+    requestSkillMethodologyPreview,
+    selectedSkillName,
+  ]);
 
   const runMutation = useCallback(
     async (key: string, action: () => Promise<string | void>, success: string) => {
@@ -1365,6 +1517,10 @@ export function SettingsDrawer({
     await runMutation(
       `skill:create:${newSkillName.trim() || "new"}`,
       async () => {
+        const methodology =
+          newSkillEditorMode === "methodology"
+            ? buildMethodologyTemplateFromDraft(newSkillMethodologyDraft)
+            : undefined;
         const response = await apiJson<SkillManageResponseLike>("/skill/manage", {
           method: "POST",
           body: JSON.stringify({
@@ -1373,7 +1529,8 @@ export function SettingsDrawer({
             name: newSkillName,
             description: newSkillDescription,
             category: newSkillCategory.trim() || undefined,
-            body: newSkillBody,
+            body: newSkillEditorMode === "raw" ? newSkillBody : undefined,
+            methodology,
           }),
         });
         setSelectedSkillName(response.result.skill_name);
@@ -1381,6 +1538,10 @@ export function SettingsDrawer({
         setNewSkillDescription("");
         setNewSkillCategory("");
         setNewSkillBody("");
+        setNewSkillEditorMode("methodology");
+        setNewSkillMethodologyDraft(emptySkillMethodologyDraft());
+        setNewSkillMethodologyPreview("");
+        setNewSkillMethodologyPreviewError(null);
         if (response.guard_report) {
           return `Created skill ${response.result.skill_name} with ${response.guard_report.violations.length} guard warnings.`;
         }
@@ -1394,13 +1555,18 @@ export function SettingsDrawer({
     await runMutation(
       `skill:edit:${selectedSkillName}`,
       async () => {
+        const structuredMode = editSkillEditorMode === "methodology";
         const response = await apiJson<SkillManageResponseLike>("/skill/manage", {
           method: "POST",
           body: JSON.stringify({
             session_id: selectedSessionId,
-            action: "edit",
+            action: structuredMode ? "patch" : "edit",
             name: selectedSkillName,
-            content: skillEditorContent,
+            description: structuredMode ? editSkillDescription : undefined,
+            methodology: structuredMode
+              ? buildMethodologyTemplateFromDraft(editSkillMethodologyDraft)
+              : undefined,
+            content: structuredMode ? undefined : skillEditorContent,
           }),
         });
         if (response.guard_report) {
@@ -2524,6 +2690,23 @@ export function SettingsDrawer({
                       <h3 className="m-0 mt-1">New workspace skill</h3>
                     </div>
                   </div>
+                  <div className="flex flex-wrap gap-2">
+                    {(["methodology", "raw"] as SkillEditorMode[]).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        className={cn(
+                          "rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors",
+                          newSkillEditorMode === mode
+                            ? "border-border bg-accent text-foreground"
+                            : "border-border/50 bg-background/60 text-muted-foreground hover:bg-accent/60",
+                        )}
+                        onClick={() => setNewSkillEditorMode(mode)}
+                      >
+                        {mode === "methodology" ? "Methodology Form" : "Raw Markdown"}
+                      </button>
+                    ))}
+                  </div>
                   <input
                     type="text"
                     placeholder="skill name"
@@ -2542,13 +2725,22 @@ export function SettingsDrawer({
                     value={newSkillCategory}
                     onChange={(event) => setNewSkillCategory(event.target.value)}
                   />
-                  <textarea
-                    className={editorTextareaClass}
-                    placeholder="Skill body"
-                    value={newSkillBody}
-                    onChange={(event) => setNewSkillBody(event.target.value)}
-                    spellCheck={false}
-                  />
+                  {newSkillEditorMode === "methodology" ? (
+                    <SkillMethodologyEditor
+                      draft={newSkillMethodologyDraft}
+                      onChange={setNewSkillMethodologyDraft}
+                      previewBody={newSkillMethodologyPreview}
+                      previewError={newSkillMethodologyPreviewError}
+                    />
+                  ) : (
+                    <textarea
+                      className={editorTextareaClass}
+                      placeholder="Skill body"
+                      value={newSkillBody}
+                      onChange={(event) => setNewSkillBody(event.target.value)}
+                      spellCheck={false}
+                    />
+                  )}
                   <div className="flex items-center gap-2">
                     <button
                       className={primaryButtonClass}
@@ -2557,7 +2749,9 @@ export function SettingsDrawer({
                         !skillsMutationsEnabled ||
                         !newSkillName.trim() ||
                         !newSkillDescription.trim() ||
-                        !newSkillBody.trim() ||
+                        (newSkillEditorMode === "raw"
+                          ? !newSkillBody.trim()
+                          : Boolean(newSkillMethodologyPreviewError)) ||
                         busyKey === `skill:create:${newSkillName.trim() || "new"}`
                       }
                       onClick={() => void createSkill()}
@@ -2659,8 +2853,49 @@ export function SettingsDrawer({
                           ) : null}
                         </div>
 
+                        <div className="flex flex-wrap gap-2">
+                          {(["methodology", "raw"] as SkillEditorMode[]).map((mode) => (
+                            <button
+                              key={mode}
+                              type="button"
+                              className={cn(
+                                "rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors",
+                                editSkillEditorMode === mode
+                                  ? "border-border bg-accent text-foreground"
+                                  : "border-border/50 bg-background/60 text-muted-foreground hover:bg-accent/60",
+                              )}
+                              onClick={() => setEditSkillEditorMode(mode)}
+                              disabled={!selectedSkillEntry.writable || skillDetailLoading}
+                            >
+                              {mode === "methodology" ? "Methodology Form" : "Raw Markdown"}
+                            </button>
+                          ))}
+                        </div>
+
                         {skillDetailLoading ? (
                           <p className="m-0 text-sm text-muted-foreground">Loading skill source...</p>
+                        ) : editSkillEditorMode === "methodology" ? (
+                          <div className="grid gap-3">
+                            <input
+                              type="text"
+                              placeholder="description"
+                              value={editSkillDescription}
+                              onChange={(event) => setEditSkillDescription(event.target.value)}
+                              disabled={!selectedSkillEntry.writable}
+                            />
+                            {!editSkillMethodologyMatched ? (
+                              <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200">
+                                Current SKILL.md did not round-trip into the methodology template. Saving in methodology mode will rewrite the body from this structured form.
+                              </div>
+                            ) : null}
+                            <SkillMethodologyEditor
+                              draft={editSkillMethodologyDraft}
+                              onChange={setEditSkillMethodologyDraft}
+                              previewBody={editSkillMethodologyPreview}
+                              previewError={editSkillMethodologyPreviewError}
+                              disabled={!selectedSkillEntry.writable}
+                            />
+                          </div>
                         ) : (
                           <textarea
                             className="min-h-[26rem] w-full resize-y rounded-xl border border-border/45 bg-background/78 p-3.5 text-foreground leading-relaxed font-mono text-sm"
@@ -2687,6 +2922,9 @@ export function SettingsDrawer({
                               !skillsMutationsEnabled ||
                               !selectedSkillEntry.writable ||
                               skillDetailLoading ||
+                              (editSkillEditorMode === "methodology" &&
+                                (!editSkillDescription.trim() ||
+                                  Boolean(editSkillMethodologyPreviewError))) ||
                               busyKey === `skill:edit:${selectedSkillEntry.name}`
                             }
                             onClick={() => void saveSelectedSkill()}

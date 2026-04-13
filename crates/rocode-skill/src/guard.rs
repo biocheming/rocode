@@ -1,4 +1,5 @@
 use crate::discovery::is_valid_relative_skill_path;
+use crate::methodology::SkillQualityRubric;
 use crate::write::{
     build_skill_document, parse_skill_document, read_frontmatter_value, validate_skill_description,
     validate_skill_name,
@@ -274,6 +275,41 @@ fn evaluate_markdown_content(
     }
     let content = body_hint.unwrap_or(markdown_content);
     evaluate_suspicious_content(violations, content, Some("SKILL.md"));
+    evaluate_methodology_quality(violations, skill_name, content);
+}
+
+fn evaluate_methodology_quality(
+    violations: &mut Vec<SkillGuardViolation>,
+    skill_name: &str,
+    markdown_content: &str,
+) {
+    let rubric = SkillQualityRubric::default();
+    let normalized = markdown_content.to_ascii_lowercase();
+    let line_count = markdown_content.lines().count();
+    if line_count > rubric.recommended_max_lines {
+        violations.push(warn_violation(
+            "quality.length_budget",
+            format!(
+                "skill `{}` is {} lines long; consider keeping the core SKILL under {} lines and moving detail into references or scripts.",
+                skill_name, line_count, rubric.recommended_max_lines
+            ),
+            Some("SKILL.md".to_string()),
+        ));
+    }
+
+    for rule in rubric.required_rules {
+        let matched = rule
+            .heading_hints
+            .iter()
+            .any(|hint| normalized.contains(&hint.to_ascii_lowercase()));
+        if !matched {
+            violations.push(warn_violation(
+                &rule.rule_id,
+                rule.message,
+                Some("SKILL.md".to_string()),
+            ));
+        }
+    }
 }
 
 fn evaluate_suspicious_content(

@@ -99,6 +99,8 @@ pub struct SkillManageRequest {
     #[serde(default)]
     pub body: Option<String>,
     #[serde(default)]
+    pub methodology: Option<rocode_skill::SkillMethodologyTemplate>,
+    #[serde(default)]
     pub content: Option<String>,
     #[serde(default)]
     pub category: Option<String>,

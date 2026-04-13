@@ -5,6 +5,10 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
 };
+use rocode_skill::{
+    extract_methodology_template_from_markdown, render_methodology_skill_body,
+    SkillMethodologyReference, SkillMethodologyStep, SkillMethodologyTemplate,
+};
 
 use crate::api::{
     ManagedSkillRecord, SkillArtifactCacheEntry, SkillAuditEvent, SkillCatalogEntry,
@@ -113,29 +117,260 @@ impl TextEditorState {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SkillManageEditorMode {
+    Methodology,
+    Raw,
+}
+
+impl SkillManageEditorMode {
+    fn toggle(&mut self) {
+        *self = match self {
+            Self::Methodology => Self::Raw,
+            Self::Raw => Self::Methodology,
+        };
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Methodology => "methodology",
+            Self::Raw => "raw markdown",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SkillMethodologySection {
+    WhenToUse,
+    WhenNotToUse,
+    Prerequisites,
+    CoreSteps,
+    SuccessCriteria,
+    Validation,
+    Pitfalls,
+    References,
+}
+
+impl SkillMethodologySection {
+    const ALL: [Self; 8] = [
+        Self::WhenToUse,
+        Self::WhenNotToUse,
+        Self::Prerequisites,
+        Self::CoreSteps,
+        Self::SuccessCriteria,
+        Self::Validation,
+        Self::Pitfalls,
+        Self::References,
+    ];
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::WhenToUse => "When To Use",
+            Self::WhenNotToUse => "When Not To Use",
+            Self::Prerequisites => "Prerequisites",
+            Self::CoreSteps => "Core Steps",
+            Self::SuccessCriteria => "Success Criteria",
+            Self::Validation => "Validation",
+            Self::Pitfalls => "Boundaries / Pitfalls",
+            Self::References => "References",
+        }
+    }
+
+    fn hint(self) -> &'static str {
+        match self {
+            Self::WhenToUse => "One trigger per line.",
+            Self::WhenNotToUse => "One boundary per line.",
+            Self::Prerequisites => "One requirement per line.",
+            Self::CoreSteps => "One step per line: Title | Action | Outcome(optional)",
+            Self::SuccessCriteria => "One checklist item per line.",
+            Self::Validation => "One validation check per line.",
+            Self::Pitfalls => "One pitfall per line.",
+            Self::References => "One reference per line: path | label",
+        }
+    }
+
+    fn next(self) -> Self {
+        let index = Self::ALL
+            .iter()
+            .position(|value| *value == self)
+            .unwrap_or(0);
+        Self::ALL[(index + 1) % Self::ALL.len()]
+    }
+
+    fn previous(self) -> Self {
+        let index = Self::ALL
+            .iter()
+            .position(|value| *value == self)
+            .unwrap_or(0);
+        Self::ALL[(index + Self::ALL.len() - 1) % Self::ALL.len()]
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SkillMethodologyDraft {
+    selected_section: SkillMethodologySection,
+    when_to_use: TextEditorState,
+    when_not_to_use: TextEditorState,
+    prerequisites: TextEditorState,
+    core_steps: TextEditorState,
+    success_criteria: TextEditorState,
+    validation: TextEditorState,
+    pitfalls: TextEditorState,
+    references: TextEditorState,
+}
+
+impl Default for SkillMethodologyDraft {
+    fn default() -> Self {
+        Self {
+            selected_section: SkillMethodologySection::WhenToUse,
+            when_to_use: TextEditorState::default(),
+            when_not_to_use: TextEditorState::default(),
+            prerequisites: TextEditorState::default(),
+            core_steps: TextEditorState::default(),
+            success_criteria: TextEditorState::default(),
+            validation: TextEditorState::default(),
+            pitfalls: TextEditorState::default(),
+            references: TextEditorState::default(),
+        }
+    }
+}
+
+impl SkillMethodologyDraft {
+    fn from_template(template: &SkillMethodologyTemplate) -> Self {
+        Self {
+            selected_section: SkillMethodologySection::WhenToUse,
+            when_to_use: TextEditorState::with_text(template.when_to_use.join("\n")),
+            when_not_to_use: TextEditorState::with_text(template.when_not_to_use.join("\n")),
+            prerequisites: TextEditorState::with_text(template.prerequisites.join("\n")),
+            core_steps: TextEditorState::with_text(
+                template
+                    .core_steps
+                    .iter()
+                    .map(|step| {
+                        let mut line = format!("{} | {}", step.title, step.action);
+                        if let Some(outcome) =
+                            step.outcome.as_deref().filter(|value| !value.is_empty())
+                        {
+                            line.push_str(" | ");
+                            line.push_str(outcome);
+                        }
+                        line
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+            success_criteria: TextEditorState::with_text(template.success_criteria.join("\n")),
+            validation: TextEditorState::with_text(template.validation.join("\n")),
+            pitfalls: TextEditorState::with_text(template.pitfalls.join("\n")),
+            references: TextEditorState::with_text(
+                template
+                    .references
+                    .iter()
+                    .map(|reference| format!("{} | {}", reference.path, reference.label))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+        }
+    }
+
+    fn selected_editor(&self) -> &TextEditorState {
+        match self.selected_section {
+            SkillMethodologySection::WhenToUse => &self.when_to_use,
+            SkillMethodologySection::WhenNotToUse => &self.when_not_to_use,
+            SkillMethodologySection::Prerequisites => &self.prerequisites,
+            SkillMethodologySection::CoreSteps => &self.core_steps,
+            SkillMethodologySection::SuccessCriteria => &self.success_criteria,
+            SkillMethodologySection::Validation => &self.validation,
+            SkillMethodologySection::Pitfalls => &self.pitfalls,
+            SkillMethodologySection::References => &self.references,
+        }
+    }
+
+    fn selected_editor_mut(&mut self) -> &mut TextEditorState {
+        match self.selected_section {
+            SkillMethodologySection::WhenToUse => &mut self.when_to_use,
+            SkillMethodologySection::WhenNotToUse => &mut self.when_not_to_use,
+            SkillMethodologySection::Prerequisites => &mut self.prerequisites,
+            SkillMethodologySection::CoreSteps => &mut self.core_steps,
+            SkillMethodologySection::SuccessCriteria => &mut self.success_criteria,
+            SkillMethodologySection::Validation => &mut self.validation,
+            SkillMethodologySection::Pitfalls => &mut self.pitfalls,
+            SkillMethodologySection::References => &mut self.references,
+        }
+    }
+
+    fn to_template(&self) -> Result<SkillMethodologyTemplate, String> {
+        Ok(SkillMethodologyTemplate {
+            when_to_use: split_non_empty_lines(&self.when_to_use.text),
+            when_not_to_use: split_non_empty_lines(&self.when_not_to_use.text),
+            prerequisites: split_non_empty_lines(&self.prerequisites.text),
+            core_steps: parse_methodology_steps_input(&self.core_steps.text)?,
+            success_criteria: split_non_empty_lines(&self.success_criteria.text),
+            validation: split_non_empty_lines(&self.validation.text),
+            pitfalls: split_non_empty_lines(&self.pitfalls.text),
+            references: parse_methodology_references_input(&self.references.text)?,
+        })
+    }
+
+    fn preview(&self, skill_name: &str) -> Result<String, String> {
+        let template = self.to_template()?;
+        render_methodology_skill_body(skill_name, &template).map_err(|error| error.to_string())
+    }
+
+    fn section_summary(&self, section: SkillMethodologySection) -> String {
+        let count = split_non_empty_lines(match section {
+            SkillMethodologySection::WhenToUse => &self.when_to_use.text,
+            SkillMethodologySection::WhenNotToUse => &self.when_not_to_use.text,
+            SkillMethodologySection::Prerequisites => &self.prerequisites.text,
+            SkillMethodologySection::CoreSteps => &self.core_steps.text,
+            SkillMethodologySection::SuccessCriteria => &self.success_criteria.text,
+            SkillMethodologySection::Validation => &self.validation.text,
+            SkillMethodologySection::Pitfalls => &self.pitfalls.text,
+            SkillMethodologySection::References => &self.references.text,
+        })
+        .len();
+        format!("{} ({})", section.title(), count)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SkillCreateField {
     Name,
     Description,
     Category,
+    EditorMode,
+    MethodologySection,
+    MethodologyEditor,
     Body,
 }
 
 impl SkillCreateField {
-    fn next(self) -> Self {
+    fn next(self, mode: SkillManageEditorMode) -> Self {
         match self {
             Self::Name => Self::Description,
             Self::Description => Self::Category,
-            Self::Category => Self::Body,
+            Self::Category => Self::EditorMode,
+            Self::EditorMode => match mode {
+                SkillManageEditorMode::Methodology => Self::MethodologySection,
+                SkillManageEditorMode::Raw => Self::Body,
+            },
+            Self::MethodologySection => Self::MethodologyEditor,
+            Self::MethodologyEditor => Self::Name,
             Self::Body => Self::Name,
         }
     }
 
-    fn previous(self) -> Self {
+    fn previous(self, mode: SkillManageEditorMode) -> Self {
         match self {
-            Self::Name => Self::Body,
+            Self::Name => match mode {
+                SkillManageEditorMode::Methodology => Self::MethodologyEditor,
+                SkillManageEditorMode::Raw => Self::Body,
+            },
             Self::Description => Self::Name,
             Self::Category => Self::Description,
-            Self::Body => Self::Category,
+            Self::EditorMode => Self::Category,
+            Self::MethodologySection => Self::EditorMode,
+            Self::MethodologyEditor => Self::MethodologySection,
+            Self::Body => Self::EditorMode,
         }
     }
 }
@@ -143,20 +378,61 @@ impl SkillCreateField {
 #[derive(Clone, Debug)]
 struct SkillCreateDraft {
     active_field: SkillCreateField,
+    editor_mode: SkillManageEditorMode,
     name: String,
     description: String,
     category: String,
     body: TextEditorState,
+    methodology: SkillMethodologyDraft,
 }
 
 impl Default for SkillCreateDraft {
     fn default() -> Self {
         Self {
             active_field: SkillCreateField::Name,
+            editor_mode: SkillManageEditorMode::Methodology,
             name: String::new(),
             description: String::new(),
             category: String::new(),
             body: TextEditorState::default(),
+            methodology: SkillMethodologyDraft::default(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SkillEditField {
+    Description,
+    EditorMode,
+    MethodologySection,
+    MethodologyEditor,
+    RawSource,
+}
+
+impl SkillEditField {
+    fn next(self, mode: SkillManageEditorMode) -> Self {
+        match self {
+            Self::Description => Self::EditorMode,
+            Self::EditorMode => match mode {
+                SkillManageEditorMode::Methodology => Self::MethodologySection,
+                SkillManageEditorMode::Raw => Self::RawSource,
+            },
+            Self::MethodologySection => Self::MethodologyEditor,
+            Self::MethodologyEditor => Self::Description,
+            Self::RawSource => Self::Description,
+        }
+    }
+
+    fn previous(self, mode: SkillManageEditorMode) -> Self {
+        match self {
+            Self::Description => match mode {
+                SkillManageEditorMode::Methodology => Self::MethodologyEditor,
+                SkillManageEditorMode::Raw => Self::RawSource,
+            },
+            Self::EditorMode => Self::Description,
+            Self::MethodologySection => Self::EditorMode,
+            Self::MethodologyEditor => Self::MethodologySection,
+            Self::RawSource => Self::EditorMode,
         }
     }
 }
@@ -164,7 +440,42 @@ impl Default for SkillCreateDraft {
 #[derive(Clone, Debug)]
 struct SkillEditDraft {
     name: String,
+    description: String,
+    category: Option<String>,
+    active_field: SkillEditField,
+    editor_mode: SkillManageEditorMode,
     source: TextEditorState,
+    methodology: SkillMethodologyDraft,
+    methodology_loaded: bool,
+}
+
+#[derive(Clone, Debug)]
+pub enum SkillCreatePayload {
+    Raw {
+        name: String,
+        description: String,
+        category: Option<String>,
+        body: String,
+    },
+    Methodology {
+        name: String,
+        description: String,
+        category: Option<String>,
+        methodology: SkillMethodologyTemplate,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub enum SkillEditPayload {
+    Raw {
+        name: String,
+        content: String,
+    },
+    Methodology {
+        name: String,
+        description: String,
+        methodology: SkillMethodologyTemplate,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -481,9 +792,23 @@ impl SkillListDialog {
                 "This skill is read-only in the current workspace. Only workspace-local skills can be edited.".to_string(),
             );
         }
+        let extracted = extract_methodology_template_from_markdown(&detail.source);
         self.mode = SkillListMode::Edit(SkillEditDraft {
             name: detail.skill.meta.name,
+            description: detail.skill.meta.description,
+            category: detail.skill.meta.category,
+            active_field: SkillEditField::Description,
+            editor_mode: if extracted.is_some() {
+                SkillManageEditorMode::Methodology
+            } else {
+                SkillManageEditorMode::Raw
+            },
             source: TextEditorState::with_text(detail.source),
+            methodology: extracted
+                .as_ref()
+                .map(SkillMethodologyDraft::from_template)
+                .unwrap_or_default(),
+            methodology_loaded: extracted.is_some(),
         });
         Ok(())
     }
@@ -506,23 +831,55 @@ impl SkillListDialog {
         self.mode = SkillListMode::Browse;
     }
 
-    pub fn create_payload(&self) -> Option<(String, String, Option<String>, String)> {
+    pub fn create_payload(&self) -> Option<Result<SkillCreatePayload, String>> {
         let SkillListMode::Create(draft) = &self.mode else {
             return None;
         };
-        Some((
-            draft.name.trim().to_string(),
-            draft.description.trim().to_string(),
-            (!draft.category.trim().is_empty()).then(|| draft.category.trim().to_string()),
-            draft.body.text.clone(),
-        ))
+        let name = draft.name.trim().to_string();
+        let description = draft.description.trim().to_string();
+        let category =
+            (!draft.category.trim().is_empty()).then(|| draft.category.trim().to_string());
+        Some(match draft.editor_mode {
+            SkillManageEditorMode::Raw => Ok(SkillCreatePayload::Raw {
+                name,
+                description,
+                category,
+                body: draft.body.text.clone(),
+            }),
+            SkillManageEditorMode::Methodology => {
+                draft
+                    .methodology
+                    .to_template()
+                    .map(|methodology| SkillCreatePayload::Methodology {
+                        name,
+                        description,
+                        category,
+                        methodology,
+                    })
+            }
+        })
     }
 
-    pub fn edit_payload(&self) -> Option<(String, String)> {
+    pub fn edit_payload(&self) -> Option<Result<SkillEditPayload, String>> {
         let SkillListMode::Edit(draft) = &self.mode else {
             return None;
         };
-        Some((draft.name.clone(), draft.source.text.clone()))
+        Some(match draft.editor_mode {
+            SkillManageEditorMode::Raw => Ok(SkillEditPayload::Raw {
+                name: draft.name.clone(),
+                content: draft.source.text.clone(),
+            }),
+            SkillManageEditorMode::Methodology => {
+                draft
+                    .methodology
+                    .to_template()
+                    .map(|methodology| SkillEditPayload::Methodology {
+                        name: draft.name.clone(),
+                        description: draft.description.trim().to_string(),
+                        methodology,
+                    })
+            }
+        })
     }
 
     pub fn delete_payload(&self) -> Option<String> {
@@ -538,9 +895,20 @@ impl SkillListDialog {
                 SkillCreateField::Name => draft.name.push(c),
                 SkillCreateField::Description => draft.description.push(c),
                 SkillCreateField::Category => draft.category.push(c),
+                SkillCreateField::EditorMode | SkillCreateField::MethodologySection => {}
+                SkillCreateField::MethodologyEditor => {
+                    draft.methodology.selected_editor_mut().insert_char(c)
+                }
                 SkillCreateField::Body => draft.body.insert_char(c),
             },
-            SkillListMode::Edit(draft) => draft.source.insert_char(c),
+            SkillListMode::Edit(draft) => match draft.active_field {
+                SkillEditField::Description => draft.description.push(c),
+                SkillEditField::EditorMode | SkillEditField::MethodologySection => {}
+                SkillEditField::MethodologyEditor => {
+                    draft.methodology.selected_editor_mut().insert_char(c)
+                }
+                SkillEditField::RawSource => draft.source.insert_char(c),
+            },
             _ => {}
         }
     }
@@ -557,40 +925,127 @@ impl SkillListDialog {
                 SkillCreateField::Category => {
                     draft.category.pop();
                 }
+                SkillCreateField::EditorMode | SkillCreateField::MethodologySection => {}
+                SkillCreateField::MethodologyEditor => {
+                    draft.methodology.selected_editor_mut().backspace()
+                }
                 SkillCreateField::Body => draft.body.backspace(),
             },
-            SkillListMode::Edit(draft) => draft.source.backspace(),
+            SkillListMode::Edit(draft) => match draft.active_field {
+                SkillEditField::Description => {
+                    draft.description.pop();
+                }
+                SkillEditField::EditorMode | SkillEditField::MethodologySection => {}
+                SkillEditField::MethodologyEditor => {
+                    draft.methodology.selected_editor_mut().backspace()
+                }
+                SkillEditField::RawSource => draft.source.backspace(),
+            },
             _ => {}
         }
     }
 
     pub fn handle_manage_delete(&mut self) {
-        if let SkillListMode::Edit(draft) = &mut self.mode {
-            draft.source.delete();
+        match &mut self.mode {
+            SkillListMode::Create(draft) => match draft.active_field {
+                SkillCreateField::MethodologyEditor => {
+                    draft.methodology.selected_editor_mut().delete()
+                }
+                SkillCreateField::Body => draft.body.delete(),
+                _ => {}
+            },
+            SkillListMode::Edit(draft) => match draft.active_field {
+                SkillEditField::MethodologyEditor => {
+                    draft.methodology.selected_editor_mut().delete()
+                }
+                SkillEditField::RawSource => draft.source.delete(),
+                _ => {}
+            },
+            _ => {}
         }
     }
 
     pub fn handle_manage_left(&mut self) {
-        if let SkillListMode::Edit(draft) = &mut self.mode {
-            draft.source.move_left();
+        match &mut self.mode {
+            SkillListMode::Create(draft) => match draft.active_field {
+                SkillCreateField::EditorMode => draft.editor_mode.toggle(),
+                SkillCreateField::MethodologyEditor => {
+                    draft.methodology.selected_editor_mut().move_left()
+                }
+                SkillCreateField::Body => draft.body.move_left(),
+                _ => {}
+            },
+            SkillListMode::Edit(draft) => match draft.active_field {
+                SkillEditField::EditorMode => draft.editor_mode.toggle(),
+                SkillEditField::MethodologyEditor => {
+                    draft.methodology.selected_editor_mut().move_left()
+                }
+                SkillEditField::RawSource => draft.source.move_left(),
+                _ => {}
+            },
+            _ => {}
         }
     }
 
     pub fn handle_manage_right(&mut self) {
-        if let SkillListMode::Edit(draft) = &mut self.mode {
-            draft.source.move_right();
+        match &mut self.mode {
+            SkillListMode::Create(draft) => match draft.active_field {
+                SkillCreateField::EditorMode => draft.editor_mode.toggle(),
+                SkillCreateField::MethodologyEditor => {
+                    draft.methodology.selected_editor_mut().move_right()
+                }
+                SkillCreateField::Body => draft.body.move_right(),
+                _ => {}
+            },
+            SkillListMode::Edit(draft) => match draft.active_field {
+                SkillEditField::EditorMode => draft.editor_mode.toggle(),
+                SkillEditField::MethodologyEditor => {
+                    draft.methodology.selected_editor_mut().move_right()
+                }
+                SkillEditField::RawSource => draft.source.move_right(),
+                _ => {}
+            },
+            _ => {}
         }
     }
 
     pub fn handle_manage_home(&mut self) {
-        if let SkillListMode::Edit(draft) = &mut self.mode {
-            draft.source.move_home();
+        match &mut self.mode {
+            SkillListMode::Create(draft) => match draft.active_field {
+                SkillCreateField::MethodologyEditor => {
+                    draft.methodology.selected_editor_mut().move_home()
+                }
+                SkillCreateField::Body => draft.body.move_home(),
+                _ => {}
+            },
+            SkillListMode::Edit(draft) => match draft.active_field {
+                SkillEditField::MethodologyEditor => {
+                    draft.methodology.selected_editor_mut().move_home()
+                }
+                SkillEditField::RawSource => draft.source.move_home(),
+                _ => {}
+            },
+            _ => {}
         }
     }
 
     pub fn handle_manage_end(&mut self) {
-        if let SkillListMode::Edit(draft) = &mut self.mode {
-            draft.source.move_end();
+        match &mut self.mode {
+            SkillListMode::Create(draft) => match draft.active_field {
+                SkillCreateField::MethodologyEditor => {
+                    draft.methodology.selected_editor_mut().move_end()
+                }
+                SkillCreateField::Body => draft.body.move_end(),
+                _ => {}
+            },
+            SkillListMode::Edit(draft) => match draft.active_field {
+                SkillEditField::MethodologyEditor => {
+                    draft.methodology.selected_editor_mut().move_end()
+                }
+                SkillEditField::RawSource => draft.source.move_end(),
+                _ => {}
+            },
+            _ => {}
         }
     }
 
@@ -599,44 +1054,131 @@ impl SkillListDialog {
             SkillListMode::Create(draft) => match draft.active_field {
                 SkillCreateField::Name => draft.active_field = SkillCreateField::Description,
                 SkillCreateField::Description => draft.active_field = SkillCreateField::Category,
-                SkillCreateField::Category => draft.active_field = SkillCreateField::Body,
+                SkillCreateField::Category => draft.active_field = SkillCreateField::EditorMode,
+                SkillCreateField::EditorMode => {
+                    draft.editor_mode.toggle();
+                    draft.active_field = match draft.editor_mode {
+                        SkillManageEditorMode::Methodology => SkillCreateField::MethodologySection,
+                        SkillManageEditorMode::Raw => SkillCreateField::Body,
+                    };
+                }
+                SkillCreateField::MethodologySection => {
+                    draft.active_field = SkillCreateField::MethodologyEditor
+                }
+                SkillCreateField::MethodologyEditor => {
+                    draft.methodology.selected_editor_mut().insert_newline()
+                }
                 SkillCreateField::Body => draft.body.insert_newline(),
             },
-            SkillListMode::Edit(draft) => draft.source.insert_newline(),
+            SkillListMode::Edit(draft) => match draft.active_field {
+                SkillEditField::Description => draft.active_field = SkillEditField::EditorMode,
+                SkillEditField::EditorMode => {
+                    draft.editor_mode.toggle();
+                    draft.active_field = match draft.editor_mode {
+                        SkillManageEditorMode::Methodology => SkillEditField::MethodologySection,
+                        SkillManageEditorMode::Raw => SkillEditField::RawSource,
+                    };
+                }
+                SkillEditField::MethodologySection => {
+                    draft.active_field = SkillEditField::MethodologyEditor
+                }
+                SkillEditField::MethodologyEditor => {
+                    draft.methodology.selected_editor_mut().insert_newline()
+                }
+                SkillEditField::RawSource => draft.source.insert_newline(),
+            },
             _ => {}
         }
     }
 
     pub fn handle_manage_tab(&mut self, reverse: bool) {
-        if let SkillListMode::Create(draft) = &mut self.mode {
-            draft.active_field = if reverse {
-                draft.active_field.previous()
-            } else {
-                draft.active_field.next()
-            };
+        match &mut self.mode {
+            SkillListMode::Create(draft) => {
+                draft.active_field = if reverse {
+                    draft.active_field.previous(draft.editor_mode)
+                } else {
+                    draft.active_field.next(draft.editor_mode)
+                };
+            }
+            SkillListMode::Edit(draft) => {
+                draft.active_field = if reverse {
+                    draft.active_field.previous(draft.editor_mode)
+                } else {
+                    draft.active_field.next(draft.editor_mode)
+                };
+            }
+            _ => {}
         }
     }
 
     pub fn handle_manage_page_up(&mut self) {
         match &mut self.mode {
-            SkillListMode::Create(draft) => {
-                if matches!(draft.active_field, SkillCreateField::Body) {
-                    draft.body.scroll_up();
+            SkillListMode::Create(draft) => match draft.active_field {
+                SkillCreateField::MethodologyEditor => {
+                    draft.methodology.selected_editor_mut().scroll_up()
                 }
-            }
-            SkillListMode::Edit(draft) => draft.source.scroll_up(),
+                SkillCreateField::Body => draft.body.scroll_up(),
+                _ => {}
+            },
+            SkillListMode::Edit(draft) => match draft.active_field {
+                SkillEditField::MethodologyEditor => {
+                    draft.methodology.selected_editor_mut().scroll_up()
+                }
+                SkillEditField::RawSource => draft.source.scroll_up(),
+                _ => {}
+            },
             _ => {}
         }
     }
 
     pub fn handle_manage_page_down(&mut self) {
         match &mut self.mode {
-            SkillListMode::Create(draft) => {
-                if matches!(draft.active_field, SkillCreateField::Body) {
-                    draft.body.scroll_down();
+            SkillListMode::Create(draft) => match draft.active_field {
+                SkillCreateField::MethodologyEditor => {
+                    draft.methodology.selected_editor_mut().scroll_down()
                 }
+                SkillCreateField::Body => draft.body.scroll_down(),
+                _ => {}
+            },
+            SkillListMode::Edit(draft) => match draft.active_field {
+                SkillEditField::MethodologyEditor => {
+                    draft.methodology.selected_editor_mut().scroll_down()
+                }
+                SkillEditField::RawSource => draft.source.scroll_down(),
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    pub fn handle_manage_up(&mut self) {
+        match &mut self.mode {
+            SkillListMode::Create(draft)
+                if matches!(draft.active_field, SkillCreateField::MethodologySection) =>
+            {
+                draft.methodology.selected_section = draft.methodology.selected_section.previous();
             }
-            SkillListMode::Edit(draft) => draft.source.scroll_down(),
+            SkillListMode::Edit(draft)
+                if matches!(draft.active_field, SkillEditField::MethodologySection) =>
+            {
+                draft.methodology.selected_section = draft.methodology.selected_section.previous();
+            }
+            _ => {}
+        }
+    }
+
+    pub fn handle_manage_down(&mut self) {
+        match &mut self.mode {
+            SkillListMode::Create(draft)
+                if matches!(draft.active_field, SkillCreateField::MethodologySection) =>
+            {
+                draft.methodology.selected_section = draft.methodology.selected_section.next();
+            }
+            SkillListMode::Edit(draft)
+                if matches!(draft.active_field, SkillEditField::MethodologySection) =>
+            {
+                draft.methodology.selected_section = draft.methodology.selected_section.next();
+            }
             _ => {}
         }
     }
@@ -896,7 +1438,7 @@ impl SkillListDialog {
         theme: &Theme,
         draft: &SkillCreateDraft,
     ) {
-        let dialog_area = centered_rect(92, 24, area);
+        let dialog_area = centered_rect(94, 28, area);
         frame.render_widget(Clear, dialog_area);
 
         let block = Block::default()
@@ -918,7 +1460,8 @@ impl SkillListDialog {
                 Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Length(1),
-                Constraint::Min(8),
+                Constraint::Length(1),
+                Constraint::Min(10),
                 Constraint::Length(2),
             ])
             .split(inner);
@@ -947,56 +1490,50 @@ impl SkillListDialog {
             &draft.category,
             matches!(draft.active_field, SkillCreateField::Category),
         );
-
-        let body_block = Block::default()
-            .title(Span::styled(
-                " Body ",
-                field_block_style(theme, matches!(draft.active_field, SkillCreateField::Body))
-                    .add_modifier(Modifier::BOLD),
-            ))
-            .borders(Borders::ALL)
-            .border_style(field_block_style(
-                theme,
-                matches!(draft.active_field, SkillCreateField::Body),
-            ))
-            .style(Style::default().bg(theme.background_panel));
-        let body_inner = super::dialog_inner(body_block.inner(layout[3]));
-        frame.render_widget(body_block, layout[3]);
-        frame.render_widget(
-            Paragraph::new(if draft.body.text.is_empty() {
-                vec![Line::from(Span::styled(
-                    "Write markdown body here...",
-                    Style::default().fg(theme.text_muted),
-                ))]
-            } else {
-                draft
-                    .body
-                    .text
-                    .lines()
-                    .map(|line| {
-                        Line::from(Span::styled(
-                            line.to_string(),
-                            Style::default().fg(theme.text),
-                        ))
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .wrap(Wrap { trim: false })
-            .scroll((draft.body.scroll, 0)),
-            body_inner,
+        render_field_line(
+            frame,
+            layout[3],
+            theme,
+            "Editor",
+            draft.editor_mode.label(),
+            matches!(draft.active_field, SkillCreateField::EditorMode),
         );
+
+        let body_inner = match draft.editor_mode {
+            SkillManageEditorMode::Raw => Some(self.render_raw_skill_editor(
+                frame,
+                layout[4],
+                theme,
+                "Body",
+                "Write markdown body here...",
+                &draft.body,
+                matches!(draft.active_field, SkillCreateField::Body),
+            )),
+            SkillManageEditorMode::Methodology => {
+                self.render_methodology_editor(
+                    frame,
+                    layout[4],
+                    theme,
+                    draft.name.trim(),
+                    &draft.methodology,
+                    matches!(draft.active_field, SkillCreateField::MethodologySection),
+                    matches!(draft.active_field, SkillCreateField::MethodologyEditor),
+                );
+                None
+            }
+        };
 
         let footer = vec![
             Line::from(Span::styled(
-                "Tab/Shift+Tab move fields  Enter newline/body-next  Ctrl+S create  Esc cancel",
+                "Tab move fields  Up/Down choose methodology section  Enter edits/toggles  Ctrl+S create  Esc cancel",
                 Style::default().fg(theme.text_muted),
             )),
             Line::from(Span::styled(
-                "Creates a workspace-local skill via /skill/manage.",
+                "Creates a workspace-local skill via /skill/manage create, using methodology or raw markdown.",
                 Style::default().fg(theme.text_muted),
             )),
         ];
-        frame.render_widget(Paragraph::new(footer), layout[4]);
+        frame.render_widget(Paragraph::new(footer), layout[5]);
 
         match draft.active_field {
             SkillCreateField::Name => {
@@ -1019,6 +1556,9 @@ impl SkillListDialog {
                 );
             }
             SkillCreateField::Body => {
+                let Some(body_inner) = body_inner else {
+                    return;
+                };
                 let (row, col) = draft.body.cursor_row_col();
                 let cursor_y = body_inner
                     .y
@@ -1028,11 +1568,15 @@ impl SkillListDialog {
                     frame.set_cursor(cursor_x, cursor_y);
                 }
             }
+            SkillCreateField::MethodologyEditor => {
+                self.set_methodology_editor_cursor(frame, &draft.methodology, layout[4]);
+            }
+            SkillCreateField::EditorMode | SkillCreateField::MethodologySection => {}
         }
     }
 
     fn render_edit(&self, frame: &mut Frame, area: Rect, theme: &Theme, draft: &SkillEditDraft) {
-        let dialog_area = centered_rect(92, 24, area);
+        let dialog_area = centered_rect(94, 28, area);
         frame.render_widget(Clear, dialog_area);
 
         let block = Block::default()
@@ -1051,44 +1595,143 @@ impl SkillListDialog {
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
+                Constraint::Length(1),
+                Constraint::Length(1),
                 Constraint::Length(3),
                 Constraint::Min(10),
-                Constraint::Length(1),
+                Constraint::Length(2),
             ])
             .split(inner);
 
-        let header = vec![
-            Line::from(Span::styled(
-                "Editing raw SKILL.md source from the workspace authority.",
-                Style::default().fg(theme.text_muted),
-            )),
-            Line::from(Span::styled(
-                "Preview/source reads follow the current session-aware catalog before loading detail.",
-                Style::default().fg(theme.text_muted),
-            )),
-            Line::from(Span::styled(
-                "Ctrl+S save  Esc cancel  PageUp/PageDown scroll",
-                Style::default().fg(theme.text_muted),
-            )),
-        ];
-        frame.render_widget(Paragraph::new(header), layout[0]);
+        render_field_line(
+            frame,
+            layout[0],
+            theme,
+            "Description",
+            &draft.description,
+            matches!(draft.active_field, SkillEditField::Description),
+        );
+        render_field_line(
+            frame,
+            layout[1],
+            theme,
+            "Editor",
+            draft.editor_mode.label(),
+            matches!(draft.active_field, SkillEditField::EditorMode),
+        );
 
+        let editor_inner = match draft.editor_mode {
+            SkillManageEditorMode::Raw => Some(self.render_raw_skill_editor(
+                frame,
+                layout[3],
+                theme,
+                "Source",
+                "Edit raw SKILL.md source here...",
+                &draft.source,
+                matches!(draft.active_field, SkillEditField::RawSource),
+            )),
+            SkillManageEditorMode::Methodology => {
+                self.render_methodology_editor(
+                    frame,
+                    layout[3],
+                    theme,
+                    draft.name.trim(),
+                    &draft.methodology,
+                    matches!(draft.active_field, SkillEditField::MethodologySection),
+                    matches!(draft.active_field, SkillEditField::MethodologyEditor),
+                );
+                None
+            }
+        };
+
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(Span::styled(
+                    format!(
+                        "Category: {}",
+                        draft.category.as_deref().unwrap_or("uncategorized")
+                    ),
+                    Style::default().fg(theme.text_muted),
+                )),
+                Line::from(Span::styled(
+                    if draft.methodology_loaded {
+                        "This skill matched the methodology template, so structured patch mode is available."
+                    } else {
+                        "This skill did not round-trip into the methodology template; raw markdown remains the safest edit path."
+                    },
+                    Style::default().fg(theme.text_muted),
+                )),
+                Line::from(Span::styled(
+                    "Ctrl+S save  Esc cancel  Tab move fields  Up/Down choose methodology section",
+                    Style::default().fg(theme.text_muted),
+                )),
+            ]),
+            layout[2],
+        );
+
+        frame.render_widget(
+            Paragraph::new("Saving uses POST /skill/manage action=edit for raw mode, or action=patch with methodology for structured mode.")
+                .style(Style::default().fg(theme.text_muted)),
+            layout[4],
+        );
+
+        match draft.active_field {
+            SkillEditField::Description => {
+                set_line_cursor(
+                    frame,
+                    layout[0],
+                    "Description",
+                    draft.description.chars().count() as u16,
+                );
+            }
+            SkillEditField::RawSource => {
+                let Some(editor_inner) = editor_inner else {
+                    return;
+                };
+                let (row, col) = draft.source.cursor_row_col();
+                let cursor_y = editor_inner
+                    .y
+                    .saturating_add(row.saturating_sub(draft.source.scroll));
+                let cursor_x = editor_inner.x.saturating_add(col);
+                if cursor_y < editor_inner.y.saturating_add(editor_inner.height) {
+                    frame.set_cursor(cursor_x, cursor_y);
+                }
+            }
+            SkillEditField::MethodologyEditor => {
+                self.set_methodology_editor_cursor(frame, &draft.methodology, layout[3]);
+            }
+            SkillEditField::EditorMode | SkillEditField::MethodologySection => {}
+        }
+    }
+
+    fn render_raw_skill_editor(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        theme: &Theme,
+        title: &str,
+        placeholder: &str,
+        editor: &TextEditorState,
+        active: bool,
+    ) -> Rect {
         let editor_block = Block::default()
             .title(Span::styled(
-                " Source ",
-                Style::default()
-                    .fg(theme.primary)
-                    .add_modifier(Modifier::BOLD),
+                format!(" {} ", title),
+                field_block_style(theme, active).add_modifier(Modifier::BOLD),
             ))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme.primary))
+            .border_style(field_block_style(theme, active))
             .style(Style::default().bg(theme.background_panel));
-        let editor_inner = super::dialog_inner(editor_block.inner(layout[1]));
-        frame.render_widget(editor_block, layout[1]);
+        let editor_inner = super::dialog_inner(editor_block.inner(area));
+        frame.render_widget(editor_block, area);
         frame.render_widget(
-            Paragraph::new(
-                draft
-                    .source
+            Paragraph::new(if editor.text.is_empty() {
+                vec![Line::from(Span::styled(
+                    placeholder,
+                    Style::default().fg(theme.text_muted),
+                ))]
+            } else {
+                editor
                     .text
                     .lines()
                     .map(|line| {
@@ -1097,23 +1740,166 @@ impl SkillListDialog {
                             Style::default().fg(theme.text),
                         ))
                     })
-                    .collect::<Vec<_>>(),
-            )
+                    .collect::<Vec<_>>()
+            })
             .wrap(Wrap { trim: false })
-            .scroll((draft.source.scroll, 0)),
+            .scroll((editor.scroll, 0)),
+            editor_inner,
+        );
+        editor_inner
+    }
+
+    fn render_methodology_editor(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        theme: &Theme,
+        skill_name: &str,
+        draft: &SkillMethodologyDraft,
+        section_active: bool,
+        editor_active: bool,
+    ) {
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(24),
+                Constraint::Percentage(33),
+                Constraint::Percentage(43),
+            ])
+            .split(area);
+
+        let selector_block = Block::default()
+            .title(Span::styled(
+                " Methodology ",
+                field_block_style(theme, section_active).add_modifier(Modifier::BOLD),
+            ))
+            .borders(Borders::ALL)
+            .border_style(field_block_style(theme, section_active))
+            .style(Style::default().bg(theme.background_panel));
+        let selector_inner = super::dialog_inner(selector_block.inner(columns[0]));
+        frame.render_widget(selector_block, columns[0]);
+        let selector_items = SkillMethodologySection::ALL
+            .iter()
+            .map(|section| {
+                let active_style = if *section == draft.selected_section {
+                    Style::default()
+                        .fg(theme.primary)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme.text)
+                };
+                ListItem::new(Text::from(vec![
+                    Line::from(Span::styled(draft.section_summary(*section), active_style)),
+                    Line::from(Span::styled(
+                        section.hint(),
+                        Style::default().fg(theme.text_muted),
+                    )),
+                ]))
+            })
+            .collect::<Vec<_>>();
+        frame.render_widget(List::new(selector_items), selector_inner);
+
+        let editor_block = Block::default()
+            .title(Span::styled(
+                format!(" {} ", draft.selected_section.title()),
+                field_block_style(theme, editor_active).add_modifier(Modifier::BOLD),
+            ))
+            .borders(Borders::ALL)
+            .border_style(field_block_style(theme, editor_active))
+            .style(Style::default().bg(theme.background_panel));
+        let editor_inner = super::dialog_inner(editor_block.inner(columns[1]));
+        frame.render_widget(editor_block, columns[1]);
+        let selected_editor = draft.selected_editor();
+        frame.render_widget(
+            Paragraph::new(if selected_editor.text.is_empty() {
+                vec![Line::from(Span::styled(
+                    draft.selected_section.hint(),
+                    Style::default().fg(theme.text_muted),
+                ))]
+            } else {
+                selected_editor
+                    .text
+                    .lines()
+                    .map(|line| {
+                        Line::from(Span::styled(
+                            line.to_string(),
+                            Style::default().fg(theme.text),
+                        ))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .wrap(Wrap { trim: false })
+            .scroll((selected_editor.scroll, 0)),
             editor_inner,
         );
 
+        let preview_block = Block::default()
+            .title(Span::styled(
+                " Preview ",
+                Style::default()
+                    .fg(theme.primary)
+                    .add_modifier(Modifier::BOLD),
+            ))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.border))
+            .style(Style::default().bg(theme.background_panel));
+        let preview_inner = super::dialog_inner(preview_block.inner(columns[2]));
+        frame.render_widget(preview_block, columns[2]);
+        let preview_name = if skill_name.trim().is_empty() {
+            "draft-skill"
+        } else {
+            skill_name
+        };
+        let preview_lines = match draft.preview(preview_name) {
+            Ok(preview) => preview
+                .lines()
+                .map(|line| {
+                    Line::from(Span::styled(
+                        line.to_string(),
+                        Style::default().fg(theme.text),
+                    ))
+                })
+                .collect::<Vec<_>>(),
+            Err(error) => vec![
+                Line::from(Span::styled(
+                    "Methodology preview is incomplete.",
+                    Style::default()
+                        .fg(theme.warning)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(error, Style::default().fg(theme.text_muted))),
+            ],
+        };
         frame.render_widget(
-            Paragraph::new("Saving uses POST /skill/manage action=edit.")
-                .style(Style::default().fg(theme.text_muted)),
-            layout[2],
+            Paragraph::new(preview_lines)
+                .wrap(Wrap { trim: false })
+                .style(Style::default().bg(theme.background_panel)),
+            preview_inner,
         );
+    }
 
-        let (row, col) = draft.source.cursor_row_col();
+    fn set_methodology_editor_cursor(
+        &self,
+        frame: &mut Frame,
+        draft: &SkillMethodologyDraft,
+        area: Rect,
+    ) {
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(24),
+                Constraint::Percentage(33),
+                Constraint::Percentage(43),
+            ])
+            .split(area);
+        let editor_block = Block::default().borders(Borders::ALL);
+        let editor_inner = super::dialog_inner(editor_block.inner(columns[1]));
+        let selected_editor = draft.selected_editor();
+        let (row, col) = selected_editor.cursor_row_col();
         let cursor_y = editor_inner
             .y
-            .saturating_add(row.saturating_sub(draft.source.scroll));
+            .saturating_add(row.saturating_sub(selected_editor.scroll));
         let cursor_x = editor_inner.x.saturating_add(col);
         if cursor_y < editor_inner.y.saturating_add(editor_inner.height) {
             frame.set_cursor(cursor_x, cursor_y);
@@ -1551,6 +2337,74 @@ impl SkillListDialog {
         }
         parts.join(" · ")
     }
+}
+
+fn split_non_empty_lines(input: &str) -> Vec<String> {
+    input
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn parse_methodology_steps_input(input: &str) -> Result<Vec<SkillMethodologyStep>, String> {
+    let mut steps = Vec::new();
+    for (index, line) in split_non_empty_lines(input).into_iter().enumerate() {
+        let parts = line.split('|').map(str::trim).collect::<Vec<_>>();
+        if parts.len() < 2 {
+            return Err(format!(
+                "core step line {} must use `Title | Action | Outcome(optional)`",
+                index + 1
+            ));
+        }
+        let title = parts[0];
+        let action = parts[1];
+        if title.is_empty() || action.is_empty() {
+            return Err(format!(
+                "core step line {} must include both title and action",
+                index + 1
+            ));
+        }
+        let outcome = parts
+            .get(2)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        steps.push(SkillMethodologyStep {
+            title: title.to_string(),
+            action: action.to_string(),
+            outcome,
+        });
+    }
+    Ok(steps)
+}
+
+fn parse_methodology_references_input(
+    input: &str,
+) -> Result<Vec<SkillMethodologyReference>, String> {
+    let mut references = Vec::new();
+    for (index, line) in split_non_empty_lines(input).into_iter().enumerate() {
+        let parts = line.split('|').map(str::trim).collect::<Vec<_>>();
+        if parts.len() < 2 {
+            return Err(format!(
+                "reference line {} must use `path | label`",
+                index + 1
+            ));
+        }
+        let path = parts[0];
+        let label = parts[1];
+        if path.is_empty() || label.is_empty() {
+            return Err(format!(
+                "reference line {} must include both path and label",
+                index + 1
+            ));
+        }
+        references.push(SkillMethodologyReference {
+            label: label.to_string(),
+            path: path.to_string(),
+        });
+    }
+    Ok(references)
 }
 
 impl Default for SkillListDialog {

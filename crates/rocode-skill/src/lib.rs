@@ -10,6 +10,7 @@ mod governance;
 mod guard;
 mod hub;
 mod lifecycle;
+mod methodology;
 mod runtime;
 mod sync;
 mod types;
@@ -27,6 +28,11 @@ pub use governance::{SkillGovernanceAuthority, SkillGovernedSyncResult, SkillGov
 pub use guard::{SkillGuardEngine, SkillGuardMode};
 pub use hub::{SkillHubSnapshot, SkillHubStore};
 pub use lifecycle::SkillLifecycleCoordinator;
+pub use methodology::{
+    extract_methodology_template_from_markdown, render_methodology_skill_body,
+    SkillMethodologyReference, SkillMethodologyStep, SkillMethodologyTemplate, SkillQualityRubric,
+    SkillQualityRule,
+};
 pub use runtime::{
     RuntimeInstructionSource, RuntimeSkillBootstrapReport, RuntimeSkillMaterialization,
     RuntimeSkillMaterializationAction, RuntimeSkillSourceKind,
@@ -429,6 +435,86 @@ Use the following explicit create or refresh mapping:
         assert!(audit
             .iter()
             .any(|event| event.kind == SkillAuditKind::Create));
+    }
+
+    #[test]
+    fn governance_create_warns_when_skill_lacks_methodology_sections() {
+        let dir = tempdir().unwrap();
+        let governance = SkillGovernanceAuthority::new(dir.path(), None);
+        let created = governance
+            .create_skill(
+                CreateSkillRequest {
+                    name: "loose-skill".to_string(),
+                    description: "loose".to_string(),
+                    body: "Just do the thing and trust the result.".to_string(),
+                    frontmatter: None,
+                    category: None,
+                    directory_name: None,
+                },
+                "test:quality-guard",
+            )
+            .unwrap();
+
+        let report = created.guard_report.expect("quality report should exist");
+        assert!(report
+            .violations
+            .iter()
+            .any(|violation| violation.rule_id == "quality.trigger_section"));
+        assert!(report
+            .violations
+            .iter()
+            .any(|violation| violation.rule_id == "quality.validation_section"));
+    }
+
+    #[test]
+    fn methodology_rendered_skill_can_pass_guard_without_quality_warnings() {
+        let dir = tempdir().unwrap();
+        let governance = SkillGovernanceAuthority::new(dir.path(), None);
+        let body = render_methodology_skill_body(
+            "provider-refresh",
+            &SkillMethodologyTemplate {
+                when_to_use: vec![
+                    "Use when provider or model catalog data needs a repeatable refresh."
+                        .to_string(),
+                ],
+                when_not_to_use: vec!["Do not use for ad-hoc credential edits.".to_string()],
+                prerequisites: vec!["Provider auth is already configured.".to_string()],
+                core_steps: vec![SkillMethodologyStep {
+                    title: "Refresh provider state".to_string(),
+                    action: "Run the refresh entrypoint and capture provider/model deltas."
+                        .to_string(),
+                    outcome: Some("The catalog reflects the latest provider source.".to_string()),
+                }],
+                success_criteria: vec![
+                    "The expected provider ids and models appear in the catalog.".to_string(),
+                ],
+                validation: vec![
+                    "List models again and confirm the refreshed ids are present.".to_string(),
+                ],
+                pitfalls: vec![
+                    "Do not overwrite workspace-local sandbox config during refresh.".to_string(),
+                ],
+                references: vec![],
+            },
+        )
+        .unwrap();
+
+        let created = governance
+            .create_skill(
+                CreateSkillRequest {
+                    name: "provider-refresh".to_string(),
+                    description: "Refresh provider inventory with a repeatable workflow."
+                        .to_string(),
+                    body,
+                    frontmatter: None,
+                    category: None,
+                    directory_name: None,
+                },
+                "test:quality-pass",
+            )
+            .unwrap();
+
+        assert!(created.guard_report.is_none());
     }
 
     #[test]

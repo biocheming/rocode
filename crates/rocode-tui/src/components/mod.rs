@@ -31,9 +31,10 @@ pub use dialogs::{
     McpDialog, McpItem, ModeKind, Model, ModelSelectDialog, PendingSubmit, PromptStashDialog,
     Provider, ProviderConnectMode, ProviderDialog, ProviderStatus, RecoveryActionDialog,
     RecoveryActionItem, SessionDeleteState, SessionExportDialog, SessionItem, SessionListDialog,
-    SessionRenameDialog, SkillListDialog, StashItem, StatusDialog, StatusLine, SubagentDialog,
-    SubagentInfo, SubagentMessage, SubmitResult, Tag, TagDialog, ThemeListDialog, ThemeOption,
-    TimelineDialog, TimelineEntry, ToolCallCancelDialog, ToolCallItem, VisibilityLabels,
+    SessionRenameDialog, SkillCreatePayload, SkillEditPayload, SkillListDialog, StashItem,
+    StatusDialog, StatusLine, SubagentDialog, SubagentInfo, SubagentMessage, SubmitResult, Tag,
+    TagDialog, ThemeListDialog, ThemeOption, TimelineDialog, TimelineEntry, ToolCallCancelDialog,
+    ToolCallItem, VisibilityLabels,
 };
 pub use diff::{DiffLine, DiffLineType, DiffMode, DiffView};
 pub use home::HomeView;
