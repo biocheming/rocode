@@ -401,7 +401,32 @@ pub(crate) fn render_help(style: &CliStyle) -> String {
         fmt("/status", "Show session status"),
         fmt("/runtime", "Show current runtime telemetry"),
         fmt("/usage", "Show authority-backed session usage"),
+        fmt(
+            "/insights",
+            "Show persisted runtime explain and memory insights",
+        ),
         fmt("/events [filters]", "Show runtime event log"),
+        fmt("/memory [search]", "List workspace memory records"),
+        fmt(
+            "/memory preview [query]",
+            "Preview which memory records would be injected this turn",
+        ),
+        fmt("/memory show <id>", "Show memory detail"),
+        fmt("/memory validation <id>", "Show latest validation report"),
+        fmt(
+            "/memory conflicts <id>",
+            "Show recorded duplicate/contradiction conflicts",
+        ),
+        fmt("/memory rules", "List builtin memory rule packs"),
+        fmt(
+            "/memory hits [run=<id> record=<id> limit=<n>]",
+            "List persisted memory rule hits",
+        ),
+        fmt("/memory runs", "List memory consolidation runs"),
+        fmt(
+            "/memory consolidate [candidates] [limit=<n>]",
+            "Run authority-backed consolidation and reflection",
+        ),
         fmt(
             "/events next|prev|first|clear",
             "Page or reset the current event view",

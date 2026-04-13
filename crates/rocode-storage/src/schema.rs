@@ -163,6 +163,125 @@ CREATE TABLE IF NOT EXISTS session_shares (
 );
 "#;
 
+/// Memory records table - stores structured memory observations.
+pub const CREATE_MEMORY_RECORDS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS memory_records (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'candidate',
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    trigger_conditions TEXT,
+    normalized_facts TEXT,
+    boundaries TEXT,
+    confidence REAL,
+    source_session_id TEXT,
+    workspace_identity TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    last_validated_at INTEGER,
+    expires_at INTEGER,
+    derived_skill_name TEXT,
+    linked_skill_name TEXT,
+    validation_status TEXT NOT NULL DEFAULT 'pending'
+);
+"#;
+
+/// Memory evidence table - normalized provenance rows for each record.
+pub const CREATE_MEMORY_EVIDENCE_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS memory_evidence (
+    memory_id TEXT NOT NULL,
+    evidence_index INTEGER NOT NULL,
+    session_id TEXT,
+    message_id TEXT,
+    tool_call_id TEXT,
+    stage_id TEXT,
+    note TEXT,
+    PRIMARY KEY (memory_id, evidence_index),
+    FOREIGN KEY (memory_id) REFERENCES memory_records(id) ON DELETE CASCADE
+);
+"#;
+
+/// Memory validation runs table - stores validation reports.
+pub const CREATE_MEMORY_VALIDATION_RUNS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS memory_validation_runs (
+    run_id TEXT PRIMARY KEY,
+    memory_id TEXT,
+    status TEXT NOT NULL,
+    issues TEXT,
+    checked_at INTEGER NOT NULL,
+    FOREIGN KEY (memory_id) REFERENCES memory_records(id) ON DELETE SET NULL
+);
+"#;
+
+/// Memory conflicts table - reserved for future contradiction tracking.
+pub const CREATE_MEMORY_CONFLICTS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS memory_conflicts (
+    id TEXT PRIMARY KEY,
+    left_memory_id TEXT,
+    right_memory_id TEXT,
+    conflict_kind TEXT,
+    detail TEXT,
+    detected_at INTEGER NOT NULL,
+    FOREIGN KEY (left_memory_id) REFERENCES memory_records(id) ON DELETE SET NULL,
+    FOREIGN KEY (right_memory_id) REFERENCES memory_records(id) ON DELETE SET NULL
+);
+"#;
+
+/// Memory consolidation runs table - stores consolidation job outcomes.
+pub const CREATE_MEMORY_CONSOLIDATION_RUNS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS memory_consolidation_runs (
+    run_id TEXT PRIMARY KEY,
+    started_at INTEGER NOT NULL,
+    finished_at INTEGER,
+    merged_count INTEGER NOT NULL DEFAULT 0,
+    promoted_count INTEGER NOT NULL DEFAULT 0,
+    conflict_count INTEGER NOT NULL DEFAULT 0
+);
+"#;
+
+/// Memory retrieval log table - stores retrieval/read observations.
+pub const CREATE_MEMORY_RETRIEVAL_LOG_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS memory_retrieval_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT,
+    query TEXT,
+    stage TEXT,
+    scopes TEXT,
+    retrieved_count INTEGER NOT NULL DEFAULT 0,
+    used_count INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+"#;
+
+/// Memory rule packs table - reserved for later validation/consolidation rule packs.
+pub const CREATE_MEMORY_RULE_PACKS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS memory_rule_packs (
+    id TEXT PRIMARY KEY,
+    rule_pack_kind TEXT NOT NULL,
+    version TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+"#;
+
+/// Memory rule hits table - reserved for later rule execution evidence.
+pub const CREATE_MEMORY_RULE_HITS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS memory_rule_hits (
+    id TEXT PRIMARY KEY,
+    rule_pack_id TEXT,
+    memory_id TEXT,
+    run_id TEXT,
+    hit_kind TEXT NOT NULL,
+    detail TEXT,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (rule_pack_id) REFERENCES memory_rule_packs(id) ON DELETE SET NULL,
+    FOREIGN KEY (memory_id) REFERENCES memory_records(id) ON DELETE SET NULL
+);
+"#;
+
 /// Create indexes for better query performance
 pub const CREATE_INDEXES: &str = r#"
 -- Session indexes
@@ -183,6 +302,17 @@ CREATE INDEX IF NOT EXISTS idx_parts_order ON parts(sort_order);
 -- Todo indexes
 CREATE INDEX IF NOT EXISTS idx_todos_session ON todos(session_id);
 CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status);
+
+-- Memory indexes
+CREATE INDEX IF NOT EXISTS idx_memory_records_scope ON memory_records(scope);
+CREATE INDEX IF NOT EXISTS idx_memory_records_kind ON memory_records(kind);
+CREATE INDEX IF NOT EXISTS idx_memory_records_status ON memory_records(status);
+CREATE INDEX IF NOT EXISTS idx_memory_records_updated ON memory_records(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memory_records_workspace ON memory_records(workspace_identity);
+CREATE INDEX IF NOT EXISTS idx_memory_records_session ON memory_records(source_session_id);
+CREATE INDEX IF NOT EXISTS idx_memory_evidence_memory ON memory_evidence(memory_id);
+CREATE INDEX IF NOT EXISTS idx_memory_validation_runs_memory ON memory_validation_runs(memory_id);
+CREATE INDEX IF NOT EXISTS idx_memory_retrieval_log_session ON memory_retrieval_log(session_id);
 "#;
 
 /// Add finish column to messages table for existing databases.
@@ -199,6 +329,14 @@ pub const ALL_MIGRATIONS: &[&str] = &[
     CREATE_TODOS_TABLE,
     CREATE_PERMISSIONS_TABLE,
     CREATE_SESSION_SHARES_TABLE,
+    CREATE_MEMORY_RECORDS_TABLE,
+    CREATE_MEMORY_EVIDENCE_TABLE,
+    CREATE_MEMORY_VALIDATION_RUNS_TABLE,
+    CREATE_MEMORY_CONFLICTS_TABLE,
+    CREATE_MEMORY_CONSOLIDATION_RUNS_TABLE,
+    CREATE_MEMORY_RETRIEVAL_LOG_TABLE,
+    CREATE_MEMORY_RULE_PACKS_TABLE,
+    CREATE_MEMORY_RULE_HITS_TABLE,
     CREATE_INDEXES,
     ADD_MESSAGES_FINISH_COLUMN,
     ADD_SESSIONS_METADATA_COLUMN,

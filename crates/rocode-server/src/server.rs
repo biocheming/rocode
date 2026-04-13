@@ -14,6 +14,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
+use rocode_memory::MemoryAuthority;
 use rocode_plugin::init_global;
 use rocode_plugin::subprocess::{
     PluginAuthBridge, PluginContext, PluginFetchRequest, PluginLoader,
@@ -28,10 +29,11 @@ use rocode_provider::{
 use rocode_runtime_context::{ResolvedWorkspaceContext, ResolvedWorkspaceContextAuthority};
 use rocode_session::{SessionManager, SessionPrompt, SessionStateManager};
 use rocode_state::UserStateAuthority;
-use rocode_storage::{Database, MessageRepository, SessionRepository};
+use rocode_storage::{Database, MemoryRepository, MessageRepository, SessionRepository};
 
 use crate::routes;
 use crate::runtime_control::RuntimeControlRegistry;
+use crate::session_runtime::memory::RuntimeMemoryAuthority;
 use crate::session_runtime::telemetry::RuntimeTelemetryAuthority;
 use crate::stage_event_log::StageEventLog;
 
@@ -216,6 +218,7 @@ pub struct ServerState {
     pub resolved_context_authority: Arc<ResolvedWorkspaceContextAuthority>,
     pub tool_registry: Arc<rocode_tool::ToolRegistry>,
     pub prompt_runner: Arc<SessionPrompt>,
+    pub(crate) runtime_memory: Arc<RuntimeMemoryAuthority>,
     pub(crate) runtime_telemetry: Arc<RuntimeTelemetryAuthority>,
     // Legacy compatibility fields. Phase 1 keeps them so existing write paths
     // can keep compiling while read paths start going through the authority.
@@ -265,6 +268,10 @@ impl ServerState {
             config_store.clone(),
             user_state.clone(),
         ));
+        let runtime_memory = Arc::new(RuntimeMemoryAuthority::new(Arc::new(MemoryAuthority::new(
+            user_state.clone(),
+            resolved_context_authority.clone(),
+        ))));
         let (tx, _) = broadcast::channel(1024);
         let runtime_telemetry = Arc::new(RuntimeTelemetryAuthority::new(tx.clone()));
         let runtime_control = runtime_telemetry.runtime_control();
@@ -282,6 +289,7 @@ impl ServerState {
             prompt_runner: Arc::new(SessionPrompt::new(Arc::new(tokio::sync::RwLock::new(
                 SessionStateManager::new(),
             )))),
+            runtime_memory,
             runtime_telemetry,
             runtime_control,
             stage_event_log,
@@ -353,6 +361,11 @@ impl ServerState {
         state.config_store = config_store.clone();
         state.user_state = user_state;
         state.resolved_context_authority = resolved_context_authority.clone();
+        state.runtime_memory =
+            Arc::new(RuntimeMemoryAuthority::new(Arc::new(MemoryAuthority::new(
+                state.user_state.clone(),
+                state.resolved_context_authority.clone(),
+            ))));
         let _ = state.refresh_resolved_context().await;
 
         // Load task category registry from configured path
@@ -393,8 +406,16 @@ impl ServerState {
         );
         let db = Database::new().await?;
         let pool = db.pool().clone();
+        let memory_repo = Arc::new(MemoryRepository::new(pool.clone()));
         state.session_repo = Some(SessionRepository::new(pool.clone()));
         state.message_repo = Some(MessageRepository::new(pool));
+        state.runtime_memory = Arc::new(RuntimeMemoryAuthority::new(Arc::new(
+            MemoryAuthority::new(
+                state.user_state.clone(),
+                state.resolved_context_authority.clone(),
+            )
+            .with_repository(memory_repo),
+        )));
         state.load_sessions_from_storage().await?;
         Ok(state)
     }
@@ -459,11 +480,22 @@ impl ServerState {
             return Ok(());
         };
 
-        let mut stored: rocode_types::Session =
+        let stored: rocode_types::Session =
             serde_json::from_value(serde_json::to_value(&session)?)?;
-        let messages = std::mem::take(&mut stored.messages);
+        let mut persisted = stored.clone();
+        let messages = std::mem::take(&mut persisted.messages);
 
-        session_repo.flush_with_messages(&stored, &messages).await?;
+        session_repo
+            .flush_with_messages(&persisted, &messages)
+            .await?;
+        self.runtime_memory.ingest_session_record(&stored).await?;
+        let stage_summaries = self
+            .runtime_telemetry
+            .list_stage_summaries(session_id)
+            .await;
+        self.runtime_memory
+            .ingest_stage_summaries(session_id, &stage_summaries)
+            .await?;
 
         Ok(())
     }
@@ -492,12 +524,23 @@ impl ServerState {
 
         // Flush each session transactionally (upsert session + messages + delete stale).
         for session in snapshot {
-            let mut stored_session: rocode_types::Session =
+            let stored_session: rocode_types::Session =
                 serde_json::from_value(serde_json::to_value(&session)?)?;
-            let stored_messages = std::mem::take(&mut stored_session.messages);
+            let mut persisted_session = stored_session.clone();
+            let stored_messages = std::mem::take(&mut persisted_session.messages);
 
             session_repo
-                .flush_with_messages(&stored_session, &stored_messages)
+                .flush_with_messages(&persisted_session, &stored_messages)
+                .await?;
+            self.runtime_memory
+                .ingest_session_record(&stored_session)
+                .await?;
+            let stage_summaries = self
+                .runtime_telemetry
+                .list_stage_summaries(&stored_session.id)
+                .await;
+            self.runtime_memory
+                .ingest_stage_summaries(&stored_session.id, &stage_summaries)
                 .await?;
         }
 

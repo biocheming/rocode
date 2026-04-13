@@ -12,6 +12,11 @@ const ExecutionActivityPanel = React.lazy(async () => {
   return { default: module.ExecutionActivityPanel };
 });
 
+const SessionInsightsPanel = React.lazy(async () => {
+  const module = await import("./SessionInsightsPanel");
+  return { default: module.SessionInsightsPanel };
+});
+
 interface FileTreeNodeLike {
   name: string;
   path: string;
@@ -287,6 +292,10 @@ export function WorkspaceInspectorPanel({
           onNavigateChildSession={schedulerNavigation.navigateToChildSession}
           onNavigateToolCall={schedulerNavigation.navigateToToolCall}
         />
+      </Suspense>
+
+      <Suspense fallback={<InspectorLoadingCard label="session insights" />}>
+        <SessionInsightsPanel activity={executionActivity} />
       </Suspense>
 
       <DeferredTerminalPanel

@@ -529,6 +529,68 @@ fn cli_runtime_snapshot_lines(
         }
     }
 
+    if let Some(memory) = telemetry.memory.as_ref() {
+        lines.push(String::new());
+        lines.push(format!(
+            "Memory runtime: {} · {}",
+            memory.workspace_mode,
+            truncate_text(&memory.workspace_key, 72)
+        ));
+        lines.push(format!(
+            "  Frozen snapshot: {} items{}",
+            memory.frozen_snapshot_items,
+            cli_optional_generated_at(memory.frozen_snapshot_generated_at)
+        ));
+        lines.push(format!(
+            "  Last prefetch: {} items{}",
+            memory.last_prefetch_items,
+            cli_optional_generated_at(memory.last_prefetch_generated_at)
+        ));
+        lines.push(format!(
+            "  Session records: candidate {} · validated {} · rejected {}",
+            memory.candidate_count, memory.validated_count, memory.rejected_count
+        ));
+        lines.push(format!(
+            "  Skill linkage: linked {} · feedback lessons {}",
+            memory.linked_skill_count, memory.skill_feedback_lesson_count
+        ));
+        lines.push(format!(
+            "  Retrieval: runs {} · hits {} · used {}",
+            memory.retrieval_run_count, memory.retrieval_hit_count, memory.retrieval_use_count
+        ));
+        if let Some(query) = memory.last_prefetch_query.as_deref() {
+            lines.push(format!("  Prefetch query: {}", truncate_text(query, 120)));
+        }
+        if let Some(run) = memory.latest_consolidation_run.as_ref() {
+            lines.push(format!(
+                "  Latest consolidation: {} · merged {} · promoted {} · conflicts {}",
+                run.run_id, run.merged_count, run.promoted_count, run.conflict_count
+            ));
+        }
+        if memory.recent_rule_hits.is_empty() {
+            lines.push("  Recent rule hits: none".to_string());
+        } else {
+            lines.push(format!(
+                "  Recent rule hits ({})",
+                memory.recent_rule_hits.len()
+            ));
+            for hit in &memory.recent_rule_hits {
+                let detail = hit.detail.as_deref().unwrap_or("no detail");
+                let memory_ref = hit
+                    .memory_id
+                    .as_ref()
+                    .map(|id| id.0.as_str())
+                    .unwrap_or("workspace");
+                lines.push(format!(
+                    "    {} · {} · {}",
+                    hit.hit_kind,
+                    memory_ref,
+                    truncate_text(detail, 100)
+                ));
+            }
+        }
+    }
+
     lines
 }
 
@@ -561,6 +623,134 @@ fn cli_usage_snapshot_lines(
         lines.push(format!("Stage usage ({})", telemetry.stages.len()));
         for stage in &telemetry.stages {
             lines.push(format!("  {}", cli_stage_usage_line(stage)));
+        }
+    }
+
+    lines
+}
+
+fn cli_session_insights_lines(
+    session_id: &str,
+    insights: &crate::api_client::SessionInsightsResponse,
+) -> Vec<String> {
+    let mut lines = vec![
+        format!("Session: {}", session_id),
+        format!("Title: {}", insights.title),
+        format!("Directory: {}", insights.directory),
+        format!(
+            "Updated: {}",
+            chrono::DateTime::<chrono::Utc>::from_timestamp_millis(insights.updated)
+                .map(|value| value.with_timezone(&chrono::Local))
+                .map(|value| value.format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_else(|| insights.updated.to_string())
+        ),
+    ];
+
+    if let Some(telemetry) = insights.telemetry.as_ref() {
+        lines.push(String::new());
+        lines.push(format!(
+            "Persisted telemetry: version {:?} · status {} · updated {}",
+            telemetry.version, telemetry.last_run_status, telemetry.updated_at
+        ));
+        lines.push(format!(
+            "  Usage: in {} out {} reasoning {} cache {}/{} cost ${:.4}",
+            format_token_count(telemetry.usage.input_tokens),
+            format_token_count(telemetry.usage.output_tokens),
+            format_token_count(telemetry.usage.reasoning_tokens),
+            format_token_count(telemetry.usage.cache_read_tokens),
+            format_token_count(telemetry.usage.cache_write_tokens),
+            telemetry.usage.total_cost
+        ));
+        lines.push(format!(
+            "  Persisted stages: {}",
+            telemetry.stage_summaries.len()
+        ));
+    }
+
+    if let Some(memory) = insights.memory.as_ref() {
+        lines.push(String::new());
+        lines.push(format!(
+            "Memory explain: {} · {}",
+            memory.summary.workspace_mode,
+            truncate_text(&memory.summary.workspace_key, 88)
+        ));
+        lines.push(format!(
+            "  Frozen snapshot packet: {} items{}",
+            memory.summary.frozen_snapshot_items,
+            cli_optional_generated_at(memory.summary.frozen_snapshot_generated_at)
+        ));
+        lines.push(format!(
+            "  Last prefetch packet: {} items{}",
+            memory.summary.last_prefetch_items,
+            cli_optional_generated_at(memory.summary.last_prefetch_generated_at)
+        ));
+        if let Some(query) = memory.summary.last_prefetch_query.as_deref() {
+            lines.push(format!("  Prefetch query: {}", truncate_text(query, 120)));
+        }
+        if let Some(run) = memory.summary.latest_consolidation_run.as_ref() {
+            lines.push(format!(
+                "  Latest consolidation: {} · merged {} · promoted {} · conflicts {}",
+                run.run_id, run.merged_count, run.promoted_count, run.conflict_count
+            ));
+        }
+        if !memory.summary.recent_rule_hits.is_empty() {
+            lines.push(format!(
+                "  Recent rule hits ({})",
+                memory.summary.recent_rule_hits.len()
+            ));
+            for hit in &memory.summary.recent_rule_hits {
+                let detail = hit.detail.as_deref().unwrap_or("no detail");
+                lines.push(format!(
+                    "    {} · {}",
+                    hit.hit_kind,
+                    truncate_text(detail, 96)
+                ));
+            }
+        }
+        if let Some(packet) = memory.frozen_snapshot.as_ref() {
+            lines.push(format!(
+                "  Frozen snapshot scopes: {}",
+                packet
+                    .scopes
+                    .iter()
+                    .map(|scope| format!("{scope:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if let Some(packet) = memory.last_prefetch_packet.as_ref() {
+            lines.push(format!(
+                "  Last prefetch scopes: {}",
+                packet
+                    .scopes
+                    .iter()
+                    .map(|scope| format!("{scope:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        let suggested_ids = memory
+            .summary
+            .recent_rule_hits
+            .iter()
+            .filter_map(|hit| hit.memory_id.as_ref().map(|id| id.0.as_str()))
+            .chain(
+                memory
+                    .last_prefetch_packet
+                    .iter()
+                    .flat_map(|packet| packet.items.iter().map(|item| item.card.id.0.as_str())),
+            )
+            .take(3)
+            .collect::<Vec<_>>();
+        if !suggested_ids.is_empty() {
+            lines.push("  Follow-up commands:".to_string());
+            for record_id in suggested_ids {
+                lines.push(format!("    /memory show {}", record_id));
+                lines.push(format!("    /memory hits record={}", record_id));
+            }
+        }
+        if let Some(run) = memory.summary.latest_consolidation_run.as_ref() {
+            lines.push(format!("    /memory hits run={}", run.run_id));
         }
     }
 
@@ -653,6 +843,13 @@ fn cli_event_payload_summary(payload: &serde_json::Value) -> Option<String> {
     }
     .filter(|text| !text.is_empty())
     .map(|text| truncate_text(&text.replace('\n', " "), 120))
+}
+
+fn cli_optional_generated_at(ts: Option<i64>) -> String {
+    ts.and_then(|value| chrono::DateTime::<chrono::Utc>::from_timestamp_millis(value))
+        .map(|value| value.with_timezone(&chrono::Local))
+        .map(|value| format!(" @ {}", value.format("%Y-%m-%d %H:%M:%S")))
+        .unwrap_or_default()
 }
 
 fn cli_event_lines(
@@ -749,6 +946,40 @@ async fn cli_print_usage_snapshot(
                 Some(runtime),
                 OutputBlock::Status(StatusBlock::error(format!(
                     "Failed to load session usage: {}",
+                    error
+                ))),
+                style,
+            );
+        }
+    }
+}
+
+async fn cli_print_session_insights(
+    runtime: &CliExecutionRuntime,
+    api_client: &CliApiClient,
+    style: &CliStyle,
+) {
+    let Some(session_id) = cli_current_observed_session_id(runtime) else {
+        let _ = print_block(
+            Some(runtime),
+            OutputBlock::Status(StatusBlock::warning("No active session available for /insights.")),
+            style,
+        );
+        return;
+    };
+
+    match api_client.get_session_insights(&session_id).await {
+        Ok(insights) => {
+            let lines = cli_session_insights_lines(&session_id, &insights);
+            let footer =
+                "Source: /session/{id}/insights · follow with /memory show <id> or /memory hits record=<id>";
+            let _ = print_cli_list_on_surface(Some(runtime), "Session Insights", Some(footer), &lines, style);
+        }
+        Err(error) => {
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::error(format!(
+                    "Failed to load session insights: {}",
                     error
                 ))),
                 style,
@@ -911,6 +1142,531 @@ async fn cli_print_session_events(
                 Some(runtime),
                 OutputBlock::Status(StatusBlock::error(format!(
                     "Failed to load session events: {}",
+                    error
+                ))),
+                style,
+            );
+        }
+    }
+}
+
+async fn cli_print_memory_list(
+    runtime: &CliExecutionRuntime,
+    api_client: &CliApiClient,
+    style: &CliStyle,
+    search: Option<&str>,
+) {
+    let query = crate::api_client::MemoryListQuery {
+        search: search
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+        limit: Some(50),
+        source_session_id: cli_current_observed_session_id(runtime),
+        ..Default::default()
+    };
+
+    let response_result = if query.search.is_some() {
+        api_client.search_memory(Some(&query)).await
+    } else {
+        api_client.list_memory(Some(&query)).await
+    };
+
+    match response_result {
+        Ok(response) => {
+            let mut lines = Vec::new();
+            if let Some(session_id) = query.source_session_id.as_deref() {
+                lines.push(format!("Session filter: {}", session_id));
+            } else {
+                lines.push("Scope: current workspace authority".to_string());
+            }
+            if let Some(search) = query.search.as_deref() {
+                lines.push(format!("Search: {}", search));
+            }
+            lines.push(format!("Total: {}", response.items.len()));
+            lines.push(String::new());
+            if response.items.is_empty() {
+                lines.push(style.dim("No memory records matched the current query."));
+            } else {
+                for item in &response.items {
+                    lines.push(format!(
+                        "{} · {:?} · {:?} · {:?}",
+                        item.id.0, item.kind, item.status, item.validation_status
+                    ));
+                    lines.push(format!("  {}", item.title));
+                    lines.push(format!("  {}", item.summary));
+                }
+            }
+            let footer = format!(
+                "Source: {} · search fields: {} · detail: /memory show <id>",
+                if query.search.is_some() {
+                    "/memory/search"
+                } else {
+                    "/memory/list"
+                },
+                response.contract.search_fields.join(", ")
+            );
+            let _ = print_cli_list_on_surface(Some(runtime), "Memory Records", Some(&footer), &lines, style);
+        }
+        Err(error) => {
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::error(format!(
+                    "Failed to list memory records: {}",
+                    error
+                ))),
+                style,
+            );
+        }
+    }
+}
+
+async fn cli_print_memory_retrieval_preview(
+    runtime: &CliExecutionRuntime,
+    api_client: &CliApiClient,
+    style: &CliStyle,
+    query_text: Option<&str>,
+) {
+    let query = crate::api_client::MemoryRetrievalQuery {
+        query: query_text
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+        stage: None,
+        limit: Some(6),
+        kinds: Vec::new(),
+        scopes: Vec::new(),
+        session_id: cli_current_observed_session_id(runtime),
+    };
+
+    match api_client.get_memory_retrieval_preview(&query).await {
+        Ok(response) => {
+            let packet = response.packet;
+            let mut lines = Vec::new();
+            if let Some(session_id) = query.session_id.as_deref() {
+                lines.push(format!("Session filter: {}", session_id));
+            }
+            if let Some(search) = packet.query.as_deref() {
+                lines.push(format!("Query: {}", search));
+            }
+            lines.push(format!(
+                "Items: {} · Budget: {}",
+                packet.items.len(),
+                packet
+                    .budget_limit
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "--".to_string())
+            ));
+            lines.push(format!("Contract: {}", response.contract.note));
+            lines.push(String::new());
+            if packet.items.is_empty() {
+                lines.push("No memory records would be injected for this turn.".to_string());
+            } else {
+                for item in packet.items {
+                    lines.push(format!(
+                        "{} · {:?} · {:?}",
+                        item.card.id.0, item.card.kind, item.card.validation_status
+                    ));
+                    lines.push(format!("  {}", item.card.title));
+                    lines.push(format!("  why: {}", item.why_recalled));
+                    lines.push(format!("  summary: {}", item.card.summary));
+                    if let Some(evidence) = item.evidence_summary.as_deref() {
+                        lines.push(format!("  evidence: {}", evidence));
+                    }
+                }
+            }
+            let _ = print_cli_list_on_surface(
+                Some(runtime),
+                "Memory Retrieval Preview",
+                Some("Source: /memory/retrieval-preview"),
+                &lines,
+                style,
+            );
+        }
+        Err(error) => {
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::error(format!(
+                    "Failed to load memory retrieval preview: {}",
+                    error
+                ))),
+                style,
+            );
+        }
+    }
+}
+
+async fn cli_print_memory_detail(
+    runtime: &CliExecutionRuntime,
+    api_client: &CliApiClient,
+    style: &CliStyle,
+    record_id: &str,
+) {
+    match api_client.get_memory_detail(record_id).await {
+        Ok(detail) => {
+            let record = detail.record;
+            let mut lines = vec![
+                format!("Id: {}", record.id.0),
+                format!(
+                    "Kind: {:?} · Scope: {:?} · Status: {:?} · Validation: {:?}",
+                    record.kind, record.scope, record.status, record.validation_status
+                ),
+                format!("Title: {}", record.title),
+                format!("Summary: {}", record.summary),
+            ];
+            if !record.trigger_conditions.is_empty() {
+                lines.push("Triggers:".to_string());
+                lines.extend(record.trigger_conditions.iter().map(|value| format!("  - {}", value)));
+            }
+            if !record.normalized_facts.is_empty() {
+                lines.push("Facts:".to_string());
+                lines.extend(record.normalized_facts.iter().map(|value| format!("  - {}", value)));
+            }
+            if !record.boundaries.is_empty() {
+                lines.push("Boundaries:".to_string());
+                lines.extend(record.boundaries.iter().map(|value| format!("  - {}", value)));
+            }
+            if !record.evidence_refs.is_empty() {
+                lines.push("Evidence:".to_string());
+                lines.extend(record.evidence_refs.iter().map(|evidence| {
+                    format!(
+                        "  - session={} message={} tool={} stage={} {}",
+                        evidence.session_id.as_deref().unwrap_or("--"),
+                        evidence.message_id.as_deref().unwrap_or("--"),
+                        evidence.tool_call_id.as_deref().unwrap_or("--"),
+                        evidence.stage_id.as_deref().unwrap_or("--"),
+                        evidence.note.as_deref().unwrap_or("")
+                    )
+                }));
+            }
+            let footer =
+                "Source: /memory/{id} · validation: /memory validation <id> · conflicts: /memory conflicts <id>";
+            let _ = print_cli_list_on_surface(Some(runtime), "Memory Detail", Some(footer), &lines, style);
+        }
+        Err(error) => {
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::error(format!(
+                    "Failed to load memory detail `{}`: {}",
+                    record_id, error
+                ))),
+                style,
+            );
+        }
+    }
+}
+
+async fn cli_print_memory_validation_report(
+    runtime: &CliExecutionRuntime,
+    api_client: &CliApiClient,
+    style: &CliStyle,
+    record_id: &str,
+) {
+    match api_client.get_memory_validation_report(record_id).await {
+        Ok(response) => {
+            let mut lines = vec![format!("Record: {}", response.record_id.0)];
+            if let Some(report) = response.latest {
+                lines.push(format!("Status: {:?}", report.status));
+                lines.push(format!("Checked at: {}", report.checked_at));
+                if report.issues.is_empty() {
+                    lines.push("Issues: none".to_string());
+                } else {
+                    lines.push("Issues:".to_string());
+                    lines.extend(report.issues.into_iter().map(|issue| format!("  - {}", issue)));
+                }
+            } else {
+                lines.push("No validation report recorded yet.".to_string());
+            }
+            let _ = print_cli_list_on_surface(
+                Some(runtime),
+                "Memory Validation",
+                Some("Source: /memory/{id}/validation-report"),
+                &lines,
+                style,
+            );
+        }
+        Err(error) => {
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::error(format!(
+                    "Failed to load memory validation report `{}`: {}",
+                    record_id, error
+                ))),
+                style,
+            );
+        }
+    }
+}
+
+async fn cli_print_memory_conflicts(
+    runtime: &CliExecutionRuntime,
+    api_client: &CliApiClient,
+    style: &CliStyle,
+    record_id: &str,
+) {
+    match api_client.get_memory_conflicts(record_id).await {
+        Ok(response) => {
+            let mut lines = vec![format!("Record: {}", response.record_id.0)];
+            if response.conflicts.is_empty() {
+                lines.push("No duplicate or contradiction conflicts recorded.".to_string());
+            } else {
+                for conflict in response.conflicts {
+                    lines.push(format!(
+                        "{} · {} · other {}",
+                        conflict.id, conflict.conflict_kind, conflict.other_record_id.0
+                    ));
+                    lines.push(format!("  {}", conflict.detail));
+                }
+            }
+            let _ = print_cli_list_on_surface(
+                Some(runtime),
+                "Memory Conflicts",
+                Some("Source: /memory/{id}/conflicts"),
+                &lines,
+                style,
+            );
+        }
+        Err(error) => {
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::error(format!(
+                    "Failed to load memory conflicts `{}`: {}",
+                    record_id, error
+                ))),
+                style,
+            );
+        }
+    }
+}
+
+async fn cli_print_memory_rule_packs(
+    runtime: &CliExecutionRuntime,
+    api_client: &CliApiClient,
+    style: &CliStyle,
+) {
+    match api_client.list_memory_rule_packs().await {
+        Ok(response) => {
+            let mut lines = Vec::new();
+            if response.items.is_empty() {
+                lines.push("No memory rule packs registered.".to_string());
+            } else {
+                for pack in response.items {
+                    lines.push(format!(
+                        "{} · {:?} · version {}",
+                        pack.id, pack.rule_pack_kind, pack.version
+                    ));
+                    if pack.rules.is_empty() {
+                        lines.push("  rules: none".to_string());
+                    } else {
+                        for rule in pack.rules {
+                            lines.push(format!("  - {}: {}", rule.id, rule.description));
+                        }
+                    }
+                }
+            }
+            let _ = print_cli_list_on_surface(
+                Some(runtime),
+                "Memory Rule Packs",
+                Some("Source: /memory/rule-packs"),
+                &lines,
+                style,
+            );
+        }
+        Err(error) => {
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::error(format!(
+                    "Failed to load memory rule packs: {}",
+                    error
+                ))),
+                style,
+            );
+        }
+    }
+}
+
+async fn cli_print_memory_rule_hits(
+    runtime: &CliExecutionRuntime,
+    api_client: &CliApiClient,
+    style: &CliStyle,
+    raw_query: Option<&str>,
+) {
+    let parsed = rocode_command::interactive::parse_memory_rule_hit_query(raw_query);
+    let query = crate::api_client::MemoryRuleHitQuery {
+        run_id: parsed.run_id.clone(),
+        memory_id: parsed.record_id.map(rocode_types::MemoryRecordId),
+        limit: parsed.limit.map(|value| value as u32),
+    };
+
+    match api_client.list_memory_rule_hits(Some(&query)).await {
+        Ok(response) => {
+            let mut lines = Vec::new();
+            if let Some(run_id) = query.run_id.as_deref() {
+                lines.push(format!("Run filter: {}", run_id));
+            }
+            if let Some(memory_id) = query.memory_id.as_ref() {
+                lines.push(format!("Record filter: {}", memory_id.0));
+            }
+            lines.push(format!("Total: {}", response.items.len()));
+            lines.push(String::new());
+            if response.items.is_empty() {
+                lines.push("No matching memory rule hits were found.".to_string());
+            } else {
+                for hit in response.items {
+                    lines.push(format!(
+                        "{} · {} · run={} · memory={}",
+                        hit.id,
+                        hit.hit_kind,
+                        hit.run_id.as_deref().unwrap_or("--"),
+                        hit.memory_id
+                            .as_ref()
+                            .map(|id| id.0.as_str())
+                            .unwrap_or("--")
+                    ));
+                    if let Some(pack_id) = hit.rule_pack_id.as_deref() {
+                        lines.push(format!("  pack: {}", pack_id));
+                    }
+                    if let Some(detail) = hit.detail.as_deref() {
+                        lines.push(format!("  {}", detail));
+                    }
+                }
+            }
+            let _ = print_cli_list_on_surface(
+                Some(runtime),
+                "Memory Rule Hits",
+                Some("Source: /memory/rule-hits"),
+                &lines,
+                style,
+            );
+        }
+        Err(error) => {
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::error(format!(
+                    "Failed to load memory rule hits: {}",
+                    error
+                ))),
+                style,
+            );
+        }
+    }
+}
+
+async fn cli_print_memory_consolidation_runs(
+    runtime: &CliExecutionRuntime,
+    api_client: &CliApiClient,
+    style: &CliStyle,
+) {
+    match api_client
+        .list_memory_consolidation_runs(Some(&crate::api_client::MemoryConsolidationRunQuery {
+            limit: Some(20),
+        }))
+        .await
+    {
+        Ok(response) => {
+            let mut lines = Vec::new();
+            if response.items.is_empty() {
+                lines.push("No consolidation runs recorded yet.".to_string());
+            } else {
+                for run in response.items {
+                    lines.push(format!(
+                        "{} · merged {} · promoted {} · conflicts {}",
+                        run.run_id, run.merged_count, run.promoted_count, run.conflict_count
+                    ));
+                    lines.push(format!(
+                        "  started={} finished={}",
+                        run.started_at,
+                        run.finished_at
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "--".to_string())
+                    ));
+                }
+            }
+            let _ = print_cli_list_on_surface(
+                Some(runtime),
+                "Memory Consolidation Runs",
+                Some("Source: /memory/consolidation/runs"),
+                &lines,
+                style,
+            );
+        }
+        Err(error) => {
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::error(format!(
+                    "Failed to load memory consolidation runs: {}",
+                    error
+                ))),
+                style,
+            );
+        }
+    }
+}
+
+async fn cli_run_memory_consolidation(
+    runtime: &CliExecutionRuntime,
+    api_client: &CliApiClient,
+    style: &CliStyle,
+    raw_request: Option<&str>,
+) {
+    let parsed = rocode_command::interactive::parse_memory_consolidation_request(raw_request);
+    let request = crate::api_client::MemoryConsolidationRequest {
+        limit: parsed.limit.map(|value| value as u32),
+        include_candidates: parsed.include_candidates,
+    };
+
+    match api_client.run_memory_consolidation(&request).await {
+        Ok(response) => {
+            let mut lines = vec![
+                format!("Run: {}", response.run.run_id),
+                format!(
+                    "Merged: {} · Promoted: {} · Conflicts: {}",
+                    response.run.merged_count,
+                    response.run.promoted_count,
+                    response.run.conflict_count
+                ),
+            ];
+            if !response.promoted_record_ids.is_empty() {
+                lines.push("Promoted records:".to_string());
+                lines.extend(
+                    response
+                        .promoted_record_ids
+                        .iter()
+                        .map(|id| format!("  - {}", id.0)),
+                );
+            }
+            if !response.reflection_notes.is_empty() {
+                lines.push("Reflection:".to_string());
+                lines.extend(
+                    response
+                        .reflection_notes
+                        .iter()
+                        .map(|note| format!("  - {}", note)),
+                );
+            }
+            if !response.rule_hits.is_empty() {
+                lines.push("Rule hits:".to_string());
+                lines.extend(
+                    response
+                        .rule_hits
+                        .iter()
+                        .take(8)
+                        .map(|hit| format!("  - {} ({})", hit.hit_kind, hit.id)),
+                );
+            }
+            let _ = print_cli_list_on_surface(
+                Some(runtime),
+                "Memory Consolidation",
+                Some("Source: POST /memory/consolidate · inspect: /memory runs · /memory hits"),
+                &lines,
+                style,
+            );
+        }
+        Err(error) => {
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::error(format!(
+                    "Failed to run memory consolidation: {}",
                     error
                 ))),
                 style,
@@ -1599,7 +2355,7 @@ fn cli_sidebar_lines(
 
     lines.push(String::new());
     lines.push("/help · /model · /preset".to_string());
-    lines.push("/runtime · /usage · /events".to_string());
+    lines.push("/runtime · /usage · /insights · /events".to_string());
     lines.push("/events next · /events prev · /events page <n>".to_string());
     lines.push("/events first · /events clear".to_string());
     lines.push("/child · /abort · /status".to_string());

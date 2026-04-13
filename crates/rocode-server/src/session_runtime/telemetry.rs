@@ -16,6 +16,7 @@ use rocode_plugin::{HookContext, HookEvent};
 use rocode_session::{
     SessionMessage, SessionTelemetrySnapshot, SessionTelemetrySnapshotVersion, SessionUsage,
 };
+use rocode_types::SessionMemoryTelemetrySummary;
 
 pub(crate) struct RuntimeTelemetryAuthority {
     event_bus: broadcast::Sender<String>,
@@ -675,6 +676,7 @@ impl RuntimeTelemetryAuthority {
         session_id: &str,
         usage: SessionUsage,
         last_run_status: impl Into<String>,
+        memory: Option<SessionMemoryTelemetrySummary>,
     ) -> Option<SessionTelemetrySnapshot> {
         let has_runtime = self.runtime_state.get(session_id).await.is_some();
         let stage_summaries = self.stage_summaries.list_for_session(session_id).await;
@@ -689,9 +691,10 @@ impl RuntimeTelemetryAuthority {
         }
 
         Some(SessionTelemetrySnapshot {
-            version: SessionTelemetrySnapshotVersion::V1,
+            version: SessionTelemetrySnapshotVersion::V2,
             usage,
             stage_summaries: stage_summaries.into_iter().map(Into::into).collect(),
+            memory,
             last_run_status: last_run_status.into(),
             updated_at: chrono::Utc::now().timestamp_millis(),
         })

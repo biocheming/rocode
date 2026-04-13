@@ -27,6 +27,16 @@ impl App {
         }
     }
 
+    pub(super) fn open_insights_status_dialog(&mut self) -> bool {
+        if self.render_insights_status_dialog() {
+            self.status_dialog_view = StatusDialogView::Insights;
+            self.status_dialog.open();
+            true
+        } else {
+            false
+        }
+    }
+
     pub(super) fn open_events_status_dialog(&mut self, raw_filter: Option<&str>) -> bool {
         let Some(session_id) = self.current_session_id() else {
             self.toast.show(
@@ -199,6 +209,361 @@ impl App {
         }
     }
 
+    pub(super) fn open_memory_list_status_dialog(&mut self, raw_query: Option<&str>) -> bool {
+        let Some(client) = self.context.get_api_client() else {
+            self.toast
+                .show(ToastVariant::Error, "API unavailable for /memory.", 2400);
+            return false;
+        };
+
+        let query_text = raw_query
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let query = MemoryListQuery {
+            search: query_text.clone(),
+            limit: Some(50),
+            source_session_id: self.current_session_id(),
+            ..MemoryListQuery::default()
+        };
+
+        let response = if query.search.is_some() {
+            client.search_memory(Some(&query))
+        } else {
+            client.list_memory(Some(&query))
+        };
+
+        match response {
+            Ok(response) => {
+                let lines = tui_memory_list_status_lines(&query, &response);
+                self.status_dialog_view =
+                    StatusDialogView::MemoryList(TuiMemoryListState { query: query_text });
+                self.status_dialog.set_title("Memory");
+                self.status_dialog.set_footer_hint(Some(
+                    "Esc close · /memory show <id> · /memory rules · /memory runs · /memory consolidate"
+                        .to_string(),
+                ));
+                self.status_dialog.set_status_lines(lines);
+                self.status_dialog.open();
+                true
+            }
+            Err(error) => {
+                self.toast.show(
+                    ToastVariant::Error,
+                    &format!("Failed to load memory list: {}", error),
+                    3000,
+                );
+                false
+            }
+        }
+    }
+
+    pub(super) fn open_memory_preview_status_dialog(&mut self, raw_query: Option<&str>) -> bool {
+        let Some(client) = self.context.get_api_client() else {
+            self.toast.show(
+                ToastVariant::Error,
+                "API unavailable for /memory preview.",
+                2400,
+            );
+            return false;
+        };
+
+        let query_text = raw_query
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let query = MemoryRetrievalQuery {
+            query: query_text.clone(),
+            stage: None,
+            limit: Some(6),
+            kinds: Vec::new(),
+            scopes: Vec::new(),
+            session_id: self.current_session_id(),
+        };
+
+        match client.get_memory_retrieval_preview(&query) {
+            Ok(response) => {
+                let lines = tui_memory_preview_status_lines(&query, &response);
+                self.status_dialog_view =
+                    StatusDialogView::MemoryPreview(TuiMemoryPreviewState { query: query_text });
+                self.status_dialog.set_title("Memory Preview");
+                self.status_dialog.set_footer_hint(Some(
+                    "Esc close · shows why records would be injected this turn".to_string(),
+                ));
+                self.status_dialog.set_status_lines(lines);
+                self.status_dialog.open();
+                true
+            }
+            Err(error) => {
+                self.toast.show(
+                    ToastVariant::Error,
+                    &format!("Failed to load memory retrieval preview: {}", error),
+                    3000,
+                );
+                false
+            }
+        }
+    }
+
+    pub(super) fn open_memory_detail_status_dialog(&mut self, record_id: &str) -> bool {
+        let Some(client) = self.context.get_api_client() else {
+            self.toast
+                .show(ToastVariant::Error, "API unavailable for /memory.", 2400);
+            return false;
+        };
+
+        match client.get_memory_detail(record_id) {
+            Ok(detail) => {
+                let lines = tui_memory_detail_status_lines(&detail);
+                self.status_dialog_view = StatusDialogView::MemoryDetail(TuiMemoryDetailState {
+                    record_id: record_id.to_string(),
+                });
+                self.status_dialog.set_title("Memory Detail");
+                self.status_dialog.set_footer_hint(Some(
+                    "Esc close · /memory validation <id> · /memory conflicts <id> · /memory hits record=<id>".to_string(),
+                ));
+                self.status_dialog.set_status_lines(lines);
+                self.status_dialog.open();
+                true
+            }
+            Err(error) => {
+                self.toast.show(
+                    ToastVariant::Error,
+                    &format!("Failed to load memory detail: {}", error),
+                    3000,
+                );
+                false
+            }
+        }
+    }
+
+    pub(super) fn open_memory_validation_status_dialog(&mut self, record_id: &str) -> bool {
+        let Some(client) = self.context.get_api_client() else {
+            self.toast
+                .show(ToastVariant::Error, "API unavailable for /memory.", 2400);
+            return false;
+        };
+
+        match client.get_memory_validation_report(record_id) {
+            Ok(report) => {
+                let lines = tui_memory_validation_status_lines(&report);
+                self.status_dialog_view =
+                    StatusDialogView::MemoryValidation(TuiMemoryDetailState {
+                        record_id: record_id.to_string(),
+                    });
+                self.status_dialog.set_title("Memory Validation");
+                self.status_dialog.set_footer_hint(Some(
+                    "Esc close · values come from /memory/{id}/validation-report".to_string(),
+                ));
+                self.status_dialog.set_status_lines(lines);
+                self.status_dialog.open();
+                true
+            }
+            Err(error) => {
+                self.toast.show(
+                    ToastVariant::Error,
+                    &format!("Failed to load memory validation report: {}", error),
+                    3000,
+                );
+                false
+            }
+        }
+    }
+
+    pub(super) fn open_memory_conflicts_status_dialog(&mut self, record_id: &str) -> bool {
+        let Some(client) = self.context.get_api_client() else {
+            self.toast
+                .show(ToastVariant::Error, "API unavailable for /memory.", 2400);
+            return false;
+        };
+
+        match client.get_memory_conflicts(record_id) {
+            Ok(conflicts) => {
+                let lines = tui_memory_conflict_status_lines(&conflicts);
+                self.status_dialog_view = StatusDialogView::MemoryConflicts(TuiMemoryDetailState {
+                    record_id: record_id.to_string(),
+                });
+                self.status_dialog.set_title("Memory Conflicts");
+                self.status_dialog.set_footer_hint(Some(
+                    "Esc close · values come from /memory/{id}/conflicts".to_string(),
+                ));
+                self.status_dialog.set_status_lines(lines);
+                self.status_dialog.open();
+                true
+            }
+            Err(error) => {
+                self.toast.show(
+                    ToastVariant::Error,
+                    &format!("Failed to load memory conflicts: {}", error),
+                    3000,
+                );
+                false
+            }
+        }
+    }
+
+    pub(super) fn open_memory_rule_packs_status_dialog(&mut self) -> bool {
+        let Some(client) = self.context.get_api_client() else {
+            self.toast.show(
+                ToastVariant::Error,
+                "API unavailable for /memory rules.",
+                2400,
+            );
+            return false;
+        };
+
+        match client.list_memory_rule_packs() {
+            Ok(response) => {
+                let lines = tui_memory_rule_pack_status_lines(&response);
+                self.status_dialog_view = StatusDialogView::MemoryRulePacks;
+                self.status_dialog.set_title("Memory Rule Packs");
+                self.status_dialog.set_footer_hint(Some(
+                    "Esc close · values come from /memory/rule-packs".to_string(),
+                ));
+                self.status_dialog.set_status_lines(lines);
+                self.status_dialog.open();
+                true
+            }
+            Err(error) => {
+                self.toast.show(
+                    ToastVariant::Error,
+                    &format!("Failed to load memory rule packs: {}", error),
+                    3000,
+                );
+                false
+            }
+        }
+    }
+
+    pub(super) fn open_memory_rule_hits_status_dialog(&mut self, raw_query: Option<&str>) -> bool {
+        let Some(client) = self.context.get_api_client() else {
+            self.toast.show(
+                ToastVariant::Error,
+                "API unavailable for /memory hits.",
+                2400,
+            );
+            return false;
+        };
+
+        let parsed = rocode_command::interactive::parse_memory_rule_hit_query(raw_query);
+        let query = crate::api::MemoryRuleHitQuery {
+            run_id: parsed.run_id,
+            memory_id: parsed.record_id.map(rocode_types::MemoryRecordId),
+            limit: parsed.limit.map(|value| value as u32),
+        };
+
+        match client.list_memory_rule_hits(Some(&query)) {
+            Ok(response) => {
+                let lines = tui_memory_rule_hit_status_lines(&query, &response);
+                self.status_dialog_view =
+                    StatusDialogView::MemoryRuleHits(TuiMemoryRuleHitsState {
+                        raw_query: raw_query
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(ToOwned::to_owned),
+                    });
+                self.status_dialog.set_title("Memory Rule Hits");
+                self.status_dialog.set_footer_hint(Some(
+                    "Esc close · filter with /memory hits run=<id> record=<id>".to_string(),
+                ));
+                self.status_dialog.set_status_lines(lines);
+                self.status_dialog.open();
+                true
+            }
+            Err(error) => {
+                self.toast.show(
+                    ToastVariant::Error,
+                    &format!("Failed to load memory rule hits: {}", error),
+                    3000,
+                );
+                false
+            }
+        }
+    }
+
+    pub(super) fn open_memory_consolidation_runs_status_dialog(&mut self) -> bool {
+        let Some(client) = self.context.get_api_client() else {
+            self.toast.show(
+                ToastVariant::Error,
+                "API unavailable for /memory runs.",
+                2400,
+            );
+            return false;
+        };
+
+        match client.list_memory_consolidation_runs(Some(
+            &crate::api::MemoryConsolidationRunQuery { limit: Some(20) },
+        )) {
+            Ok(response) => {
+                let lines = tui_memory_consolidation_runs_status_lines(&response);
+                self.status_dialog_view = StatusDialogView::MemoryConsolidationRuns;
+                self.status_dialog.set_title("Memory Consolidation Runs");
+                self.status_dialog.set_footer_hint(Some(
+                    "Esc close · values come from /memory/consolidation/runs".to_string(),
+                ));
+                self.status_dialog.set_status_lines(lines);
+                self.status_dialog.open();
+                true
+            }
+            Err(error) => {
+                self.toast.show(
+                    ToastVariant::Error,
+                    &format!("Failed to load memory consolidation runs: {}", error),
+                    3000,
+                );
+                false
+            }
+        }
+    }
+
+    pub(super) fn run_memory_consolidation_status_dialog(
+        &mut self,
+        raw_request: Option<&str>,
+    ) -> bool {
+        let Some(client) = self.context.get_api_client() else {
+            self.toast.show(
+                ToastVariant::Error,
+                "API unavailable for /memory consolidate.",
+                2400,
+            );
+            return false;
+        };
+
+        let parsed = rocode_command::interactive::parse_memory_consolidation_request(raw_request);
+        let request = crate::api::MemoryConsolidationRequest {
+            limit: parsed.limit.map(|value| value as u32),
+            include_candidates: parsed.include_candidates,
+        };
+
+        match client.run_memory_consolidation(&request) {
+            Ok(response) => {
+                let lines = tui_memory_consolidation_result_status_lines(&response);
+                self.status_dialog_view =
+                    StatusDialogView::MemoryConsolidationResult(TuiMemoryConsolidationState {
+                        raw_request: raw_request
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(ToOwned::to_owned),
+                    });
+                self.status_dialog.set_title("Memory Consolidation");
+                self.status_dialog.set_footer_hint(Some(
+                    "Esc close · /memory runs · /memory hits run=<id>".to_string(),
+                ));
+                self.status_dialog.set_status_lines(lines);
+                self.status_dialog.open();
+                true
+            }
+            Err(error) => {
+                self.toast.show(
+                    ToastVariant::Error,
+                    &format!("Failed to run memory consolidation: {}", error),
+                    3000,
+                );
+                false
+            }
+        }
+    }
+
     pub(super) fn refresh_active_status_dialog(&mut self) {
         match self.status_dialog_view.clone() {
             StatusDialogView::Overview => self.refresh_status_dialog(),
@@ -208,8 +573,38 @@ impl App {
             StatusDialogView::Usage => {
                 let _ = self.render_usage_status_dialog();
             }
+            StatusDialogView::Insights => {
+                let _ = self.render_insights_status_dialog();
+            }
             StatusDialogView::Events(_) => {
                 let _ = self.open_events_status_dialog(None);
+            }
+            StatusDialogView::MemoryList(state) => {
+                let _ = self.open_memory_list_status_dialog(state.query.as_deref());
+            }
+            StatusDialogView::MemoryPreview(state) => {
+                let _ = self.open_memory_preview_status_dialog(state.query.as_deref());
+            }
+            StatusDialogView::MemoryDetail(state) => {
+                let _ = self.open_memory_detail_status_dialog(&state.record_id);
+            }
+            StatusDialogView::MemoryValidation(state) => {
+                let _ = self.open_memory_validation_status_dialog(&state.record_id);
+            }
+            StatusDialogView::MemoryConflicts(state) => {
+                let _ = self.open_memory_conflicts_status_dialog(&state.record_id);
+            }
+            StatusDialogView::MemoryRulePacks => {
+                let _ = self.open_memory_rule_packs_status_dialog();
+            }
+            StatusDialogView::MemoryRuleHits(state) => {
+                let _ = self.open_memory_rule_hits_status_dialog(state.raw_query.as_deref());
+            }
+            StatusDialogView::MemoryConsolidationRuns => {
+                let _ = self.open_memory_consolidation_runs_status_dialog();
+            }
+            StatusDialogView::MemoryConsolidationResult(state) => {
+                let _ = self.run_memory_consolidation_status_dialog(state.raw_request.as_deref());
             }
         }
     }
@@ -525,6 +920,43 @@ impl App {
         }
     }
 
+    fn render_insights_status_dialog(&mut self) -> bool {
+        let Some(session_id) = self.current_session_id() else {
+            self.toast.show(
+                ToastVariant::Warning,
+                "No active session available for /insights.",
+                2400,
+            );
+            return false;
+        };
+
+        let Some(client) = self.context.get_api_client() else {
+            self.toast
+                .show(ToastVariant::Error, "API unavailable for /insights.", 2400);
+            return false;
+        };
+
+        match client.get_session_insights(&session_id) {
+            Ok(insights) => {
+                let lines = tui_session_insights_lines(&session_id, &insights);
+                self.status_dialog.set_title("Insights");
+                self.status_dialog.set_footer_hint(Some(
+                    "Esc close · /memory show <id> · /memory hits record=<id> · values come from /session/{id}/insights".to_string(),
+                ));
+                self.status_dialog.set_status_lines(lines);
+                true
+            }
+            Err(error) => {
+                self.toast.show(
+                    ToastVariant::Error,
+                    &format!("Failed to load session insights: {}", error),
+                    3000,
+                );
+                false
+            }
+        }
+    }
+
     pub(super) fn handle_status_dialog_key(&mut self, key: KeyEvent) -> bool {
         if !self.status_dialog.is_open() {
             return false;
@@ -729,6 +1161,355 @@ impl App {
     }
 }
 
+fn tui_memory_list_status_lines(
+    query: &MemoryListQuery,
+    response: &crate::api::MemoryListResponse,
+) -> Vec<StatusLine> {
+    let mut lines = vec![StatusLine::title("Memory Records")];
+    if let Some(session_id) = query.source_session_id.as_deref() {
+        lines.push(StatusLine::normal(format!(
+            "Session filter: {}",
+            session_id
+        )));
+    } else {
+        lines.push(StatusLine::muted("Scope: current workspace authority"));
+    }
+    if let Some(search) = query.search.as_deref() {
+        lines.push(StatusLine::normal(format!("Search: {}", search)));
+    }
+    lines.push(StatusLine::muted(format!(
+        "Total: {} · Search fields: {}",
+        response.items.len(),
+        response.contract.search_fields.join(", ")
+    )));
+    lines.push(StatusLine::muted(String::new()));
+    if response.items.is_empty() {
+        lines.push(StatusLine::muted(
+            "No memory records matched the current query.",
+        ));
+        return lines;
+    }
+
+    for item in &response.items {
+        lines.push(StatusLine::normal(format!(
+            "{} · {:?} · {:?} · {:?}",
+            item.id.0, item.kind, item.status, item.validation_status
+        )));
+        lines.push(StatusLine::muted(format!("  {}", item.title)));
+        lines.push(StatusLine::muted(format!("  {}", item.summary)));
+    }
+    lines
+}
+
+fn tui_memory_preview_status_lines(
+    query: &MemoryRetrievalQuery,
+    response: &MemoryRetrievalPreviewResponse,
+) -> Vec<StatusLine> {
+    let packet = &response.packet;
+    let mut lines = vec![StatusLine::title("Memory Retrieval Preview")];
+    if let Some(session_id) = query.session_id.as_deref() {
+        lines.push(StatusLine::normal(format!(
+            "Session filter: {}",
+            session_id
+        )));
+    }
+    if let Some(search) = packet.query.as_deref() {
+        lines.push(StatusLine::normal(format!("Query: {}", search)));
+    }
+    lines.push(StatusLine::muted(format!(
+        "Items: {} · Budget: {}",
+        packet.items.len(),
+        packet
+            .budget_limit
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "--".to_string())
+    )));
+    lines.push(StatusLine::muted(response.contract.note.clone()));
+    lines.push(StatusLine::muted(String::new()));
+    if packet.items.is_empty() {
+        lines.push(StatusLine::muted(
+            "No memory records would be injected for this turn.",
+        ));
+        return lines;
+    }
+
+    for item in &packet.items {
+        lines.push(StatusLine::normal(format!(
+            "{} · {:?} · {:?}",
+            item.card.id.0, item.card.kind, item.card.validation_status
+        )));
+        lines.push(StatusLine::muted(format!("  {}", item.card.title)));
+        lines.push(StatusLine::muted(format!("  why: {}", item.why_recalled)));
+        lines.push(StatusLine::muted(format!(
+            "  summary: {}",
+            item.card.summary
+        )));
+        if let Some(evidence) = item.evidence_summary.as_deref() {
+            lines.push(StatusLine::muted(format!("  evidence: {}", evidence)));
+        }
+    }
+    lines
+}
+
+fn tui_memory_detail_status_lines(detail: &MemoryDetailView) -> Vec<StatusLine> {
+    let record = &detail.record;
+    let mut lines = vec![
+        StatusLine::title("Memory Detail"),
+        StatusLine::normal(format!("Id: {}", record.id.0)),
+        StatusLine::normal(format!(
+            "Kind: {:?} · Scope: {:?} · Status: {:?} · Validation: {:?}",
+            record.kind, record.scope, record.status, record.validation_status
+        )),
+        StatusLine::normal(format!("Title: {}", record.title)),
+        StatusLine::normal(format!("Summary: {}", record.summary)),
+    ];
+    if !record.trigger_conditions.is_empty() {
+        lines.push(StatusLine::muted("Triggers:"));
+        lines.extend(
+            record
+                .trigger_conditions
+                .iter()
+                .map(|value| StatusLine::muted(format!("  - {}", value))),
+        );
+    }
+    if !record.normalized_facts.is_empty() {
+        lines.push(StatusLine::muted("Facts:"));
+        lines.extend(
+            record
+                .normalized_facts
+                .iter()
+                .map(|value| StatusLine::muted(format!("  - {}", value))),
+        );
+    }
+    if !record.boundaries.is_empty() {
+        lines.push(StatusLine::muted("Boundaries:"));
+        lines.extend(
+            record
+                .boundaries
+                .iter()
+                .map(|value| StatusLine::muted(format!("  - {}", value))),
+        );
+    }
+    if !record.evidence_refs.is_empty() {
+        lines.push(StatusLine::muted("Evidence:"));
+        lines.extend(record.evidence_refs.iter().map(|evidence| {
+            StatusLine::muted(format!(
+                "  - session={} message={} tool={} stage={} {}",
+                evidence.session_id.as_deref().unwrap_or("--"),
+                evidence.message_id.as_deref().unwrap_or("--"),
+                evidence.tool_call_id.as_deref().unwrap_or("--"),
+                evidence.stage_id.as_deref().unwrap_or("--"),
+                evidence.note.as_deref().unwrap_or("")
+            ))
+        }));
+    }
+    lines
+}
+
+fn tui_memory_validation_status_lines(
+    response: &MemoryValidationReportResponse,
+) -> Vec<StatusLine> {
+    let mut lines = vec![
+        StatusLine::title("Memory Validation"),
+        StatusLine::normal(format!("Record: {}", response.record_id.0)),
+    ];
+    match response.latest.as_ref() {
+        Some(report) => {
+            lines.push(StatusLine::normal(format!("Status: {:?}", report.status)));
+            lines.push(StatusLine::muted(format!(
+                "Checked at: {}",
+                report.checked_at
+            )));
+            if report.issues.is_empty() {
+                lines.push(StatusLine::muted("Issues: none"));
+            } else {
+                lines.push(StatusLine::muted("Issues:"));
+                lines.extend(
+                    report
+                        .issues
+                        .iter()
+                        .map(|issue| StatusLine::muted(format!("  - {}", issue))),
+                );
+            }
+        }
+        None => lines.push(StatusLine::muted(
+            "No validation report has been recorded yet.",
+        )),
+    }
+    lines
+}
+
+fn tui_memory_conflict_status_lines(response: &MemoryConflictResponse) -> Vec<StatusLine> {
+    let mut lines = vec![
+        StatusLine::title("Memory Conflicts"),
+        StatusLine::normal(format!("Record: {}", response.record_id.0)),
+    ];
+    if response.conflicts.is_empty() {
+        lines.push(StatusLine::muted(
+            "No conflicts detected for this memory record.",
+        ));
+        return lines;
+    }
+
+    for conflict in &response.conflicts {
+        lines.push(StatusLine::normal(format!(
+            "{} · other={} · {}",
+            conflict.id, conflict.other_record_id.0, conflict.conflict_kind
+        )));
+        lines.push(StatusLine::muted(format!("  {}", conflict.detail)));
+        lines.push(StatusLine::muted(format!(
+            "  detected_at={}",
+            conflict.detected_at
+        )));
+    }
+    lines
+}
+
+fn tui_memory_rule_pack_status_lines(
+    response: &crate::api::MemoryRulePackListResponse,
+) -> Vec<StatusLine> {
+    let mut lines = vec![
+        StatusLine::title("Memory Rule Packs"),
+        StatusLine::normal(format!("Total: {}", response.items.len())),
+    ];
+    if response.items.is_empty() {
+        lines.push(StatusLine::muted("No rule packs registered."));
+        return lines;
+    }
+
+    for pack in &response.items {
+        lines.push(StatusLine::muted(String::new()));
+        lines.push(StatusLine::normal(format!(
+            "{} · {:?} · version {}",
+            pack.id, pack.rule_pack_kind, pack.version
+        )));
+        if pack.rules.is_empty() {
+            lines.push(StatusLine::muted("  rules: none"));
+        } else {
+            for rule in &pack.rules {
+                lines.push(StatusLine::muted(format!(
+                    "  - {}: {}",
+                    rule.id, rule.description
+                )));
+            }
+        }
+    }
+    lines
+}
+
+fn tui_memory_rule_hit_status_lines(
+    query: &crate::api::MemoryRuleHitQuery,
+    response: &crate::api::MemoryRuleHitListResponse,
+) -> Vec<StatusLine> {
+    let mut lines = vec![
+        StatusLine::title("Memory Rule Hits"),
+        StatusLine::normal(format!("Total: {}", response.items.len())),
+    ];
+    if let Some(run_id) = query.run_id.as_deref() {
+        lines.push(StatusLine::muted(format!("Run filter: {}", run_id)));
+    }
+    if let Some(memory_id) = query.memory_id.as_ref() {
+        lines.push(StatusLine::muted(format!("Record filter: {}", memory_id.0)));
+    }
+    if response.items.is_empty() {
+        lines.push(StatusLine::muted(
+            "No matching memory rule hits were found.",
+        ));
+        return lines;
+    }
+
+    for hit in &response.items {
+        lines.push(StatusLine::muted(String::new()));
+        lines.push(StatusLine::normal(format!("{} · {}", hit.id, hit.hit_kind)));
+        lines.push(StatusLine::muted(format!(
+            "  run={} memory={}",
+            hit.run_id.as_deref().unwrap_or("--"),
+            hit.memory_id
+                .as_ref()
+                .map(|id| id.0.as_str())
+                .unwrap_or("--")
+        )));
+        if let Some(pack_id) = hit.rule_pack_id.as_deref() {
+            lines.push(StatusLine::muted(format!("  pack={}", pack_id)));
+        }
+        if let Some(detail) = hit.detail.as_deref() {
+            lines.push(StatusLine::muted(format!("  {}", detail)));
+        }
+    }
+    lines
+}
+
+fn tui_memory_consolidation_runs_status_lines(
+    response: &crate::api::MemoryConsolidationRunListResponse,
+) -> Vec<StatusLine> {
+    let mut lines = vec![
+        StatusLine::title("Memory Consolidation Runs"),
+        StatusLine::normal(format!("Total: {}", response.items.len())),
+    ];
+    if response.items.is_empty() {
+        lines.push(StatusLine::muted("No consolidation runs recorded yet."));
+        return lines;
+    }
+
+    for run in &response.items {
+        lines.push(StatusLine::muted(String::new()));
+        lines.push(StatusLine::normal(format!(
+            "{} · merged {} · promoted {} · conflicts {}",
+            run.run_id, run.merged_count, run.promoted_count, run.conflict_count
+        )));
+        lines.push(StatusLine::muted(format!(
+            "  started={} finished={}",
+            run.started_at,
+            run.finished_at
+                .map(|value: i64| value.to_string())
+                .unwrap_or_else(|| "--".to_string())
+        )));
+    }
+    lines
+}
+
+fn tui_memory_consolidation_result_status_lines(
+    response: &crate::api::MemoryConsolidationResponse,
+) -> Vec<StatusLine> {
+    let mut lines = vec![
+        StatusLine::title("Memory Consolidation"),
+        StatusLine::normal(format!("Run: {}", response.run.run_id)),
+        StatusLine::normal(format!(
+            "Merged: {} · Promoted: {} · Conflicts: {}",
+            response.run.merged_count, response.run.promoted_count, response.run.conflict_count
+        )),
+    ];
+    if !response.promoted_record_ids.is_empty() {
+        lines.push(StatusLine::muted("Promoted records:"));
+        lines.extend(
+            response
+                .promoted_record_ids
+                .iter()
+                .map(|id| StatusLine::muted(format!("  - {}", id.0))),
+        );
+    }
+    if !response.reflection_notes.is_empty() {
+        lines.push(StatusLine::muted("Reflection:"));
+        lines.extend(
+            response
+                .reflection_notes
+                .iter()
+                .map(|note| StatusLine::muted(format!("  - {}", note))),
+        );
+    }
+    if !response.rule_hits.is_empty() {
+        lines.push(StatusLine::muted("Rule hits:"));
+        lines.extend(
+            response
+                .rule_hits
+                .iter()
+                .take(8)
+                .map(|hit| StatusLine::muted(format!("  - {} ({})", hit.hit_kind, hit.id))),
+        );
+    }
+    lines
+}
+
 fn format_run_status(status: &crate::api::SessionRunStatusKind) -> &'static str {
     match status {
         crate::api::SessionRunStatusKind::Idle => "idle",
@@ -860,6 +1641,67 @@ fn tui_runtime_status_lines(
         }
     }
 
+    if let Some(memory) = telemetry.memory.as_ref() {
+        lines.push(StatusLine::muted(String::new()));
+        lines.push(StatusLine::title("Memory Runtime"));
+        lines.push(StatusLine::normal(format!(
+            "Workspace: {} · {}",
+            memory.workspace_mode, memory.workspace_key
+        )));
+        lines.push(StatusLine::normal(format!(
+            "Frozen snapshot: {} items{}",
+            memory.frozen_snapshot_items,
+            tui_optional_generated_at(memory.frozen_snapshot_generated_at)
+        )));
+        lines.push(StatusLine::normal(format!(
+            "Last prefetch: {} items{}",
+            memory.last_prefetch_items,
+            tui_optional_generated_at(memory.last_prefetch_generated_at)
+        )));
+        lines.push(StatusLine::normal(format!(
+            "Session records: candidate {} · validated {} · rejected {}",
+            memory.candidate_count, memory.validated_count, memory.rejected_count
+        )));
+        lines.push(StatusLine::normal(format!(
+            "Skill linkage: linked {} · feedback lessons {}",
+            memory.linked_skill_count, memory.skill_feedback_lesson_count
+        )));
+        lines.push(StatusLine::normal(format!(
+            "Retrieval: runs {} · hits {} · used {}",
+            memory.retrieval_run_count, memory.retrieval_hit_count, memory.retrieval_use_count
+        )));
+        if let Some(query) = memory.last_prefetch_query.as_deref() {
+            lines.push(StatusLine::muted(format!("Prefetch query: {}", query)));
+        }
+        if let Some(run) = memory.latest_consolidation_run.as_ref() {
+            lines.push(StatusLine::normal(format!(
+                "Latest consolidation: {} · merged {} · promoted {} · conflicts {}",
+                run.run_id, run.merged_count, run.promoted_count, run.conflict_count
+            )));
+        }
+        if memory.recent_rule_hits.is_empty() {
+            lines.push(StatusLine::muted("Recent rule hits: none"));
+        } else {
+            lines.push(StatusLine::title(format!(
+                "Recent Rule Hits ({})",
+                memory.recent_rule_hits.len()
+            )));
+            for hit in &memory.recent_rule_hits {
+                let memory_ref = hit
+                    .memory_id
+                    .as_ref()
+                    .map(|id| id.0.as_str())
+                    .unwrap_or("workspace");
+                let detail = hit.detail.as_deref().unwrap_or("no detail");
+                lines.push(StatusLine::normal(format!(
+                    "- {} · {}",
+                    hit.hit_kind, memory_ref
+                )));
+                lines.push(StatusLine::muted(format!("  {}", detail)));
+            }
+        }
+    }
+
     lines
 }
 
@@ -895,6 +1737,134 @@ fn tui_usage_status_lines(
     lines
 }
 
+fn tui_session_insights_lines(
+    session_id: &str,
+    insights: &crate::api::SessionInsightsResponse,
+) -> Vec<StatusLine> {
+    let mut lines = vec![
+        StatusLine::title("Session Insights"),
+        StatusLine::normal(format!("Session: {}", session_id)),
+        StatusLine::normal(format!("Title: {}", insights.title)),
+        StatusLine::normal(format!("Directory: {}", insights.directory)),
+        StatusLine::normal(format!(
+            "Updated: {}",
+            tui_format_timestamp(insights.updated)
+        )),
+    ];
+
+    if let Some(telemetry) = insights.telemetry.as_ref() {
+        lines.push(StatusLine::muted(String::new()));
+        lines.push(StatusLine::title("Persisted Telemetry"));
+        lines.push(StatusLine::normal(format!(
+            "Status: {} · Version: {:?}",
+            telemetry.last_run_status, telemetry.version
+        )));
+        lines.push(StatusLine::normal(format!(
+            "Usage: in {} · out {} · reasoning {}",
+            telemetry.usage.input_tokens,
+            telemetry.usage.output_tokens,
+            telemetry.usage.reasoning_tokens
+        )));
+        lines.push(StatusLine::muted(format!(
+            "Persisted stages: {}",
+            telemetry.stage_summaries.len()
+        )));
+    }
+
+    if let Some(memory) = insights.memory.as_ref() {
+        lines.push(StatusLine::muted(String::new()));
+        lines.push(StatusLine::title("Memory Explain"));
+        lines.push(StatusLine::normal(format!(
+            "Workspace: {} · {}",
+            memory.summary.workspace_mode, memory.summary.workspace_key
+        )));
+        lines.push(StatusLine::normal(format!(
+            "Frozen snapshot: {} items{}",
+            memory.summary.frozen_snapshot_items,
+            tui_optional_generated_at(memory.summary.frozen_snapshot_generated_at)
+        )));
+        lines.push(StatusLine::normal(format!(
+            "Last prefetch: {} items{}",
+            memory.summary.last_prefetch_items,
+            tui_optional_generated_at(memory.summary.last_prefetch_generated_at)
+        )));
+        if let Some(query) = memory.summary.last_prefetch_query.as_deref() {
+            lines.push(StatusLine::muted(format!("Prefetch query: {}", query)));
+        }
+        if let Some(run) = memory.summary.latest_consolidation_run.as_ref() {
+            lines.push(StatusLine::normal(format!(
+                "Latest consolidation: {} · merged {} · promoted {} · conflicts {}",
+                run.run_id, run.merged_count, run.promoted_count, run.conflict_count
+            )));
+        }
+        if !memory.summary.recent_rule_hits.is_empty() {
+            lines.push(StatusLine::title(format!(
+                "Recent Rule Hits ({})",
+                memory.summary.recent_rule_hits.len()
+            )));
+            for hit in &memory.summary.recent_rule_hits {
+                lines.push(StatusLine::normal(format!("- {}", hit.hit_kind)));
+                if let Some(detail) = hit.detail.as_deref() {
+                    lines.push(StatusLine::muted(format!("  {}", detail)));
+                }
+            }
+        }
+        if let Some(packet) = memory.frozen_snapshot.as_ref() {
+            lines.push(StatusLine::muted(format!(
+                "Frozen scopes: {}",
+                packet
+                    .scopes
+                    .iter()
+                    .map(|scope| format!("{scope:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+        if let Some(packet) = memory.last_prefetch_packet.as_ref() {
+            lines.push(StatusLine::muted(format!(
+                "Prefetch scopes: {}",
+                packet
+                    .scopes
+                    .iter()
+                    .map(|scope| format!("{scope:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+        let suggested_ids = memory
+            .summary
+            .recent_rule_hits
+            .iter()
+            .filter_map(|hit| hit.memory_id.as_ref().map(|id| id.0.as_str()))
+            .chain(
+                memory
+                    .last_prefetch_packet
+                    .iter()
+                    .flat_map(|packet| packet.items.iter().map(|item| item.card.id.0.as_str())),
+            )
+            .take(3)
+            .collect::<Vec<_>>();
+        if !suggested_ids.is_empty() {
+            lines.push(StatusLine::title("Follow-up Commands"));
+            for record_id in suggested_ids {
+                lines.push(StatusLine::muted(format!("/memory show {}", record_id)));
+                lines.push(StatusLine::muted(format!(
+                    "/memory hits record={}",
+                    record_id
+                )));
+            }
+        }
+        if let Some(run) = memory.summary.latest_consolidation_run.as_ref() {
+            lines.push(StatusLine::muted(format!(
+                "/memory hits run={}",
+                run.run_id
+            )));
+        }
+    }
+
+    lines
+}
+
 fn tui_events_query(
     input: &rocode_command::interactive::InteractiveEventsQuery,
     offset: usize,
@@ -907,6 +1877,20 @@ fn tui_events_query(
         limit: input.limit,
         offset: Some(offset),
     }
+}
+
+fn tui_format_timestamp(ts: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ts)
+        .map(|value| value.with_timezone(&chrono::Local))
+        .map(|value| value.format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_else(|| ts.to_string())
+}
+
+fn tui_optional_generated_at(ts: Option<i64>) -> String {
+    ts.and_then(|value| chrono::DateTime::<chrono::Utc>::from_timestamp_millis(value))
+        .map(|value| value.with_timezone(&chrono::Local))
+        .map(|value| format!(" @ {}", value.format("%Y-%m-%d %H:%M:%S")))
+        .unwrap_or_default()
 }
 
 fn tui_events_filter_label(input: &rocode_command::interactive::InteractiveEventsQuery) -> String {

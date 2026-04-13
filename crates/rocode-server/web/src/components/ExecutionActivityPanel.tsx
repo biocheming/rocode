@@ -32,6 +32,11 @@ function formatMoney(value?: number | null) {
   return `$${value.toFixed(4)}`;
 }
 
+function formatDateTime(ts?: number | null) {
+  if (!ts) return "--";
+  return new Date(ts).toLocaleString();
+}
+
 function eventWindowLabel(page: number, count: number, pageSize: number) {
   if (count === 0) return `page ${page} · items 0`;
   const start = (page - 1) * pageSize + 1;
@@ -324,6 +329,82 @@ export function ExecutionActivityPanel({
                   <p className="text-sm text-muted-foreground leading-relaxed">No active stage summary in telemetry.</p>
                 )}
               </div>
+            </div>
+          ) : null}
+          {activity.sessionMemory ? (
+            <div className="roc-subpanel p-4 grid gap-3 bg-background/55">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Memory Runtime</p>
+                  <h4>{activity.sessionMemory.workspace_mode} workspace explain</h4>
+                </div>
+                <span className="roc-pill px-3 py-1.5 text-xs">
+                  snapshot {activity.sessionMemory.frozen_snapshot_items}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <span className="roc-pill px-3 py-1.5 text-xs">prefetch {activity.sessionMemory.last_prefetch_items}</span>
+                <span className="roc-pill px-3 py-1.5 text-xs">rule hits {activity.sessionMemory.recent_rule_hits.length}</span>
+                <span className="roc-pill px-3 py-1.5 text-xs">session writes {activity.sessionMemory.candidate_count + activity.sessionMemory.validated_count + activity.sessionMemory.rejected_count}</span>
+                <span className="roc-pill px-3 py-1.5 text-xs">linked skills {activity.sessionMemory.linked_skill_count}</span>
+                {activity.sessionMemory.latest_consolidation_run ? (
+                  <span className="roc-pill px-3 py-1.5 text-xs">
+                    consolidation {activity.sessionMemory.latest_consolidation_run.run_id}
+                  </span>
+                ) : null}
+              </div>
+              <div className="grid gap-1 text-sm text-muted-foreground">
+                <p>Workspace key: {activity.sessionMemory.workspace_key}</p>
+                <p>Frozen snapshot generated: {formatDateTime(activity.sessionMemory.frozen_snapshot_generated_at ?? undefined)}</p>
+                <p>Last prefetch generated: {formatDateTime(activity.sessionMemory.last_prefetch_generated_at ?? undefined)}</p>
+                <p>
+                  Last prefetch query: {activity.sessionMemory.last_prefetch_query?.trim() || "No query captured"}
+                </p>
+                <p>
+                  Session memory records: candidate {activity.sessionMemory.candidate_count} · validated {activity.sessionMemory.validated_count} · rejected {activity.sessionMemory.rejected_count}
+                </p>
+                <p>
+                  Skill linkage: linked {activity.sessionMemory.linked_skill_count} · feedback lessons {activity.sessionMemory.skill_feedback_lesson_count}
+                </p>
+                <p>
+                  Retrieval: runs {activity.sessionMemory.retrieval_run_count} · hits {activity.sessionMemory.retrieval_hit_count} · used {activity.sessionMemory.retrieval_use_count}
+                </p>
+              </div>
+              {activity.sessionMemory.latest_consolidation_run ? (
+                <div className="grid gap-1 text-sm text-muted-foreground">
+                  <p>
+                    Latest consolidation finished {formatDateTime(activity.sessionMemory.latest_consolidation_run.finished_at ?? activity.sessionMemory.latest_consolidation_run.started_at)}
+                  </p>
+                  <p>
+                    Merged {activity.sessionMemory.latest_consolidation_run.merged_count} · promoted {activity.sessionMemory.latest_consolidation_run.promoted_count} · conflicts {activity.sessionMemory.latest_consolidation_run.conflict_count}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground leading-relaxed">No consolidation run has been recorded for this workspace yet.</p>
+              )}
+              {activity.sessionMemory.recent_rule_hits.length ? (
+                <div className="grid gap-2">
+                  <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Recent Rule Hits</p>
+                  <div className="grid gap-2 md:grid-cols-2">
+                    {activity.sessionMemory.recent_rule_hits.map((hit) => (
+                      <div key={hit.id} className="roc-item p-3 grid gap-1 bg-card/45">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <strong>{hit.hit_kind}</strong>
+                          {hit.memory_id ? (
+                            <span className="roc-pill px-2.5 py-1 text-xs">{hit.memory_id}</span>
+                          ) : null}
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {hit.detail || "No detail attached"}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {formatDateTime(hit.created_at)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </>

@@ -122,6 +122,85 @@ pub fn events_browser_page_for_offset(input: &InteractiveEventsQuery, offset: us
     (offset / events_browser_page_size(input)) + 1
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InteractiveMemoryRuleHitQuery {
+    pub run_id: Option<String>,
+    pub record_id: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InteractiveMemoryConsolidationRequest {
+    pub include_candidates: bool,
+    pub limit: Option<usize>,
+}
+
+pub fn parse_memory_rule_hit_query(raw: Option<&str>) -> InteractiveMemoryRuleHitQuery {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return InteractiveMemoryRuleHitQuery {
+            limit: Some(50),
+            ..Default::default()
+        };
+    };
+
+    let mut query = InteractiveMemoryRuleHitQuery {
+        limit: Some(50),
+        ..Default::default()
+    };
+    for token in raw.split_whitespace() {
+        let Some((key, value)) = token.split_once('=') else {
+            continue;
+        };
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        match key {
+            "run" | "run_id" => query.run_id = Some(value.to_string()),
+            "record" | "id" | "memory" | "memory_id" => query.record_id = Some(value.to_string()),
+            "limit" => query.limit = value.parse::<usize>().ok(),
+            _ => {}
+        }
+    }
+    query
+}
+
+pub fn parse_memory_consolidation_request(
+    raw: Option<&str>,
+) -> InteractiveMemoryConsolidationRequest {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return InteractiveMemoryConsolidationRequest::default();
+    };
+
+    let mut request = InteractiveMemoryConsolidationRequest::default();
+    for token in raw.split_whitespace() {
+        let normalized = token.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "candidate" | "candidates" | "include-candidates" | "all" => {
+                request.include_candidates = true;
+                continue;
+            }
+            _ => {}
+        }
+
+        if let Some((key, value)) = token.split_once('=') {
+            let value = value.trim();
+            if value.is_empty() {
+                continue;
+            }
+            match key {
+                "limit" => request.limit = value.parse::<usize>().ok(),
+                "include_candidates" | "include-candidates" => {
+                    request.include_candidates =
+                        matches!(value, "1" | "true" | "yes" | "on" | "all" | "candidate");
+                }
+                _ => {}
+            }
+        }
+    }
+    request
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InteractiveCommand {
     Exit,
@@ -160,7 +239,17 @@ pub enum InteractiveCommand {
     ScrollBottom,
     ShowRuntime,
     ShowUsage,
+    ShowInsights,
     ShowEvents(Option<String>),
+    ShowMemory(Option<String>),
+    ShowMemoryPreview(Option<String>),
+    ShowMemoryDetail(String),
+    ShowMemoryValidation(String),
+    ShowMemoryConflicts(String),
+    ShowMemoryRulePacks,
+    ShowMemoryRuleHits(Option<String>),
+    ShowMemoryConsolidationRuns,
+    RunMemoryConsolidation(Option<String>),
     /// `/inspect [stage_id]` — show stage event log for current session.
     InspectStage(Option<String>),
     /// User typed an unknown /command — we should warn, not treat as prompt.
@@ -253,9 +342,46 @@ pub fn parse_interactive_command(input: &str) -> Option<InteractiveCommand> {
         "status" | "stats" => Some(InteractiveCommand::ShowStatus),
         "runtime" => Some(InteractiveCommand::ShowRuntime),
         "usage" => Some(InteractiveCommand::ShowUsage),
+        "insights" | "insight" => Some(InteractiveCommand::ShowInsights),
         "events" | "event" => Some(InteractiveCommand::ShowEvents(
             (!arg.is_empty()).then_some(arg),
         )),
+        "memory" | "memories" => {
+            if arg.is_empty() {
+                Some(InteractiveCommand::ShowMemory(None))
+            } else {
+                let mut sub_parts = arg.split_whitespace();
+                let sub_cmd = sub_parts.next().unwrap_or_default();
+                let sub_arg = sub_parts.collect::<Vec<_>>().join(" ");
+                match sub_cmd {
+                    "show" | "detail" if !sub_arg.is_empty() => {
+                        Some(InteractiveCommand::ShowMemoryDetail(sub_arg))
+                    }
+                    "preview" => Some(InteractiveCommand::ShowMemoryPreview(
+                        (!sub_arg.is_empty()).then_some(sub_arg),
+                    )),
+                    "validation" | "report" if !sub_arg.is_empty() => {
+                        Some(InteractiveCommand::ShowMemoryValidation(sub_arg))
+                    }
+                    "conflicts" | "conflict" if !sub_arg.is_empty() => {
+                        Some(InteractiveCommand::ShowMemoryConflicts(sub_arg))
+                    }
+                    "rules" | "rule-packs" | "rulepacks" => {
+                        Some(InteractiveCommand::ShowMemoryRulePacks)
+                    }
+                    "hits" | "rule-hits" | "rulehits" => {
+                        Some(InteractiveCommand::ShowMemoryRuleHits(
+                            (!sub_arg.is_empty()).then_some(sub_arg),
+                        ))
+                    }
+                    "runs" | "run" => Some(InteractiveCommand::ShowMemoryConsolidationRuns),
+                    "consolidate" | "reflect" => Some(InteractiveCommand::RunMemoryConsolidation(
+                        (!sub_arg.is_empty()).then_some(sub_arg),
+                    )),
+                    _ => Some(InteractiveCommand::ShowMemory(Some(arg))),
+                }
+            }
+        }
         "models" => Some(InteractiveCommand::ListModels),
         "model" => {
             if arg.is_empty() {
@@ -343,8 +469,10 @@ pub fn parse_interactive_command(input: &str) -> Option<InteractiveCommand> {
 mod tests {
     use super::{
         default_events_browser_query, parse_events_browser_command, parse_events_browser_query,
-        parse_interactive_command, InteractiveCommand, InteractiveEventsCommand,
-        InteractiveEventsQuery, EVENTS_BROWSER_DEFAULT_PAGE_SIZE,
+        parse_interactive_command, parse_memory_consolidation_request, parse_memory_rule_hit_query,
+        InteractiveCommand, InteractiveEventsCommand, InteractiveEventsQuery,
+        InteractiveMemoryConsolidationRequest, InteractiveMemoryRuleHitQuery,
+        EVENTS_BROWSER_DEFAULT_PAGE_SIZE,
     };
     use crate::{ResolvedUiCommand, UiActionId, UiCommandArgumentKind};
 
@@ -449,6 +577,10 @@ mod tests {
             Some(InteractiveCommand::ShowUsage)
         );
         assert_eq!(
+            parse_interactive_command("/insights"),
+            Some(InteractiveCommand::ShowInsights)
+        );
+        assert_eq!(
             parse_interactive_command("/events"),
             Some(InteractiveCommand::ShowEvents(None))
         );
@@ -456,6 +588,54 @@ mod tests {
             parse_interactive_command("/events stage=stg_1 limit=10"),
             Some(InteractiveCommand::ShowEvents(Some(
                 "stage=stg_1 limit=10".to_string()
+            )))
+        );
+        assert_eq!(
+            parse_interactive_command("/memory"),
+            Some(InteractiveCommand::ShowMemory(None))
+        );
+        assert_eq!(
+            parse_interactive_command("/memory cargo"),
+            Some(InteractiveCommand::ShowMemory(Some("cargo".to_string())))
+        );
+        assert_eq!(
+            parse_interactive_command("/memory show mem_1"),
+            Some(InteractiveCommand::ShowMemoryDetail("mem_1".to_string()))
+        );
+        assert_eq!(
+            parse_interactive_command("/memory preview cargo test"),
+            Some(InteractiveCommand::ShowMemoryPreview(Some(
+                "cargo test".to_string()
+            )))
+        );
+        assert_eq!(
+            parse_interactive_command("/memory validation mem_1"),
+            Some(InteractiveCommand::ShowMemoryValidation(
+                "mem_1".to_string()
+            ))
+        );
+        assert_eq!(
+            parse_interactive_command("/memory conflicts mem_1"),
+            Some(InteractiveCommand::ShowMemoryConflicts("mem_1".to_string()))
+        );
+        assert_eq!(
+            parse_interactive_command("/memory rules"),
+            Some(InteractiveCommand::ShowMemoryRulePacks)
+        );
+        assert_eq!(
+            parse_interactive_command("/memory hits run=mem_run_1"),
+            Some(InteractiveCommand::ShowMemoryRuleHits(Some(
+                "run=mem_run_1".to_string()
+            )))
+        );
+        assert_eq!(
+            parse_interactive_command("/memory runs"),
+            Some(InteractiveCommand::ShowMemoryConsolidationRuns)
+        );
+        assert_eq!(
+            parse_interactive_command("/memory consolidate candidates limit=10"),
+            Some(InteractiveCommand::RunMemoryConsolidation(Some(
+                "candidates limit=10".to_string()
             )))
         );
     }
@@ -784,6 +964,29 @@ mod tests {
                 argument_kind: UiCommandArgumentKind::Text,
                 argument: Some("glm".to_string()),
             })
+        );
+    }
+
+    #[test]
+    fn parses_memory_rule_hit_query_spec() {
+        assert_eq!(
+            parse_memory_rule_hit_query(Some("run=run_1 record=mem_1 limit=10")),
+            InteractiveMemoryRuleHitQuery {
+                run_id: Some("run_1".to_string()),
+                record_id: Some("mem_1".to_string()),
+                limit: Some(10),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_memory_consolidation_request_spec() {
+        assert_eq!(
+            parse_memory_consolidation_request(Some("candidates limit=12")),
+            InteractiveMemoryConsolidationRequest {
+                include_candidates: true,
+                limit: Some(12),
+            }
         );
     }
 }

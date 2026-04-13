@@ -40,7 +40,10 @@ use super::super::permission::request_permission;
 use super::super::tui::request_question_answers;
 use super::cancel::is_scheduler_cancellation_error;
 use super::messages::resolve_provider_and_model;
-use super::prompt::{create_scheduler_user_message, SchedulerUserMessageContext};
+use super::prompt::{
+    create_scheduler_user_message, merge_scheduler_prompt_with_memory,
+    resolve_prompt_memory_context, SchedulerUserMessageContext,
+};
 use super::session_crud::{resolved_session_directory, set_session_run_status};
 use super::telemetry::persist_session_telemetry_metadata;
 
@@ -1149,6 +1152,14 @@ pub async fn run_local_scheduler_prompt(
         session.remove_metadata("scheduler_root_agent");
     }
 
+    let (memory_frozen_snapshot_block, _memory_prefetch_packet, memory_prefetch_block) =
+        resolve_prompt_memory_context(&state, &mut session, &req.prompt_text).await;
+    let scheduler_execution_prompt = merge_scheduler_prompt_with_memory(
+        &req.prompt_text,
+        memory_frozen_snapshot_block.as_deref(),
+        memory_prefetch_block.as_deref(),
+    );
+
     let mode_kind = scheduler_mode_kind(&profile_name);
     let resolved_system_prompt = scheduler_system_prompt_preview(&profile_name, &profile_config);
     let prompt_parts = resolve_local_scheduler_prompt_parts(
@@ -1306,7 +1317,7 @@ pub async fn run_local_scheduler_prompt(
     enrich_scheduler_plan_skills(&state, &mut plan).await?;
 
     let orchestrator_result = scheduler_orchestrator_from_plan(plan, tool_runner)
-        .execute(&req.prompt_text, &ctx)
+        .execute(&scheduler_execution_prompt, &ctx)
         .await;
     state
         .runtime_telemetry

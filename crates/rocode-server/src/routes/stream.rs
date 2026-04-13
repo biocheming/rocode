@@ -350,6 +350,7 @@ pub(crate) async fn stream_message(
                 rocode_session::prompt::PromptRequestContext {
                     provider: stream_provider,
                     system_prompt: stream_system_prompt.clone(),
+                    memory_prefetch: None,
                     tools: tool_defs,
                     compiled_request: compiled_request.clone(),
                     hooks: rocode_session::prompt::PromptHooks {

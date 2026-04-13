@@ -11,6 +11,7 @@ members = [
     "crates/rocode-provider",
     "crates/rocode-state",
     "crates/rocode-runtime-context",
+    "crates/rocode-memory",
     "crates/rocode-execution-types",
     "crates/rocode-session",
     "crates/rocode-skill",

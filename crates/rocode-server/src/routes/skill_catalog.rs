@@ -4,6 +4,7 @@ use axum::{
     extract::{Query, State},
     Json,
 };
+use rocode_memory::SkillWriteObservation;
 use rocode_orchestrator::{
     stage_policy_available_tools, stage_policy_from_label, SchedulerProfilePlan, SchedulerSkillRef,
     SchedulerStageKind, SchedulerStageOverride, StageToolPolicy,
@@ -611,12 +612,12 @@ where
 {
     let session_id = required_string(Some(req.session_id.clone()), "session_id")?;
     let permission = build_skill_manage_permission_request(&req)?;
-    permission_gate(state.clone(), session_id, permission)
+    permission_gate(state.clone(), session_id.clone(), permission)
         .await
         .map_err(map_tool_error_to_api_error)?;
 
     let authority = skill_governance_authority(state);
-    match req.action {
+    let result = match req.action {
         SkillManageAction::Create => authority
             .create_skill(
                 CreateSkillRequest {
@@ -691,7 +692,33 @@ where
                 "route:/skill/manage",
             )
             .map_err(map_skill_error_to_api_error),
+    }?;
+
+    let action_label = skill_write_action_label(&result.result.action);
+    let location = result.result.location.to_string_lossy().to_string();
+    if let Err(error) = state
+        .runtime_memory
+        .memory()
+        .ingest_skill_write_observation(&SkillWriteObservation {
+            session_id: &session_id,
+            tool_call_id: None,
+            skill_name: &result.result.skill_name,
+            action: action_label,
+            location: Some(location.as_str()),
+            supporting_file: result.result.supporting_file.as_deref(),
+            guard_report: result.guard_report.as_ref(),
+        })
+        .await
+    {
+        tracing::warn!(
+            session_id,
+            skill_name = %result.result.skill_name,
+            %error,
+            "failed to persist memory linkage for route skill_manage"
+        );
     }
+
+    Ok(result)
 }
 
 fn build_skill_manage_permission_request(
@@ -759,6 +786,17 @@ fn skill_manage_action_label(action: &SkillManageAction) -> &'static str {
         SkillManageAction::WriteFile => "write_file",
         SkillManageAction::RemoveFile => "remove_file",
         SkillManageAction::Delete => "delete",
+    }
+}
+
+fn skill_write_action_label(action: &rocode_skill::SkillWriteAction) -> &'static str {
+    match action {
+        rocode_skill::SkillWriteAction::Created => "create",
+        rocode_skill::SkillWriteAction::Patched => "patch",
+        rocode_skill::SkillWriteAction::Edited => "edit",
+        rocode_skill::SkillWriteAction::SupportingFileWritten => "write_file",
+        rocode_skill::SkillWriteAction::SupportingFileRemoved => "remove_file",
+        rocode_skill::SkillWriteAction::Deleted => "delete",
     }
 }
 
@@ -888,18 +926,55 @@ fn map_skill_error_to_api_error(error: rocode_skill::SkillError) -> ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session_runtime::memory::RuntimeMemoryAuthority;
     use crate::ServerState;
     use rocode_config::ConfigStore;
+    use rocode_memory::MemoryAuthority;
+    use rocode_runtime_context::ResolvedWorkspaceContextAuthority;
     use rocode_session::{Session, SessionMessage};
+    use rocode_state::UserStateAuthority;
+    use rocode_storage::{Database, MemoryRepository};
     use std::fs;
     use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
 
     fn server_state_for_project(project_dir: &std::path::Path) -> Arc<ServerState> {
         let mut state = ServerState::new();
-        state.config_store = Arc::new(
+        let config_store = Arc::new(
             ConfigStore::from_project_dir(project_dir).expect("project config store should load"),
         );
+        let user_state = Arc::new(UserStateAuthority::from_config_store(&config_store));
+        let resolved_context_authority = Arc::new(ResolvedWorkspaceContextAuthority::new(
+            config_store.clone(),
+            user_state.clone(),
+        ));
+        state.config_store = config_store;
+        state.user_state = user_state;
+        state.resolved_context_authority = resolved_context_authority;
+        Arc::new(state)
+    }
+
+    async fn server_state_for_project_with_memory(
+        project_dir: &std::path::Path,
+    ) -> Arc<ServerState> {
+        let mut state = ServerState::new();
+        let config_store = Arc::new(
+            ConfigStore::from_project_dir(project_dir).expect("project config store should load"),
+        );
+        let user_state = Arc::new(UserStateAuthority::from_config_store(&config_store));
+        let resolved_context_authority = Arc::new(ResolvedWorkspaceContextAuthority::new(
+            config_store.clone(),
+            user_state.clone(),
+        ));
+        let db = Database::in_memory().await.expect("db should initialize");
+        let repository = Arc::new(MemoryRepository::new(db.pool().clone()));
+        state.config_store = config_store;
+        state.user_state = user_state.clone();
+        state.resolved_context_authority = resolved_context_authority.clone();
+        state.runtime_memory = Arc::new(RuntimeMemoryAuthority::new(Arc::new(
+            MemoryAuthority::new(user_state, resolved_context_authority)
+                .with_repository(repository),
+        )));
         Arc::new(state)
     }
 
@@ -1097,6 +1172,46 @@ mod tests {
         assert!(content.contains("## Core Steps"));
         assert!(content.contains("## Validation"));
         assert!(response.guard_report.is_none());
+    }
+
+    #[tokio::test]
+    async fn manage_skill_create_persists_memory_linkage() {
+        let dir = tempdir().expect("tempdir");
+        let state = server_state_for_project_with_memory(dir.path()).await;
+
+        let response = execute_skill_manage_request_with_gate(
+            &state,
+            SkillManageRequest {
+                session_id: "skill-manage-memory".to_string(),
+                action: SkillManageAction::Create,
+                name: Some("provider-refresh".to_string()),
+                new_name: None,
+                description: Some("refresh provider catalog".to_string()),
+                body: Some("Refresh providers and validate model coverage.".to_string()),
+                methodology: None,
+                content: None,
+                category: None,
+                directory_name: None,
+                file_path: None,
+                frontmatter: None,
+            },
+            |_state, _session_id, _permission| async move { Ok(()) },
+        )
+        .await
+        .expect("manage skill should succeed");
+
+        let memories = state
+            .runtime_memory
+            .memory()
+            .list_memory(None)
+            .await
+            .expect("memory list should load");
+        assert!(
+            memories
+                .iter()
+                .any(|record| record.title.contains(&response.result.skill_name)),
+            "skill manage route should emit a linked memory record"
+        );
     }
 
     #[tokio::test]

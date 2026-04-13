@@ -345,6 +345,7 @@ async fn prompt_with_update_hook_emits_incremental_snapshots() {
             PromptRequestContext {
                 provider,
                 system_prompt: None,
+                memory_prefetch: None,
                 tools: Vec::new(),
                 compiled_request: CompiledExecutionRequest::default(),
                 hooks: PromptHooks {
@@ -459,6 +460,7 @@ async fn prompt_continues_after_tool_calls_without_finish_step_reason() {
             PromptRequestContext {
                 provider,
                 system_prompt: None,
+                memory_prefetch: None,
                 tools: Vec::new(),
                 compiled_request: CompiledExecutionRequest::default(),
                 hooks: PromptHooks::default(),

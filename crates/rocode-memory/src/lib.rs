@@ -1,0 +1,15 @@
+mod authority;
+mod consolidation;
+mod rules;
+mod validation;
+
+pub use authority::{
+    allowed_scopes_for_mode, load_last_prefetch_packet, load_persisted_memory_snapshot,
+    persist_last_prefetch_packet, persist_persisted_memory_snapshot, render_frozen_snapshot_block,
+    render_prefetch_packet_block, MemoryAuthority, MemoryFilter, PersistedMemorySnapshot,
+    ResolvedMemoryContext, SkillWriteObservation, ToolMemoryObservation,
+    MEMORY_FROZEN_SNAPSHOT_METADATA_KEY, MEMORY_LAST_PREFETCH_METADATA_KEY,
+};
+pub use consolidation::MemoryConsolidationEngine;
+pub use rules::builtin_rule_packs;
+pub use validation::{MemoryValidationEngine, MemoryValidationOutcome};

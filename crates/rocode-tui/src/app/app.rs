@@ -46,7 +46,9 @@ use rocode_core::agent_task_registry::{global_task_registry, AgentTaskStatus};
 
 use crate::api::{
     ApiClient, ExecutionModeInfo, ExecutionStatus as ApiExecutionStatus, McpStatusInfo,
-    MessageInfo, PermissionRequestInfo, QuestionInfo, RecoveryActionKind as ApiRecoveryActionKind,
+    MemoryConflictResponse, MemoryDetailView, MemoryListQuery, MemoryRetrievalPreviewResponse,
+    MemoryRetrievalQuery, MemoryValidationReportResponse, MessageInfo, PermissionRequestInfo,
+    QuestionInfo, RecoveryActionKind as ApiRecoveryActionKind,
     RecoveryProtocolStatus as ApiRecoveryProtocolStatus, SessionExecutionNode, SessionInfo,
     SessionRecoveryProtocol, SessionRevertInfo,
 };
@@ -226,12 +228,47 @@ struct TuiEventsBrowserState {
 }
 
 #[derive(Clone, Debug, Default)]
+struct TuiMemoryListState {
+    query: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct TuiMemoryDetailState {
+    record_id: String,
+}
+
+#[derive(Clone, Debug, Default)]
+struct TuiMemoryPreviewState {
+    query: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct TuiMemoryRuleHitsState {
+    raw_query: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct TuiMemoryConsolidationState {
+    raw_request: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
 enum StatusDialogView {
     #[default]
     Overview,
     Runtime,
     Usage,
+    Insights,
     Events(TuiEventsBrowserState),
+    MemoryList(TuiMemoryListState),
+    MemoryPreview(TuiMemoryPreviewState),
+    MemoryDetail(TuiMemoryDetailState),
+    MemoryValidation(TuiMemoryDetailState),
+    MemoryConflicts(TuiMemoryDetailState),
+    MemoryRulePacks,
+    MemoryRuleHits(TuiMemoryRuleHitsState),
+    MemoryConsolidationRuns,
+    MemoryConsolidationResult(TuiMemoryConsolidationState),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

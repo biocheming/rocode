@@ -504,8 +504,38 @@ impl App {
             InteractiveCommand::ShowUsage => {
                 let _ = self.open_usage_status_dialog();
             }
+            InteractiveCommand::ShowInsights => {
+                let _ = self.open_insights_status_dialog();
+            }
             InteractiveCommand::ShowEvents(raw_filter) => {
                 let _ = self.open_events_status_dialog(raw_filter.as_deref());
+            }
+            InteractiveCommand::ShowMemory(search) => {
+                let _ = self.open_memory_list_status_dialog(search.as_deref());
+            }
+            InteractiveCommand::ShowMemoryPreview(query) => {
+                let _ = self.open_memory_preview_status_dialog(query.as_deref());
+            }
+            InteractiveCommand::ShowMemoryDetail(record_id) => {
+                let _ = self.open_memory_detail_status_dialog(&record_id);
+            }
+            InteractiveCommand::ShowMemoryValidation(record_id) => {
+                let _ = self.open_memory_validation_status_dialog(&record_id);
+            }
+            InteractiveCommand::ShowMemoryConflicts(record_id) => {
+                let _ = self.open_memory_conflicts_status_dialog(&record_id);
+            }
+            InteractiveCommand::ShowMemoryRulePacks => {
+                let _ = self.open_memory_rule_packs_status_dialog();
+            }
+            InteractiveCommand::ShowMemoryRuleHits(raw_query) => {
+                let _ = self.open_memory_rule_hits_status_dialog(raw_query.as_deref());
+            }
+            InteractiveCommand::ShowMemoryConsolidationRuns => {
+                let _ = self.open_memory_consolidation_runs_status_dialog();
+            }
+            InteractiveCommand::RunMemoryConsolidation(raw_request) => {
+                let _ = self.run_memory_consolidation_status_dialog(raw_request.as_deref());
             }
             InteractiveCommand::InspectStage(stage_filter) => {
                 let _ = self.open_events_status_dialog(stage_filter.as_deref());

@@ -10,7 +10,12 @@ pub use rocode_session::{
 use rocode_session::{SessionTelemetrySnapshot as PersistedSessionTelemetrySnapshot, SessionUsage};
 use rocode_state::RecentModelEntry;
 pub use rocode_types::{
-    ManagedSkillRecord, SessionStatusInfo, SkillArtifactCacheEntry, SkillAuditEvent,
+    ManagedSkillRecord, MemoryConflictResponse, MemoryConsolidationRequest,
+    MemoryConsolidationResponse, MemoryConsolidationRunListResponse, MemoryConsolidationRunQuery,
+    MemoryDetailView, MemoryListQuery, MemoryListResponse, MemoryRetrievalPreviewResponse,
+    MemoryRetrievalQuery, MemoryRuleHitListResponse, MemoryRuleHitQuery,
+    MemoryRulePackListResponse, MemoryValidationReportResponse, SessionMemoryInsight,
+    SessionMemoryTelemetrySummary, SessionStatusInfo, SkillArtifactCacheEntry, SkillAuditEvent,
     SkillDistributionRecord, SkillGovernanceTimelineEntry, SkillGovernanceTimelineStatus,
     SkillGovernanceWriteResult, SkillGuardReport, SkillGuardStatus, SkillHubArtifactCacheResponse,
     SkillHubAuditResponse, SkillHubDistributionResponse, SkillHubGuardRunRequest,
@@ -331,6 +336,8 @@ pub struct SessionTelemetrySnapshot {
     pub stages: Vec<StageSummary>,
     pub topology: SessionExecutionTopology,
     pub usage: SessionUsage,
+    #[serde(default)]
+    pub memory: Option<SessionMemoryTelemetrySummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -341,6 +348,8 @@ pub struct SessionInsightsResponse {
     pub updated: i64,
     #[serde(default)]
     pub telemetry: Option<PersistedSessionTelemetrySnapshot>,
+    #[serde(default)]
+    pub memory: Option<SessionMemoryInsight>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1633,6 +1642,172 @@ impl ApiClient {
         }
 
         Ok(response.json::<SkillManageResponse>()?)
+    }
+
+    pub fn list_memory(
+        &self,
+        query: Option<&MemoryListQuery>,
+    ) -> anyhow::Result<MemoryListResponse> {
+        let url = format!("{}/memory/list", self.base_url);
+        let response = match query {
+            Some(query) => self.client.get(&url).query(query).send()?,
+            None => self.client.get(&url).send()?,
+        };
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to list memory: {} - {}", status, text);
+        }
+        Ok(response.json::<MemoryListResponse>()?)
+    }
+
+    pub fn search_memory(
+        &self,
+        query: Option<&MemoryListQuery>,
+    ) -> anyhow::Result<MemoryListResponse> {
+        let url = format!("{}/memory/search", self.base_url);
+        let response = match query {
+            Some(query) => self.client.get(&url).query(query).send()?,
+            None => self.client.get(&url).send()?,
+        };
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to search memory: {} - {}", status, text);
+        }
+        Ok(response.json::<MemoryListResponse>()?)
+    }
+
+    pub fn get_memory_retrieval_preview(
+        &self,
+        query: &MemoryRetrievalQuery,
+    ) -> anyhow::Result<MemoryRetrievalPreviewResponse> {
+        let url = format!("{}/memory/retrieval-preview", self.base_url);
+        let response = self.client.get(&url).query(query).send()?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to fetch memory retrieval preview: {} - {}",
+                status,
+                text
+            );
+        }
+        Ok(response.json::<MemoryRetrievalPreviewResponse>()?)
+    }
+
+    pub fn get_memory_detail(&self, id: &str) -> anyhow::Result<MemoryDetailView> {
+        let url = format!("{}/memory/{}", self.base_url, id);
+        let response = self.client.get(&url).send()?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to fetch memory detail `{}`: {} - {}",
+                id,
+                status,
+                text
+            );
+        }
+        Ok(response.json::<MemoryDetailView>()?)
+    }
+
+    pub fn get_memory_validation_report(
+        &self,
+        id: &str,
+    ) -> anyhow::Result<MemoryValidationReportResponse> {
+        let url = format!("{}/memory/{}/validation-report", self.base_url, id);
+        let response = self.client.get(&url).send()?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to fetch memory validation report `{}`: {} - {}",
+                id,
+                status,
+                text
+            );
+        }
+        Ok(response.json::<MemoryValidationReportResponse>()?)
+    }
+
+    pub fn get_memory_conflicts(&self, id: &str) -> anyhow::Result<MemoryConflictResponse> {
+        let url = format!("{}/memory/{}/conflicts", self.base_url, id);
+        let response = self.client.get(&url).send()?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to fetch memory conflicts `{}`: {} - {}",
+                id,
+                status,
+                text
+            );
+        }
+        Ok(response.json::<MemoryConflictResponse>()?)
+    }
+
+    pub fn list_memory_rule_packs(&self) -> anyhow::Result<MemoryRulePackListResponse> {
+        let url = format!("{}/memory/rule-packs", self.base_url);
+        let response = self.client.get(&url).send()?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to fetch memory rule packs: {} - {}", status, text);
+        }
+        Ok(response.json::<MemoryRulePackListResponse>()?)
+    }
+
+    pub fn list_memory_rule_hits(
+        &self,
+        query: Option<&MemoryRuleHitQuery>,
+    ) -> anyhow::Result<MemoryRuleHitListResponse> {
+        let url = format!("{}/memory/rule-hits", self.base_url);
+        let response = match query {
+            Some(query) => self.client.get(&url).query(query).send()?,
+            None => self.client.get(&url).send()?,
+        };
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to fetch memory rule hits: {} - {}", status, text);
+        }
+        Ok(response.json::<MemoryRuleHitListResponse>()?)
+    }
+
+    pub fn list_memory_consolidation_runs(
+        &self,
+        query: Option<&MemoryConsolidationRunQuery>,
+    ) -> anyhow::Result<MemoryConsolidationRunListResponse> {
+        let url = format!("{}/memory/consolidation/runs", self.base_url);
+        let response = match query {
+            Some(query) => self.client.get(&url).query(query).send()?,
+            None => self.client.get(&url).send()?,
+        };
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to fetch memory consolidation runs: {} - {}",
+                status,
+                text
+            );
+        }
+        Ok(response.json::<MemoryConsolidationRunListResponse>()?)
+    }
+
+    pub fn run_memory_consolidation(
+        &self,
+        request: &MemoryConsolidationRequest,
+    ) -> anyhow::Result<MemoryConsolidationResponse> {
+        let url = format!("{}/memory/consolidate", self.base_url);
+        let response = self.client.post(&url).json(request).send()?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to run memory consolidation: {} - {}", status, text);
+        }
+        Ok(response.json::<MemoryConsolidationResponse>()?)
     }
 
     pub fn list_skill_hub_managed(&self) -> anyhow::Result<SkillHubManagedResponse> {

@@ -459,12 +459,75 @@ pub(super) async fn run_chat_session(
                     InteractiveCommand::ShowUsage => {
                         cli_print_usage_snapshot(&runtime, &api_client, &repl_style).await;
                     }
+                    InteractiveCommand::ShowInsights => {
+                        cli_print_session_insights(&runtime, &api_client, &repl_style).await;
+                    }
                     InteractiveCommand::ShowEvents(raw_filter) => {
                         cli_print_session_events(
                             &runtime,
                             &api_client,
                             &repl_style,
                             raw_filter.as_deref(),
+                        )
+                        .await;
+                    }
+                    InteractiveCommand::ShowMemory(search) => {
+                        cli_print_memory_list(
+                            &runtime,
+                            &api_client,
+                            &repl_style,
+                            search.as_deref(),
+                        )
+                        .await;
+                    }
+                    InteractiveCommand::ShowMemoryPreview(query) => {
+                        cli_print_memory_retrieval_preview(
+                            &runtime,
+                            &api_client,
+                            &repl_style,
+                            query.as_deref(),
+                        )
+                        .await;
+                    }
+                    InteractiveCommand::ShowMemoryDetail(record_id) => {
+                        cli_print_memory_detail(&runtime, &api_client, &repl_style, &record_id)
+                            .await;
+                    }
+                    InteractiveCommand::ShowMemoryValidation(record_id) => {
+                        cli_print_memory_validation_report(
+                            &runtime,
+                            &api_client,
+                            &repl_style,
+                            &record_id,
+                        )
+                        .await;
+                    }
+                    InteractiveCommand::ShowMemoryConflicts(record_id) => {
+                        cli_print_memory_conflicts(&runtime, &api_client, &repl_style, &record_id)
+                            .await;
+                    }
+                    InteractiveCommand::ShowMemoryRulePacks => {
+                        cli_print_memory_rule_packs(&runtime, &api_client, &repl_style).await;
+                    }
+                    InteractiveCommand::ShowMemoryRuleHits(raw_query) => {
+                        cli_print_memory_rule_hits(
+                            &runtime,
+                            &api_client,
+                            &repl_style,
+                            raw_query.as_deref(),
+                        )
+                        .await;
+                    }
+                    InteractiveCommand::ShowMemoryConsolidationRuns => {
+                        cli_print_memory_consolidation_runs(&runtime, &api_client, &repl_style)
+                            .await;
+                    }
+                    InteractiveCommand::RunMemoryConsolidation(raw_request) => {
+                        cli_run_memory_consolidation(
+                            &runtime,
+                            &api_client,
+                            &repl_style,
+                            raw_request.as_deref(),
                         )
                         .await;
                     }

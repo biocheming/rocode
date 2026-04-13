@@ -4,6 +4,7 @@ mod file;
 mod frontend_smoke;
 mod global;
 mod mcp;
+mod memory;
 mod permission;
 mod plugin_auth;
 mod process;
@@ -19,6 +20,7 @@ mod tui;
 mod workspace;
 
 // Re-export all pub items from sub-modules so `pub use routes::*` in lib.rs continues to work.
+use self::memory::memory_routes;
 use self::plugin_auth::{ensure_plugin_loader_active, plugin_auth_routes};
 use self::process::process_routes;
 use self::skill_catalog::{
@@ -94,6 +96,7 @@ pub fn router() -> Router<Arc<ServerState>> {
         )
         .route("/skill/manage", post(manage_skill))
         .nest("/skill/hub", skill_hub_routes())
+        .nest("/memory", memory_routes())
         .route("/lsp", get(get_lsp_status))
         .route("/formatter", get(get_formatter_status))
         .route("/auth/{id}", put(set_auth).delete(delete_auth))

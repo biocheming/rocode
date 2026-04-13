@@ -896,6 +896,7 @@ mod tests {
                 child_session_count: 0,
                 primary_child_session_id: None,
             }],
+            memory: None,
             last_run_status: "completed".to_string(),
             updated_at: 123,
         };
@@ -930,6 +931,7 @@ mod tests {
                     total_cost: 0.1,
                 },
                 stage_summaries: vec![],
+                memory: None,
                 last_run_status: "completed".to_string(),
                 updated_at: 123,
             },

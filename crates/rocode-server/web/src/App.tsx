@@ -2422,6 +2422,7 @@ export default function App() {
         {rightSidebarOpen && (
           <div className="w-80 shrink-0 overflow-hidden border-l border-border bg-sidebar/55">
             <WorkspacePanel
+              apiJson={apiJson}
               workspaceLoading={workspaceLoading}
               fileTree={fileTree}
               workspaceRootPath={workspaceRootPath || resolvedWorkspaceRootPath}

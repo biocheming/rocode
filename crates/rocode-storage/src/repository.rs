@@ -2,11 +2,14 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json;
-use sqlx::{FromRow, SqlitePool};
+use sqlx::{FromRow, Row, SqlitePool};
 
 use rocode_types::{
-    MessagePart, MessageRole, Session, SessionMessage, SessionShare, SessionStatus, SessionSummary,
-    SessionTime, SessionUsage,
+    MemoryConflictView, MemoryConsolidationRun, MemoryEvidenceRef, MemoryKind, MemoryRecord,
+    MemoryRecordId, MemoryRuleHit, MemoryRuleHitQuery, MemoryRulePack, MemoryRulePackKind,
+    MemoryScope, MemoryStatus, MemoryValidationReport, MemoryValidationStatus, MessagePart,
+    MessageRole, Session, SessionMessage, SessionShare, SessionStatus, SessionSummary, SessionTime,
+    SessionUsage,
 };
 
 use crate::database::DatabaseError;
@@ -47,6 +50,846 @@ ON CONFLICT(id) DO UPDATE SET
     metadata = excluded.metadata,
     data = excluded.data
 "#;
+
+const MEMORY_RECORD_UPSERT_SQL: &str = r#"
+INSERT INTO memory_records (
+    id, kind, scope, status, title, summary, trigger_conditions, normalized_facts, boundaries,
+    confidence, source_session_id, workspace_identity, created_at, updated_at,
+    last_validated_at, expires_at, derived_skill_name, linked_skill_name, validation_status
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    kind = excluded.kind,
+    scope = excluded.scope,
+    status = excluded.status,
+    title = excluded.title,
+    summary = excluded.summary,
+    trigger_conditions = excluded.trigger_conditions,
+    normalized_facts = excluded.normalized_facts,
+    boundaries = excluded.boundaries,
+    confidence = excluded.confidence,
+    source_session_id = excluded.source_session_id,
+    workspace_identity = excluded.workspace_identity,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at,
+    last_validated_at = excluded.last_validated_at,
+    expires_at = excluded.expires_at,
+    derived_skill_name = excluded.derived_skill_name,
+    linked_skill_name = excluded.linked_skill_name,
+    validation_status = excluded.validation_status
+"#;
+
+#[derive(Debug, Clone, Default)]
+pub struct MemoryRepositoryFilter {
+    pub scopes: Vec<MemoryScope>,
+    pub kinds: Vec<MemoryKind>,
+    pub statuses: Vec<MemoryStatus>,
+    pub search: Option<String>,
+    pub workspace_identity: Option<String>,
+    pub source_session_id: Option<String>,
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MemoryRetrievalLogEntry {
+    pub session_id: Option<String>,
+    pub query: Option<String>,
+    pub stage: Option<String>,
+    pub scopes: Vec<MemoryScope>,
+    pub retrieved_count: u32,
+    pub used_count: u32,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct MemoryConflictRecord {
+    pub id: String,
+    pub left_memory_id: String,
+    pub right_memory_id: String,
+    pub conflict_kind: String,
+    pub detail: String,
+    pub detected_at: i64,
+}
+
+#[derive(Debug, FromRow)]
+struct MemoryRecordRow {
+    id: String,
+    kind: String,
+    scope: String,
+    status: String,
+    title: String,
+    summary: String,
+    trigger_conditions: Option<String>,
+    normalized_facts: Option<String>,
+    boundaries: Option<String>,
+    confidence: Option<f64>,
+    source_session_id: Option<String>,
+    workspace_identity: Option<String>,
+    created_at: i64,
+    updated_at: i64,
+    last_validated_at: Option<i64>,
+    expires_at: Option<i64>,
+    derived_skill_name: Option<String>,
+    linked_skill_name: Option<String>,
+    validation_status: String,
+}
+
+impl MemoryRecordRow {
+    fn into_record(self, evidence_refs: Vec<MemoryEvidenceRef>) -> MemoryRecord {
+        MemoryRecord {
+            id: MemoryRecordId(self.id),
+            kind: string_to_memory_kind(&self.kind),
+            scope: string_to_memory_scope(&self.scope),
+            status: string_to_memory_status(&self.status),
+            title: self.title,
+            summary: self.summary,
+            trigger_conditions: parse_json_vec(self.trigger_conditions),
+            normalized_facts: parse_json_vec(self.normalized_facts),
+            boundaries: parse_json_vec(self.boundaries),
+            confidence: self.confidence.map(|value| value as f32),
+            evidence_refs,
+            source_session_id: self.source_session_id,
+            workspace_identity: self.workspace_identity,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            last_validated_at: self.last_validated_at,
+            expires_at: self.expires_at,
+            derived_skill_name: self.derived_skill_name,
+            linked_skill_name: self.linked_skill_name,
+            validation_status: string_to_memory_validation_status(&self.validation_status),
+        }
+    }
+}
+
+#[derive(Debug, FromRow)]
+struct MemoryEvidenceRow {
+    memory_id: String,
+    evidence_index: i64,
+    session_id: Option<String>,
+    message_id: Option<String>,
+    tool_call_id: Option<String>,
+    stage_id: Option<String>,
+    note: Option<String>,
+}
+
+#[derive(Debug, FromRow)]
+struct MemoryValidationRunRow {
+    memory_id: Option<String>,
+    status: String,
+    issues: Option<String>,
+    checked_at: i64,
+}
+
+#[derive(Debug, FromRow)]
+struct MemoryConflictRow {
+    id: String,
+    left_memory_id: Option<String>,
+    right_memory_id: Option<String>,
+    conflict_kind: String,
+    detail: String,
+    detected_at: i64,
+}
+
+#[derive(Debug, FromRow)]
+struct MemoryConsolidationRunRow {
+    run_id: String,
+    started_at: i64,
+    finished_at: Option<i64>,
+    merged_count: i64,
+    promoted_count: i64,
+    conflict_count: i64,
+}
+
+#[derive(Debug, FromRow)]
+struct MemoryRulePackRow {
+    id: String,
+    rule_pack_kind: String,
+    version: String,
+    body: String,
+    created_at: i64,
+    updated_at: i64,
+}
+
+#[derive(Debug, FromRow)]
+struct MemoryRuleHitRow {
+    id: String,
+    rule_pack_id: Option<String>,
+    memory_id: Option<String>,
+    run_id: Option<String>,
+    hit_kind: String,
+    detail: Option<String>,
+    created_at: i64,
+}
+
+#[derive(Clone)]
+pub struct MemoryRepository {
+    pool: SqlitePool,
+}
+
+impl MemoryRepository {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+
+    pub async fn upsert_record(&self, record: &MemoryRecord) -> Result<(), DatabaseError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| DatabaseError::TransactionError(e.to_string()))?;
+
+        bind_memory_record_upsert(sqlx::query(MEMORY_RECORD_UPSERT_SQL), record)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+        sqlx::query("DELETE FROM memory_evidence WHERE memory_id = ?")
+            .bind(&record.id.0)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+        for (index, evidence) in record.evidence_refs.iter().enumerate() {
+            sqlx::query(
+                r#"
+                INSERT INTO memory_evidence (
+                    memory_id, evidence_index, session_id, message_id, tool_call_id, stage_id, note
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(&record.id.0)
+            .bind(index as i64)
+            .bind(&evidence.session_id)
+            .bind(&evidence.message_id)
+            .bind(&evidence.tool_call_id)
+            .bind(&evidence.stage_id)
+            .bind(&evidence.note)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| DatabaseError::TransactionError(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn get_record(&self, id: &str) -> Result<Option<MemoryRecord>, DatabaseError> {
+        let row = sqlx::query_as::<_, MemoryRecordRow>(
+            r#"SELECT
+                id, kind, scope, status, title, summary, trigger_conditions, normalized_facts,
+                boundaries, confidence, source_session_id, workspace_identity, created_at,
+                updated_at, last_validated_at, expires_at, derived_skill_name,
+                linked_skill_name, validation_status
+               FROM memory_records
+               WHERE id = ?"#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let evidence = self.load_evidence_map(&[row.id.clone()]).await?;
+        Ok(Some(row.into_record(
+            evidence.get(id).cloned().unwrap_or_default(),
+        )))
+    }
+
+    pub async fn list_records(
+        &self,
+        filter: Option<&MemoryRepositoryFilter>,
+    ) -> Result<Vec<MemoryRecord>, DatabaseError> {
+        let filter = filter.cloned().unwrap_or_default();
+        let mut sql = String::from(
+            r#"SELECT
+                id, kind, scope, status, title, summary, trigger_conditions, normalized_facts,
+                boundaries, confidence, source_session_id, workspace_identity, created_at,
+                updated_at, last_validated_at, expires_at, derived_skill_name,
+                linked_skill_name, validation_status
+               FROM memory_records
+               WHERE 1 = 1"#,
+        );
+
+        if !filter.scopes.is_empty() {
+            sql.push_str(" AND scope IN (");
+            sql.push_str(&repeat_placeholders(filter.scopes.len()));
+            sql.push(')');
+        }
+        if !filter.kinds.is_empty() {
+            sql.push_str(" AND kind IN (");
+            sql.push_str(&repeat_placeholders(filter.kinds.len()));
+            sql.push(')');
+        }
+        if !filter.statuses.is_empty() {
+            sql.push_str(" AND status IN (");
+            sql.push_str(&repeat_placeholders(filter.statuses.len()));
+            sql.push(')');
+        }
+        if filter.search.is_some() {
+            sql.push_str(" AND (title LIKE ? OR summary LIKE ? OR normalized_facts LIKE ?)");
+        }
+        if filter.workspace_identity.is_some() {
+            sql.push_str(" AND workspace_identity = ?");
+        }
+        if filter.source_session_id.is_some() {
+            sql.push_str(" AND source_session_id = ?");
+        }
+        sql.push_str(" ORDER BY updated_at DESC LIMIT ?");
+
+        let mut query = sqlx::query_as::<_, MemoryRecordRow>(&sql);
+        for scope in &filter.scopes {
+            query = query.bind(memory_scope_to_str(scope));
+        }
+        for kind in &filter.kinds {
+            query = query.bind(memory_kind_to_str(kind));
+        }
+        for status in &filter.statuses {
+            query = query.bind(memory_status_to_str(status));
+        }
+        if let Some(search) = filter.search.as_deref() {
+            let pattern = format!("%{}%", search);
+            query = query
+                .bind(pattern.clone())
+                .bind(pattern.clone())
+                .bind(pattern);
+        }
+        if let Some(workspace_identity) = filter.workspace_identity.as_deref() {
+            query = query.bind(workspace_identity);
+        }
+        if let Some(source_session_id) = filter.source_session_id.as_deref() {
+            query = query.bind(source_session_id);
+        }
+        query = query.bind(filter.limit.unwrap_or(100));
+
+        let rows = query
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+        let ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+        let evidence = self.load_evidence_map(&ids).await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let id = row.id.clone();
+                row.into_record(evidence.get(&id).cloned().unwrap_or_default())
+            })
+            .collect())
+    }
+
+    pub async fn delete_record(&self, id: &str) -> Result<(), DatabaseError> {
+        sqlx::query("DELETE FROM memory_records WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn record_validation_run(
+        &self,
+        report: &MemoryValidationReport,
+    ) -> Result<(), DatabaseError> {
+        let run_id = validation_run_id(report);
+        let issues = serde_json::to_string(&report.issues)
+            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+        sqlx::query(
+            r#"
+            INSERT INTO memory_validation_runs (run_id, memory_id, status, issues, checked_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                memory_id = excluded.memory_id,
+                status = excluded.status,
+                issues = excluded.issues,
+                checked_at = excluded.checked_at
+            "#,
+        )
+        .bind(run_id)
+        .bind(report.record_id.as_ref().map(|id| id.0.as_str()))
+        .bind(memory_validation_status_to_str(&report.status))
+        .bind(issues)
+        .bind(report.checked_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn latest_validation_report(
+        &self,
+        memory_id: &str,
+    ) -> Result<Option<MemoryValidationReport>, DatabaseError> {
+        let row = sqlx::query_as::<_, MemoryValidationRunRow>(
+            r#"
+            SELECT memory_id, status, issues, checked_at
+            FROM memory_validation_runs
+            WHERE memory_id = ?
+            ORDER BY checked_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(memory_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+        Ok(row.map(|row| MemoryValidationReport {
+            record_id: row.memory_id.map(MemoryRecordId),
+            status: string_to_memory_validation_status(&row.status),
+            issues: parse_json_vec(row.issues),
+            checked_at: row.checked_at,
+        }))
+    }
+
+    pub async fn record_consolidation_run(
+        &self,
+        run: &MemoryConsolidationRun,
+    ) -> Result<(), DatabaseError> {
+        sqlx::query(
+            r#"
+            INSERT INTO memory_consolidation_runs (
+                run_id, started_at, finished_at, merged_count, promoted_count, conflict_count
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                started_at = excluded.started_at,
+                finished_at = excluded.finished_at,
+                merged_count = excluded.merged_count,
+                promoted_count = excluded.promoted_count,
+                conflict_count = excluded.conflict_count
+            "#,
+        )
+        .bind(&run.run_id)
+        .bind(run.started_at)
+        .bind(run.finished_at)
+        .bind(run.merged_count as i64)
+        .bind(run.promoted_count as i64)
+        .bind(run.conflict_count as i64)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn list_consolidation_runs(
+        &self,
+        limit: Option<i64>,
+    ) -> Result<Vec<MemoryConsolidationRun>, DatabaseError> {
+        let rows = sqlx::query_as::<_, MemoryConsolidationRunRow>(
+            r#"
+            SELECT run_id, started_at, finished_at, merged_count, promoted_count, conflict_count
+            FROM memory_consolidation_runs
+            ORDER BY started_at DESC, run_id DESC
+            LIMIT ?
+            "#,
+        )
+        .bind(limit.unwrap_or(20))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| MemoryConsolidationRun {
+                run_id: row.run_id,
+                started_at: row.started_at,
+                finished_at: row.finished_at,
+                merged_count: row.merged_count.max(0) as u32,
+                promoted_count: row.promoted_count.max(0) as u32,
+                conflict_count: row.conflict_count.max(0) as u32,
+            })
+            .collect())
+    }
+
+    pub async fn record_retrieval(
+        &self,
+        entry: &MemoryRetrievalLogEntry,
+    ) -> Result<(), DatabaseError> {
+        let scopes = serde_json::to_string(&entry.scopes)
+            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+        sqlx::query(
+            r#"
+            INSERT INTO memory_retrieval_log (
+                session_id, query, stage, scopes, retrieved_count, used_count, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&entry.session_id)
+        .bind(&entry.query)
+        .bind(&entry.stage)
+        .bind(scopes)
+        .bind(entry.retrieved_count as i64)
+        .bind(entry.used_count as i64)
+        .bind(entry.created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn list_retrieval_logs(
+        &self,
+        session_id: Option<&str>,
+        limit: Option<i64>,
+    ) -> Result<Vec<MemoryRetrievalLogEntry>, DatabaseError> {
+        let limit = limit.unwrap_or(20).clamp(1, 500);
+        let rows = if let Some(session_id) = session_id {
+            sqlx::query(
+                r#"
+                SELECT session_id, query, stage, scopes, retrieved_count, used_count, created_at
+                FROM memory_retrieval_log
+                WHERE session_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                "#,
+            )
+            .bind(session_id)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| DatabaseError::QueryError(e.to_string()))?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT session_id, query, stage, scopes, retrieved_count, used_count, created_at
+                FROM memory_retrieval_log
+                ORDER BY created_at DESC
+                LIMIT ?
+                "#,
+            )
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| DatabaseError::QueryError(e.to_string()))?
+        };
+
+        rows.into_iter()
+            .map(|row| {
+                let scopes =
+                    serde_json::from_str::<Vec<MemoryScope>>(&row.get::<String, _>("scopes"))
+                        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+                Ok(MemoryRetrievalLogEntry {
+                    session_id: row.get("session_id"),
+                    query: row.get("query"),
+                    stage: row.get("stage"),
+                    scopes,
+                    retrieved_count: row.get::<i64, _>("retrieved_count").max(0) as u32,
+                    used_count: row.get::<i64, _>("used_count").max(0) as u32,
+                    created_at: row.get("created_at"),
+                })
+            })
+            .collect()
+    }
+
+    pub async fn upsert_rule_pack(&self, pack: &MemoryRulePack) -> Result<(), DatabaseError> {
+        let body =
+            serde_json::to_string(pack).map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+        sqlx::query(
+            r#"
+            INSERT INTO memory_rule_packs (
+                id, rule_pack_kind, version, body, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                rule_pack_kind = excluded.rule_pack_kind,
+                version = excluded.version,
+                body = excluded.body,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(&pack.id)
+        .bind(memory_rule_pack_kind_to_str(&pack.rule_pack_kind))
+        .bind(&pack.version)
+        .bind(body)
+        .bind(pack.created_at)
+        .bind(pack.updated_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn list_rule_packs(
+        &self,
+        kind: Option<MemoryRulePackKind>,
+    ) -> Result<Vec<MemoryRulePack>, DatabaseError> {
+        let rows = if let Some(kind) = kind {
+            sqlx::query_as::<_, MemoryRulePackRow>(
+                r#"
+                SELECT id, rule_pack_kind, version, body, created_at, updated_at
+                FROM memory_rule_packs
+                WHERE rule_pack_kind = ?
+                ORDER BY id ASC
+                "#,
+            )
+            .bind(memory_rule_pack_kind_to_str(&kind))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| DatabaseError::QueryError(e.to_string()))?
+        } else {
+            sqlx::query_as::<_, MemoryRulePackRow>(
+                r#"
+                SELECT id, rule_pack_kind, version, body, created_at, updated_at
+                FROM memory_rule_packs
+                ORDER BY rule_pack_kind ASC, id ASC
+                "#,
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| DatabaseError::QueryError(e.to_string()))?
+        };
+
+        rows.into_iter().map(parse_memory_rule_pack_row).collect()
+    }
+
+    pub async fn record_rule_hits(&self, hits: &[MemoryRuleHit]) -> Result<(), DatabaseError> {
+        if hits.is_empty() {
+            return Ok(());
+        }
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| DatabaseError::TransactionError(e.to_string()))?;
+
+        for hit in hits {
+            sqlx::query(
+                r#"
+                INSERT INTO memory_rule_hits (
+                    id, rule_pack_id, memory_id, run_id, hit_kind, detail, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    rule_pack_id = excluded.rule_pack_id,
+                    memory_id = excluded.memory_id,
+                    run_id = excluded.run_id,
+                    hit_kind = excluded.hit_kind,
+                    detail = excluded.detail,
+                    created_at = excluded.created_at
+                "#,
+            )
+            .bind(&hit.id)
+            .bind(&hit.rule_pack_id)
+            .bind(hit.memory_id.as_ref().map(|id| id.0.as_str()))
+            .bind(&hit.run_id)
+            .bind(&hit.hit_kind)
+            .bind(&hit.detail)
+            .bind(hit.created_at)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| DatabaseError::TransactionError(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn list_rule_hits(
+        &self,
+        query: Option<&MemoryRuleHitQuery>,
+    ) -> Result<Vec<MemoryRuleHit>, DatabaseError> {
+        let query = query.cloned().unwrap_or_default();
+        let mut sql = String::from(
+            "SELECT id, rule_pack_id, memory_id, run_id, hit_kind, detail, created_at \
+             FROM memory_rule_hits WHERE 1=1",
+        );
+        if query.run_id.is_some() {
+            sql.push_str(" AND run_id = ?");
+        }
+        if query.memory_id.is_some() {
+            sql.push_str(" AND memory_id = ?");
+        }
+        sql.push_str(" ORDER BY created_at DESC, id ASC LIMIT ?");
+
+        let mut stmt = sqlx::query_as::<_, MemoryRuleHitRow>(&sql);
+        if let Some(run_id) = query.run_id.as_deref() {
+            stmt = stmt.bind(run_id);
+        }
+        if let Some(memory_id) = query.memory_id.as_ref() {
+            stmt = stmt.bind(&memory_id.0);
+        }
+        stmt = stmt.bind(query.limit.unwrap_or(100) as i64);
+
+        let rows = stmt
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| MemoryRuleHit {
+                id: row.id,
+                rule_pack_id: row.rule_pack_id,
+                memory_id: row.memory_id.map(MemoryRecordId),
+                run_id: row.run_id,
+                hit_kind: row.hit_kind,
+                detail: row.detail,
+                created_at: row.created_at,
+            })
+            .collect())
+    }
+
+    pub async fn replace_conflicts_for_memory(
+        &self,
+        memory_id: &str,
+        conflicts: &[MemoryConflictRecord],
+    ) -> Result<(), DatabaseError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| DatabaseError::TransactionError(e.to_string()))?;
+
+        sqlx::query("DELETE FROM memory_conflicts WHERE left_memory_id = ? OR right_memory_id = ?")
+            .bind(memory_id)
+            .bind(memory_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+        for conflict in conflicts {
+            sqlx::query(
+                r#"
+                INSERT INTO memory_conflicts (
+                    id, left_memory_id, right_memory_id, conflict_kind, detail, detected_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    left_memory_id = excluded.left_memory_id,
+                    right_memory_id = excluded.right_memory_id,
+                    conflict_kind = excluded.conflict_kind,
+                    detail = excluded.detail,
+                    detected_at = excluded.detected_at
+                "#,
+            )
+            .bind(&conflict.id)
+            .bind(&conflict.left_memory_id)
+            .bind(&conflict.right_memory_id)
+            .bind(&conflict.conflict_kind)
+            .bind(&conflict.detail)
+            .bind(conflict.detected_at)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| DatabaseError::TransactionError(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn list_conflicts_for_memory(
+        &self,
+        memory_id: &str,
+    ) -> Result<Vec<MemoryConflictView>, DatabaseError> {
+        let rows = sqlx::query_as::<_, MemoryConflictRow>(
+            r#"
+            SELECT id, left_memory_id, right_memory_id, conflict_kind, detail, detected_at
+            FROM memory_conflicts
+            WHERE left_memory_id = ? OR right_memory_id = ?
+            ORDER BY detected_at DESC, id ASC
+            "#,
+        )
+        .bind(memory_id)
+        .bind(memory_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let left = row.left_memory_id?;
+                let right = row.right_memory_id?;
+                let (record_id, other_record_id) = if left == memory_id {
+                    (left, right)
+                } else if right == memory_id {
+                    (right, left)
+                } else {
+                    return None;
+                };
+
+                Some(MemoryConflictView {
+                    id: row.id,
+                    record_id: MemoryRecordId(record_id),
+                    other_record_id: MemoryRecordId(other_record_id),
+                    conflict_kind: row.conflict_kind,
+                    detail: row.detail,
+                    detected_at: row.detected_at,
+                })
+            })
+            .collect())
+    }
+
+    async fn load_evidence_map(
+        &self,
+        memory_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, Vec<MemoryEvidenceRef>>, DatabaseError> {
+        let mut map = std::collections::HashMap::new();
+        if memory_ids.is_empty() {
+            return Ok(map);
+        }
+
+        for chunk in memory_ids.chunks(500) {
+            let sql = format!(
+                "SELECT memory_id, evidence_index, session_id, message_id, tool_call_id, stage_id, note \
+                 FROM memory_evidence WHERE memory_id IN ({}) ORDER BY memory_id ASC, evidence_index ASC",
+                repeat_placeholders(chunk.len())
+            );
+            let mut query = sqlx::query_as::<_, MemoryEvidenceRow>(&sql);
+            for id in chunk {
+                query = query.bind(id);
+            }
+            let rows = query
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+            for row in rows {
+                let _ = row.evidence_index;
+                map.entry(row.memory_id)
+                    .or_insert_with(Vec::new)
+                    .push(MemoryEvidenceRef {
+                        session_id: row.session_id,
+                        message_id: row.message_id,
+                        tool_call_id: row.tool_call_id,
+                        stage_id: row.stage_id,
+                        note: row.note,
+                    });
+            }
+        }
+
+        Ok(map)
+    }
+}
+
+fn bind_memory_record_upsert<'q>(
+    query: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>,
+    record: &'q MemoryRecord,
+) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
+    query
+        .bind(&record.id.0)
+        .bind(memory_kind_to_str(&record.kind))
+        .bind(memory_scope_to_str(&record.scope))
+        .bind(memory_status_to_str(&record.status))
+        .bind(&record.title)
+        .bind(&record.summary)
+        .bind(serde_json::to_string(&record.trigger_conditions).ok())
+        .bind(serde_json::to_string(&record.normalized_facts).ok())
+        .bind(serde_json::to_string(&record.boundaries).ok())
+        .bind(record.confidence.map(f64::from))
+        .bind(&record.source_session_id)
+        .bind(&record.workspace_identity)
+        .bind(record.created_at)
+        .bind(record.updated_at)
+        .bind(record.last_validated_at)
+        .bind(record.expires_at)
+        .bind(&record.derived_skill_name)
+        .bind(&record.linked_skill_name)
+        .bind(memory_validation_status_to_str(&record.validation_status))
+}
 
 fn bind_session_upsert<'q>(
     query: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>,
@@ -609,6 +1452,141 @@ fn string_to_status(s: &str) -> SessionStatus {
         "archived" => SessionStatus::Archived,
         "compacting" => SessionStatus::Compacting,
         _ => SessionStatus::Active,
+    }
+}
+
+fn repeat_placeholders(count: usize) -> String {
+    std::iter::repeat_n("?", count)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn parse_json_vec(raw: Option<String>) -> Vec<String> {
+    raw.and_then(|value| serde_json::from_str(&value).ok())
+        .unwrap_or_default()
+}
+
+fn validation_run_id(report: &MemoryValidationReport) -> String {
+    match report.record_id.as_ref() {
+        Some(record_id) => format!("validation_{}_{}", record_id.0, report.checked_at),
+        None => format!("validation_global_{}", report.checked_at),
+    }
+}
+
+fn memory_kind_to_str(kind: &MemoryKind) -> &'static str {
+    match kind {
+        MemoryKind::Preference => "preference",
+        MemoryKind::EnvironmentFact => "environment_fact",
+        MemoryKind::WorkspaceConvention => "workspace_convention",
+        MemoryKind::Lesson => "lesson",
+        MemoryKind::Pattern => "pattern",
+        MemoryKind::MethodologyCandidate => "methodology_candidate",
+    }
+}
+
+fn string_to_memory_kind(value: &str) -> MemoryKind {
+    match value {
+        "preference" => MemoryKind::Preference,
+        "environment_fact" => MemoryKind::EnvironmentFact,
+        "workspace_convention" => MemoryKind::WorkspaceConvention,
+        "lesson" => MemoryKind::Lesson,
+        "methodology_candidate" => MemoryKind::MethodologyCandidate,
+        _ => MemoryKind::Pattern,
+    }
+}
+
+fn memory_scope_to_str(scope: &MemoryScope) -> &'static str {
+    match scope {
+        MemoryScope::GlobalUser => "global_user",
+        MemoryScope::GlobalWorkspace => "global_workspace",
+        MemoryScope::WorkspaceShared => "workspace_shared",
+        MemoryScope::WorkspaceSandbox => "workspace_sandbox",
+        MemoryScope::SessionEphemeral => "session_ephemeral",
+    }
+}
+
+fn string_to_memory_scope(value: &str) -> MemoryScope {
+    match value {
+        "global_user" => MemoryScope::GlobalUser,
+        "global_workspace" => MemoryScope::GlobalWorkspace,
+        "workspace_sandbox" => MemoryScope::WorkspaceSandbox,
+        "session_ephemeral" => MemoryScope::SessionEphemeral,
+        _ => MemoryScope::WorkspaceShared,
+    }
+}
+
+fn memory_status_to_str(status: &MemoryStatus) -> &'static str {
+    match status {
+        MemoryStatus::Candidate => "candidate",
+        MemoryStatus::Validated => "validated",
+        MemoryStatus::Consolidated => "consolidated",
+        MemoryStatus::Archived => "archived",
+        MemoryStatus::Rejected => "rejected",
+    }
+}
+
+fn string_to_memory_status(value: &str) -> MemoryStatus {
+    match value {
+        "validated" => MemoryStatus::Validated,
+        "consolidated" => MemoryStatus::Consolidated,
+        "archived" => MemoryStatus::Archived,
+        "rejected" => MemoryStatus::Rejected,
+        _ => MemoryStatus::Candidate,
+    }
+}
+
+fn memory_validation_status_to_str(status: &MemoryValidationStatus) -> &'static str {
+    match status {
+        MemoryValidationStatus::Pending => "pending",
+        MemoryValidationStatus::Passed => "passed",
+        MemoryValidationStatus::Warning => "warning",
+        MemoryValidationStatus::Failed => "failed",
+    }
+}
+
+fn string_to_memory_validation_status(value: &str) -> MemoryValidationStatus {
+    match value {
+        "passed" => MemoryValidationStatus::Passed,
+        "warning" => MemoryValidationStatus::Warning,
+        "failed" => MemoryValidationStatus::Failed,
+        _ => MemoryValidationStatus::Pending,
+    }
+}
+
+fn memory_rule_pack_kind_to_str(kind: &MemoryRulePackKind) -> &'static str {
+    match kind {
+        MemoryRulePackKind::Validation => "validation",
+        MemoryRulePackKind::Consolidation => "consolidation",
+        MemoryRulePackKind::Reflection => "reflection",
+    }
+}
+
+fn string_to_memory_rule_pack_kind(value: &str) -> MemoryRulePackKind {
+    match value {
+        "validation" => MemoryRulePackKind::Validation,
+        "reflection" => MemoryRulePackKind::Reflection,
+        _ => MemoryRulePackKind::Consolidation,
+    }
+}
+
+fn parse_memory_rule_pack_row(row: MemoryRulePackRow) -> Result<MemoryRulePack, DatabaseError> {
+    match serde_json::from_str::<MemoryRulePack>(&row.body) {
+        Ok(mut pack) => {
+            pack.id = row.id;
+            pack.rule_pack_kind = string_to_memory_rule_pack_kind(&row.rule_pack_kind);
+            pack.version = row.version;
+            pack.created_at = row.created_at;
+            pack.updated_at = row.updated_at;
+            Ok(pack)
+        }
+        Err(_) => Ok(MemoryRulePack {
+            id: row.id,
+            rule_pack_kind: string_to_memory_rule_pack_kind(&row.rule_pack_kind),
+            version: row.version,
+            rules: Vec::new(),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        }),
     }
 }
 
@@ -1226,7 +2204,39 @@ mod tests {
             parts: vec![],
             created_at: Utc::now(),
             metadata: HashMap::new(),
+            usage: None,
             finish: None,
+        }
+    }
+
+    fn make_memory_record(id: &str, scope: MemoryScope) -> MemoryRecord {
+        MemoryRecord {
+            id: MemoryRecordId(id.to_string()),
+            kind: MemoryKind::Pattern,
+            scope,
+            status: MemoryStatus::Candidate,
+            title: format!("Memory {}", id),
+            summary: "Reusable observation".to_string(),
+            trigger_conditions: vec!["when running tests".to_string()],
+            normalized_facts: vec!["tool:cargo_test".to_string()],
+            boundaries: vec!["Candidate only".to_string()],
+            confidence: Some(0.7),
+            evidence_refs: vec![MemoryEvidenceRef {
+                session_id: Some("ses_1".to_string()),
+                message_id: Some("msg_1".to_string()),
+                tool_call_id: Some("call_1".to_string()),
+                stage_id: Some("stage_1".to_string()),
+                note: Some("captured from tool output".to_string()),
+            }],
+            source_session_id: Some("ses_1".to_string()),
+            workspace_identity: Some("ws:test".to_string()),
+            created_at: 1_700_000_000_000,
+            updated_at: 1_700_000_000_100,
+            last_validated_at: None,
+            expires_at: None,
+            derived_skill_name: None,
+            linked_skill_name: None,
+            validation_status: MemoryValidationStatus::Pending,
         }
     }
 
@@ -1465,5 +2475,180 @@ mod tests {
         );
         assert_eq!(loaded_msgs[0].id, "m1");
         assert_eq!(loaded_msgs[1].id, "m2");
+    }
+
+    #[tokio::test]
+    async fn memory_repository_roundtrips_record_and_evidence() {
+        let db = Database::in_memory().await.unwrap();
+        let repo = MemoryRepository::new(db.pool().clone());
+        let record = make_memory_record("mem_1", MemoryScope::WorkspaceShared);
+
+        repo.upsert_record(&record).await.unwrap();
+
+        let loaded = repo
+            .get_record("mem_1")
+            .await
+            .unwrap()
+            .expect("record should exist");
+        assert_eq!(loaded.title, record.title);
+        assert_eq!(loaded.normalized_facts, record.normalized_facts);
+        assert_eq!(loaded.evidence_refs, record.evidence_refs);
+    }
+
+    #[tokio::test]
+    async fn memory_repository_filters_by_scope_and_search() {
+        let db = Database::in_memory().await.unwrap();
+        let repo = MemoryRepository::new(db.pool().clone());
+        let mut shared = make_memory_record("mem_shared", MemoryScope::WorkspaceShared);
+        shared.title = "Test workflow".to_string();
+        let mut sandbox = make_memory_record("mem_sandbox", MemoryScope::WorkspaceSandbox);
+        sandbox.title = "Deploy workflow".to_string();
+
+        repo.upsert_record(&shared).await.unwrap();
+        repo.upsert_record(&sandbox).await.unwrap();
+
+        let filtered = repo
+            .list_records(Some(&MemoryRepositoryFilter {
+                scopes: vec![MemoryScope::WorkspaceShared],
+                search: Some("Test".to_string()),
+                ..MemoryRepositoryFilter::default()
+            }))
+            .await
+            .unwrap();
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id.0, "mem_shared");
+    }
+
+    #[tokio::test]
+    async fn memory_repository_returns_latest_validation_report() {
+        let db = Database::in_memory().await.unwrap();
+        let repo = MemoryRepository::new(db.pool().clone());
+        let record = make_memory_record("mem_validation", MemoryScope::WorkspaceShared);
+
+        repo.upsert_record(&record).await.unwrap();
+        repo.record_validation_run(&MemoryValidationReport {
+            record_id: Some(record.id.clone()),
+            status: MemoryValidationStatus::Warning,
+            issues: vec!["missing follow-up verification".to_string()],
+            checked_at: 100,
+        })
+        .await
+        .unwrap();
+        repo.record_validation_run(&MemoryValidationReport {
+            record_id: Some(record.id.clone()),
+            status: MemoryValidationStatus::Passed,
+            issues: vec![],
+            checked_at: 200,
+        })
+        .await
+        .unwrap();
+
+        let latest = repo
+            .latest_validation_report(&record.id.0)
+            .await
+            .unwrap()
+            .expect("latest validation report should exist");
+
+        assert_eq!(latest.status, MemoryValidationStatus::Passed);
+        assert_eq!(latest.checked_at, 200);
+        assert!(latest.issues.is_empty());
+    }
+
+    #[tokio::test]
+    async fn memory_repository_lists_conflicts_for_selected_record() {
+        let db = Database::in_memory().await.unwrap();
+        let repo = MemoryRepository::new(db.pool().clone());
+        let left = make_memory_record("mem_left", MemoryScope::WorkspaceShared);
+        let right = make_memory_record("mem_right", MemoryScope::WorkspaceShared);
+
+        repo.upsert_record(&left).await.unwrap();
+        repo.upsert_record(&right).await.unwrap();
+        repo.replace_conflicts_for_memory(
+            &left.id.0,
+            &[MemoryConflictRecord {
+                id: "conflict_1".to_string(),
+                left_memory_id: left.id.0.clone(),
+                right_memory_id: right.id.0.clone(),
+                conflict_kind: "contradiction".to_string(),
+                detail: "Two records disagree on the preferred workflow".to_string(),
+                detected_at: 300,
+            }],
+        )
+        .await
+        .unwrap();
+
+        let conflicts = repo.list_conflicts_for_memory(&left.id.0).await.unwrap();
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].record_id.0, left.id.0);
+        assert_eq!(conflicts[0].other_record_id.0, right.id.0);
+        assert_eq!(conflicts[0].conflict_kind, "contradiction");
+    }
+
+    #[tokio::test]
+    async fn memory_repository_roundtrips_rule_packs_and_hits() {
+        let db = Database::in_memory().await.unwrap();
+        let repo = MemoryRepository::new(db.pool().clone());
+        let record = make_memory_record("mem_rule", MemoryScope::WorkspaceShared);
+        repo.upsert_record(&record).await.unwrap();
+
+        let pack = MemoryRulePack {
+            id: "builtin.consolidation.core".to_string(),
+            rule_pack_kind: MemoryRulePackKind::Consolidation,
+            version: "2026.04.13".to_string(),
+            rules: vec![rocode_types::MemoryRuleDefinition {
+                id: "merge.similar.summary".to_string(),
+                description: "Merge similar memory summaries into one consolidated record."
+                    .to_string(),
+                tags: vec!["merge".to_string()],
+                promotion_target: None,
+            }],
+            created_at: 400,
+            updated_at: 400,
+        };
+        repo.upsert_rule_pack(&pack).await.unwrap();
+        repo.record_consolidation_run(&MemoryConsolidationRun {
+            run_id: "run_1".to_string(),
+            started_at: 450,
+            finished_at: Some(500),
+            merged_count: 1,
+            promoted_count: 1,
+            conflict_count: 0,
+        })
+        .await
+        .unwrap();
+        repo.record_rule_hits(&[MemoryRuleHit {
+            id: "hit_1".to_string(),
+            rule_pack_id: Some(pack.id.clone()),
+            memory_id: Some(record.id.clone()),
+            run_id: Some("run_1".to_string()),
+            hit_kind: "merge.similar.summary".to_string(),
+            detail: Some("Merged into canonical consolidated record.".to_string()),
+            created_at: 500,
+        }])
+        .await
+        .unwrap();
+
+        let packs = repo
+            .list_rule_packs(Some(MemoryRulePackKind::Consolidation))
+            .await
+            .unwrap();
+        assert_eq!(packs, vec![pack.clone()]);
+
+        let runs = repo.list_consolidation_runs(Some(10)).await.unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].run_id, "run_1");
+
+        let hits = repo
+            .list_rule_hits(Some(&MemoryRuleHitQuery {
+                run_id: Some("run_1".to_string()),
+                memory_id: Some(record.id.clone()),
+                limit: Some(10),
+            }))
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].rule_pack_id.as_deref(), Some(pack.id.as_str()));
+        assert_eq!(hits[0].memory_id.as_ref(), Some(&record.id));
     }
 }

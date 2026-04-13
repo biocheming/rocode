@@ -1,4 +1,5 @@
 pub(crate) mod events;
+pub(crate) mod memory;
 pub(crate) mod stage_summary;
 pub(crate) mod state;
 pub(crate) mod telemetry;
@@ -672,6 +673,52 @@ impl LifecycleHook for SessionSchedulerLifecycleHook {
             .runtime_telemetry
             .finish_tool_call(&self.session_id, tool_call_id)
             .await;
+
+        let stage_id = {
+            let guard = self.active_stage_messages.lock().await;
+            guard.last().map(|stage| stage.execution_id.clone())
+        };
+        if let Err(error) = self
+            .state
+            .runtime_memory
+            .ingest_tool_result(
+                &self.session_id,
+                tool_call_id,
+                tool_name,
+                stage_id.as_deref(),
+                &tool_output.output,
+                tool_output.is_error,
+            )
+            .await
+        {
+            tracing::warn!(
+                session_id = %self.session_id,
+                tool_call_id,
+                tool_name,
+                %error,
+                "failed to persist runtime memory candidate from tool result"
+            );
+        }
+        if tool_name.eq_ignore_ascii_case("skill_manage") {
+            if let Err(error) = self
+                .state
+                .runtime_memory
+                .ingest_skill_manage_result(
+                    &self.session_id,
+                    tool_call_id,
+                    tool_output.metadata.as_ref(),
+                )
+                .await
+            {
+                tracing::warn!(
+                    session_id = %self.session_id,
+                    tool_call_id,
+                    tool_name,
+                    %error,
+                    "failed to persist runtime skill memory linkage"
+                );
+            }
+        }
 
         self.update_active_stage_message(
             |message, _active| {

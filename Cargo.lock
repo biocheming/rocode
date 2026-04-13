@@ -3100,6 +3100,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocode-memory"
+version = "2026.4.12"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "rocode-command",
+ "rocode-config",
+ "rocode-runtime-context",
+ "rocode-state",
+ "rocode-storage",
+ "rocode-types",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+]
+
+[[package]]
 name = "rocode-orchestrator"
 version = "2026.4.12"
 dependencies = [
@@ -3217,6 +3235,7 @@ dependencies = [
  "rocode-core",
  "rocode-execution-types",
  "rocode-mcp",
+ "rocode-memory",
  "rocode-orchestrator",
  "rocode-permission",
  "rocode-plugin",

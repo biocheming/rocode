@@ -3,6 +3,8 @@ use rocode_content::stage_protocol::StageStatus;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::SessionMemoryTelemetrySummary;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SessionSummary {
     pub additions: u64,
@@ -140,6 +142,7 @@ impl Session {
 pub enum SessionTelemetrySnapshotVersion {
     #[default]
     V1,
+    V2,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -325,6 +328,8 @@ pub struct SessionTelemetrySnapshot {
     pub usage: SessionUsage,
     #[serde(default)]
     pub stage_summaries: Vec<PersistedStageTelemetrySummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<SessionMemoryTelemetrySummary>,
     pub last_run_status: String,
     pub updated_at: i64,
 }

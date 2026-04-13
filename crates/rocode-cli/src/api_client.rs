@@ -18,8 +18,12 @@ use rocode_runtime_context::ResolvedWorkspaceContext;
 pub use rocode_tui::api::{
     AgentInfo, CompactResponse, CreateSessionRequest, ExecuteRecoveryRequest, ExecuteShellRequest,
     ExecutionModeInfo, FullProviderListResponse, KnownProvidersResponse, McpAuthStartInfo,
-    McpStatusInfo, MessageInfo, PendingCommandInvocation, PermissionRequestInfo, PromptPart,
-    PromptRequest, PromptResponse, ProviderConnectSchemaResponse, ProviderListResponse,
+    McpStatusInfo, MemoryConflictResponse, MemoryConsolidationRequest, MemoryConsolidationResponse,
+    MemoryConsolidationRunListResponse, MemoryConsolidationRunQuery, MemoryDetailView,
+    MemoryListQuery, MemoryListResponse, MemoryRetrievalPreviewResponse, MemoryRetrievalQuery,
+    MemoryRuleHitListResponse, MemoryRuleHitQuery, MemoryRulePackListResponse,
+    MemoryValidationReportResponse, MessageInfo, PendingCommandInvocation, PermissionRequestInfo,
+    PromptPart, PromptRequest, PromptResponse, ProviderConnectSchemaResponse, ProviderListResponse,
     QuestionInfo, RecoveryActionKind, RefreshProviderCatalogResponse, RevertRequest,
     RevertResponse, SessionEventsQuery, SessionExecutionTopology, SessionInfo,
     SessionInsightsResponse, SessionListItem, SessionListResponse, SessionRecoveryProtocol,
@@ -339,6 +343,109 @@ impl CliApiClient {
         let url = server_url(&self.base_url, &format!("/session/{}/events", session_id));
         let resp = self.client.get(&url).query(query).send().await?;
         Self::json_ok(resp, "get session events").await
+    }
+
+    pub async fn list_memory(
+        &self,
+        query: Option<&MemoryListQuery>,
+    ) -> anyhow::Result<MemoryListResponse> {
+        let url = server_url(&self.base_url, "/memory/list");
+        let req = match query {
+            Some(query) => self.client.get(&url).query(query),
+            None => self.client.get(&url),
+        };
+        let resp = req.send().await?;
+        Self::json_ok(resp, "list memory").await
+    }
+
+    pub async fn search_memory(
+        &self,
+        query: Option<&MemoryListQuery>,
+    ) -> anyhow::Result<MemoryListResponse> {
+        let url = server_url(&self.base_url, "/memory/search");
+        let req = match query {
+            Some(query) => self.client.get(&url).query(query),
+            None => self.client.get(&url),
+        };
+        let resp = req.send().await?;
+        Self::json_ok(resp, "search memory").await
+    }
+
+    pub async fn get_memory_retrieval_preview(
+        &self,
+        query: &MemoryRetrievalQuery,
+    ) -> anyhow::Result<MemoryRetrievalPreviewResponse> {
+        let url = server_url(&self.base_url, "/memory/retrieval-preview");
+        let resp = self.client.get(&url).query(query).send().await?;
+        Self::json_ok(resp, "get memory retrieval preview").await
+    }
+
+    pub async fn get_memory_detail(&self, record_id: &str) -> anyhow::Result<MemoryDetailView> {
+        let url = server_url(&self.base_url, &format!("/memory/{}", record_id));
+        let resp = self.client.get(&url).send().await?;
+        Self::json_ok(resp, "get memory detail").await
+    }
+
+    pub async fn get_memory_validation_report(
+        &self,
+        record_id: &str,
+    ) -> anyhow::Result<MemoryValidationReportResponse> {
+        let url = server_url(
+            &self.base_url,
+            &format!("/memory/{}/validation-report", record_id),
+        );
+        let resp = self.client.get(&url).send().await?;
+        Self::json_ok(resp, "get memory validation report").await
+    }
+
+    pub async fn get_memory_conflicts(
+        &self,
+        record_id: &str,
+    ) -> anyhow::Result<MemoryConflictResponse> {
+        let url = server_url(&self.base_url, &format!("/memory/{}/conflicts", record_id));
+        let resp = self.client.get(&url).send().await?;
+        Self::json_ok(resp, "get memory conflicts").await
+    }
+
+    pub async fn list_memory_rule_packs(&self) -> anyhow::Result<MemoryRulePackListResponse> {
+        let url = server_url(&self.base_url, "/memory/rule-packs");
+        let resp = self.client.get(&url).send().await?;
+        Self::json_ok(resp, "list memory rule packs").await
+    }
+
+    pub async fn list_memory_rule_hits(
+        &self,
+        query: Option<&MemoryRuleHitQuery>,
+    ) -> anyhow::Result<MemoryRuleHitListResponse> {
+        let url = server_url(&self.base_url, "/memory/rule-hits");
+        let req = match query {
+            Some(query) => self.client.get(&url).query(query),
+            None => self.client.get(&url),
+        };
+        let resp = req.send().await?;
+        Self::json_ok(resp, "list memory rule hits").await
+    }
+
+    pub async fn list_memory_consolidation_runs(
+        &self,
+        query: Option<&MemoryConsolidationRunQuery>,
+    ) -> anyhow::Result<MemoryConsolidationRunListResponse> {
+        let url = server_url(&self.base_url, "/memory/consolidation/runs");
+        let req = match query {
+            Some(query) => self.client.get(&url).query(query),
+            None => self.client.get(&url),
+        };
+        let resp = req.send().await?;
+        Self::json_ok(resp, "list memory consolidation runs").await
+    }
+
+    pub async fn run_memory_consolidation(
+        &self,
+        request: &MemoryConsolidationRequest,
+    ) -> anyhow::Result<MemoryConsolidationResponse> {
+        let url = server_url(&self.base_url, "/memory/consolidate");
+        let resp = self.client.post(&url).json(request).send().await?;
+        Self::json_ok(resp, "run memory consolidation").await
     }
 
     pub async fn get_session_recovery(

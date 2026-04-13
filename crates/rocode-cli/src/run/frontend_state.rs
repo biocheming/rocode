@@ -884,6 +884,7 @@ impl CliFrontendProjection {
         parts.push("Alt+Enter/Ctrl+J newline".to_string());
         parts.push("/help".to_string());
         parts.push("/runtime".to_string());
+        parts.push("/insights".to_string());
         parts.push("/child".to_string());
         if !matches!(self.phase, CliFrontendPhase::Idle) {
             parts.push("/abort".to_string());

@@ -35,6 +35,103 @@ export interface SessionUsageRecord {
   total_cost: number;
 }
 
+export interface MemoryConsolidationRunRecord {
+  run_id: string;
+  started_at: number;
+  finished_at?: number | null;
+  merged_count: number;
+  promoted_count: number;
+  conflict_count: number;
+}
+
+export interface MemoryRuleHitRecord {
+  id: string;
+  rule_pack_id?: string | null;
+  memory_id?: string | null;
+  run_id?: string | null;
+  hit_kind: string;
+  detail?: string | null;
+  created_at: number;
+}
+
+export interface SessionMemoryTelemetryRecord {
+  workspace_key: string;
+  workspace_mode: string;
+  allowed_scopes: string[];
+  frozen_snapshot_generated_at?: number | null;
+  frozen_snapshot_items: number;
+  last_prefetch_generated_at?: number | null;
+  last_prefetch_items: number;
+  last_prefetch_query?: string | null;
+  candidate_count: number;
+  validated_count: number;
+  rejected_count: number;
+  linked_skill_count: number;
+  skill_feedback_lesson_count: number;
+  retrieval_run_count: number;
+  retrieval_hit_count: number;
+  retrieval_use_count: number;
+  latest_consolidation_run?: MemoryConsolidationRunRecord | null;
+  recent_rule_hits: MemoryRuleHitRecord[];
+}
+
+export interface MemoryCardRecord {
+  id: string;
+  kind: string;
+  scope: string;
+  status: string;
+  title: string;
+  summary: string;
+  confidence?: number | null;
+  validation_status: string;
+  last_validated_at?: number | null;
+}
+
+export interface MemoryRetrievalPacketRecord {
+  generated_at: number;
+  snapshot: boolean;
+  query?: string | null;
+  scopes: string[];
+  items: Array<{
+    card: {
+      id: string;
+      kind: string;
+      scope: string;
+      status: string;
+      title: string;
+      summary: string;
+      confidence?: number | null;
+      validation_status: string;
+      last_validated_at?: number | null;
+    };
+    why_recalled: string;
+    evidence_summary?: string | null;
+  }>;
+  note?: string | null;
+  budget_limit?: number | null;
+}
+
+export interface SessionInsightsRecord {
+  id: string;
+  title: string;
+  directory: string;
+  updated: number;
+  telemetry?: {
+    version: string;
+    usage: SessionUsageRecord;
+    stage_summaries: StageSummaryRecord[];
+    memory?: SessionMemoryTelemetryRecord | null;
+    last_run_status: string;
+    updated_at: number;
+  } | null;
+  memory?: {
+    summary: SessionMemoryTelemetryRecord;
+    frozen_snapshot?: MemoryRetrievalPacketRecord | null;
+    last_prefetch_packet?: MemoryRetrievalPacketRecord | null;
+    recent_session_records: MemoryCardRecord[];
+  } | null;
+}
+
 export interface StageSummaryRecord {
   stage_id: string;
   stage_name: string;
@@ -76,6 +173,7 @@ export interface SessionTelemetrySnapshotRecord {
   stages: StageSummaryRecord[];
   topology: SessionExecutionTopologyRecord;
   usage: SessionUsageRecord;
+  memory?: SessionMemoryTelemetryRecord | null;
 }
 
 export interface ActivityEventRecord {
@@ -132,11 +230,12 @@ async function loadExecutionActivityData(
   apiJson: <T>(path: string, options?: RequestInit) => Promise<T>,
 ) {
   const query = executionActivityQuery(filters, page);
-  const [telemetry, events] = await Promise.all([
+  const [telemetry, insights, events] = await Promise.all([
     apiJson<SessionTelemetrySnapshotRecord>(`/session/${selectedSessionId}/telemetry`),
+    apiJson<SessionInsightsRecord>(`/session/${selectedSessionId}/insights`),
     apiJson<ActivityEventRecord[]>(`/session/${selectedSessionId}/events?${query}`),
   ]);
-  return { telemetry, events };
+  return { telemetry, insights, events };
 }
 
 function flattenExecutionNodes(nodes: ExecutionNodeRecord[]): ExecutionNodeRecord[] {
@@ -162,6 +261,7 @@ export function useExecutionActivity({
   onInfo,
 }: UseExecutionActivityOptions) {
   const [telemetry, setTelemetry] = useState<SessionTelemetrySnapshotRecord | null>(null);
+  const [insights, setInsights] = useState<SessionInsightsRecord | null>(null);
   const [activityEvents, setActivityEvents] = useState<ActivityEventRecord[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityFilters, setActivityFilters] = useState<ActivityFilters>(DEFAULT_FILTERS);
@@ -182,6 +282,9 @@ export function useExecutionActivity({
   useEffect(() => {
     if (previousSessionRef.current === selectedSessionId) return;
     previousSessionRef.current = selectedSessionId;
+    setTelemetry(null);
+    setInsights(null);
+    setActivityEvents([]);
     setActivityFilters(DEFAULT_FILTERS);
     setActivityPage(1);
     setSelectedExecutionId(null);
@@ -199,6 +302,7 @@ export function useExecutionActivity({
 
   const resetExecutionActivity = useCallback(() => {
     setTelemetry(null);
+    setInsights(null);
     setActivityEvents([]);
     setActivityLoading(false);
     setActivityFilters(DEFAULT_FILTERS);
@@ -218,7 +322,7 @@ export function useExecutionActivity({
 
       setActivityLoading(true);
       try {
-        const { telemetry, events } = await loadExecutionActivityData(
+        const { telemetry, insights, events } = await loadExecutionActivityData(
           sessionId,
           filters,
           page,
@@ -226,6 +330,7 @@ export function useExecutionActivity({
         );
         if (sessionRef.current !== sessionId) return;
         setTelemetry(telemetry);
+        setInsights(insights);
         setActivityEvents(events);
         setKnownEventTypes((current) =>
           uniqStrings([...current, ...events.map((event) => event.event_type)]).sort(),
@@ -370,8 +475,10 @@ export function useExecutionActivity({
 
   return {
     telemetry,
+    sessionInsights: insights,
     sessionRuntime: telemetry?.runtime ?? null,
     sessionUsage: telemetry?.usage ?? null,
+    sessionMemory: telemetry?.memory ?? null,
     stageSummaries: telemetry?.stages ?? [],
     activeStageSummary,
     executionTopology,

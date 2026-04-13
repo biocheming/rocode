@@ -70,7 +70,7 @@ mod tests {
 
     fn sample_snapshot() -> SessionTelemetrySnapshot {
         SessionTelemetrySnapshot {
-            version: SessionTelemetrySnapshotVersion::V1,
+            version: SessionTelemetrySnapshotVersion::V2,
             usage: SessionUsage {
                 input_tokens: 10,
                 output_tokens: 20,
@@ -105,6 +105,7 @@ mod tests {
                 child_session_count: 0,
                 primary_child_session_id: None,
             }],
+            memory: None,
             last_run_status: "completed".to_string(),
             updated_at: 123,
         }

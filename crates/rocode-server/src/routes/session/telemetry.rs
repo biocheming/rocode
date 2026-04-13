@@ -8,6 +8,7 @@ use rocode_session::{
     session_last_run_status_label, Session, SessionTelemetrySnapshot as PersistedTelemetrySnapshot,
     SessionUsage,
 };
+use rocode_types::{SessionMemoryInsight, SessionMemoryTelemetrySummary};
 use serde::Serialize;
 
 use crate::runtime_control::SessionExecutionTopology;
@@ -24,6 +25,8 @@ pub struct SessionTelemetrySnapshot {
     pub stages: Vec<StageSummary>,
     pub topology: SessionExecutionTopology,
     pub usage: SessionUsage,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<SessionMemoryTelemetrySummary>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -34,6 +37,8 @@ pub struct SessionInsightsResponse {
     pub updated: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub telemetry: Option<PersistedTelemetrySnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<SessionMemoryInsight>,
 }
 
 pub(super) async fn get_session_telemetry(
@@ -67,12 +72,29 @@ pub(super) async fn get_session_insights(
     };
 
     let session_record = session.record();
+    let memory = match state
+        .runtime_memory
+        .memory()
+        .build_session_memory_insight(&session)
+        .await
+    {
+        Ok(memory) => memory,
+        Err(error) => {
+            tracing::warn!(
+                session_id = %session.id,
+                %error,
+                "failed to build session memory insight"
+            );
+            None
+        }
+    };
     Ok(Json(SessionInsightsResponse {
         id: session_record.id.clone(),
         title: session_record.title.clone(),
         directory: session_record.directory.clone(),
         updated: session_record.time.updated,
         telemetry: load_session_telemetry_snapshot(&session),
+        memory,
     }))
 }
 
@@ -90,12 +112,14 @@ pub(super) async fn build_session_telemetry_snapshot(
         .list_stage_summaries(session_id)
         .await;
     let topology = build_session_execution_topology_snapshot(state, session_id, session).await;
+    let memory = build_session_memory_telemetry(state, session).await;
 
     Ok(SessionTelemetrySnapshot {
         runtime,
         stages,
         topology,
         usage,
+        memory,
     })
 }
 
@@ -106,9 +130,10 @@ pub(super) async fn persist_session_telemetry_metadata(
     let usage = session.get_usage();
     let last_run_status = session_last_run_status_label(session);
     let session_id = session.record().id.clone();
+    let memory = build_session_memory_telemetry(state, session).await;
     let Some(snapshot) = state
         .runtime_telemetry
-        .build_persisted_snapshot(&session_id, usage, last_run_status)
+        .build_persisted_snapshot(&session_id, usage, last_run_status, memory)
         .await
     else {
         return;
@@ -129,6 +154,28 @@ pub(super) async fn persist_session_telemetry_metadata(
         .await;
 }
 
+async fn build_session_memory_telemetry(
+    state: &Arc<ServerState>,
+    session: &Session,
+) -> Option<SessionMemoryTelemetrySummary> {
+    match state
+        .runtime_memory
+        .memory()
+        .build_session_memory_telemetry(session)
+        .await
+    {
+        Ok(memory) => memory,
+        Err(error) => {
+            tracing::warn!(
+                session_id = %session.id,
+                %error,
+                "failed to build session memory telemetry summary"
+            );
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,6 +184,7 @@ mod tests {
     use crate::session_runtime::{emit_scheduler_stage_message, SchedulerStageMessageInput};
     use crate::ServerState;
     use rocode_command::stage_protocol::{StageStatus, StageSummary};
+    use rocode_memory::PersistedMemorySnapshot;
     use rocode_orchestrator::ExecutionContext;
     use rocode_plugin::{global, Hook, HookEvent};
     use rocode_session::{
@@ -230,6 +278,7 @@ mod tests {
                 cache_read_tokens: 5,
                 total_cost: 0.12,
             },
+            memory: None,
         };
 
         let value = serde_json::to_value(&snapshot).expect("snapshot should serialize");
@@ -281,6 +330,7 @@ mod tests {
                 &mut session,
                 &rocode_session::SessionTelemetrySnapshot {
                     version: SessionTelemetrySnapshotVersion::V1,
+                    memory: None,
                     usage: rocode_types::SessionUsage {
                         input_tokens: 10,
                         output_tokens: 20,
@@ -295,6 +345,35 @@ mod tests {
                 },
             )
             .expect("snapshot should persist");
+            session.insert_metadata(
+                rocode_memory::MEMORY_FROZEN_SNAPSHOT_METADATA_KEY.to_string(),
+                serde_json::to_value(PersistedMemorySnapshot {
+                    packet: rocode_types::MemoryRetrievalPacket {
+                        generated_at: 200,
+                        snapshot: true,
+                        query: None,
+                        scopes: vec![rocode_types::MemoryScope::WorkspaceShared],
+                        items: vec![],
+                        note: Some("frozen".to_string()),
+                        budget_limit: Some(8),
+                    },
+                    rendered_block: Some("memory block".to_string()),
+                })
+                .expect("frozen memory snapshot should serialize"),
+            );
+            session.insert_metadata(
+                rocode_memory::MEMORY_LAST_PREFETCH_METADATA_KEY.to_string(),
+                serde_json::to_value(rocode_types::MemoryRetrievalPacket {
+                    generated_at: 250,
+                    snapshot: false,
+                    query: Some("latest prompt".to_string()),
+                    scopes: vec![rocode_types::MemoryScope::WorkspaceShared],
+                    items: vec![],
+                    note: Some("prefetch".to_string()),
+                    budget_limit: Some(6),
+                })
+                .expect("prefetch packet should serialize"),
+            );
             let id = session.id.clone();
             sessions.update(session);
             id
@@ -313,6 +392,13 @@ mod tests {
                 .as_ref()
                 .map(|snapshot| snapshot.last_run_status.as_str()),
             Some("completed")
+        );
+        assert_eq!(
+            response
+                .memory
+                .as_ref()
+                .map(|memory| memory.summary.last_prefetch_query.as_deref()),
+            Some(Some("latest prompt"))
         );
     }
 

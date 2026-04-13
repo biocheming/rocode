@@ -50,6 +50,7 @@ use rocode_plugin::{HookContext, HookEvent};
 use rocode_provider::transform::{apply_caching, ProviderType};
 use rocode_provider::{Provider, ToolDefinition};
 use rocode_skill::RuntimeInstructionSource;
+use rocode_types::MemoryRetrievalPacket;
 
 use crate::compaction::{run_compaction, CompactionResult};
 use crate::instruction::{InstructionLoader, InstructionSource};
@@ -238,6 +239,7 @@ pub struct PromptHooks {
 pub struct PromptRequestContext {
     pub provider: Arc<dyn Provider>,
     pub system_prompt: Option<String>,
+    pub memory_prefetch: Option<MemoryRetrievalPacket>,
     pub tools: Vec<ToolDefinition>,
     pub compiled_request: CompiledExecutionRequest,
     pub hooks: PromptHooks,
@@ -1233,6 +1235,65 @@ impl SessionPrompt {
         Ok(())
     }
 
+    fn apply_runtime_memory_prefetch(
+        session: &mut Session,
+        packet: Option<&MemoryRetrievalPacket>,
+    ) -> anyhow::Result<()> {
+        let Some(user_msg) = session
+            .messages_mut()
+            .iter_mut()
+            .rfind(|message| matches!(message.role, MessageRole::User))
+        else {
+            return Ok(());
+        };
+
+        let Some(packet) = packet else {
+            user_msg.metadata.remove("memory_prefetch_packet");
+            return Ok(());
+        };
+
+        user_msg.metadata.insert(
+            "memory_prefetch_packet".to_string(),
+            serde_json::to_value(packet)?,
+        );
+        if let Some(reminder) = Self::render_memory_prefetch_reminder(packet) {
+            user_msg.add_text(SystemPrompt::system_reminder(&reminder));
+        }
+
+        Ok(())
+    }
+
+    fn render_memory_prefetch_reminder(packet: &MemoryRetrievalPacket) -> Option<String> {
+        if packet.items.is_empty() {
+            return None;
+        }
+
+        let mut lines = vec!["Turn Memory Recall:".to_string()];
+        if let Some(query) = packet
+            .query
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            lines.push(format!("- query: {}", query.trim()));
+        }
+        for item in &packet.items {
+            lines.push(format!(
+                "- {} [{:?} / {:?}]",
+                item.card.title, item.card.kind, item.card.validation_status
+            ));
+            lines.push(format!("  why: {}", item.why_recalled));
+            lines.push(format!("  summary: {}", item.card.summary));
+            if let Some(evidence) = item.evidence_summary.as_deref() {
+                lines.push(format!("  evidence: {}", evidence));
+            }
+            if let Some(last_validated_at) = item.card.last_validated_at {
+                lines.push(format!("  last_validated_at: {}", last_validated_at));
+            }
+        }
+
+        Some(lines.join("\n"))
+    }
+
     fn text_from_prompt_parts(parts: &[PartInput]) -> String {
         parts
             .iter()
@@ -1511,6 +1572,7 @@ impl SessionPrompt {
             PromptRequestContext {
                 provider,
                 system_prompt,
+                memory_prefetch: None,
                 tools,
                 compiled_request,
                 hooks: PromptHooks::default(),
@@ -1528,6 +1590,7 @@ impl SessionPrompt {
         let PromptRequestContext {
             provider,
             system_prompt,
+            memory_prefetch,
             tools,
             compiled_request,
             hooks,
@@ -1555,6 +1618,7 @@ impl SessionPrompt {
 
         self.create_user_message(&input, session).await?;
         self.apply_runtime_workspace_context(session).await?;
+        Self::apply_runtime_memory_prefetch(session, memory_prefetch.as_ref())?;
         Self::annotate_latest_user_message(session, &input, system_prompt.as_deref());
 
         // Set an immediate title from the first user message when the title is
@@ -3212,6 +3276,7 @@ mod tests {
                 PromptRequestContext {
                     provider,
                     system_prompt: None,
+                    memory_prefetch: None,
                     tools: Vec::new(),
                     compiled_request: CompiledExecutionRequest::default(),
                     hooks: PromptHooks {
@@ -3318,6 +3383,7 @@ mod tests {
                 PromptRequestContext {
                     provider,
                     system_prompt: None,
+                    memory_prefetch: None,
                     tools: Vec::new(),
                     compiled_request: CompiledExecutionRequest::default(),
                     hooks: PromptHooks {
@@ -3419,6 +3485,7 @@ mod tests {
                 PromptRequestContext {
                     provider,
                     system_prompt: None,
+                    memory_prefetch: None,
                     tools: Vec::new(),
                     compiled_request: CompiledExecutionRequest::default(),
                     hooks: PromptHooks::default(),
@@ -3515,6 +3582,7 @@ mod tests {
                 PromptRequestContext {
                     provider,
                     system_prompt: None,
+                    memory_prefetch: None,
                     tools: Vec::new(),
                     compiled_request: CompiledExecutionRequest::default(),
                     hooks: PromptHooks::default(),

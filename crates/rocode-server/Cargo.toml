@@ -13,6 +13,7 @@ rocode-orchestrator = { path = "../rocode-orchestrator" }
 rocode-provider = { path = "../rocode-provider" }
 rocode-state = { path = "../rocode-state" }
 rocode-runtime-context = { path = "../rocode-runtime-context" }
+rocode-memory = { path = "../rocode-memory" }
 rocode-session = { path = "../rocode-session" }
 rocode-skill = { path = "../rocode-skill" }
 rocode-storage = { path = "../rocode-storage" }

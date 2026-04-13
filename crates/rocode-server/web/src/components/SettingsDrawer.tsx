@@ -12,6 +12,7 @@ import {
 
 type SettingsTabId =
   | "general"
+  | "memory"
   | "providers"
   | "scheduler"
   | "skills"
@@ -136,6 +137,164 @@ interface LspStatus {
 
 interface FormatterStatus {
   formatters: string[];
+}
+
+interface MemoryCardViewLike {
+  id: { 0: string } | string;
+  kind: string;
+  scope: string;
+  status: string;
+  title: string;
+  summary: string;
+  confidence?: number | null;
+  validation_status: string;
+}
+
+interface MemoryContractLike {
+  filter_query_parameters: string[];
+  search_fields: string[];
+  non_search_fields: string[];
+  note: string;
+}
+
+interface MemoryListResponseLike {
+  items: MemoryCardViewLike[];
+  contract: MemoryContractLike;
+}
+
+interface MemoryEvidenceRefLike {
+  session_id?: string | null;
+  message_id?: string | null;
+  tool_call_id?: string | null;
+  stage_id?: string | null;
+  note?: string | null;
+}
+
+interface MemoryDetailRecordLike {
+  id: { 0: string } | string;
+  kind: string;
+  scope: string;
+  status: string;
+  title: string;
+  summary: string;
+  trigger_conditions: string[];
+  normalized_facts: string[];
+  boundaries: string[];
+  confidence?: number | null;
+  evidence_refs: MemoryEvidenceRefLike[];
+  source_session_id?: string | null;
+  workspace_identity?: string | null;
+  created_at: number;
+  updated_at: number;
+  last_validated_at?: number | null;
+  validation_status: string;
+}
+
+interface MemoryDetailResponseLike {
+  record: MemoryDetailRecordLike;
+}
+
+interface MemoryValidationReportLike {
+  record_id?: { 0: string } | string | null;
+  status: string;
+  issues: string[];
+  checked_at: number;
+}
+
+interface MemoryValidationReportResponseLike {
+  record_id: { 0: string } | string;
+  latest?: MemoryValidationReportLike | null;
+}
+
+interface MemoryConflictViewLike {
+  id: string;
+  record_id: { 0: string } | string;
+  other_record_id: { 0: string } | string;
+  conflict_kind: string;
+  detail: string;
+  detected_at: number;
+}
+
+interface MemoryConflictResponseLike {
+  record_id: { 0: string } | string;
+  conflicts: MemoryConflictViewLike[];
+}
+
+interface MemoryRecallViewLike {
+  card: MemoryCardViewLike;
+  why_recalled: string;
+  evidence_summary?: string | null;
+}
+
+interface MemoryRetrievalPacketLike {
+  generated_at: number;
+  snapshot: boolean;
+  query?: string | null;
+  scopes: string[];
+  items: MemoryRecallViewLike[];
+  note?: string | null;
+  budget_limit?: number | null;
+}
+
+interface MemoryRetrievalPreviewResponseLike {
+  packet: MemoryRetrievalPacketLike;
+  contract: MemoryContractLike;
+}
+
+interface MemoryRuleDefinitionLike {
+  id: string;
+  description: string;
+  tags?: string[];
+  promotion_target?: string | null;
+}
+
+interface MemoryRulePackLike {
+  id: string;
+  rule_pack_kind: string;
+  version: string;
+  rules: MemoryRuleDefinitionLike[];
+  created_at: number;
+  updated_at: number;
+}
+
+interface MemoryRulePackListResponseLike {
+  items: MemoryRulePackLike[];
+}
+
+interface MemoryRuleHitLike {
+  id: string;
+  rule_pack_id?: string | null;
+  memory_id?: { 0: string } | string | null;
+  run_id?: string | null;
+  hit_kind: string;
+  detail?: string | null;
+  created_at: number;
+}
+
+interface MemoryRuleHitListResponseLike {
+  items: MemoryRuleHitLike[];
+}
+
+interface MemoryConsolidationRunLike {
+  run_id: string;
+  started_at: number;
+  finished_at?: number | null;
+  merged_count: number;
+  promoted_count: number;
+  conflict_count: number;
+}
+
+interface MemoryConsolidationRunListResponseLike {
+  items: MemoryConsolidationRunLike[];
+}
+
+interface MemoryConsolidationResponseLike {
+  run: MemoryConsolidationRunLike;
+  merged_record_ids: Array<{ 0: string } | string>;
+  promoted_record_ids: Array<{ 0: string } | string>;
+  archived_record_ids: Array<{ 0: string } | string>;
+  reflection_notes: string[];
+  rule_hits: MemoryRuleHitLike[];
 }
 
 interface SkillCatalogEntry {
@@ -481,6 +640,7 @@ interface SettingsDrawerProps {
 
 const SETTINGS_TABS: Array<{ id: SettingsTabId; label: string }> = [
   { id: "general", label: "General" },
+  { id: "memory", label: "Memory" },
   { id: "providers", label: "Providers" },
   { id: "scheduler", label: "Scheduler" },
   { id: "skills", label: "Skills" },
@@ -495,6 +655,8 @@ function isolatedWorkspaceNotice(tab: SettingsTabId): string | null {
       return "These settings are still persisted to global config. In isolated mode, that persisted global copy does not become the current sandbox runtime unless you switch back to a shared workspace.";
     case "providers":
       return "Provider and model changes made here target global config or shared provider state. The current isolated sandbox will not inherit those global config changes unless the same intent is expressed inside this workspace's .rocode.";
+    case "memory":
+      return "Memory reads here come from the current workspace authority. In isolated mode, that means you are inspecting sandbox-local memory state rather than inherited global memory records.";
     case "scheduler":
       return "Scheduler edits here write global config. The active isolated sandbox will continue resolving scheduler behavior from its local workspace authority until you switch to shared mode or add matching workspace-local config.";
     case "skills":
@@ -558,6 +720,11 @@ function unixTimeLabel(value?: number | null): string {
 function formatError(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error ?? "Unknown error");
+}
+
+function memoryRecordIdValue(value: { 0: string } | string | null | undefined): string {
+  if (!value) return "";
+  return typeof value === "string" ? value : value[0] ?? "";
 }
 
 function stringifyJson(value: unknown) {
@@ -674,6 +841,27 @@ export function SettingsDrawer({
   const [schedulerConfig, setSchedulerConfig] = useState<SchedulerConfigResponse | null>(null);
   const [schedulerPathDraft, setSchedulerPathDraft] = useState("");
   const [schedulerContentDraft, setSchedulerContentDraft] = useState("");
+  const [memorySearchDraft, setMemorySearchDraft] = useState("");
+  const [memoryListLoading, setMemoryListLoading] = useState(false);
+  const [memoryListResponse, setMemoryListResponse] = useState<MemoryListResponseLike | null>(null);
+  const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
+  const [memoryDetailLoading, setMemoryDetailLoading] = useState(false);
+  const [memoryDetail, setMemoryDetail] = useState<MemoryDetailResponseLike | null>(null);
+  const [memoryValidationReport, setMemoryValidationReport] =
+    useState<MemoryValidationReportResponseLike | null>(null);
+  const [memoryConflicts, setMemoryConflicts] = useState<MemoryConflictResponseLike | null>(null);
+  const [memoryPreviewLoading, setMemoryPreviewLoading] = useState(false);
+  const [memoryPreview, setMemoryPreview] = useState<MemoryRetrievalPreviewResponseLike | null>(null);
+  const [memoryRulePacks, setMemoryRulePacks] = useState<MemoryRulePackListResponseLike | null>(null);
+  const [memoryRuleHits, setMemoryRuleHits] = useState<MemoryRuleHitListResponseLike | null>(null);
+  const [memoryConsolidationRuns, setMemoryConsolidationRuns] =
+    useState<MemoryConsolidationRunListResponseLike | null>(null);
+  const [memoryConsolidationResult, setMemoryConsolidationResult] =
+    useState<MemoryConsolidationResponseLike | null>(null);
+  const [memoryGovernanceLoading, setMemoryGovernanceLoading] = useState(false);
+  const [memoryConsolidating, setMemoryConsolidating] = useState(false);
+  const [memoryConsolidateIncludeCandidates, setMemoryConsolidateIncludeCandidates] =
+    useState(false);
   const [mcpStatus, setMcpStatus] = useState<Record<string, McpStatusInfo>>({});
   const [mcpDrafts, setMcpDrafts] = useState<Record<string, string>>({});
   const [newMcpKey, setNewMcpKey] = useState("");
@@ -834,6 +1022,13 @@ export function SettingsDrawer({
     if (!trimmed) return ".rocode/skills";
     return `${trimmed.replace(/\/+$/, "")}/.rocode/skills`;
   }, [workspaceRootPath]);
+  const selectedMemoryCard = useMemo(
+    () =>
+      memoryListResponse?.items.find(
+        (item) => memoryRecordIdValue(item.id) === (selectedMemoryId ?? ""),
+      ) ?? null,
+    [memoryListResponse?.items, selectedMemoryId],
+  );
   const skillsMutationsEnabled = Boolean(selectedSessionId);
 
   const reloadSettingsData = useCallback(async () => {
@@ -925,9 +1120,184 @@ export function SettingsDrawer({
     [apiJson],
   );
 
+  const loadMemoryList = useCallback(async () => {
+    setMemoryListLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (memorySearchDraft.trim()) {
+        params.set("search", memorySearchDraft.trim());
+      }
+      params.set("limit", "60");
+      if (selectedSessionId) {
+        params.set("source_session_id", selectedSessionId);
+      }
+      const route = memorySearchDraft.trim() ? "/memory/search" : "/memory/list";
+      const path = `${route}${params.toString() ? `?${params.toString()}` : ""}`;
+      const response = await apiJson<MemoryListResponseLike>(path);
+      setMemoryListResponse(response);
+      setSelectedMemoryId((current) => {
+        if (
+          current &&
+          response.items.some((item) => memoryRecordIdValue(item.id) === current)
+        ) {
+          return current;
+        }
+        return response.items[0] ? memoryRecordIdValue(response.items[0].id) : null;
+      });
+    } catch (error) {
+      const message = `Failed to load memory list: ${formatError(error)}`;
+      setFeedback(message);
+      onBanner(message);
+    } finally {
+      setMemoryListLoading(false);
+    }
+  }, [apiJson, memorySearchDraft, onBanner, selectedSessionId]);
+
+  const loadMemoryPreview = useCallback(async () => {
+    setMemoryPreviewLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (memorySearchDraft.trim()) {
+        params.set("query", memorySearchDraft.trim());
+      }
+      params.set("limit", "6");
+      if (selectedSessionId) {
+        params.set("session_id", selectedSessionId);
+      }
+      const path = `/memory/retrieval-preview?${params.toString()}`;
+      const response = await apiJson<MemoryRetrievalPreviewResponseLike>(path);
+      setMemoryPreview(response);
+    } catch (error) {
+      const message = `Failed to load memory retrieval preview: ${formatError(error)}`;
+      setFeedback(message);
+      onBanner(message);
+    } finally {
+      setMemoryPreviewLoading(false);
+    }
+  }, [apiJson, memorySearchDraft, onBanner, selectedSessionId]);
+
+  const loadMemoryGovernance = useCallback(async () => {
+    setMemoryGovernanceLoading(true);
+    try {
+      const [rulePacks, ruleHits, runs] = await Promise.all([
+        apiJson<MemoryRulePackListResponseLike>("/memory/rule-packs"),
+        apiJson<MemoryRuleHitListResponseLike>("/memory/rule-hits?limit=30"),
+        apiJson<MemoryConsolidationRunListResponseLike>("/memory/consolidation/runs?limit=20"),
+      ]);
+      setMemoryRulePacks(rulePacks);
+      setMemoryRuleHits(ruleHits);
+      setMemoryConsolidationRuns(runs);
+    } catch (error) {
+      const message = `Failed to load memory governance state: ${formatError(error)}`;
+      setFeedback(message);
+      onBanner(message);
+    } finally {
+      setMemoryGovernanceLoading(false);
+    }
+  }, [apiJson, onBanner]);
+
+  const runMemoryConsolidation = useCallback(async () => {
+    setMemoryConsolidating(true);
+    try {
+      const response = await apiJson<MemoryConsolidationResponseLike>("/memory/consolidate", {
+        method: "POST",
+        body: JSON.stringify({
+          include_candidates: memoryConsolidateIncludeCandidates,
+        }),
+      });
+      setMemoryConsolidationResult(response);
+      await loadMemoryGovernance();
+      await loadMemoryList();
+      if (selectedMemoryId) {
+        setSelectedMemoryId(selectedMemoryId);
+      }
+    } catch (error) {
+      const message = `Failed to run memory consolidation: ${formatError(error)}`;
+      setFeedback(message);
+      onBanner(message);
+    } finally {
+      setMemoryConsolidating(false);
+    }
+  }, [
+    apiJson,
+    loadMemoryGovernance,
+    loadMemoryList,
+    memoryConsolidateIncludeCandidates,
+    onBanner,
+    selectedMemoryId,
+  ]);
+
   useEffect(() => {
     void reloadSettingsData();
   }, [reloadSettingsData]);
+
+  useEffect(() => {
+    if (activeTab !== "memory") {
+      return;
+    }
+    void loadMemoryList();
+  }, [activeTab, loadMemoryList]);
+
+  useEffect(() => {
+    if (activeTab !== "memory") {
+      return;
+    }
+    void loadMemoryPreview();
+  }, [activeTab, loadMemoryPreview]);
+
+  useEffect(() => {
+    if (activeTab !== "memory") {
+      return;
+    }
+    void loadMemoryGovernance();
+  }, [activeTab, loadMemoryGovernance]);
+
+  useEffect(() => {
+    if (activeTab !== "memory" || !selectedMemoryId) {
+      setMemoryDetail(null);
+      setMemoryValidationReport(null);
+      setMemoryConflicts(null);
+      setMemoryDetailLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setMemoryDetailLoading(true);
+
+    void (async () => {
+      try {
+        const [detail, validation, conflicts] = await Promise.all([
+          apiJson<MemoryDetailResponseLike>(`/memory/${encodeURIComponent(selectedMemoryId)}`),
+          apiJson<MemoryValidationReportResponseLike>(
+            `/memory/${encodeURIComponent(selectedMemoryId)}/validation-report`,
+          ),
+          apiJson<MemoryConflictResponseLike>(
+            `/memory/${encodeURIComponent(selectedMemoryId)}/conflicts`,
+          ),
+        ]);
+        if (cancelled) return;
+        setMemoryDetail(detail);
+        setMemoryValidationReport(validation);
+        setMemoryConflicts(conflicts);
+      } catch (error) {
+        if (cancelled) return;
+        const message = `Failed to load memory detail: ${formatError(error)}`;
+        setFeedback(message);
+        onBanner(message);
+        setMemoryDetail(null);
+        setMemoryValidationReport(null);
+        setMemoryConflicts(null);
+      } finally {
+        if (!cancelled) {
+          setMemoryDetailLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, apiJson, onBanner, selectedMemoryId]);
 
   useEffect(() => {
     if (skillCatalog.length === 0) {
@@ -1788,6 +2158,493 @@ export function SettingsDrawer({
                 <div className={summaryCardClass}>
                   <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Plugins</span>
                   <strong>{Object.keys(pluginConfigs).length}</strong>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {!loading && activeTab === "memory" ? (
+            <div className="grid gap-6">
+              <div className={sectionCardClass}>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                  <div className="grid flex-1 gap-2">
+                    <label htmlFor="settings-memory-search">Search Memory</label>
+                    <input
+                      id="settings-memory-search"
+                      type="text"
+                      placeholder="Search title, summary, normalized facts"
+                      value={memorySearchDraft}
+                      onChange={(event) => setMemorySearchDraft(event.target.value)}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    className={primaryButtonClass}
+                    onClick={() => void loadMemoryList()}
+                    disabled={memoryListLoading}
+                  >
+                    {memoryListLoading ? "Refreshing..." : "Refresh Memory"}
+                  </button>
+                  <button
+                    type="button"
+                    className={secondaryButtonClass}
+                    onClick={() => void loadMemoryPreview()}
+                    disabled={memoryPreviewLoading}
+                  >
+                    {memoryPreviewLoading ? "Previewing..." : "Preview Injection"}
+                  </button>
+                  <button
+                    type="button"
+                    className={secondaryButtonClass}
+                    onClick={() => void loadMemoryGovernance()}
+                    disabled={memoryGovernanceLoading}
+                  >
+                    {memoryGovernanceLoading ? "Refreshing..." : "Refresh Governance"}
+                  </button>
+                </div>
+
+                <div className="flex flex-col gap-3 rounded-xl border border-border/35 bg-muted/10 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <label className="flex items-center gap-3 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={memoryConsolidateIncludeCandidates}
+                      onChange={(event) => setMemoryConsolidateIncludeCandidates(event.target.checked)}
+                    />
+                    Include candidate records in consolidation
+                  </label>
+                  <button
+                    type="button"
+                    className={primaryButtonClass}
+                    onClick={() => void runMemoryConsolidation()}
+                    disabled={memoryConsolidating}
+                  >
+                    {memoryConsolidating ? "Consolidating..." : "Run Consolidation"}
+                  </button>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-4">
+                  <div className={summaryCardClass}>
+                    <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Session Scope</span>
+                    <strong className="break-all text-sm">{selectedSessionId || "workspace authority"}</strong>
+                  </div>
+                  <div className={summaryCardClass}>
+                    <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Records</span>
+                    <strong>{memoryListResponse?.items.length ?? 0}</strong>
+                  </div>
+                  <div className={summaryCardClass}>
+                    <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Search Fields</span>
+                    <strong className="text-sm">
+                      {memoryListResponse?.contract.search_fields.join(", ") || "--"}
+                    </strong>
+                  </div>
+                  <div className={summaryCardClass}>
+                    <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Contract</span>
+                    <strong className="text-sm">
+                      {memoryListResponse?.contract.filter_query_parameters.join(", ") || "--"}
+                    </strong>
+                  </div>
+                  <div className={summaryCardClass}>
+                    <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Rule Packs</span>
+                    <strong>{memoryRulePacks?.items.length ?? 0}</strong>
+                  </div>
+                  <div className={summaryCardClass}>
+                    <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Recent Rule Hits</span>
+                    <strong>{memoryRuleHits?.items.length ?? 0}</strong>
+                  </div>
+                  <div className={summaryCardClass}>
+                    <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Consolidation Runs</span>
+                    <strong>{memoryConsolidationRuns?.items.length ?? 0}</strong>
+                  </div>
+                </div>
+
+                <div className={mutedCardClass}>
+                  {memoryListResponse?.contract.note ||
+                    "Read models come from /memory/list, /memory/{id}, /memory/{id}/validation-report, and /memory/{id}/conflicts."}
+                </div>
+              </div>
+
+              <div className="grid gap-6 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.35fr)]">
+                <div className={sectionCardClass}>
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="m-0 text-base">Memory Records</h3>
+                    <span className="text-xs text-muted-foreground">
+                      {memoryListLoading ? "Loading..." : `${memoryListResponse?.items.length ?? 0} records`}
+                    </span>
+                  </div>
+                  <div className="grid gap-3 max-h-[32rem] overflow-y-auto pr-1">
+                    {memoryListResponse?.items.length ? (
+                      memoryListResponse.items.map((item) => {
+                        const recordId = memoryRecordIdValue(item.id);
+                        const active = recordId === selectedMemoryId;
+                        return (
+                          <button
+                            key={recordId}
+                            type="button"
+                            className={cn(
+                              "grid gap-2 rounded-xl border px-4 py-3 text-left transition-colors",
+                              active
+                                ? "border-foreground/20 bg-foreground text-background"
+                                : "border-border/40 bg-card/50 hover:bg-accent",
+                            )}
+                            onClick={() => setSelectedMemoryId(recordId)}
+                          >
+                            <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-wide">
+                              <span>{item.kind}</span>
+                              <span>·</span>
+                              <span>{item.status}</span>
+                              <span>·</span>
+                              <span>{item.validation_status}</span>
+                            </div>
+                            <strong className="text-sm">{item.title}</strong>
+                            <span className={active ? "text-background/85 text-sm" : "text-muted-foreground text-sm"}>
+                              {item.summary}
+                            </span>
+                          </button>
+                        );
+                      })
+                    ) : (
+                      <div className={mutedCardClass}>No memory records matched this query.</div>
+                    )}
+                  </div>
+                </div>
+
+                <div className={sectionCardClass}>
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="m-0 text-base">Memory Detail</h3>
+                    <span className="text-xs text-muted-foreground">
+                      {memoryDetailLoading
+                        ? "Loading detail..."
+                        : selectedMemoryCard
+                          ? memoryRecordIdValue(selectedMemoryCard.id)
+                          : "No record selected"}
+                    </span>
+                  </div>
+
+                  {memoryDetail && !memoryDetailLoading ? (
+                    <div className="grid gap-5">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className={summaryCardClass}>
+                          <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Kind / Scope</span>
+                          <strong className="text-sm">
+                            {memoryDetail.record.kind} / {memoryDetail.record.scope}
+                          </strong>
+                        </div>
+                        <div className={summaryCardClass}>
+                          <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Status</span>
+                          <strong className="text-sm">
+                            {memoryDetail.record.status} / {memoryDetail.record.validation_status}
+                          </strong>
+                        </div>
+                      </div>
+
+                      <div className={mutedCardClass}>
+                        <strong className="block text-foreground">{memoryDetail.record.title}</strong>
+                        <span>{memoryDetail.record.summary}</span>
+                      </div>
+
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div className={summaryCardClass}>
+                          <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Triggers</span>
+                          <div className="grid gap-1 text-sm">
+                            {memoryDetail.record.trigger_conditions.length
+                              ? memoryDetail.record.trigger_conditions.map((value) => (
+                                  <span key={value}>{value}</span>
+                                ))
+                              : <span className="text-muted-foreground">--</span>}
+                          </div>
+                        </div>
+                        <div className={summaryCardClass}>
+                          <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Boundaries</span>
+                          <div className="grid gap-1 text-sm">
+                            {memoryDetail.record.boundaries.length
+                              ? memoryDetail.record.boundaries.map((value) => (
+                                  <span key={value}>{value}</span>
+                                ))
+                              : <span className="text-muted-foreground">--</span>}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className={summaryCardClass}>
+                        <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Normalized Facts</span>
+                        <div className="grid gap-1 text-sm">
+                          {memoryDetail.record.normalized_facts.length
+                            ? memoryDetail.record.normalized_facts.map((value) => (
+                                <span key={value}>{value}</span>
+                              ))
+                            : <span className="text-muted-foreground">--</span>}
+                        </div>
+                      </div>
+
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div className={summaryCardClass}>
+                          <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Validation Report</span>
+                          {memoryValidationReport?.latest ? (
+                            <div className="grid gap-2 text-sm">
+                              <strong>{memoryValidationReport.latest.status}</strong>
+                              <span className="text-muted-foreground">
+                                Checked: {unixTimeLabel(memoryValidationReport.latest.checked_at)}
+                              </span>
+                              <div className="grid gap-1">
+                                {memoryValidationReport.latest.issues.length
+                                  ? memoryValidationReport.latest.issues.map((issue) => (
+                                      <span key={issue}>{issue}</span>
+                                    ))
+                                  : <span className="text-muted-foreground">No issues.</span>}
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-sm text-muted-foreground">
+                              No validation report recorded yet.
+                            </span>
+                          )}
+                        </div>
+
+                        <div className={summaryCardClass}>
+                          <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Conflicts</span>
+                          <div className="grid gap-2 text-sm">
+                            {memoryConflicts?.conflicts.length ? (
+                              memoryConflicts.conflicts.map((conflict) => (
+                                <div key={conflict.id} className="rounded-lg border border-border/35 bg-muted/10 p-3">
+                                  <strong className="block">{conflict.conflict_kind}</strong>
+                                  <span className="block text-muted-foreground">
+                                    Other: {memoryRecordIdValue(conflict.other_record_id)}
+                                  </span>
+                                  <span className="block">{conflict.detail}</span>
+                                  <span className="block text-muted-foreground">
+                                    Detected: {unixTimeLabel(conflict.detected_at)}
+                                  </span>
+                                </div>
+                              ))
+                            ) : (
+                              <span className="text-muted-foreground">No conflicts detected.</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className={summaryCardClass}>
+                        <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Evidence</span>
+                        <div className="grid gap-2 text-sm">
+                          {memoryDetail.record.evidence_refs.length ? (
+                            memoryDetail.record.evidence_refs.map((ref, index) => (
+                              <div key={`${ref.session_id ?? "session"}-${index}`} className="rounded-lg border border-border/35 bg-muted/10 p-3">
+                                <div>session: {ref.session_id || "--"}</div>
+                                <div>message: {ref.message_id || "--"}</div>
+                                <div>tool: {ref.tool_call_id || "--"}</div>
+                                <div>stage: {ref.stage_id || "--"}</div>
+                                {ref.note ? <div>note: {ref.note}</div> : null}
+                              </div>
+                            ))
+                          ) : (
+                            <span className="text-muted-foreground">No evidence refs.</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className={mutedCardClass}>
+                      {memoryDetailLoading
+                        ? "Loading memory detail..."
+                        : "Select a memory record to inspect its detail, validation report, and conflicts."}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className={sectionCardClass}>
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="m-0 text-base">Retrieval Preview</h3>
+                  <span className="text-xs text-muted-foreground">
+                    {memoryPreviewLoading
+                      ? "Loading preview..."
+                      : `${memoryPreview?.packet.items.length ?? 0} recalled`}
+                  </span>
+                </div>
+                <div className={mutedCardClass}>
+                  {memoryPreview?.contract.note ||
+                    "Formal preview of which memory records would be injected into the current turn and why."}
+                </div>
+                <div className="grid gap-3">
+                  {memoryPreview?.packet.items.length ? (
+                    memoryPreview.packet.items.map((item) => (
+                      <div
+                        key={memoryRecordIdValue(item.card.id)}
+                        className="rounded-xl border border-border/40 bg-card/55 p-4"
+                      >
+                        <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
+                          <span>{item.card.kind}</span>
+                          <span>·</span>
+                          <span>{item.card.validation_status}</span>
+                        </div>
+                        <strong className="mt-2 block text-sm">{item.card.title}</strong>
+                        <div className="mt-2 text-sm">
+                          <div>why: {item.why_recalled}</div>
+                          <div>summary: {item.card.summary}</div>
+                          {item.evidence_summary ? <div>evidence: {item.evidence_summary}</div> : null}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className={mutedCardClass}>
+                      No memory records would be injected for the current search/session scope.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+                <div className={sectionCardClass}>
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="m-0 text-base">Rule Packs</h3>
+                    <span className="text-xs text-muted-foreground">
+                      {memoryGovernanceLoading
+                        ? "Loading..."
+                        : `${memoryRulePacks?.items.length ?? 0} packs`}
+                    </span>
+                  </div>
+                  <div className="grid gap-3">
+                    {memoryRulePacks?.items.length ? (
+                      memoryRulePacks.items.map((pack) => (
+                        <div
+                          key={pack.id}
+                          className="rounded-xl border border-border/40 bg-card/55 p-4"
+                        >
+                          <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
+                            <span>{pack.rule_pack_kind}</span>
+                            <span>·</span>
+                            <span>{pack.version}</span>
+                          </div>
+                          <strong className="mt-2 block text-sm">{pack.id}</strong>
+                          <div className="mt-3 grid gap-2 text-sm">
+                            {pack.rules.length ? (
+                              pack.rules.map((rule) => (
+                                <div key={rule.id} className="rounded-lg border border-border/35 bg-muted/10 p-3">
+                                  <strong className="block">{rule.id}</strong>
+                                  <span className="block text-muted-foreground">{rule.description}</span>
+                                  {rule.promotion_target ? (
+                                    <span className="block text-xs text-muted-foreground">
+                                      promotion target: {rule.promotion_target}
+                                    </span>
+                                  ) : null}
+                                </div>
+                              ))
+                            ) : (
+                              <div className={mutedCardClass}>No rules declared.</div>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className={mutedCardClass}>
+                        {memoryGovernanceLoading
+                          ? "Loading rule packs..."
+                          : "No rule packs available."}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid gap-6">
+                  <div className={sectionCardClass}>
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="m-0 text-base">Recent Rule Hits</h3>
+                      <span className="text-xs text-muted-foreground">
+                        {memoryGovernanceLoading
+                          ? "Loading..."
+                          : `${memoryRuleHits?.items.length ?? 0} hits`}
+                      </span>
+                    </div>
+                    <div className="grid gap-3">
+                      {memoryRuleHits?.items.length ? (
+                        memoryRuleHits.items.map((hit) => (
+                          <div
+                            key={hit.id}
+                            className="rounded-xl border border-border/40 bg-card/55 p-4"
+                          >
+                            <strong className="block text-sm">{hit.hit_kind}</strong>
+                            <div className="mt-2 grid gap-1 text-sm">
+                              <span>run: {hit.run_id || "--"}</span>
+                              <span>record: {memoryRecordIdValue(hit.memory_id)}</span>
+                              <span>pack: {hit.rule_pack_id || "--"}</span>
+                              <span className="text-muted-foreground">
+                                {unixTimeLabel(hit.created_at)}
+                              </span>
+                              {hit.detail ? <span>{hit.detail}</span> : null}
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className={mutedCardClass}>
+                          {memoryGovernanceLoading
+                            ? "Loading rule hits..."
+                            : "No recent rule hits."}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className={sectionCardClass}>
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="m-0 text-base">Consolidation Runs</h3>
+                      <span className="text-xs text-muted-foreground">
+                        {memoryGovernanceLoading
+                          ? "Loading..."
+                          : `${memoryConsolidationRuns?.items.length ?? 0} runs`}
+                      </span>
+                    </div>
+                    <div className="grid gap-3">
+                      {memoryConsolidationResult ? (
+                        <div className="rounded-xl border border-foreground/15 bg-foreground text-background p-4">
+                          <strong className="block text-sm">Latest Consolidation</strong>
+                          <div className="mt-2 grid gap-1 text-sm text-background/85">
+                            <span>run: {memoryConsolidationResult.run.run_id}</span>
+                            <span>
+                              merged {memoryConsolidationResult.run.merged_count} · promoted{" "}
+                              {memoryConsolidationResult.run.promoted_count} · conflicts{" "}
+                              {memoryConsolidationResult.run.conflict_count}
+                            </span>
+                            {memoryConsolidationResult.reflection_notes.length ? (
+                              <div className="mt-2 grid gap-1">
+                                {memoryConsolidationResult.reflection_notes.map((note) => (
+                                  <span key={note}>{note}</span>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {memoryConsolidationRuns?.items.length ? (
+                        memoryConsolidationRuns.items.map((run) => (
+                          <div
+                            key={run.run_id}
+                            className="rounded-xl border border-border/40 bg-card/55 p-4"
+                          >
+                            <strong className="block text-sm">{run.run_id}</strong>
+                            <div className="mt-2 grid gap-1 text-sm">
+                              <span>
+                                merged {run.merged_count} · promoted {run.promoted_count} · conflicts{" "}
+                                {run.conflict_count}
+                              </span>
+                              <span className="text-muted-foreground">
+                                started: {unixTimeLabel(run.started_at)}
+                              </span>
+                              <span className="text-muted-foreground">
+                                finished: {run.finished_at ? unixTimeLabel(run.finished_at) : "--"}
+                              </span>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className={mutedCardClass}>
+                          {memoryGovernanceLoading
+                            ? "Loading consolidation runs..."
+                            : "No consolidation runs recorded yet."}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>

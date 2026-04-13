@@ -9,6 +9,11 @@ use axum::{
     Json,
 };
 use rocode_config::Config as AppConfig;
+use rocode_memory::{
+    load_persisted_memory_snapshot, render_frozen_snapshot_block, render_prefetch_packet_block,
+    PersistedMemorySnapshot, MEMORY_LAST_PREFETCH_METADATA_KEY,
+};
+use rocode_types::{MemoryRetrievalPacket, MemoryRetrievalQuery};
 use serde::Deserialize;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -144,6 +149,168 @@ async fn resolve_prompt_payload(
         command: Some(command.clone()),
         raw_arguments,
     })
+}
+
+async fn ensure_memory_frozen_snapshot(
+    state: &Arc<ServerState>,
+    session: &mut rocode_session::Session,
+) -> Option<PersistedMemorySnapshot> {
+    if let Some(snapshot) = load_persisted_memory_snapshot(session) {
+        return Some(snapshot);
+    }
+
+    let packet = match state.runtime_memory.build_frozen_snapshot().await {
+        Ok(packet) => packet,
+        Err(error) => {
+            tracing::warn!(
+                session_id = %session.id,
+                %error,
+                "failed to build frozen memory snapshot"
+            );
+            return None;
+        }
+    };
+
+    let snapshot = PersistedMemorySnapshot {
+        rendered_block: render_frozen_snapshot_block(&packet),
+        packet,
+    };
+
+    match serde_json::to_value(&snapshot) {
+        Ok(value) => {
+            session.insert_metadata(
+                rocode_memory::MEMORY_FROZEN_SNAPSHOT_METADATA_KEY.to_string(),
+                value,
+            );
+        }
+        Err(error) => {
+            tracing::warn!(
+                session_id = %session.id,
+                %error,
+                "failed to serialize frozen memory snapshot"
+            );
+        }
+    }
+    Some(snapshot)
+}
+
+async fn build_memory_prefetch_packet(
+    state: &Arc<ServerState>,
+    session_id: &str,
+    prompt_text: &str,
+) -> Option<MemoryRetrievalPacket> {
+    let trimmed = prompt_text.trim();
+    let query = MemoryRetrievalQuery {
+        query: (!trimmed.is_empty()).then_some(trimmed.to_string()),
+        stage: None,
+        limit: Some(6),
+        kinds: Vec::new(),
+        scopes: Vec::new(),
+        session_id: Some(session_id.to_string()),
+    };
+
+    match state.runtime_memory.build_prefetch_packet(&query).await {
+        Ok(packet) => Some(packet),
+        Err(error) => {
+            tracing::warn!(
+                session_id,
+                %error,
+                "failed to build turn memory prefetch packet"
+            );
+            None
+        }
+    }
+}
+
+pub(super) async fn resolve_prompt_memory_context(
+    state: &Arc<ServerState>,
+    session: &mut rocode_session::Session,
+    prompt_text: &str,
+) -> (
+    Option<String>,
+    Option<MemoryRetrievalPacket>,
+    Option<String>,
+) {
+    let frozen_snapshot = ensure_memory_frozen_snapshot(state, session).await;
+    let prefetch_packet = build_memory_prefetch_packet(state, &session.id, prompt_text).await;
+
+    if let Some(packet) = prefetch_packet.as_ref() {
+        match serde_json::to_value(packet) {
+            Ok(value) => {
+                session.insert_metadata(MEMORY_LAST_PREFETCH_METADATA_KEY.to_string(), value);
+            }
+            Err(error) => {
+                tracing::warn!(
+                    session_id = %session.id,
+                    %error,
+                    "failed to serialize last prefetch memory packet"
+                );
+            }
+        }
+        if let Err(error) = state
+            .runtime_memory
+            .memory()
+            .record_prefetch_usage(&session.id, packet)
+            .await
+        {
+            tracing::warn!(
+                session_id = %session.id,
+                %error,
+                "failed to persist memory prefetch usage event"
+            );
+        }
+    } else {
+        session.remove_metadata(MEMORY_LAST_PREFETCH_METADATA_KEY);
+    }
+
+    let frozen_block = frozen_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.rendered_block.clone());
+    let prefetch_block = prefetch_packet
+        .as_ref()
+        .and_then(render_prefetch_packet_block);
+
+    (frozen_block, prefetch_packet, prefetch_block)
+}
+
+pub(super) fn merge_system_prompt_with_memory_snapshot(
+    base: Option<String>,
+    frozen_snapshot_block: Option<&str>,
+) -> Option<String> {
+    match (
+        base.map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        frozen_snapshot_block
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+    ) {
+        (Some(base), Some(snapshot)) => Some(format!("{base}\n\n{snapshot}")),
+        (Some(base), None) => Some(base),
+        (None, Some(snapshot)) => Some(snapshot.to_string()),
+        (None, None) => None,
+    }
+}
+
+pub(super) fn merge_scheduler_prompt_with_memory(
+    prompt_text: &str,
+    frozen_snapshot_block: Option<&str>,
+    prefetch_block: Option<&str>,
+) -> String {
+    let mut sections = Vec::new();
+    if let Some(snapshot) = frozen_snapshot_block
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        sections.push(snapshot.to_string());
+    }
+    if let Some(prefetch) = prefetch_block
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        sections.push(prefetch.to_string());
+    }
+    sections.push(prompt_text.to_string());
+    sections.join("\n\n")
 }
 
 fn normalize_command_field_key(key: &str) -> String {
@@ -957,6 +1124,18 @@ pub(super) async fn session_prompt(
             }
         }
 
+        let (memory_frozen_snapshot_block, memory_prefetch_packet, memory_prefetch_block) =
+            resolve_prompt_memory_context(&task_state, &mut session, &prompt_text).await;
+        let task_system_prompt = merge_system_prompt_with_memory_snapshot(
+            task_system_prompt.clone(),
+            memory_frozen_snapshot_block.as_deref(),
+        );
+        let scheduler_execution_prompt = merge_scheduler_prompt_with_memory(
+            &prompt_text,
+            memory_frozen_snapshot_block.as_deref(),
+            memory_prefetch_block.as_deref(),
+        );
+
         if let (Some(profile_name), Some(profile_config)) = (
             task_scheduler_profile_name.clone(),
             task_scheduler_profile_config.clone(),
@@ -1160,7 +1339,7 @@ pub(super) async fn session_prompt(
                         match enrich_scheduler_plan_skills(&task_state, &mut plan).await {
                             Ok(()) => {
                                 scheduler_orchestrator_from_plan(plan, tool_runner)
-                                    .execute(&prompt_text, &ctx)
+                                    .execute(&scheduler_execution_prompt, &ctx)
                                     .await
                             }
                             Err(error) => Err(rocode_orchestrator::OrchestratorError::Other(
@@ -1503,6 +1682,7 @@ pub(super) async fn session_prompt(
                 rocode_session::prompt::PromptRequestContext {
                     provider,
                     system_prompt: task_system_prompt.clone(),
+                    memory_prefetch: memory_prefetch_packet.clone(),
                     tools: tool_defs,
                     compiled_request: task_compiled_request.clone(),
                     hooks: rocode_session::prompt::PromptHooks {
