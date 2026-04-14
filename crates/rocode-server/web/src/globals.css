@@ -204,11 +204,11 @@ html[data-theme="midnight"] {
 
 @layer components {
   .roc-panel {
-    @apply rounded-xl border border-border/45 bg-card/72 shadow-sm;
+    @apply rounded-xl border border-border/45 bg-card;
   }
 
   .roc-subpanel {
-    @apply rounded-lg border border-border/35 bg-muted/10;
+    @apply rounded-lg border border-border/35 bg-muted;
   }
 
   .roc-item {
@@ -236,7 +236,7 @@ html[data-theme="midnight"] {
   }
 
   .roc-textarea {
-    @apply rounded-xl border border-border/45 bg-background/78;
+    @apply rounded-xl border border-border/45 bg-background;
   }
 }
 

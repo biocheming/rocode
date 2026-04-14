@@ -1207,8 +1207,10 @@ mod tests {
             sidebar_collapsed: false,
             active_collapsed: false,
             session_title: Some("Test Session".to_string()),
+            current_model_label: Some("openai/gpt-4.1".to_string()),
             scroll_offset: 0,
             token_stats: CliSessionTokenStats::default(),
+            model_catalog: HashMap::new(),
             mcp_servers: Vec::new(),
             lsp_servers: Vec::new(),
         };

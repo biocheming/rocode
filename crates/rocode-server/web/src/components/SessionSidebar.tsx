@@ -55,10 +55,10 @@ function SessionTreeList({
         <div key={node.id} className="flex flex-col gap-2">
           <div
             className={cn(
-              "roc-item px-0",
+              "px-0 transition-colors border-l-2",
               node.id === selectedSessionId
-                ? "roc-item-active bg-background/90"
-                : "hover:bg-background/65",
+                ? "bg-accent/40 border-l-primary"
+                : "hover:bg-accent/20 border-l-transparent",
             )}
             style={{ marginLeft: `${depth * 16}px` }}
           >
@@ -175,11 +175,11 @@ export function SessionSidebar({
 
   return (
     <aside
-      className="h-full overflow-y-auto border-r border-border bg-sidebar/70"
+      className="h-full overflow-y-auto border-r border-border bg-sidebar"
       data-testid="session-sidebar"
     >
-      <div className="space-y-4 px-4 py-4">
-        <div className="roc-panel bg-background/88 p-4">
+      <div className="space-y-6">
+        <div className="px-4 py-3 border-b border-border">
           <div className="grid grid-cols-1 gap-2">
             <Button
               variant="outline"
@@ -206,7 +206,7 @@ export function SessionSidebar({
             </Button>
           </div>
         </div>
-        <div className="grid min-h-[16rem] max-h-[22rem] grid-rows-[auto_minmax(0,1fr)] rounded-lg border border-border/40 bg-background p-3 shadow-sm">
+        <div className="flex flex-col px-4">
           <div className="mb-3 space-y-3">
             <div className="flex items-center justify-between gap-2">
               <div>
@@ -243,10 +243,10 @@ export function SessionSidebar({
                     key={workspace.path}
                     type="button"
                     className={cn(
-                      "roc-item px-3 py-2.5 text-left",
+                      "px-3 py-2.5 text-left transition-colors border-l-2",
                       workspace.path === currentWorkspacePath
-                        ? "roc-item-active bg-background/90"
-                        : "hover:bg-background/65",
+                        ? "bg-accent/40 border-l-primary"
+                        : "hover:bg-accent/20 border-l-transparent",
                     )}
                     onClick={() => onSelectWorkspace(workspace.path)}
                   >
@@ -272,7 +272,7 @@ export function SessionSidebar({
           </div>
         </div>
         <div
-          className="grid min-h-[18rem] max-h-[28rem] grid-rows-[auto_auto_minmax(0,1fr)] rounded-lg border border-border/40 bg-background p-3 shadow-sm"
+          className="flex flex-col px-4"
           data-testid="session-list"
         >
           <div className="mb-3">

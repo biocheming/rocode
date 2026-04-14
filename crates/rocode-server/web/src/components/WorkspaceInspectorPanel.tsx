@@ -20,6 +20,7 @@ const SessionInsightsPanel = React.lazy(async () => {
 });
 
 interface WorkspaceInspectorPanelProps {
+  apiJson: <T>(path: string, options?: RequestInit) => Promise<T>;
   workspaceLoading: boolean;
   fileTree: FileTreeNodeRecord | null;
   workspaceRootLabel: string;
@@ -71,6 +72,7 @@ const workspaceActionButtonClass =
   "roc-action min-h-[42px] px-4 cursor-pointer transition-colors";
 
 export function WorkspaceInspectorPanel({
+  apiJson,
   workspaceLoading,
   fileTree,
   workspaceRootLabel,
@@ -283,7 +285,7 @@ export function WorkspaceInspectorPanel({
       </Suspense>
 
       <Suspense fallback={<InspectorLoadingCard label="session insights" />}>
-        <SessionInsightsPanel activity={executionActivity} />
+        <SessionInsightsPanel activity={executionActivity} apiJson={apiJson} />
       </Suspense>
 
       <DeferredTerminalPanel

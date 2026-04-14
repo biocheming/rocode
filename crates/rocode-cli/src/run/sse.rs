@@ -866,6 +866,30 @@ async fn cli_refresh_server_info(
     projection: &Arc<Mutex<CliFrontendProjection>>,
     server_session_id: Option<&str>,
 ) {
+    match api_client.get_all_providers().await {
+        Ok(response) => {
+            let mut model_catalog = std::collections::HashMap::new();
+            for provider in response.all {
+                for model in provider.models {
+                    model_catalog.insert(
+                        format!("{}/{}", provider.id, model.id),
+                        CliModelCatalogEntry {
+                            context_window: model.context_window,
+                            cost_per_million_input: model.cost_per_million_input,
+                            cost_per_million_output: model.cost_per_million_output,
+                        },
+                    );
+                }
+            }
+            if let Ok(mut projection) = projection.lock() {
+                projection.model_catalog = model_catalog;
+            }
+        }
+        Err(error) => {
+            tracing::debug!("Failed to refresh provider catalogue: {}", error);
+        }
+    }
+
     match api_client.get_mcp_status().await {
         Ok(servers) => {
             let statuses: Vec<CliMcpServerStatus> = servers.into_iter().map(Into::into).collect();

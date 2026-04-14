@@ -85,8 +85,9 @@ async fn get_config_providers(
 ) -> Json<ConfigProvidersResponse> {
     let variant_lookup = crate::routes::provider::get_model_variant_lookup(state.as_ref()).await;
     let models = state.providers.read().await.list_models();
-    let mut provider_map: HashMap<String, Vec<crate::routes::provider::ModelInfo>> = HashMap::new();
     let mut provider_names: HashMap<String, String> = HashMap::new();
+    let mut provider_model_map: HashMap<String, HashMap<String, crate::routes::provider::ModelInfo>> =
+        HashMap::new();
     for m in models {
         let provider_id = m.provider.clone();
         let model_id = m.id.clone();
@@ -95,13 +96,10 @@ async fn get_config_providers(
             .or_insert_with(|| provider_id.clone());
         let variants =
             crate::routes::provider::variants_for_model(&variant_lookup, &provider_id, &model_id);
-        provider_map.entry(provider_id.clone()).or_default().push(
-            crate::routes::provider::ModelInfo {
-                id: model_id,
-                name: m.name,
-                provider: provider_id,
-                variants,
-            },
+        crate::routes::provider::upsert_runtime_model_info(
+            &mut provider_model_map,
+            &provider_id,
+            crate::routes::provider::runtime_model_info(&m, variants),
         );
     }
     let config = state.config_store.config();
@@ -110,12 +108,6 @@ async fn get_config_providers(
             provider_names
                 .entry(provider_id.clone())
                 .or_insert_with(|| provider.name.clone().unwrap_or_else(|| provider_id.clone()));
-            let entries = provider_map.entry(provider_id.clone()).or_default();
-            let mut existing: HashMap<String, usize> = entries
-                .iter()
-                .enumerate()
-                .map(|(idx, model)| (model.id.clone(), idx))
-                .collect();
             if let Some(models) = &provider.models {
                 for (configured_model_key, configured_model) in models {
                     let model_id = configured_model
@@ -134,25 +126,31 @@ async fn get_config_providers(
                                 &model_id,
                             )
                         });
-                    let info = crate::routes::provider::ModelInfo {
-                        id: model_id.clone(),
-                        name: configured_model
-                            .name
-                            .clone()
-                            .unwrap_or_else(|| model_id.clone()),
-                        provider: provider_id.clone(),
-                        variants,
-                    };
-                    if let Some(index) = existing.get(&model_id).copied() {
-                        entries[index] = info;
-                    } else {
-                        existing.insert(model_id.clone(), entries.len());
-                        entries.push(info);
-                    }
+                    crate::routes::provider::upsert_config_model_info(
+                        &mut provider_model_map,
+                        provider_id,
+                        crate::routes::provider::configured_model_info(
+                            provider_id,
+                            model_id,
+                            configured_model,
+                            variants,
+                        ),
+                    );
                 }
             }
         }
     }
+    for provider_id in provider_names.keys() {
+        provider_model_map.entry(provider_id.clone()).or_default();
+    }
+    let provider_map: HashMap<String, Vec<crate::routes::provider::ModelInfo>> = provider_model_map
+        .into_iter()
+        .map(|(provider_id, model_map)| {
+            let mut entries = model_map.into_values().collect::<Vec<_>>();
+            entries.sort_by(|a, b| a.id.cmp(&b.id));
+            (provider_id, entries)
+        })
+        .collect();
     let providers: Vec<crate::routes::provider::ProviderInfo> = provider_map
         .into_iter()
         .map(|(id, models)| crate::routes::provider::ProviderInfo {

@@ -29,6 +29,8 @@ pub struct ModelInfo {
     pub max_output_tokens: u64,
     pub supports_vision: bool,
     pub supports_tools: bool,
+    pub cost_per_million_input: Option<f64>,
+    pub cost_per_million_output: Option<f64>,
 }
 
 #[derive(Clone)]
@@ -249,6 +251,28 @@ impl AppContext {
 
     pub fn current_model_variant(&self) -> Option<String> {
         self.current_variant.read().clone()
+    }
+
+    pub fn resolve_model_info(&self, model_ref: Option<&str>) -> Option<ModelInfo> {
+        let fallback_model = self.current_model.read().clone();
+        let target = model_ref
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .or(fallback_model)?;
+        self.providers
+            .read()
+            .iter()
+            .flat_map(|provider| provider.models.iter())
+            .find(|model| {
+                model.id == target
+                    || model
+                        .id
+                        .rsplit_once('/')
+                        .map(|(_, suffix)| suffix == target)
+                        .unwrap_or(false)
+            })
+            .cloned()
     }
 
     pub fn set_agent(&self, agent: String) {

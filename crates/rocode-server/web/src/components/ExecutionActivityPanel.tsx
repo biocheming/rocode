@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { ConversationJumpTarget } from "../hooks/useConversationJump";
 import type { useExecutionActivity } from "../hooks/useExecutionActivity";
 import { cn } from "@/lib/utils";
+import { memoryRecordIdValue } from "../lib/memory";
 import { StructuredDataView } from "./StructuredDataView";
 
 type ExecutionActivityState = ReturnType<typeof useExecutionActivity>;
@@ -385,7 +386,7 @@ export function ExecutionActivityPanel({
                   <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Recent Skill-Linked Memory</p>
                   <div className="flex flex-wrap gap-2">
                     {recentSkillRecords.slice(0, 4).map((item) => (
-                      <span key={item.id} className="roc-pill px-3 py-1.5 text-xs">
+                      <span key={memoryRecordIdValue(item.id)} className="roc-pill px-3 py-1.5 text-xs">
                         {item.linked_skill_name || item.derived_skill_name}: {item.title}
                       </span>
                     ))}
@@ -413,7 +414,7 @@ export function ExecutionActivityPanel({
                         <div className="flex flex-wrap items-center gap-2">
                           <strong>{hit.hit_kind}</strong>
                           {hit.memory_id ? (
-                            <span className="roc-pill px-2.5 py-1 text-xs">{hit.memory_id}</span>
+                            <span className="roc-pill px-2.5 py-1 text-xs">{memoryRecordIdValue(hit.memory_id)}</span>
                           ) : null}
                         </div>
                         <p className="text-xs text-muted-foreground">
@@ -613,9 +614,9 @@ export function ExecutionActivityPanel({
                   className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
                   type="button"
                   disabled={!canCancelSelectedExecution}
-                  onClick={() => void activity.cancelExecution(activity.selectedExecution?.id || undefined)}
+                  onClick={() => void activity.cancelExecution(activity.selectedExecution!.id || undefined)}
                 >
-                  {activity.executionCancellingId === activity.selectedExecution.id
+                  {activity.executionCancellingId === activity.selectedExecution!.id
                     ? "Cancelling..."
                     : "Cancel"}
                 </button>
@@ -624,62 +625,69 @@ export function ExecutionActivityPanel({
           </div>
           {activity.selectedExecution ? (
             <>
-              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
-                <div>
-                  <dt>ID</dt>
-                  <dd>{activity.selectedExecution.id}</dd>
-                </div>
-                <div>
-                  <dt>Status</dt>
-                  <dd>{activity.selectedExecution.status}</dd>
-                </div>
-                <div>
-                  <dt>Stage</dt>
-                  <dd>
-                    {activity.selectedExecution.stage_id ? (
+              {(() => {
+                const selected = activity.selectedExecution;
+                return (
+                  <>
+                    <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+                      <div>
+                        <dt>ID</dt>
+                        <dd>{selected.id}</dd>
+                      </div>
+                      <div>
+                        <dt>Status</dt>
+                        <dd>{selected.status}</dd>
+                      </div>
+                      <div>
+                        <dt>Stage</dt>
+                        <dd>
+                          {selected.stage_id ? (
+                            <button
+                              className="text-xs text-primary underline underline-offset-2 cursor-pointer hover:text-primary/80 border-0 bg-transparent p-0"
+                              type="button"
+                              onClick={() => onNavigateStage(selected.stage_id || "")}
+                            >
+                              {selected.stage_id}
+                            </button>
+                          ) : (
+                            "--"
+                          )}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Updated</dt>
+                        <dd>{formatTs(selected.updated_at)}</dd>
+                      </div>
+                    </dl>
+                    <div className="flex flex-wrap gap-2">
                       <button
-                        className="text-xs text-primary underline underline-offset-2 cursor-pointer hover:text-primary/80 border-0 bg-transparent p-0"
+                        className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
                         type="button"
-                        onClick={() => onNavigateStage(activity.selectedExecution.stage_id || "")}
+                        onClick={() => activity.patchActivityFilters({ executionId: selected.id || "" })}
                       >
-                        {activity.selectedExecution.stage_id}
+                        Filter Events to Execution
                       </button>
-                    ) : (
-                      "--"
-                    )}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Updated</dt>
-                  <dd>{formatTs(activity.selectedExecution.updated_at)}</dd>
-                </div>
-              </dl>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
-                  type="button"
-                  onClick={() => activity.patchActivityFilters({ executionId: activity.selectedExecution?.id || "" })}
-                >
-                  Filter Events to Execution
-                </button>
-                {activity.selectedExecution.stage_id ? (
-                <button
-                  className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
-                  type="button"
-                  onClick={() =>
-                    activity.patchActivityFilters({
-                      stageId: activity.selectedExecution?.stage_id || "",
-                    })
-                  }
-                >
-                    Filter Events to Stage
-                  </button>
-                ) : null}
-              </div>
-              <StructuredDataView
-                value={activity.selectedExecution.metadata}
-                emptyLabel="No execution metadata for this node."
-              />
+                      {selected.stage_id ? (
+                        <button
+                          className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                          type="button"
+                          onClick={() =>
+                            activity.patchActivityFilters({
+                              stageId: selected.stage_id || "",
+                            })
+                          }
+                        >
+                          Filter Events to Stage
+                        </button>
+                      ) : null}
+                    </div>
+                    <StructuredDataView
+                      value={selected.metadata}
+                      emptyLabel="No execution metadata for this node."
+                    />
+                  </>
+                );
+              })()}
             </>
           ) : (
             <p className="text-center text-muted-foreground py-4">Choose a node to inspect its metadata and provenance.</p>

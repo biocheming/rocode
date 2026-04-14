@@ -598,9 +598,11 @@ impl App {
                     id: format!("{}/{}", provider_id, model_id),
                     name: model_name,
                     context_window: model_context_window,
-                    max_output_tokens: 0,
+                    max_output_tokens: model.max_output_tokens.unwrap_or(0),
                     supports_vision: false,
                     supports_tools: true,
+                    cost_per_million_input: model.cost_per_million_input,
+                    cost_per_million_output: model.cost_per_million_output,
                 });
             }
             context_providers.push(crate::context::ProviderInfo {

@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use crate::oauth::ProviderAuth;
 use crate::{ApiError, Result, ServerState};
+use rocode_config::ModelConfig;
 use rocode_provider::{
     AuthInfo, AuthMethodType, CatalogRefreshStatus, CatalogSnapshot, ModelsData, ModelsDevInfo,
 };
@@ -120,6 +121,206 @@ pub struct ModelInfo {
     pub provider: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variants: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_per_million_input: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_per_million_output: Option<f64>,
+}
+
+fn config_context_window(configured_model: &ModelConfig) -> Option<u64> {
+    configured_model
+        .limit
+        .as_ref()
+        .and_then(|limit| limit.context)
+}
+
+fn config_max_output_tokens(configured_model: &ModelConfig) -> Option<u64> {
+    configured_model
+        .limit
+        .as_ref()
+        .and_then(|limit| limit.output)
+}
+
+fn config_input_price(configured_model: &ModelConfig) -> Option<f64> {
+    configured_model.cost.as_ref().and_then(|cost| cost.input)
+}
+
+fn config_output_price(configured_model: &ModelConfig) -> Option<f64> {
+    configured_model.cost.as_ref().and_then(|cost| cost.output)
+}
+
+pub(crate) fn catalog_model_info(
+    provider_id: &str,
+    model: &ModelsDevInfo,
+    variants: Vec<String>,
+) -> ModelInfo {
+    ModelInfo {
+        id: model.id.clone(),
+        name: model.name.clone(),
+        provider: provider_id.to_string(),
+        variants,
+        context_window: Some(model.limit.context),
+        max_output_tokens: Some(model.limit.output),
+        cost_per_million_input: model.cost.as_ref().map(|cost| cost.input),
+        cost_per_million_output: model.cost.as_ref().map(|cost| cost.output),
+    }
+}
+
+pub(crate) fn runtime_model_info(
+    model: &rocode_provider::ModelInfo,
+    variants: Vec<String>,
+) -> ModelInfo {
+    ModelInfo {
+        id: model.id.clone(),
+        name: model.name.clone(),
+        provider: model.provider.clone(),
+        variants,
+        context_window: Some(model.context_window),
+        max_output_tokens: Some(model.max_output_tokens),
+        cost_per_million_input: Some(model.cost_per_million_input),
+        cost_per_million_output: Some(model.cost_per_million_output),
+    }
+}
+
+pub(crate) fn configured_model_info(
+    provider_id: &str,
+    model_id: String,
+    configured_model: &ModelConfig,
+    variants: Vec<String>,
+) -> ModelInfo {
+    ModelInfo {
+        id: model_id.clone(),
+        name: configured_model
+            .name
+            .clone()
+            .unwrap_or_else(|| model_id.clone()),
+        provider: provider_id.to_string(),
+        variants,
+        context_window: config_context_window(configured_model),
+        max_output_tokens: config_max_output_tokens(configured_model),
+        cost_per_million_input: config_input_price(configured_model),
+        cost_per_million_output: config_output_price(configured_model),
+    }
+}
+
+fn merge_catalog_model_info(existing: &mut ModelInfo, incoming: ModelInfo) {
+    if existing.name.trim().is_empty() {
+        existing.name = incoming.name;
+    }
+    if existing.variants.is_empty() && !incoming.variants.is_empty() {
+        existing.variants = incoming.variants;
+    }
+    if existing.context_window.is_none() {
+        existing.context_window = incoming.context_window;
+    }
+    if existing.max_output_tokens.is_none() {
+        existing.max_output_tokens = incoming.max_output_tokens;
+    }
+    if existing.cost_per_million_input.is_none() {
+        existing.cost_per_million_input = incoming.cost_per_million_input;
+    }
+    if existing.cost_per_million_output.is_none() {
+        existing.cost_per_million_output = incoming.cost_per_million_output;
+    }
+}
+
+fn merge_runtime_model_info(existing: &mut ModelInfo, incoming: ModelInfo) {
+    existing.name = incoming.name;
+    if !incoming.variants.is_empty() {
+        existing.variants = incoming.variants;
+    }
+    if existing.context_window.is_none() {
+        existing.context_window = incoming.context_window;
+    }
+    if existing.max_output_tokens.is_none() {
+        existing.max_output_tokens = incoming.max_output_tokens;
+    }
+    if existing.cost_per_million_input.is_none() {
+        existing.cost_per_million_input = incoming.cost_per_million_input;
+    }
+    if existing.cost_per_million_output.is_none() {
+        existing.cost_per_million_output = incoming.cost_per_million_output;
+    }
+}
+
+fn merge_config_model_info(existing: &mut ModelInfo, incoming: ModelInfo) {
+    existing.name = incoming.name;
+    if !incoming.variants.is_empty() {
+        existing.variants = incoming.variants;
+    }
+    if incoming.context_window.is_some() {
+        existing.context_window = incoming.context_window;
+    }
+    if incoming.max_output_tokens.is_some() {
+        existing.max_output_tokens = incoming.max_output_tokens;
+    }
+    if incoming.cost_per_million_input.is_some() {
+        existing.cost_per_million_input = incoming.cost_per_million_input;
+    }
+    if incoming.cost_per_million_output.is_some() {
+        existing.cost_per_million_output = incoming.cost_per_million_output;
+    }
+}
+
+fn upsert_catalog_model_info(
+    model_map: &mut HashMap<String, HashMap<String, ModelInfo>>,
+    provider_id: &str,
+    model: ModelInfo,
+) {
+    match model_map
+        .entry(provider_id.to_string())
+        .or_default()
+        .entry(model.id.clone())
+    {
+        std::collections::hash_map::Entry::Occupied(mut entry) => {
+            merge_catalog_model_info(entry.get_mut(), model);
+        }
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            entry.insert(model);
+        }
+    }
+}
+
+pub(crate) fn upsert_runtime_model_info(
+    model_map: &mut HashMap<String, HashMap<String, ModelInfo>>,
+    provider_id: &str,
+    model: ModelInfo,
+) {
+    match model_map
+        .entry(provider_id.to_string())
+        .or_default()
+        .entry(model.id.clone())
+    {
+        std::collections::hash_map::Entry::Occupied(mut entry) => {
+            merge_runtime_model_info(entry.get_mut(), model);
+        }
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            entry.insert(model);
+        }
+    }
+}
+
+pub(crate) fn upsert_config_model_info(
+    model_map: &mut HashMap<String, HashMap<String, ModelInfo>>,
+    provider_id: &str,
+    model: ModelInfo,
+) {
+    match model_map
+        .entry(provider_id.to_string())
+        .or_default()
+        .entry(model.id.clone())
+    {
+        std::collections::hash_map::Entry::Occupied(mut entry) => {
+            merge_config_model_info(entry.get_mut(), model);
+        }
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            entry.insert(model);
+        }
+    }
 }
 
 const CONNECT_PROTOCOL_OPTIONS: &[(&str, &str)] = &[
@@ -382,13 +583,6 @@ async fn list_providers(State(state): State<Arc<ServerState>>) -> Json<ProviderL
     let mut provider_names: HashMap<String, String> = HashMap::new();
     let mut provider_models: HashMap<String, HashMap<String, ModelInfo>> = HashMap::new();
 
-    let mut upsert_model = |provider_id: &str, model: ModelInfo| {
-        provider_models
-            .entry(provider_id.to_string())
-            .or_default()
-            .insert(model.id.clone(), model);
-    };
-
     // 1) models.dev full provider catalogue.
     for (provider_id, provider) in &models_data {
         provider_names
@@ -396,14 +590,10 @@ async fn list_providers(State(state): State<Arc<ServerState>>) -> Json<ProviderL
             .or_insert_with(|| provider.name.clone());
         for model in provider.models.values() {
             let variants = variants_for_model(&variant_lookup, provider_id, &model.id);
-            upsert_model(
+            upsert_catalog_model_info(
+                &mut provider_models,
                 provider_id,
-                ModelInfo {
-                    id: model.id.clone(),
-                    name: model.name.clone(),
-                    provider: provider_id.clone(),
-                    variants,
-                },
+                catalog_model_info(provider_id, model, variants),
             );
         }
     }
@@ -431,14 +621,10 @@ async fn list_providers(State(state): State<Arc<ServerState>>) -> Json<ProviderL
                     } else {
                         variants.sort();
                     }
-                    upsert_model(
+                    upsert_config_model_info(
+                        &mut provider_models,
                         provider_id,
-                        ModelInfo {
-                            id: model_id.clone(),
-                            name: configured.name.clone().unwrap_or_else(|| model_id.clone()),
-                            provider: provider_id.clone(),
-                            variants,
-                        },
+                        configured_model_info(provider_id, model_id, configured, variants),
                     );
                 }
             }
@@ -452,14 +638,10 @@ async fn list_providers(State(state): State<Arc<ServerState>>) -> Json<ProviderL
             .entry(provider_id.clone())
             .or_insert_with(|| provider_id.clone());
         let variants = variants_for_model(&variant_lookup, &provider_id, &model.id);
-        upsert_model(
+        upsert_runtime_model_info(
+            &mut provider_models,
             &provider_id,
-            ModelInfo {
-                id: model.id,
-                name: model.name,
-                provider: provider_id.clone(),
-                variants,
-            },
+            runtime_model_info(&model, variants),
         );
     }
 
@@ -578,30 +760,24 @@ async fn list_managed_providers(
                         }
                         model_map.insert(
                             model_id.clone(),
-                            ModelInfo {
-                                id: model_id.clone(),
-                                name: configured_model
-                                    .name
-                                    .clone()
-                                    .unwrap_or_else(|| model_id.clone()),
-                                provider: id.clone(),
-                                variants,
-                            },
+                            configured_model_info(&id, model_id.clone(), configured_model, variants),
                         );
                     }
                 }
 
                 for runtime_model in runtime_models.iter().filter(|model| model.provider == id) {
                     let variants = variants_for_model(&variant_lookup, &id, &runtime_model.id);
-                    model_map.insert(
-                        runtime_model.id.clone(),
-                        ModelInfo {
-                            id: runtime_model.id.clone(),
-                            name: runtime_model.name.clone(),
-                            provider: id.clone(),
-                            variants,
-                        },
-                    );
+                    match model_map.entry(runtime_model.id.clone()) {
+                        std::collections::hash_map::Entry::Occupied(mut entry) => {
+                            merge_runtime_model_info(
+                                entry.get_mut(),
+                                runtime_model_info(runtime_model, variants),
+                            );
+                        }
+                        std::collections::hash_map::Entry::Vacant(entry) => {
+                            entry.insert(runtime_model_info(runtime_model, variants));
+                        }
+                    }
                 }
 
                 let mut models: Vec<ModelInfo> = model_map.into_values().collect();

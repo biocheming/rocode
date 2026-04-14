@@ -194,7 +194,7 @@ function FilePreviewContent({
   fileLoading: boolean;
   fileSaving: boolean;
   onKeyDown: (e: React.KeyboardEvent) => void;
-  textareaRef: React.RefObject<HTMLTextAreaElement>;
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
 }) {
   const fileType = getFileType(tab.name);
   const [localContent, setLocalContent] = useState(tab.content);
@@ -332,7 +332,7 @@ function CodePreview({
   readOnly: boolean;
   onChange: (value: string) => void;
   onKeyDown: (e: React.KeyboardEvent) => void;
-  textareaRef: React.RefObject<HTMLTextAreaElement>;
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
 }) {
   const ext = filename.split(".").pop()?.toLowerCase() || "";
   const lineCount = content.split("\n").length;

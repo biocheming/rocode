@@ -29,6 +29,8 @@ fn cli_set_root_server_session(runtime: &mut CliExecutionRuntime, session_id: St
         projection.telemetry_topology = None;
         projection.events_browser = None;
         projection.token_stats = CliSessionTokenStats::default();
+        projection.model_catalog.clear();
+        projection.current_model_label = Some(runtime.resolved_model_label.clone());
     }
     cli_set_view_label(runtime, None);
 }
@@ -2419,10 +2421,34 @@ fn cli_sidebar_lines(
 
     // ── Context (token usage + cost) ────────────────────────────
     let ts = &projection.token_stats;
-    if ts.total_tokens > 0 {
+    let model_info = cli_lookup_model_catalog_entry(projection);
+    if ts.total_tokens > 0 || model_info.is_some() {
         lines.push(String::new());
         lines.push("─ Context ─".to_string());
-        lines.push(format!("Tokens: {}", format_token_count(ts.total_tokens)));
+        if ts.total_tokens > 0 {
+            if let Some(model) = model_info.filter(|model| model.context_window.unwrap_or(0) > 0) {
+                let limit = model.context_window.unwrap_or(0);
+                let pct = ((ts.total_tokens as f64 / limit as f64) * 100.0).round() as u64;
+                lines.push(format!(
+                    "Ctx:    {}/{} ({}%)",
+                    format_token_count(ts.total_tokens),
+                    format_token_count(limit),
+                    pct
+                ));
+            } else {
+                lines.push(format!("Ctx:    {}", format_token_count(ts.total_tokens)));
+            }
+        }
+        if let Some(model) = model_info {
+            if let (Some(input_price), Some(output_price)) =
+                (model.cost_per_million_input, model.cost_per_million_output)
+            {
+                lines.push(format!(
+                    "Price:  {}",
+                    cli_format_price_pair(input_price, output_price)
+                ));
+            }
+        }
         lines.push(format!("Cost:   ${:.4}", ts.total_cost));
     }
 
@@ -2480,6 +2506,51 @@ fn format_token_count(n: u64) -> String {
         format!("{:.1}K", n as f64 / 1_000.0)
     } else {
         n.to_string()
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn cli_lookup_model_catalog_entry(
+    projection: &CliFrontendProjection,
+) -> Option<&CliModelCatalogEntry> {
+    let model_label = projection
+        .current_model_label
+        .as_deref()
+        .filter(|value| !value.trim().is_empty() && *value != "auto")?;
+    projection.model_catalog.get(model_label).or_else(|| {
+        projection
+            .model_catalog
+            .iter()
+            .find(|(candidate, _)| {
+                candidate.as_str() == model_label
+                    || candidate
+                        .rsplit_once('/')
+                        .map(|(_, suffix)| suffix == model_label)
+                        .unwrap_or(false)
+            })
+            .map(|(_, model)| model)
+    })
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn cli_format_price_pair(input: f64, output: f64) -> String {
+    format!(
+        "${}/{} /1M",
+        cli_format_price(input),
+        cli_format_price(output)
+    )
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn cli_format_price(value: f64) -> String {
+    if value >= 10.0 {
+        format!("{value:.0}")
+    } else if value >= 1.0 {
+        format!("{value:.2}")
+    } else if value >= 0.1 {
+        format!("{value:.3}")
+    } else {
+        format!("{value:.4}")
     }
 }
 

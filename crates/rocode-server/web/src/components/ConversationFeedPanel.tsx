@@ -44,7 +44,7 @@ export function ConversationFeedPanel({
 
   return (
     <Conversation className="h-full border-0 bg-transparent">
-      <ConversationContent className="mx-auto w-full max-w-full px-4 py-3">
+      <ConversationContent className="mx-auto w-full max-w-3xl px-6 py-4">
         {historyLoading ? (
           <div className="flex flex-1 items-center justify-center gap-2 text-muted-foreground py-12">
             <LoaderCircleIcon className="size-4 animate-spin" />

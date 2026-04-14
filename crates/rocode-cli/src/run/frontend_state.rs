@@ -789,6 +789,14 @@ impl CliSessionTokenStats {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, Default)]
+struct CliModelCatalogEntry {
+    context_window: Option<u64>,
+    cost_per_million_input: Option<f64>,
+    cost_per_million_output: Option<f64>,
+}
+
 /// MCP server status snapshot for sidebar display.
 #[derive(Debug, Clone)]
 struct CliMcpServerStatus {
@@ -825,10 +833,12 @@ struct CliFrontendProjection {
     sidebar_collapsed: bool,
     active_collapsed: bool,
     session_title: Option<String>,
+    current_model_label: Option<String>,
     /// Scroll offset for Messages panel: 0 = bottom (latest), N = scrolled up N rows.
     scroll_offset: usize,
     /// Cumulative token usage for the current session.
     token_stats: CliSessionTokenStats,
+    model_catalog: std::collections::HashMap<String, CliModelCatalogEntry>,
     /// MCP server statuses fetched from the server.
     mcp_servers: Vec<CliMcpServerStatus>,
     /// LSP server names fetched from the server.
@@ -851,8 +861,10 @@ impl Default for CliFrontendProjection {
             sidebar_collapsed: true,
             active_collapsed: true,
             session_title: None,
+            current_model_label: None,
             scroll_offset: 0,
             token_stats: CliSessionTokenStats::default(),
+            model_catalog: std::collections::HashMap::new(),
             mcp_servers: Vec::new(),
             lsp_servers: Vec::new(),
         }
@@ -1338,6 +1350,9 @@ async fn build_cli_execution_runtime(
         .as_ref()
         .map(|m| format!("{}/{}", m.provider_id, m.model_id))
         .unwrap_or_else(|| "auto".to_string());
+    if let Ok(mut projection) = frontend_projection.lock() {
+        projection.current_model_label = Some(resolved_model_label.clone());
+    }
 
     // Shared spinner guard slot — closures capture this; process_message_with_mode
     // swaps in the real spinner's guard each cycle.

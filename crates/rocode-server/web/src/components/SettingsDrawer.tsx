@@ -430,6 +430,7 @@ export function SettingsDrawer({
   const [skillGuardTarget, setSkillGuardTarget] = useState<string | null>(null);
   const [selectedSkillName, setSelectedSkillName] = useState<string | null>(null);
   const [skillDetail, setSkillDetail] = useState<SkillDetailResponseRecord | null>(null);
+  const [skillAuditEvents, setSkillAuditEvents] = useState<unknown[]>([]);
   const [skillDetailLoading, setSkillDetailLoading] = useState(false);
   const [skillEditorContent, setSkillEditorContent] = useState("");
   const [editSkillEditorMode, setEditSkillEditorMode] = useState<SkillEditorMode>("raw");
@@ -1822,15 +1823,15 @@ export function SettingsDrawer({
                   </div>
                   <div className={summaryCardClass}>
                     <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Rule Packs</span>
-                    <strong>{memoryRulePacks?.items.length ?? 0}</strong>
+                    <strong>{memoryRulePacks?.items?.length ?? 0}</strong>
                   </div>
                   <div className={summaryCardClass}>
                     <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Recent Rule Hits</span>
-                    <strong>{memoryRuleHits?.items.length ?? 0}</strong>
+                    <strong>{memoryRuleHits?.items?.length ?? 0}</strong>
                   </div>
                   <div className={summaryCardClass}>
                     <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Consolidation Runs</span>
-                    <strong>{memoryConsolidationRuns?.items.length ?? 0}</strong>
+                    <strong>{memoryConsolidationRuns?.items?.length ?? 0}</strong>
                   </div>
                 </div>
 
@@ -2094,11 +2095,11 @@ export function SettingsDrawer({
                     <span className="text-xs text-muted-foreground">
                       {memoryGovernanceLoading
                         ? "Loading..."
-                        : `${memoryRulePacks?.items.length ?? 0} packs`}
+                        : `${memoryRulePacks?.items?.length ?? 0} packs`}
                     </span>
                   </div>
                   <div className="grid gap-3">
-                    {memoryRulePacks?.items.length ? (
+                    {memoryRulePacks?.items?.length ? (
                       memoryRulePacks.items.map((pack) => (
                         <div
                           key={pack.id}
@@ -2146,7 +2147,7 @@ export function SettingsDrawer({
                       <span className="text-xs text-muted-foreground">
                         {memoryGovernanceLoading
                           ? "Loading..."
-                          : `${memoryRuleHits?.items.length ?? 0} hits`}
+                          : `${memoryRuleHits?.items?.length ?? 0} hits`}
                       </span>
                     </div>
                     <div className="grid gap-3">
@@ -2184,7 +2185,7 @@ export function SettingsDrawer({
                       <span className="text-xs text-muted-foreground">
                         {memoryGovernanceLoading
                           ? "Loading..."
-                          : `${memoryConsolidationRuns?.items.length ?? 0} runs`}
+                          : `${memoryConsolidationRuns?.items?.length ?? 0} runs`}
                       </span>
                     </div>
                     <div className="grid gap-3">

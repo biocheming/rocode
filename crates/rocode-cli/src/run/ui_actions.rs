@@ -741,6 +741,9 @@ async fn cli_execute_ui_action(
                 };
                 if exists {
                     runtime.resolved_model_label = normalized_model_ref.clone();
+                    if let Ok(mut projection) = runtime.frontend_projection.lock() {
+                        projection.current_model_label = Some(normalized_model_ref.clone());
+                    }
                     let _ = print_block(
                         Some(runtime),
                         OutputBlock::Status(StatusBlock::title(format!(

@@ -11,8 +11,21 @@ import { AttachmentDetailsPanel } from "./AttachmentDetailsPanel";
 import { ComposerContextStrip } from "./ComposerContextStrip";
 import type { ComposerAttachmentRecord } from "../lib/composerContext";
 import { cn } from "@/lib/utils";
-import { ImageIcon, MicIcon, PaperclipIcon, SendIcon, SquareIcon } from "lucide-react";
+import {
+  ImageIcon,
+  MicIcon,
+  PaperclipIcon,
+  PlusIcon,
+  SendIcon,
+  SquareIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 interface ComposerPanelProps {
   composer: string;
@@ -290,13 +303,13 @@ export function ComposerPanel({
               </div>
             ) : null}
 
-            <div className="flex items-center justify-between border-t border-border/60 px-3.5 py-1.5">
+            <div className="flex items-center justify-between border-t border-border/60 px-3.5 py-2">
               <div className="flex min-w-0 flex-1 items-center gap-2 pr-3">
                 <select
                   aria-label="Execution mode"
                   value={selectedMode}
                   onChange={(event) => onModeChange(event.target.value)}
-                  className="h-8 min-w-0 max-w-[10.5rem] rounded-full border border-border/60 bg-background px-3 text-[12px] text-foreground outline-none transition focus:border-primary/45"
+                  className="h-7 min-w-0 max-w-[10rem] rounded-md bg-transparent px-2 text-[12px] text-muted-foreground hover:text-foreground outline-none transition cursor-pointer"
                 >
                   <option value="">Mode: Auto</option>
                   {modeOptions.map((mode) => (
@@ -309,7 +322,7 @@ export function ComposerPanel({
                   aria-label="Model"
                   value={selectedModel}
                   onChange={(event) => onModelChange(event.target.value)}
-                  className="h-8 min-w-0 max-w-[12rem] rounded-full border border-border/60 bg-background px-3 text-[12px] text-foreground outline-none transition focus:border-primary/45"
+                  className="h-7 min-w-0 max-w-[11rem] rounded-md bg-transparent px-2 text-[12px] text-muted-foreground hover:text-foreground outline-none transition cursor-pointer"
                 >
                   <option value="">Model: Auto</option>
                   {modelOptions.map((model) => (
@@ -337,79 +350,65 @@ export function ComposerPanel({
                 />
               </div>
 
-              <div className="flex shrink-0 items-center gap-1">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={!voiceSupported || !allowAudioInput}
-                  title={
-                    !allowAudioInput
-                      ? "Voice input is disabled by current multimodal policy"
-                      : voiceSupported
-                      ? voiceListening
-                        ? "Stop voice input"
-                        : voiceError ?? "Start voice input"
-                      : "This browser does not support speech recognition"
-                  }
-                  className={cn(
-                    "h-8 gap-1.5 rounded-full px-3 text-[12px]",
-                    voiceListening
-                      ? "text-foreground"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                  onClick={() => {
-                    if (voiceListening) {
-                      stopVoiceRecognition();
-                    } else {
-                      startVoiceRecognition();
-                    }
-                  }}
-                >
-                  {voiceListening ? (
+              <div className="flex shrink-0 items-center gap-1.5">
+                {voiceListening ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 rounded-full text-foreground"
+                    title="Stop voice input"
+                    onClick={stopVoiceRecognition}
+                  >
                     <SquareIcon className="size-3.5 fill-current" />
-                  ) : (
-                    <MicIcon className="size-3.5" />
-                  )}
-                  {voiceListening ? "Stop" : "Voice"}
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={!allowFileInput}
-                  className="h-8 gap-1.5 rounded-full px-3 text-[12px] text-muted-foreground hover:text-foreground"
-                  title={
-                    allowFileInput
-                      ? "Attach files"
-                      : "File attachments are disabled by current multimodal policy"
-                  }
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <PaperclipIcon className="size-3.5" />
-                  Attachment
-                  {attachments.length > 0 ? (
-                    <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-foreground">
-                      {attachments.length}
-                    </span>
-                  ) : null}
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={!allowImageInput}
-                  className="h-8 gap-1.5 rounded-full px-3 text-[12px] text-muted-foreground hover:text-foreground"
-                  title={
-                    allowImageInput
-                      ? "Attach images"
-                      : "Image attachments are disabled by current multimodal policy"
-                  }
-                  onClick={() => imageInputRef.current?.click()}
-                >
-                  <ImageIcon className="size-3.5" />
-                  Image
-                </Button>
+                  </Button>
+                ) : null}
+
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground"
+                      title="Add attachment"
+                    >
+                      <PlusIcon className="size-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="min-w-[8rem]">
+                    <DropdownMenuItem
+                      disabled={!allowAudioInput || !voiceSupported}
+                      onClick={startVoiceRecognition}
+                      className="gap-2 text-xs"
+                    >
+                      <MicIcon className="size-3.5" />
+                      Voice
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={!allowFileInput}
+                      onClick={() => fileInputRef.current?.click()}
+                      className="gap-2 text-xs"
+                    >
+                      <PaperclipIcon className="size-3.5" />
+                      File
+                      {attachments.length > 0 ? (
+                        <span className="ml-auto rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-foreground">
+                          {attachments.length}
+                        </span>
+                      ) : null}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={!allowImageInput}
+                      onClick={() => imageInputRef.current?.click()}
+                      className="gap-2 text-xs"
+                    >
+                      <ImageIcon className="size-3.5" />
+                      Image
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
                 {streaming ? (
                   <Button
                     type="button"
@@ -430,7 +429,7 @@ export function ComposerPanel({
                   variant="default"
                   size="sm"
                   disabled={!composer.trim() && attachments.length === 0}
-                  className="h-9 rounded-full px-4"
+                  className="h-8 rounded-full px-3"
                 >
                   <span className="mr-1 text-[11px] font-medium">Send</span>
                   <SendIcon className="size-3.25" />

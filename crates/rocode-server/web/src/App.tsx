@@ -139,6 +139,39 @@ const THEMES: Array<{ id: ThemeId; label: string }> = [
   { id: "midnight", label: "Midnight" },
 ];
 
+function formatCompactTokenCount(value?: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "0";
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return String(Math.round(value));
+}
+
+function formatCompactMoney(value?: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "$0";
+  if (value >= 1) return `$${value.toFixed(2)}`;
+  if (value >= 0.01) return `$${value.toFixed(3)}`;
+  return `$${value.toFixed(4)}`;
+}
+
+function formatCompactPrice(value?: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  if (value >= 10) return value.toFixed(0);
+  if (value >= 1) return value.toFixed(2);
+  if (value >= 0.1) return value.toFixed(3);
+  return value.toFixed(4);
+}
+
+function resolveActiveModelRef(session: SessionRecord | null, selectedModel: string) {
+  const explicit = selectedModel.trim();
+  if (explicit) return explicit;
+  const hinted = session?.hints?.current_model?.trim();
+  if (hinted) return hinted;
+  const provider = session?.hints?.model_provider?.trim();
+  const model = session?.hints?.model_id?.trim();
+  if (provider && model) return `${provider}/${model}`;
+  return model || null;
+}
+
 const SettingsDrawer = lazy(async () => {
   const module = await import("./components/SettingsDrawer");
   return { default: module.SettingsDrawer };
@@ -693,6 +726,32 @@ export default function App() {
   );
   const composerReferences = useMemo(() => extractPromptReferences(composer), [composer]);
   const currentSession = useMemo(() => sessions.find((session) => session.id === selectedSessionId) ?? null, [selectedSessionId, sessions]);
+  const activeModelRef = useMemo(
+    () => resolveActiveModelRef(currentSession, selectedModel),
+    [currentSession, selectedModel],
+  );
+  const activeProviderModel = useMemo(() => {
+    if (!activeModelRef) return null;
+    const target = activeModelRef.trim();
+    for (const provider of providers) {
+      for (const model of provider.models ?? []) {
+        const fullId = `${provider.id}/${model.id}`;
+        if (
+          fullId === target ||
+          model.id === target ||
+          fullId.endsWith(`/${target}`)
+        ) {
+          return {
+            ...model,
+            fullId,
+            providerId: provider.id,
+            providerName: provider.name,
+          };
+        }
+      }
+    }
+    return null;
+  }, [activeModelRef, providers]);
   const workspaceSummaries = useMemo(
     () => buildWorkspaceSummaries(sessions, serviceRootPath),
     [serviceRootPath, sessions],
@@ -740,6 +799,60 @@ export default function App() {
     onError: setBanner,
     onInfo: setBanner,
   });
+  const sessionUsage = executionActivity.sessionUsage ?? currentSession?.telemetry?.usage ?? null;
+  const usedContextTokens = useMemo(() => {
+    if (!sessionUsage) return 0;
+    return (
+      sessionUsage.input_tokens +
+      sessionUsage.output_tokens +
+      sessionUsage.reasoning_tokens +
+      sessionUsage.cache_read_tokens +
+      sessionUsage.cache_write_tokens
+    );
+  }, [sessionUsage]);
+  const headerContextSummary = useMemo(() => {
+    const parts: string[] = [];
+    if (usedContextTokens > 0) {
+      const limit = activeProviderModel?.context_window ?? null;
+      parts.push(
+        limit && limit > 0
+          ? `ctx ${formatCompactTokenCount(usedContextTokens)}/${formatCompactTokenCount(limit)}`
+          : `ctx ${formatCompactTokenCount(usedContextTokens)}`,
+      );
+    }
+    if (typeof sessionUsage?.total_cost === "number") {
+      parts.push(formatCompactMoney(sessionUsage.total_cost));
+    }
+    const inputPrice = formatCompactPrice(activeProviderModel?.cost_per_million_input ?? null);
+    const outputPrice = formatCompactPrice(activeProviderModel?.cost_per_million_output ?? null);
+    if (inputPrice && outputPrice) {
+      parts.push(`$${inputPrice}/$${outputPrice}/1M`);
+    }
+    return parts.join(" · ");
+  }, [activeProviderModel, sessionUsage?.total_cost, usedContextTokens]);
+  const headerContextTitle = useMemo(() => {
+    const detail: string[] = [];
+    if (usedContextTokens > 0) {
+      const limit = activeProviderModel?.context_window ?? null;
+      detail.push(
+        limit && limit > 0
+          ? `Context estimate ${usedContextTokens} / ${limit} tokens`
+          : `Context estimate ${usedContextTokens} tokens`,
+      );
+    }
+    if (typeof sessionUsage?.total_cost === "number") {
+      detail.push(`Total cost ${formatCompactMoney(sessionUsage.total_cost)}`);
+    }
+    if (
+      typeof activeProviderModel?.cost_per_million_input === "number" &&
+      typeof activeProviderModel?.cost_per_million_output === "number"
+    ) {
+      detail.push(
+        `Model price ${formatCompactMoney(activeProviderModel.cost_per_million_input)} input / ${formatCompactMoney(activeProviderModel.cost_per_million_output)} output per 1M tokens`,
+      );
+    }
+    return detail.join(" | ");
+  }, [activeProviderModel, sessionUsage?.total_cost, usedContextTokens]);
   const refreshExecutionActivity = executionActivity.refreshExecutionActivity;
   const conversationJump = useConversationJump({
     messages,
@@ -1651,7 +1764,7 @@ export default function App() {
   const locateAttachmentInWorkspace = (attachment: PromptPart) => {
     const path = attachmentWorkspacePath(attachment);
     if (!path) return;
-    selectWorkspaceNode(path, attachment.mime === "application/x-directory" ? "directory" : "file");
+    selectWorkspaceNode(path, attachment.type === "file" && attachment.mime === "application/x-directory" ? "directory" : "file");
     schedulerNavigation.restoreActiveStage();
     setBanner(`Located ${attachmentLabel(attachment)} in workspace`);
   };
@@ -1884,10 +1997,38 @@ export default function App() {
               <PanelLeftIcon className="size-4" />
             )}
           </button>
-          <span className="text-sm font-semibold tracking-tight text-foreground/80">ROCode</span>
-          <span className="text-[10px] text-muted-foreground/50 tracking-wide">/new</span>
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-sm font-semibold tracking-tight text-foreground/80 truncate max-w-[10rem]">
+              {currentWorkspaceSummary?.label ?? "ROCode"}
+            </span>
+            {currentSession?.title ? (
+              <>
+                <span className="text-xs text-muted-foreground/60">/</span>
+                <span className="text-xs text-muted-foreground truncate max-w-[12rem]">
+                  {currentSession.title}
+                </span>
+              </>
+            ) : null}
+          </div>
         </div>
         <div className="flex items-center gap-1.5">
+          {headerContextSummary ? (
+            <div
+              className="hidden lg:flex items-center rounded-full border border-border/60 bg-muted/40 px-3 py-1 text-[11px] font-medium tracking-tight text-muted-foreground"
+              title={headerContextTitle || headerContextSummary}
+            >
+              {headerContextSummary}
+            </div>
+          ) : null}
+          {!rightSidebarOpen && selectedWorkspaceFilename ? (
+            <button
+              onClick={() => setRightSidebarOpen(true)}
+              className="hidden md:flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              title="Show workspace"
+            >
+              <span className="truncate max-w-[10rem]">{selectedWorkspaceFilename}</span>
+            </button>
+          ) : null}
           <button
             onClick={() => setRightSidebarOpen((value) => !value)}
             className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
@@ -1908,7 +2049,7 @@ export default function App() {
       {/* Main: workspace + chat */}
       <div className="flex flex-1 overflow-hidden">
         {leftSidebarOpen && (
-          <div className="w-[22rem] shrink-0 overflow-hidden border-r border-border bg-sidebar/70">
+          <div className="w-[22rem] shrink-0 overflow-hidden border-r border-border bg-sidebar">
             <SessionSidebar
               workspaces={workspaceSummaries}
               currentWorkspacePath={currentWorkspaceSummary?.path ?? null}
@@ -2011,7 +2152,7 @@ export default function App() {
         </div>
 
         {rightSidebarOpen && (
-          <div className="w-80 shrink-0 overflow-hidden border-l border-border bg-sidebar/55">
+          <div className="w-80 shrink-0 overflow-hidden border-l border-border bg-sidebar">
             <WorkspacePanel
               apiJson={apiJson}
               workspaceLoading={workspaceLoading}

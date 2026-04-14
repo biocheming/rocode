@@ -1,7 +1,8 @@
 "use client";
 
-import type { UIMessage } from "ai";
 import type { ComponentProps, HTMLAttributes, ReactElement } from "react";
+
+type UIRole = "user" | "assistant" | "system" | "data" | "tool";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -32,7 +33,7 @@ import {
 import { Streamdown } from "streamdown";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
-  from: UIMessage["role"];
+  from: UIRole;
 };
 
 export const Message = ({ className, from, ...props }: MessageProps) => (

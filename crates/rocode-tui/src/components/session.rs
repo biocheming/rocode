@@ -300,50 +300,51 @@ impl SessionView {
             .rev()
             .find(|m| matches!(m.role, MessageRole::Assistant) && m.tokens.output > 0);
 
-        // TS parity: cost only sums assistant messages.
-        let total_cost: f64 = messages
-            .iter()
-            .filter(|m| matches!(m.role, MessageRole::Assistant))
-            .map(|m| m.cost)
-            .sum();
+        let total_cost = self
+            .context
+            .session_usage
+            .read()
+            .as_ref()
+            .map(|usage| usage.total_cost)
+            .unwrap_or_else(|| {
+                messages
+                    .iter()
+                    .filter(|m| matches!(m.role, MessageRole::Assistant))
+                    .map(|m| m.cost)
+                    .sum()
+            });
         let mut context_and_cost = None;
         if let Some(assistant_msg) = last_assistant {
-            let t = &assistant_msg.tokens;
-            let total_tokens = t.input + t.output + t.reasoning + t.cache_read + t.cache_write;
+            let total_tokens = self
+                .context
+                .session_usage
+                .read()
+                .as_ref()
+                .map(total_session_tokens)
+                .unwrap_or_else(|| {
+                    let t = &assistant_msg.tokens;
+                    t.input + t.output + t.reasoning + t.cache_read + t.cache_write
+                });
             if total_tokens > 0 {
-                let model_context_limit = {
-                    let providers = self.context.providers.read();
-                    let current_model = self.context.current_model.read();
-                    assistant_msg
-                        .model
-                        .as_ref()
-                        .or(current_model.as_ref())
-                        .and_then(|model_id| {
-                            providers.iter().find_map(|p| {
-                                p.models
-                                    .iter()
-                                    .find(|m| {
-                                        m.id == *model_id
-                                            || m.id
-                                                .rsplit_once('/')
-                                                .map(|(_, suffix)| suffix == model_id)
-                                                .unwrap_or(false)
-                                    })
-                                    .map(|m| m.context_window)
-                            })
-                        })
-                        .unwrap_or(0)
-                };
-
+                let model = self.context.resolve_model_info(assistant_msg.model.as_deref());
+                let mut parts = Vec::new();
                 let mut context_text = format_number(total_tokens);
-                if model_context_limit > 0 {
+                if let Some(model) = model.as_ref().filter(|model| model.context_window > 0) {
                     let pct =
-                        ((total_tokens as f64 / model_context_limit as f64) * 100.0).round() as u64;
-                    context_text.push_str(&format!(" {}%", pct));
+                        ((total_tokens as f64 / model.context_window as f64) * 100.0).round()
+                            as u64;
+                    context_text.push_str(&format!("/{} {}%", format_number(model.context_window), pct));
                 }
-
-                let cost_text = format!("${:.2}", total_cost);
-                context_and_cost = Some(format!("{} ({})", context_text, cost_text));
+                parts.push(context_text);
+                parts.push(format!("${:.4}", total_cost));
+                if let Some(model) = model.as_ref() {
+                    if let (Some(input_price), Some(output_price)) =
+                        (model.cost_per_million_input, model.cost_per_million_output)
+                    {
+                        parts.push(format_price_pair(input_price, output_price));
+                    }
+                }
+                context_and_cost = Some(parts.join("  ·  "));
             }
         }
 
@@ -1589,6 +1590,30 @@ fn format_number(value: u64) -> String {
         out.push(ch);
     }
     out.chars().rev().collect()
+}
+
+fn total_session_tokens(usage: &rocode_session::SessionUsage) -> u64 {
+    usage.input_tokens
+        + usage.output_tokens
+        + usage.reasoning_tokens
+        + usage.cache_read_tokens
+        + usage.cache_write_tokens
+}
+
+fn format_price_pair(input: f64, output: f64) -> String {
+    format!("${}/{} /1M", format_price(input), format_price(output))
+}
+
+fn format_price(value: f64) -> String {
+    if value >= 10.0 {
+        format!("{value:.0}")
+    } else if value >= 1.0 {
+        format!("{value:.2}")
+    } else if value >= 0.1 {
+        format!("{value:.3}")
+    } else {
+        format!("{value:.4}")
+    }
 }
 
 #[cfg(test)]

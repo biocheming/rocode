@@ -84,14 +84,13 @@ export function normalizeQuestionItems(input: unknown): QuestionItem[] {
         : undefined;
       const question = typeof item.question === "string" ? item.question : "";
       if (!question) return null;
-      return {
-        question,
-        header: typeof item.header === "string" ? item.header : undefined,
-        multiple: Boolean(item.multiple),
-        options,
-      };
+      const out: QuestionItem = { question };
+      if (typeof item.header === "string") out.header = item.header;
+      if (item.multiple) out.multiple = true;
+      if (options) out.options = options;
+      return out;
     })
-    .filter((item): item is QuestionItem => Boolean(item));
+    .filter((item): item is QuestionItem => item !== null);
 }
 
 function questionSessionId(

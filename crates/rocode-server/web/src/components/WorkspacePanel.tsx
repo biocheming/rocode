@@ -46,7 +46,10 @@ interface WorkspacePanelProps {
   conversationJump: unknown;
   schedulerNavigation: {
     navigateToStage: (stageId: string) => void;
-    navigateToChildSession: (sessionId: string, context?: unknown) => void;
+    navigateToChildSession: (
+      sessionId: string,
+      context?: { stageId?: string | null; toolCallId?: string | null; label?: string | null },
+    ) => void | Promise<void>;
     previewStage: (stageId: string | null) => void;
     restoreActiveStage: () => void;
   };
@@ -87,7 +90,7 @@ export function WorkspacePanel({
   return (
     <div className="flex flex-col h-full overflow-hidden" data-testid="workspace-panel">
       {/* Header */}
-      <div className="flex items-center justify-between px-2.5 py-2 border-b border-border/60 bg-muted/20 shrink-0">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border shrink-0">
         <div className="flex items-center gap-1.5 min-w-0">
           <FolderTreeIcon className="size-3.5 text-muted-foreground/70 flex-shrink-0" />
           <span className="font-medium text-[11px] text-muted-foreground/90 truncate">{workspaceRootLabel}</span>
@@ -123,13 +126,13 @@ export function WorkspacePanel({
         </div>
       </div>
 
-      <div className="flex items-center border-b border-border/60 bg-muted/10 shrink-0">
+      <div className="flex items-center border-b border-border shrink-0">
         <button
           className={cn(
-            "flex-1 flex items-center justify-center gap-1.5 px-2 py-2 text-[11px] transition-colors",
+            "flex-1 flex items-center justify-center gap-1.5 px-2 py-2 text-[11px] transition-colors border-b-2 -mb-px",
             activeTab === "files"
-              ? "bg-background text-foreground border-b border-primary"
-              : "text-muted-foreground hover:text-foreground"
+              ? "text-foreground border-b-primary"
+              : "text-muted-foreground hover:text-foreground border-b-transparent"
           )}
           type="button"
           onClick={() => setActiveTab("files")}
@@ -139,10 +142,10 @@ export function WorkspacePanel({
         </button>
         <button
           className={cn(
-            "flex-1 flex items-center justify-center gap-1.5 px-2 py-2 text-[11px] transition-colors",
+            "flex-1 flex items-center justify-center gap-1.5 px-2 py-2 text-[11px] transition-colors border-b-2 -mb-px",
             activeTab === "insights"
-              ? "bg-background text-foreground border-b border-primary"
-              : "text-muted-foreground hover:text-foreground"
+              ? "text-foreground border-b-primary"
+              : "text-muted-foreground hover:text-foreground border-b-transparent"
           )}
           type="button"
           onClick={() => setActiveTab("insights")}

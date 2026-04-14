@@ -1,6 +1,10 @@
 export interface ProviderModelRecord {
   id: string;
   name?: string;
+  context_window?: number | null;
+  max_output_tokens?: number | null;
+  cost_per_million_input?: number | null;
+  cost_per_million_output?: number | null;
 }
 
 export interface ProviderRecord {

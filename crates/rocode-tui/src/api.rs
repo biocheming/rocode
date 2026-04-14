@@ -778,6 +778,20 @@ pub struct ProviderModelInfo {
         alias = "contextLength"
     )]
     pub context_window: Option<u64>,
+    #[serde(default, alias = "max_output_tokens", alias = "maxOutputTokens")]
+    pub max_output_tokens: Option<u64>,
+    #[serde(
+        default,
+        alias = "cost_per_million_input",
+        alias = "costPerMillionInput"
+    )]
+    pub cost_per_million_input: Option<f64>,
+    #[serde(
+        default,
+        alias = "cost_per_million_output",
+        alias = "costPerMillionOutput"
+    )]
+    pub cost_per_million_output: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
