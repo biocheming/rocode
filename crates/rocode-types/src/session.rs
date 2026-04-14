@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use rocode_content::stage_protocol::StageStatus;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use crate::SessionMemoryTelemetrySummary;
@@ -206,6 +207,88 @@ pub type SessionSummaryInfo = SessionListSummary;
 pub type SessionShareInfo = SessionShare;
 pub type SessionRevertInfo = SessionRevert;
 pub type PermissionRulesetInfo = PermissionRuleset;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionMultimodalAttachmentInfo {
+    pub filename: String,
+    pub mime: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionMultimodalInsight {
+    pub user_message_id: String,
+    pub attachment_count: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kinds: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub badges: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compact_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unsupported_parts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended_downgrade: Option<String>,
+    #[serde(default)]
+    pub hard_block: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transport_replaced_parts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transport_warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<SessionMultimodalAttachmentInfo>,
+}
+
+impl SessionMultimodalInsight {
+    pub fn display_label(&self) -> Cow<'_, str> {
+        self.compact_label
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(Cow::Borrowed)
+            .unwrap_or_else(|| {
+                if self.attachment_count == 1 {
+                    Cow::Borrowed("attachment-backed input")
+                } else {
+                    Cow::Owned(format!("{} attachments", self.attachment_count))
+                }
+            })
+    }
+
+    pub fn combined_warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        for warning in self
+            .warnings
+            .iter()
+            .chain(self.transport_warnings.iter())
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if !warnings.iter().any(|existing| existing == warning) {
+                warnings.push(warning.to_string());
+            }
+        }
+        warnings
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionInsightsResponse {
+    pub id: String,
+    pub title: String,
+    pub directory: String,
+    pub updated: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telemetry: Option<SessionTelemetrySnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<crate::SessionMemoryInsight>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multimodal: Option<SessionMultimodalInsight>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {

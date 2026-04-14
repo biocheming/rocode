@@ -3,6 +3,8 @@ use super::*;
 pub(super) struct PromptDispatchRequest<'a> {
     pub session_id: &'a str,
     pub input: String,
+    pub display_text: String,
+    pub parts: Option<Vec<crate::api::PromptPart>>,
     pub agent: Option<String>,
     pub scheduler_profile: Option<String>,
     pub display_mode: Option<String>,
@@ -114,6 +116,15 @@ impl App {
             }
         }
 
+        self.submit_prompt_payload(input.clone(), input, None)
+    }
+
+    pub(super) fn submit_prompt_payload(
+        &mut self,
+        input: String,
+        display_text: String,
+        parts: Option<Vec<crate::api::PromptPart>>,
+    ) -> anyhow::Result<()> {
         let Some(client) = self.context.get_api_client() else {
             eprintln!("API client not initialized");
             return Ok(());
@@ -121,7 +132,7 @@ impl App {
 
         let selected_mode = resolve_command_execution_mode(
             &self.context,
-            &input,
+            &display_text,
             selected_execution_mode(&self.context),
         );
         let model = self.selected_model_for_prompt();
@@ -132,7 +143,7 @@ impl App {
                 let optimistic_session_id = self.create_optimistic_session();
                 let opt_id = self.append_optimistic_user_message(
                     &optimistic_session_id,
-                    &input,
+                    &display_text,
                     selected_mode.display_mode.clone(),
                     model.clone(),
                     variant.clone(),
@@ -154,7 +165,7 @@ impl App {
                         Ok(session) => match client.send_prompt(
                             &session.id,
                             input,
-                            None,
+                            parts,
                             selected_mode.agent,
                             selected_mode.scheduler_profile,
                             model,
@@ -182,6 +193,8 @@ impl App {
                         &session_id,
                         QueuedPrompt {
                             input,
+                            display_text,
+                            parts,
                             agent: selected_mode.agent,
                             scheduler_profile: selected_mode.scheduler_profile,
                             display_mode: selected_mode.display_mode,
@@ -194,7 +207,9 @@ impl App {
                 }
                 self.dispatch_prompt_to_session(PromptDispatchRequest {
                     session_id: &session_id,
+                    display_text,
                     input,
+                    parts,
                     agent: selected_mode.agent,
                     scheduler_profile: selected_mode.scheduler_profile,
                     display_mode: selected_mode.display_mode,
@@ -234,6 +249,8 @@ impl App {
         let PromptDispatchRequest {
             session_id,
             input,
+            display_text,
+            parts,
             agent,
             scheduler_profile,
             display_mode,
@@ -249,7 +266,7 @@ impl App {
         // Optimistic: show user message immediately before network call.
         let opt_id = self.append_optimistic_user_message(
             session_id,
-            &input,
+            &display_text,
             display_mode.clone(),
             model.clone(),
             variant.clone(),
@@ -267,7 +284,7 @@ impl App {
             let (response, error) = match client.send_prompt(
                 &session_id,
                 input,
-                None,
+                parts,
                 agent,
                 scheduler_profile,
                 model,
@@ -311,6 +328,8 @@ impl App {
             self.dispatch_prompt_to_session(PromptDispatchRequest {
                 session_id,
                 input: queued.input,
+                display_text: queued.display_text,
+                parts: queued.parts,
                 agent: queued.agent,
                 scheduler_profile: queued.scheduler_profile,
                 display_mode: queued.display_mode,

@@ -4,6 +4,7 @@ import type { ChangeEvent } from "react";
 import { Suspense, lazy, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import type { FileTreeNodeRecord } from "@/lib/workspace";
 import { WorkspaceTreeNode } from "./WorkspaceTreeNode";
 import {
   FolderTreeIcon,
@@ -19,19 +20,10 @@ const SessionInsightsPanel = lazy(async () => {
   return { default: module.SessionInsightsPanel };
 });
 
-interface FileTreeNode {
-  name: string;
-  path: string;
-  type: "file" | "directory";
-  size?: number | null;
-  modified?: number | null;
-  children?: FileTreeNode[];
-}
-
 interface WorkspacePanelProps {
   apiJson: <T>(path: string, options?: RequestInit) => Promise<T>;
   workspaceLoading: boolean;
-  fileTree: FileTreeNode | null;
+  fileTree: FileTreeNodeRecord | null;
   workspaceRootPath: string;
   workspaceRootLabel: string;
   selectedWorkspacePath: string | null;

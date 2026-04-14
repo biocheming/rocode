@@ -3,6 +3,7 @@ use rocode_command::output_blocks::SchedulerStageBlock;
 use rocode_command::terminal_tool_block_display::{
     build_file_items, build_image_items, summarize_block_items_inline,
 };
+use rocode_multimodal::PersistedMultimodalExplain;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -37,6 +38,7 @@ pub struct Message {
     pub cost: f64,
     pub tokens: TokenUsage,
     pub metadata: Option<HashMap<String, serde_json::Value>>,
+    pub multimodal: Option<PersistedMultimodalExplain>,
     pub parts: Vec<MessagePart>,
 }
 
@@ -354,6 +356,7 @@ impl SessionContext {
                 cost: 0.0,
                 tokens: TokenUsage::default(),
                 metadata: None,
+                multimodal: None,
                 parts: Vec::new(),
             });
             index.insert(message_id.to_string(), pos);
@@ -748,6 +751,7 @@ impl SessionContext {
             cost: 0.0,
             tokens: TokenUsage::default(),
             metadata: None,
+            multimodal: None,
             parts: Vec::new(),
         }
     }

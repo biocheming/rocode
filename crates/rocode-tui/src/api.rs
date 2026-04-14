@@ -1,34 +1,40 @@
 use reqwest::blocking::Client;
 use rocode_command::stage_protocol::{StageEvent, StageSummary};
 use rocode_config::Config as AppConfig;
+pub use rocode_multimodal::{
+    ModalityKind, ModalityPreflightResult, MultimodalCapabilitiesResponse,
+    MultimodalPolicyResponse, MultimodalPreflightRequest, MultimodalPreflightResponse,
+    PreflightCapabilityView, PreflightInputPart,
+};
 use rocode_runtime_context::ResolvedWorkspaceContext;
 pub use rocode_session::{
     PermissionRulesetInfo, SessionInfo, SessionListContract, SessionListHints, SessionListItem,
     SessionListResponse, SessionListTime, SessionRevertInfo, SessionShareInfo, SessionSummaryInfo,
     SessionTimeInfo,
 };
-use rocode_session::{SessionTelemetrySnapshot as PersistedSessionTelemetrySnapshot, SessionUsage};
+use rocode_session::SessionUsage;
 use rocode_state::RecentModelEntry;
 pub use rocode_types::{
     ManagedSkillRecord, MemoryConflictResponse, MemoryConsolidationRequest,
     MemoryConsolidationResponse, MemoryConsolidationRunListResponse, MemoryConsolidationRunQuery,
     MemoryDetailView, MemoryListQuery, MemoryListResponse, MemoryRetrievalPreviewResponse,
     MemoryRetrievalQuery, MemoryRuleHitListResponse, MemoryRuleHitQuery,
-    MemoryRulePackListResponse, MemoryValidationReportResponse, SessionMemoryInsight,
-    SessionMemoryTelemetrySummary, SessionStatusInfo, SkillArtifactCacheEntry, SkillAuditEvent,
-    SkillDistributionRecord, SkillGovernanceTimelineEntry, SkillGovernanceTimelineStatus,
-    SkillGovernanceWriteResult, SkillGuardReport, SkillGuardStatus, SkillHubArtifactCacheResponse,
-    SkillHubAuditResponse, SkillHubDistributionResponse, SkillHubGuardRunRequest,
-    SkillHubGuardRunResponse, SkillHubIndexRefreshRequest, SkillHubIndexRefreshResponse,
-    SkillHubIndexResponse, SkillHubLifecycleResponse, SkillHubManagedDetachRequest,
-    SkillHubManagedDetachResponse, SkillHubManagedRemoveRequest, SkillHubManagedRemoveResponse,
-    SkillHubManagedResponse, SkillHubPolicy, SkillHubPolicyResponse,
-    SkillHubRemoteInstallApplyRequest, SkillHubRemoteInstallPlanRequest,
-    SkillHubRemoteUpdateApplyRequest, SkillHubRemoteUpdatePlanRequest, SkillHubSyncApplyRequest,
-    SkillHubSyncPlanRequest, SkillHubSyncPlanResponse, SkillHubTimelineQuery,
-    SkillHubTimelineResponse, SkillManagedLifecycleRecord, SkillRemoteInstallAction,
-    SkillRemoteInstallEntry, SkillRemoteInstallPlan, SkillRemoteInstallResponse,
-    SkillSourceIndexSnapshot, SkillSourceKind, SkillSourceRef, SkillSyncPlan,
+    MemoryRulePackListResponse, MemoryValidationReportResponse, SessionInsightsResponse,
+    SessionMemoryTelemetrySummary, SessionStatusInfo,
+    SkillArtifactCacheEntry, SkillAuditEvent, SkillDistributionRecord,
+    SkillGovernanceTimelineEntry, SkillGovernanceTimelineStatus, SkillGovernanceWriteResult,
+    SkillGuardReport, SkillGuardStatus, SkillHubArtifactCacheResponse, SkillHubAuditResponse,
+    SkillHubDistributionResponse, SkillHubGuardRunRequest, SkillHubGuardRunResponse,
+    SkillHubIndexRefreshRequest, SkillHubIndexRefreshResponse, SkillHubIndexResponse,
+    SkillHubLifecycleResponse, SkillHubManagedDetachRequest, SkillHubManagedDetachResponse,
+    SkillHubManagedRemoveRequest, SkillHubManagedRemoveResponse, SkillHubManagedResponse,
+    SkillHubPolicy, SkillHubPolicyResponse, SkillHubRemoteInstallApplyRequest,
+    SkillHubRemoteInstallPlanRequest, SkillHubRemoteUpdateApplyRequest,
+    SkillHubRemoteUpdatePlanRequest, SkillHubSyncApplyRequest, SkillHubSyncPlanRequest,
+    SkillHubSyncPlanResponse, SkillHubTimelineQuery, SkillHubTimelineResponse,
+    SkillManagedLifecycleRecord, SkillRemoteInstallAction, SkillRemoteInstallEntry,
+    SkillRemoteInstallPlan, SkillRemoteInstallResponse, SkillSourceIndexSnapshot,
+    SkillSourceKind, SkillSourceRef, SkillSyncPlan,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -340,18 +346,6 @@ pub struct SessionTelemetrySnapshot {
     pub memory: Option<SessionMemoryTelemetrySummary>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionInsightsResponse {
-    pub id: String,
-    pub title: String,
-    pub directory: String,
-    pub updated: i64,
-    #[serde(default)]
-    pub telemetry: Option<PersistedSessionTelemetrySnapshot>,
-    #[serde(default)]
-    pub memory: Option<SessionMemoryInsight>,
-}
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionEventsQuery {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -562,6 +556,8 @@ pub struct MessageInfo {
     pub parts: Vec<MessagePart>,
     #[serde(default)]
     pub metadata: Option<HashMap<String, serde_json::Value>>,
+    #[serde(default)]
+    pub multimodal: Option<rocode_multimodal::PersistedMultimodalExplain>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1237,10 +1233,7 @@ impl ApiClient {
     ) -> anyhow::Result<PromptResponse> {
         let url = format!("{}/session/{}/prompt", self.base_url, session_id);
         let request = PromptRequest {
-            message: parts
-                .as_ref()
-                .map(|_| None)
-                .unwrap_or_else(|| Some(content)),
+            message: (!content.trim().is_empty()).then_some(content),
             parts,
             agent,
             scheduler_profile,
@@ -1384,6 +1377,60 @@ impl ApiClient {
             let status = response.status();
             let text = response.text().unwrap_or_default();
             anyhow::bail!("Failed to get workspace context: {} - {}", status, text);
+        }
+
+        Ok(response.json()?)
+    }
+
+    pub fn get_multimodal_policy(&self) -> anyhow::Result<MultimodalPolicyResponse> {
+        let url = format!("{}/multimodal/policy", self.base_url);
+        let response = self.client.get(&url).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to get multimodal policy: {} - {}", status, text);
+        }
+
+        Ok(response.json()?)
+    }
+
+    pub fn get_multimodal_capabilities(
+        &self,
+        model: Option<&str>,
+    ) -> anyhow::Result<MultimodalCapabilitiesResponse> {
+        let url = format!("{}/multimodal/capabilities", self.base_url);
+        let request = if let Some(model) = model.filter(|value| !value.trim().is_empty()) {
+            self.client.get(&url).query(&[("model", model)])
+        } else {
+            self.client.get(&url)
+        };
+        let response = request.send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!(
+                "Failed to get multimodal capabilities: {} - {}",
+                status,
+                text
+            );
+        }
+
+        Ok(response.json()?)
+    }
+
+    pub fn preflight_multimodal(
+        &self,
+        request: &MultimodalPreflightRequest,
+    ) -> anyhow::Result<MultimodalPreflightResponse> {
+        let url = format!("{}/multimodal/preflight", self.base_url);
+        let response = self.client.post(&url).json(request).send()?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to run multimodal preflight: {} - {}", status, text);
         }
 
         Ok(response.json()?)

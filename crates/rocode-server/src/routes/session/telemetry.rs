@@ -3,12 +3,15 @@ use std::sync::Arc;
 use axum::extract::{Path, State};
 use axum::Json;
 use rocode_command::stage_protocol::StageSummary;
+use rocode_multimodal::PersistedMultimodalExplain;
 use rocode_session::{
     load_session_telemetry_snapshot, persist_session_telemetry_snapshot,
-    session_last_run_status_label, Session, SessionTelemetrySnapshot as PersistedTelemetrySnapshot,
-    SessionUsage,
+    session_last_run_status_label, Session, SessionUsage,
 };
-use rocode_types::{SessionMemoryInsight, SessionMemoryTelemetrySummary};
+use rocode_types::{
+    SessionInsightsResponse, SessionMemoryTelemetrySummary, SessionMultimodalAttachmentInfo,
+    SessionMultimodalInsight,
+};
 use serde::Serialize;
 
 use crate::runtime_control::SessionExecutionTopology;
@@ -27,18 +30,6 @@ pub struct SessionTelemetrySnapshot {
     pub usage: SessionUsage,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory: Option<SessionMemoryTelemetrySummary>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SessionInsightsResponse {
-    pub id: String,
-    pub title: String,
-    pub directory: String,
-    pub updated: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub telemetry: Option<PersistedTelemetrySnapshot>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub memory: Option<SessionMemoryInsight>,
 }
 
 pub(super) async fn get_session_telemetry(
@@ -95,6 +86,7 @@ pub(super) async fn get_session_insights(
         updated: session_record.time.updated,
         telemetry: load_session_telemetry_snapshot(&session),
         memory,
+        multimodal: build_session_multimodal_insight(&session),
     }))
 }
 
@@ -174,6 +166,39 @@ async fn build_session_memory_telemetry(
             None
         }
     }
+}
+
+fn build_session_multimodal_insight(session: &Session) -> Option<SessionMultimodalInsight> {
+    let message = session
+        .record()
+        .messages
+        .iter()
+        .rev()
+        .find(|message| PersistedMultimodalExplain::has_message_signal(message))?;
+    let explain = PersistedMultimodalExplain::from_message(message)?;
+
+    Some(SessionMultimodalInsight {
+        user_message_id: message.id.clone(),
+        attachment_count: explain.attachment_count,
+        kinds: explain.kinds,
+        badges: explain.badges,
+        compact_label: explain.compact_label,
+        resolved_model: explain.resolved_model,
+        warnings: explain.warnings,
+        unsupported_parts: explain.unsupported_parts,
+        recommended_downgrade: explain.recommended_downgrade,
+        hard_block: explain.hard_block,
+        transport_replaced_parts: explain.transport_replaced_parts,
+        transport_warnings: explain.transport_warnings,
+        attachments: explain
+            .attachments
+            .into_iter()
+            .map(|attachment| SessionMultimodalAttachmentInfo {
+                filename: attachment.filename,
+                mime: attachment.mime,
+            })
+            .collect(),
+    })
 }
 
 #[cfg(test)]
@@ -319,6 +344,67 @@ mod tests {
         );
     }
 
+    #[test]
+    fn session_insights_builds_multimodal_detail_from_last_user_message() {
+        let mut session = Session::new("session-1".to_string(), ".".to_string());
+        let user = session.add_user_message("[audio input]");
+        user.metadata.insert(
+            "multimodal_kinds".to_string(),
+            serde_json::json!(["audio"]),
+        );
+        user.metadata.insert(
+            "multimodal_badges".to_string(),
+            serde_json::json!(["audio"]),
+        );
+        user.metadata.insert(
+            "multimodal_compact_label".to_string(),
+            serde_json::json!("[audio input]"),
+        );
+        user.metadata.insert(
+            "multimodal_resolved_model".to_string(),
+            serde_json::json!("openai/gpt-audio"),
+        );
+        user.metadata.insert(
+            "multimodal_preflight".to_string(),
+            serde_json::json!({
+                "warnings": ["Audio accepted."],
+                "unsupported_parts": [],
+                "recommended_downgrade": null,
+                "hard_block": false
+            }),
+        );
+        user.metadata.insert(
+            "multimodal_transport".to_string(),
+            serde_json::json!({
+                "replaced_parts": ["voice.wav"],
+                "warnings": [
+                    "ERROR: Cannot read \"voice.wav\" (this model does not support audio input). Inform the user."
+                ]
+            }),
+        );
+        user.add_file(
+            "data:audio/wav;base64,UklGRg==".to_string(),
+            "voice.wav".to_string(),
+            "audio/wav".to_string(),
+        );
+        let user_id = user.id.clone();
+
+        let insight = build_session_multimodal_insight(&session).expect("multimodal insight");
+        assert_eq!(insight.user_message_id, user_id);
+        assert_eq!(insight.attachment_count, 1);
+        assert_eq!(insight.kinds, vec!["audio".to_string()]);
+        assert_eq!(insight.badges, vec!["audio".to_string()]);
+        assert_eq!(insight.resolved_model.as_deref(), Some("openai/gpt-audio"));
+        assert_eq!(insight.attachments.len(), 1);
+        assert_eq!(insight.attachments[0].filename, "voice.wav");
+        assert_eq!(insight.attachments[0].mime, "audio/wav");
+        assert_eq!(insight.warnings, vec!["Audio accepted.".to_string()]);
+        assert_eq!(insight.transport_replaced_parts, vec!["voice.wav".to_string()]);
+        assert_eq!(insight.transport_warnings.len(), 1);
+        assert!(insight.transport_warnings[0].contains("does not support audio input"));
+        assert!(!insight.hard_block);
+    }
+
     #[tokio::test]
     async fn session_insights_returns_persisted_snapshot() {
         let state = Arc::new(ServerState::new());
@@ -326,6 +412,42 @@ mod tests {
             let mut sessions = state.sessions.lock().await;
             let mut session = sessions.create("project", "/tmp/project");
             session.set_title("Telemetry Session");
+            let user = session.add_user_message("[audio input]");
+            user.metadata.insert(
+                "multimodal_kinds".to_string(),
+                serde_json::json!(["audio"]),
+            );
+            user.metadata.insert(
+                "multimodal_compact_label".to_string(),
+                serde_json::json!("[audio input]"),
+            );
+            user.metadata.insert(
+                "multimodal_resolved_model".to_string(),
+                serde_json::json!("openai/gpt-audio"),
+            );
+            user.metadata.insert(
+                "multimodal_preflight".to_string(),
+                serde_json::json!({
+                    "warnings": ["Audio accepted."],
+                    "unsupported_parts": [],
+                    "recommended_downgrade": null,
+                    "hard_block": false
+                }),
+            );
+            user.metadata.insert(
+                "multimodal_transport".to_string(),
+                serde_json::json!({
+                    "replaced_parts": ["voice.wav"],
+                    "warnings": [
+                        "ERROR: Cannot read \"voice.wav\" (this model does not support audio input). Inform the user."
+                    ]
+                }),
+            );
+            user.add_file(
+                "data:audio/wav;base64,UklGRg==".to_string(),
+                "voice.wav".to_string(),
+                "audio/wav".to_string(),
+            );
             persist_session_telemetry_snapshot(
                 &mut session,
                 &rocode_session::SessionTelemetrySnapshot {
@@ -399,6 +521,27 @@ mod tests {
                 .as_ref()
                 .map(|memory| memory.summary.last_prefetch_query.as_deref()),
             Some(Some("latest prompt"))
+        );
+        assert_eq!(
+            response
+                .multimodal
+                .as_ref()
+                .and_then(|multimodal| multimodal.resolved_model.as_deref()),
+            Some("openai/gpt-audio")
+        );
+        assert_eq!(
+            response
+                .multimodal
+                .as_ref()
+                .map(|multimodal| multimodal.attachment_count),
+            Some(1)
+        );
+        assert_eq!(
+            response
+                .multimodal
+                .as_ref()
+                .map(|multimodal| multimodal.transport_replaced_parts.clone()),
+            Some(vec!["voice.wav".to_string()])
         );
     }
 

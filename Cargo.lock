@@ -2937,6 +2937,7 @@ dependencies = [
  "rocode-core",
  "rocode-grep",
  "rocode-lsp",
+ "rocode-multimodal",
  "rocode-orchestrator",
  "rocode-permission",
  "rocode-plugin",
@@ -2950,6 +2951,7 @@ dependencies = [
  "rocode-tui",
  "rocode-types",
  "rocode-util",
+ "rocode-voice",
  "serde",
  "serde_json",
  "sqlx",
@@ -3118,6 +3120,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocode-multimodal"
+version = "2026.4.12"
+dependencies = [
+ "chrono",
+ "rocode-config",
+ "rocode-provider",
+ "rocode-session",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rocode-orchestrator"
 version = "2026.4.12"
 dependencies = [
@@ -3236,6 +3250,7 @@ dependencies = [
  "rocode-execution-types",
  "rocode-mcp",
  "rocode-memory",
+ "rocode-multimodal",
  "rocode-orchestrator",
  "rocode-permission",
  "rocode-plugin",
@@ -3425,6 +3440,7 @@ dependencies = [
  "rocode-config",
  "rocode-core",
  "rocode-mcp",
+ "rocode-multimodal",
  "rocode-orchestrator",
  "rocode-provider",
  "rocode-runtime-context",
@@ -3434,6 +3450,7 @@ dependencies = [
  "rocode-tool",
  "rocode-types",
  "rocode-util",
+ "rocode-voice",
  "serde",
  "serde_json",
  "similar",
@@ -3478,6 +3495,17 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "walkdir",
+]
+
+[[package]]
+name = "rocode-voice"
+version = "2026.4.12"
+dependencies = [
+ "anyhow",
+ "base64",
+ "rocode-config",
+ "uuid",
+ "which",
 ]
 
 [[package]]

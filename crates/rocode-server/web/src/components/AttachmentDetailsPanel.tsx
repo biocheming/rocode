@@ -11,18 +11,18 @@ import {
   attachmentTextPreviewState,
   attachmentWorkspacePath,
   toWorkspaceReferencePath,
-  type ComposerAttachmentLike,
+  type ComposerAttachmentRecord,
 } from "../lib/composerContext";
 import type { BreadcrumbProvenance } from "../hooks/useSchedulerNavigation";
 import { ProvenanceTrail } from "./ProvenanceTrail";
 import { cn } from "@/lib/utils";
 
 interface AttachmentDetailsPanelProps {
-  attachment: ComposerAttachmentLike | null;
+  attachment: ComposerAttachmentRecord | null;
   workspaceRootPath: string;
   activeStageId: string | null;
   provenance: BreadcrumbProvenance | null;
-  onLocateAttachment: (attachment: ComposerAttachmentLike) => void;
+  onLocateAttachment: (attachment: ComposerAttachmentRecord) => void;
   onNavigateStage: (stageId: string) => void;
   onNavigateProvenanceSession: () => void;
   onNavigateProvenanceStage: () => void;

@@ -1,4 +1,4 @@
-import type { ComponentProps, RefObject } from "react";
+import type { RefObject } from "react";
 import { useEffect } from "react";
 import { MessageCard } from "./MessageCard";
 import {
@@ -8,13 +8,12 @@ import {
 } from "./ai-elements/conversation";
 import { Shimmer } from "./ai-elements/shimmer";
 import { LoaderCircleIcon } from "lucide-react";
-
-type FeedMessageLike = ComponentProps<typeof MessageCard>["message"];
+import type { FeedMessage } from "../lib/history";
 
 interface ConversationFeedPanelProps {
   feedRef: RefObject<HTMLDivElement | null>;
   historyLoading: boolean;
-  messages: FeedMessageLike[];
+  messages: FeedMessage[];
   highlightedFeedId: string | null;
   activeStageId: string | null;
   activeToolCallId: string | null;

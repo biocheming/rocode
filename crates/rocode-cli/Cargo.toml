@@ -14,6 +14,8 @@ rocode-core = { path = "../rocode-core" }
 rocode-orchestrator = { path = "../rocode-orchestrator" }
 rocode-util = { path = "../rocode-util" }
 rocode-config = { path = "../rocode-config" }
+rocode-multimodal = { path = "../rocode-multimodal" }
+rocode-voice = { path = "../rocode-voice" }
 rocode-grep = { path = "../rocode-grep" }
 rocode-permission = { path = "../rocode-permission" }
 rocode-server = { path = "../rocode-server" }

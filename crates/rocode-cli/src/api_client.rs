@@ -22,13 +22,15 @@ pub use rocode_tui::api::{
     MemoryConsolidationRunListResponse, MemoryConsolidationRunQuery, MemoryDetailView,
     MemoryListQuery, MemoryListResponse, MemoryRetrievalPreviewResponse, MemoryRetrievalQuery,
     MemoryRuleHitListResponse, MemoryRuleHitQuery, MemoryRulePackListResponse,
-    MemoryValidationReportResponse, MessageInfo, PendingCommandInvocation, PermissionRequestInfo,
-    PromptPart, PromptRequest, PromptResponse, ProviderConnectSchemaResponse, ProviderListResponse,
-    QuestionInfo, RecoveryActionKind, RefreshProviderCatalogResponse, RevertRequest,
-    RevertResponse, SessionEventsQuery, SessionExecutionTopology, SessionInfo,
-    SessionInsightsResponse, SessionListItem, SessionListResponse, SessionRecoveryProtocol,
-    SessionRunStatusKind, SessionRuntimeState, SessionStatusInfo, SessionTelemetrySnapshot,
-    ShareResponse, SkillCatalogEntry, SkillCatalogQuery, SkillDetailQuery, SkillDetailResponse,
+    MemoryValidationReportResponse, MessageInfo, MultimodalCapabilitiesResponse,
+    MultimodalPolicyResponse, MultimodalPreflightRequest, MultimodalPreflightResponse,
+    PendingCommandInvocation, PermissionRequestInfo, PromptPart, PromptRequest,
+    PromptResponse, ProviderConnectSchemaResponse, ProviderListResponse, QuestionInfo,
+    RecoveryActionKind, RefreshProviderCatalogResponse, RevertRequest, RevertResponse,
+    SessionEventsQuery, SessionExecutionTopology, SessionInfo, SessionInsightsResponse,
+    SessionListItem, SessionListResponse, SessionRecoveryProtocol, SessionRunStatusKind,
+    SessionRuntimeState, SessionStatusInfo, SessionTelemetrySnapshot, ShareResponse,
+    SkillCatalogEntry, SkillCatalogQuery, SkillDetailQuery, SkillDetailResponse,
     SkillHubArtifactCacheResponse, SkillHubAuditResponse, SkillHubDistributionResponse,
     SkillHubGuardRunRequest, SkillHubGuardRunResponse, SkillHubIndexRefreshRequest,
     SkillHubIndexRefreshResponse, SkillHubIndexResponse, SkillHubLifecycleResponse,
@@ -152,10 +154,7 @@ impl CliApiClient {
     ) -> anyhow::Result<PromptResponse> {
         let url = server_url(&self.base_url, &format!("/session/{}/prompt", session_id));
         let req = PromptRequest {
-            message: parts
-                .as_ref()
-                .map(|_| None)
-                .unwrap_or_else(|| Some(content)),
+            message: (!content.trim().is_empty()).then_some(content),
             parts,
             agent,
             scheduler_profile,
@@ -497,6 +496,35 @@ impl CliApiClient {
         let url = server_url(&self.base_url, "/workspace/context");
         let resp = self.client.get(&url).send().await?;
         Self::json_ok(resp, "get workspace context").await
+    }
+
+    pub async fn get_multimodal_policy(&self) -> anyhow::Result<MultimodalPolicyResponse> {
+        let url = server_url(&self.base_url, "/multimodal/policy");
+        let resp = self.client.get(&url).send().await?;
+        Self::json_ok(resp, "get multimodal policy").await
+    }
+
+    pub async fn get_multimodal_capabilities(
+        &self,
+        model: Option<&str>,
+    ) -> anyhow::Result<MultimodalCapabilitiesResponse> {
+        let url = server_url(&self.base_url, "/multimodal/capabilities");
+        let request = if let Some(model) = model.filter(|value| !value.trim().is_empty()) {
+            self.client.get(&url).query(&[("model", model)])
+        } else {
+            self.client.get(&url)
+        };
+        let resp = request.send().await?;
+        Self::json_ok(resp, "get multimodal capabilities").await
+    }
+
+    pub async fn preflight_multimodal(
+        &self,
+        request: &MultimodalPreflightRequest,
+    ) -> anyhow::Result<MultimodalPreflightResponse> {
+        let url = server_url(&self.base_url, "/multimodal/preflight");
+        let resp = self.client.post(&url).json(request).send().await?;
+        Self::json_ok(resp, "post multimodal preflight").await
     }
 
     pub async fn get_config_providers(&self) -> anyhow::Result<ProviderListResponse> {

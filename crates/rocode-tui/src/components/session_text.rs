@@ -1049,6 +1049,7 @@ mod tests {
             cost: 0.0,
             tokens: TokenUsage::default(),
             metadata: Some(metadata),
+            multimodal: None,
             parts: Vec::new(),
         }
     }
@@ -1414,6 +1415,7 @@ mod tests {
             cost: 0.0,
             tokens: TokenUsage::default(),
             metadata: None,
+            multimodal: None,
             parts: Vec::new(),
         };
         let rendered = render_message_text_part(&message, "hello", &Theme::default(), Color::Blue);

@@ -203,6 +203,18 @@ impl SessionPrompt {
                             media_type: Some(mime.clone()),
                             provider_options: None,
                         })
+                    } else if mime.starts_with("audio/") {
+                        Some(ContentPart {
+                            content_type: "file".to_string(),
+                            text: None,
+                            image_url: Some(rocode_provider::ImageUrl { url: url.clone() }),
+                            tool_use: None,
+                            tool_result: None,
+                            cache_control: None,
+                            filename: Some(filename.clone()),
+                            media_type: Some(mime.clone()),
+                            provider_options: None,
+                        })
                     } else {
                         Some(ContentPart {
                             content_type: "text".to_string(),
@@ -1064,6 +1076,33 @@ mod tests {
             .parts
             .iter()
             .any(|p| matches!(p.part_type, PartType::Compaction { .. })));
+    }
+
+    #[test]
+    fn parts_to_content_preserves_audio_file_parts() {
+        let now = chrono::Utc::now();
+        let content = SessionPrompt::parts_to_content(&[crate::MessagePart {
+            id: "prt_audio".to_string(),
+            part_type: PartType::File {
+                url: "data:audio/wav;base64,UklGRg==".to_string(),
+                filename: "voice.wav".to_string(),
+                mime: "audio/wav".to_string(),
+            },
+            created_at: now,
+            message_id: None,
+        }]);
+
+        let Content::Parts(parts) = content else {
+            panic!("expected structured content");
+        };
+        assert!(matches!(
+            parts.first(),
+            Some(part)
+                if part.content_type == "file"
+                    && part.media_type.as_deref() == Some("audio/wav")
+                    && part.image_url.as_ref().map(|value| value.url.as_str())
+                        == Some("data:audio/wav;base64,UklGRg==")
+        ));
     }
 
     #[test]

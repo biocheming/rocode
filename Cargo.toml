@@ -5,6 +5,8 @@ members = [
     "crates/rocode-content",
     "crates/rocode-types",
     "crates/rocode-util",
+    "crates/rocode-multimodal",
+    "crates/rocode-voice",
     "crates/rocode-config",
     "crates/rocode-grep",
     "crates/rocode-permission",

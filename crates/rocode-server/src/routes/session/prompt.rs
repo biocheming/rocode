@@ -19,6 +19,7 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use crate::recovery::RecoveryExecutionContext;
+use crate::routes::multimodal::resolve_provider_model;
 use crate::routes::permission::request_permission;
 use crate::routes::skill_catalog::enrich_scheduler_plan_skills;
 use crate::runtime_control::SessionRunStatus;
@@ -35,6 +36,7 @@ use rocode_command::{
     Command, CommandArgumentField, CommandArgumentKind, CommandContext, CommandRegistry,
     InteractivePolicy,
 };
+use rocode_multimodal::{MultimodalAuthority, RuntimeMultimodalExplain, SessionPartAdapter};
 use rocode_orchestrator::output_metadata::output_usage;
 use rocode_orchestrator::{
     scheduler_orchestrator_from_plan, scheduler_plan_from_profile, AvailableAgentMeta,
@@ -824,6 +826,21 @@ pub(super) async fn create_scheduler_user_message(
     Ok(user_message.id.clone())
 }
 
+fn annotate_last_user_message_multimodal_metadata(
+    session: &mut rocode_session::Session,
+    explain: &RuntimeMultimodalExplain,
+) {
+    let Some(user_message) = session
+        .messages_mut()
+        .iter_mut()
+        .rfind(|message| matches!(message.role, rocode_session::MessageRole::User))
+    else {
+        return;
+    };
+
+    explain.persist_into_message_metadata(user_message);
+}
+
 pub(super) async fn session_prompt(
     State(state): State<Arc<ServerState>>,
     headers: HeaderMap,
@@ -1010,6 +1027,43 @@ pub(super) async fn session_prompt(
     let model_id = request_config.model_id.clone();
     let agent_system_prompt = request_config.agent_system_prompt.clone();
     let task_compiled_request = request_config.compiled_request.clone();
+    let multimodal_explain = {
+        let multimodal_parts = SessionPartAdapter::from_session_parts(&prompt_parts);
+        if multimodal_parts.is_empty() {
+            None
+        } else {
+            let authority = MultimodalAuthority::from_config(&config);
+            let provider_model = resolve_provider_model(&state, &provider_id, &model_id).await?;
+            let capability = authority
+                .capability_authority()
+                .capability_view(provider_id.clone(), &provider_model);
+            let result = authority
+                .capability_authority()
+                .preflight(&capability, &SessionPartAdapter::to_preflight_parts(&multimodal_parts));
+            let transport = authority
+                .capability_authority()
+                .transport_explain(&capability, &provider_model, &prompt_parts);
+            if result.hard_block {
+                return Err(ApiError::BadRequest(
+                    result
+                        .warnings
+                        .first()
+                        .cloned()
+                        .or(result.recommended_downgrade.clone())
+                        .unwrap_or_else(|| {
+                            "Current multimodal policy blocked this input.".to_string()
+                        }),
+                ));
+            }
+            Some(RuntimeMultimodalExplain {
+                summary: authority.build_display_summary(None, &multimodal_parts),
+                capability,
+                result,
+                transport,
+                resolved_model: format!("{}/{}", provider_id, model_id),
+            })
+        }
+    };
 
     let task_state = state.clone();
     let session_id = id.clone();
@@ -1027,6 +1081,7 @@ pub(super) async fn session_prompt(
     let task_config = config.clone();
     let task_recovery = req.recovery.clone();
     let task_prompt_parts = prompt_parts.clone();
+    let task_multimodal_explain = multimodal_explain.clone();
     let task_scheduler_profile_config = task_scheduler_profile_name
         .as_deref()
         .and_then(|profile_name| resolve_scheduler_profile_config(&task_config, Some(profile_name)))
@@ -1752,6 +1807,9 @@ pub(super) async fn session_prompt(
             .rev()
             .find(|message| matches!(message.role, rocode_session::MessageRole::Assistant))
             .map(|message| message.id.clone());
+        if let Some(explain) = task_multimodal_explain.as_ref() {
+            annotate_last_user_message_multimodal_metadata(&mut session, explain);
+        }
         let _ = task_state
             .runtime_telemetry
             .record_session_usage(
@@ -1790,6 +1848,10 @@ mod tests {
     use super::*;
     use rocode_command::{CommandArgumentOption, CommandRegistry};
     use rocode_config::Config as AppConfig;
+    use rocode_multimodal::{
+        ModalityPreflightResult, ModalitySupportView, ModalityTransportResult,
+        MultimodalDisplaySummary, PreflightCapabilityView, RuntimeMultimodalExplain,
+    };
     use rocode_session::{PartType, Session, SessionStateManager};
     use std::sync::Arc;
     use tokio::sync::RwLock;
@@ -1922,6 +1984,98 @@ mod tests {
         assert_eq!(
             message.metadata.get("resolved_user_prompt"),
             Some(&serde_json::json!("Inspect @note.txt"))
+        );
+    }
+
+    #[test]
+    fn annotate_last_user_message_multimodal_metadata_persists_explain_fields() {
+        let mut session = Session::new("project", "/tmp");
+        session.add_user_message("[audio input]");
+
+        annotate_last_user_message_multimodal_metadata(
+            &mut session,
+            &RuntimeMultimodalExplain {
+                summary: MultimodalDisplaySummary {
+                    primary_text: String::new(),
+                    attachment_count: 1,
+                    badges: vec!["audio".to_string()],
+                    compact_label: "[audio input]".to_string(),
+                    kinds: vec!["audio".to_string()],
+                },
+                capability: PreflightCapabilityView {
+                    provider_id: "openai".to_string(),
+                    model_id: "gpt-audio".to_string(),
+                    attachment: true,
+                    tool_call: false,
+                    reasoning: false,
+                    temperature: true,
+                    input: ModalitySupportView {
+                        text: true,
+                        audio: true,
+                        image: false,
+                        video: false,
+                        pdf: false,
+                    },
+                    output: ModalitySupportView {
+                        text: true,
+                        audio: false,
+                        image: false,
+                        video: false,
+                        pdf: false,
+                    },
+                },
+                result: ModalityPreflightResult {
+                    warnings: vec!["Audio accepted.".to_string()],
+                    unsupported_parts: Vec::new(),
+                    recommended_downgrade: None,
+                    hard_block: false,
+                },
+                transport: ModalityTransportResult {
+                    replaced_parts: vec!["voice.wav".to_string()],
+                    warnings: vec![
+                        "ERROR: Cannot read \"voice.wav\" (this model does not support audio input). Inform the user.".to_string(),
+                    ],
+                },
+                resolved_model: "openai/gpt-audio".to_string(),
+            },
+        );
+
+        let message = session
+            .messages
+            .iter()
+            .rfind(|message| matches!(message.role, rocode_session::MessageRole::User))
+            .expect("user message should exist");
+
+        assert_eq!(
+            message
+                .metadata
+                .get("multimodal_resolved_model")
+                .and_then(|value| value.as_str()),
+            Some("openai/gpt-audio")
+        );
+        assert_eq!(
+            message
+                .metadata
+                .get("multimodal_compact_label")
+                .and_then(|value| value.as_str()),
+            Some("[audio input]")
+        );
+        assert_eq!(
+            message
+                .metadata
+                .get("multimodal_attachment_count")
+                .and_then(|value| value.as_u64()),
+            Some(1)
+        );
+        assert!(message.metadata.contains_key("multimodal_preflight"));
+        assert_eq!(
+            message
+                .metadata
+                .get("multimodal_transport")
+                .and_then(|value| value.get("replaced_parts"))
+                .and_then(|value| value.as_array())
+                .map(|value| value.len()),
+            Some(1)
         );
     }
 

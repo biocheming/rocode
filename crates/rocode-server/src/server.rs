@@ -562,7 +562,7 @@ fn convert_config_providers_for_bootstrap(
         .collect()
 }
 
-fn bootstrap_config_from_config(config: &rocode_config::Config) -> BootstrapConfig {
+pub(crate) fn bootstrap_config_from_config(config: &rocode_config::Config) -> BootstrapConfig {
     let providers = convert_config_providers_for_bootstrap(config);
     bootstrap_config_from_raw(
         providers,

@@ -43,6 +43,7 @@ pub enum UiActionId {
     OpenSkills,
     ListTasks,
     SubmitPrompt,
+    VoiceInput,
     ClearPrompt,
     PasteClipboard,
     CopyPrompt,
@@ -651,6 +652,19 @@ pub fn builtin_ui_commands() -> Vec<UiCommandSpec> {
             keybind: Some("enter"),
             include_in_palette: true,
             slash: None,
+        },
+        UiCommandSpec {
+            action_id: UiActionId::VoiceInput,
+            title: "Voice input",
+            description: "Record voice input and submit it to the current session",
+            category: UiCommandCategory::Prompt,
+            keybind: None,
+            include_in_palette: true,
+            slash: Some(UiSlashCommandSpec {
+                name: "/voice",
+                aliases: &["/audio"],
+                suggested: true,
+            }),
         },
         UiCommandSpec {
             action_id: UiActionId::ClearPrompt,

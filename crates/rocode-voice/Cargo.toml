@@ -1,0 +1,13 @@
+[package]
+name = "rocode-voice"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rocode-config = { path = "../rocode-config" }
+anyhow = { workspace = true }
+base64 = { workspace = true }
+uuid = { workspace = true }
+which = { workspace = true }

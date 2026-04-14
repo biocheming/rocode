@@ -204,8 +204,31 @@ async fn run_server_prompt(
     style: &CliStyle,
     update_recovery_base: bool,
 ) -> anyhow::Result<()> {
+    run_server_prompt_with_parts(
+        runtime,
+        api_client,
+        sse_rx,
+        input,
+        input,
+        None,
+        style,
+        update_recovery_base,
+    )
+    .await
+}
+
+async fn run_server_prompt_with_parts(
+    runtime: &mut CliExecutionRuntime,
+    api_client: &Arc<CliApiClient>,
+    sse_rx: &mut mpsc::UnboundedReceiver<CliServerEvent>,
+    input: &str,
+    display_input: &str,
+    parts: Option<Vec<crate::api_client::PromptPart>>,
+    style: &CliStyle,
+    update_recovery_base: bool,
+) -> anyhow::Result<()> {
     if update_recovery_base {
-        runtime.recovery_base_prompt = Some(input.to_string());
+        runtime.recovery_base_prompt = Some(display_input.to_string());
     }
     if let Ok(mut topology) = runtime.observed_topology.lock() {
         topology.reset_for_run(
@@ -231,7 +254,7 @@ async fn run_server_prompt(
         Some(runtime),
         OutputBlock::Message(MessageBlock::full(
             OutputMessageRole::User,
-            input.to_string(),
+            display_input.to_string(),
         )),
         style,
     )?;
@@ -257,7 +280,7 @@ async fn run_server_prompt(
         .send_prompt(
             &session_id,
             input.to_string(),
-            None,
+            parts,
             prompt_agent,
             runtime.resolved_scheduler_profile_name.clone(),
             (runtime.resolved_model_label != "auto").then(|| runtime.resolved_model_label.clone()),

@@ -1,32 +1,37 @@
 "use client";
 
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { FormEvent, ClipboardEvent, DragEvent } from "react";
 import type { BreadcrumbProvenance } from "../hooks/useSchedulerNavigation";
+import {
+  browserSpeechRecognitionConstructor,
+  type BrowserSpeechRecognition,
+} from "../lib/browserSpeech";
 import { AttachmentDetailsPanel } from "./AttachmentDetailsPanel";
 import { ComposerContextStrip } from "./ComposerContextStrip";
-import type { ComposerAttachmentLike } from "../lib/composerContext";
+import type { ComposerAttachmentRecord } from "../lib/composerContext";
 import { cn } from "@/lib/utils";
-import {
-  PlusIcon,
-  SendIcon,
-  CommandIcon,
-} from "lucide-react";
+import { ImageIcon, MicIcon, PaperclipIcon, SendIcon, SquareIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 
 interface ComposerPanelProps {
   composer: string;
   composerDragActive: boolean;
   streaming: boolean;
+  multimodalHints: Array<{ tone: "info" | "warning"; text: string }>;
+  allowAudioInput: boolean;
+  allowImageInput: boolean;
+  allowFileInput: boolean;
+  modeOptions: Array<{ key: string; label: string }>;
+  selectedMode: string;
+  onModeChange: (value: string) => void;
+  modelOptions: Array<{ key: string; label: string }>;
+  selectedModel: string;
+  onModelChange: (value: string) => void;
   references: string[];
-  attachments: ComposerAttachmentLike[];
+  attachments: ComposerAttachmentRecord[];
   selectedAttachmentIndex: number | null;
-  selectedAttachment: ComposerAttachmentLike | null;
+  selectedAttachment: ComposerAttachmentRecord | null;
   selectedWorkspacePath: string | null;
   workspaceRootPath: string;
   activeStageId: string | null;
@@ -35,8 +40,8 @@ interface ComposerPanelProps {
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onRemoveReference: (reference: string) => void;
   onRemoveAttachment: (index: number) => void;
-  onSelectAttachment: (index: number, attachment: ComposerAttachmentLike) => void;
-  onLocateAttachment: (attachment: ComposerAttachmentLike) => void;
+  onSelectAttachment: (index: number, attachment: ComposerAttachmentRecord) => void;
+  onLocateAttachment: (attachment: ComposerAttachmentRecord) => void;
   onNavigateStage: (stageId: string) => void;
   onNavigateProvenanceSession: () => void;
   onNavigateProvenanceStage: () => void;
@@ -54,6 +59,16 @@ export function ComposerPanel({
   composer,
   composerDragActive,
   streaming,
+  multimodalHints,
+  allowAudioInput,
+  allowImageInput,
+  allowFileInput,
+  modeOptions,
+  selectedMode,
+  onModeChange,
+  modelOptions,
+  selectedModel,
+  onModelChange,
   references,
   attachments,
   selectedAttachmentIndex,
@@ -80,10 +95,121 @@ export function ComposerPanel({
   onPaste,
   onComposerChange,
 }: ComposerPanelProps) {
-  const workspaceLabel =
-    selectedWorkspacePath?.split("/").filter(Boolean).pop() ||
-    workspaceRootPath.split("/").filter(Boolean).pop() ||
-    "workspace";
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const voiceBaseTextRef = useRef("");
+  const [voiceSupported, setVoiceSupported] = useState(false);
+  const [voiceListening, setVoiceListening] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    textarea.style.height = "auto";
+
+    const computed = window.getComputedStyle(textarea);
+    const lineHeight = Number.parseFloat(computed.lineHeight) || 24;
+    const paddingTop = Number.parseFloat(computed.paddingTop) || 0;
+    const paddingBottom = Number.parseFloat(computed.paddingBottom) || 0;
+    const borderTop = Number.parseFloat(computed.borderTopWidth) || 0;
+    const borderBottom = Number.parseFloat(computed.borderBottomWidth) || 0;
+    const maxHeight =
+      lineHeight * 10 + paddingTop + paddingBottom + borderTop + borderBottom;
+    const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
+
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY =
+      textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, [composer]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const RecognitionCtor = browserSpeechRecognitionConstructor(window);
+    setVoiceSupported(Boolean(RecognitionCtor));
+
+    return () => {
+      recognitionRef.current?.stop();
+      recognitionRef.current = null;
+    };
+  }, []);
+
+  const stopVoiceRecognition = () => {
+    recognitionRef.current?.stop();
+    recognitionRef.current = null;
+    setVoiceListening(false);
+  };
+
+  const startVoiceRecognition = () => {
+    if (typeof window === "undefined") return;
+    const RecognitionCtor = browserSpeechRecognitionConstructor(window);
+    if (!RecognitionCtor) {
+      setVoiceSupported(false);
+      setVoiceError("This browser does not support speech recognition.");
+      return;
+    }
+
+    setVoiceError(null);
+    voiceBaseTextRef.current = composer.trimEnd();
+
+    const recognition = new RecognitionCtor();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang =
+      typeof navigator !== "undefined" && navigator.language
+        ? navigator.language
+        : "en-US";
+    recognition.onresult = (event) => {
+      let finalTranscript = "";
+      let interimTranscript = "";
+
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index];
+        const transcript = result[0]?.transcript ?? result.item(0)?.transcript ?? "";
+        if (!transcript) continue;
+        if (result.isFinal) {
+          finalTranscript += transcript;
+        } else {
+          interimTranscript += transcript;
+        }
+      }
+
+      const spokenText = [finalTranscript, interimTranscript]
+        .map((value) => value.trim())
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+
+      const base = voiceBaseTextRef.current;
+      if (!spokenText) {
+        onComposerChange(base);
+        return;
+      }
+
+      onComposerChange(base ? `${base}\n${spokenText}` : spokenText);
+    };
+    recognition.onerror = (event) => {
+      if (event.error === "no-speech") {
+        setVoiceError("No speech detected.");
+      } else if (event.error === "not-allowed") {
+        setVoiceError("Microphone permission was denied.");
+      } else {
+        setVoiceError(`Voice input failed: ${event.error}`);
+      }
+      setVoiceListening(false);
+      recognitionRef.current = null;
+    };
+    recognition.onend = () => {
+      setVoiceListening(false);
+      recognitionRef.current = null;
+    };
+
+    recognitionRef.current = recognition;
+    setVoiceListening(true);
+    recognition.start();
+  };
 
   return (
     <div className="flex flex-col gap-3" data-testid="composer-form">
@@ -114,8 +240,8 @@ export function ComposerPanel({
 
       <div
         className={cn(
-          "overflow-hidden rounded-xl border border-border/45 bg-background/95 shadow-sm transition-colors",
-          composerDragActive ? "border-primary/40 bg-primary/5" : ""
+          "overflow-hidden rounded-2xl border border-border/50 bg-background/95 shadow-sm transition-colors",
+          composerDragActive ? "border-primary/40 bg-primary/5" : "",
         )}
       >
         <form
@@ -130,122 +256,172 @@ export function ComposerPanel({
             onDragLeave={onDragLeave}
             onDrop={onDrop}
           >
-            {attachments.length > 0 ? (
-              <div className="border-b border-border/60 px-4 py-3">
-                <div className="flex flex-wrap gap-1.5">
-                {attachments.map((att, index) => (
-                  <Button
-                    key={index}
-                    type="button"
-                    variant={selectedAttachmentIndex === index ? "secondary" : "outline"}
-                    size="sm"
-                    className={cn(
-                      "h-6 gap-1 rounded-md text-[11px] border-border/60",
-                      selectedAttachmentIndex === index && "border-primary/40 bg-primary/10"
-                    )}
-                    onClick={() => onSelectAttachment(index, att)}
-                  >
-                    <span className="text-muted-foreground">◦</span>
-                    <span className="max-w-[100px] truncate">
-                      {"filename" in att ? att.filename : `Attachment ${index + 1}`}
-                    </span>
-                    <span
-                      className="ml-0.5 flex size-3.5 items-center justify-center rounded hover:bg-muted"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onRemoveAttachment(index);
-                      }}
-                    >
-                      <span className="text-[10px] text-muted-foreground">×</span>
-                    </span>
-                  </Button>
-                ))}
-                </div>
-              </div>
-            ) : null}
-
-            <div className="border-b border-border/50 px-5 py-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="roc-pill-outline px-2.5 text-foreground">
-                    {workspaceLabel}
-                  </span>
-                  <span className="text-[11px] text-muted-foreground">
-                    Prompt, attach files, or continue the current workflow.
-                  </span>
-                </div>
-                <span className="text-[11px] text-muted-foreground/70">
-                  {streaming ? "Running" : "Ready"}
-                </span>
-              </div>
-            </div>
-
             <div className="px-5 pt-4">
               <textarea
+                ref={textareaRef}
                 name="message"
-                placeholder="Describe the task, use @file to reference material, or paste an image..."
+                rows={1}
+                placeholder="Ask ROCode"
                 value={composer}
                 onChange={(e) => onComposerChange(e.target.value)}
                 onPaste={onPaste}
                 disabled={streaming}
-                className="min-h-[132px] max-h-[340px] w-full resize-none border-0 bg-transparent text-[15px] leading-7 text-foreground outline-none placeholder:text-muted-foreground/50"
+                className="max-h-[17.5rem] w-full resize-none border-0 bg-transparent py-1 text-[15px] leading-7 text-foreground outline-none placeholder:text-muted-foreground/50"
               />
             </div>
 
-            <div className="flex items-center justify-between border-t border-border/60 px-5 py-3.5">
-              <div className="flex min-w-0 items-center gap-2">
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-9 w-9 rounded-lg"
-                        onClick={() => {
-                          document.querySelector<HTMLInputElement>(
-                            '[data-testid="composer-file-input"]',
-                          )?.click();
-                        }}
-                      >
-                        <PlusIcon className="size-3.5" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>Add files or images</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+            {multimodalHints.length > 0 ? (
+              <div className="px-5 pb-2">
+                <div className="flex flex-wrap gap-1.5">
+                  {multimodalHints.map((hint, index) => (
+                    <span
+                      key={`${hint.tone}:${hint.text}:${index}`}
+                      className={cn(
+                        "rounded-full px-2.5 py-1 text-[11px]",
+                        hint.tone === "warning"
+                          ? "bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                          : "bg-muted text-muted-foreground",
+                      )}
+                    >
+                      {hint.text}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
-              <input
-                data-testid="composer-file-input"
-                type="file"
-                multiple
-                className="hidden"
-                onChange={onFileChange}
-              />
-
-              <span className="flex items-center gap-1 rounded-full bg-muted/25 px-2 py-1 text-[11px] text-muted-foreground/70">
-                <CommandIcon className="size-3" />
-                <span>+</span>
-                <span className="font-mono">K</span>
-              </span>
-              <span className="truncate text-[11px] text-muted-foreground/60">
-                Paste images or drop files here
-              </span>
+            <div className="flex items-center justify-between border-t border-border/60 px-3.5 py-1.5">
+              <div className="flex min-w-0 flex-1 items-center gap-2 pr-3">
+                <select
+                  aria-label="Execution mode"
+                  value={selectedMode}
+                  onChange={(event) => onModeChange(event.target.value)}
+                  className="h-8 min-w-0 max-w-[10.5rem] rounded-full border border-border/60 bg-background px-3 text-[12px] text-foreground outline-none transition focus:border-primary/45"
+                >
+                  <option value="">Mode: Auto</option>
+                  {modeOptions.map((mode) => (
+                    <option key={mode.key} value={mode.key}>
+                      {mode.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  aria-label="Model"
+                  value={selectedModel}
+                  onChange={(event) => onModelChange(event.target.value)}
+                  className="h-8 min-w-0 max-w-[12rem] rounded-full border border-border/60 bg-background px-3 text-[12px] text-foreground outline-none transition focus:border-primary/45"
+                >
+                  <option value="">Model: Auto</option>
+                  {modelOptions.map((model) => (
+                    <option key={model.key} value={model.key}>
+                      {model.label}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  ref={fileInputRef}
+                  data-testid="composer-file-input"
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={onFileChange}
+                />
+                <input
+                  ref={imageInputRef}
+                  data-testid="composer-image-input"
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={onFileChange}
+                />
               </div>
 
-              <div className="flex items-center gap-2">
-              {streaming ? (
+              <div className="flex shrink-0 items-center gap-1">
                 <Button
                   type="button"
-                  variant="outline"
+                  variant="ghost"
                   size="sm"
-                  className="h-9 gap-1.5 rounded-lg border-border/45 text-xs"
+                  disabled={!voiceSupported || !allowAudioInput}
+                  title={
+                    !allowAudioInput
+                      ? "Voice input is disabled by current multimodal policy"
+                      : voiceSupported
+                      ? voiceListening
+                        ? "Stop voice input"
+                        : voiceError ?? "Start voice input"
+                      : "This browser does not support speech recognition"
+                  }
+                  className={cn(
+                    "h-8 gap-1.5 rounded-full px-3 text-[12px]",
+                    voiceListening
+                      ? "text-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
                   onClick={() => {
-                    window.dispatchEvent(new CustomEvent('rocode:stop-streaming'));
+                    if (voiceListening) {
+                      stopVoiceRecognition();
+                    } else {
+                      startVoiceRecognition();
+                    }
                   }}
                 >
-                  <span className="size-2 rounded-sm bg-current" />
-                  Stop
+                  {voiceListening ? (
+                    <SquareIcon className="size-3.5 fill-current" />
+                  ) : (
+                    <MicIcon className="size-3.5" />
+                  )}
+                  {voiceListening ? "Stop" : "Voice"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={!allowFileInput}
+                  className="h-8 gap-1.5 rounded-full px-3 text-[12px] text-muted-foreground hover:text-foreground"
+                  title={
+                    allowFileInput
+                      ? "Attach files"
+                      : "File attachments are disabled by current multimodal policy"
+                  }
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <PaperclipIcon className="size-3.5" />
+                  Attachment
+                  {attachments.length > 0 ? (
+                    <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-foreground">
+                      {attachments.length}
+                    </span>
+                  ) : null}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={!allowImageInput}
+                  className="h-8 gap-1.5 rounded-full px-3 text-[12px] text-muted-foreground hover:text-foreground"
+                  title={
+                    allowImageInput
+                      ? "Attach images"
+                      : "Image attachments are disabled by current multimodal policy"
+                  }
+                  onClick={() => imageInputRef.current?.click()}
+                >
+                  <ImageIcon className="size-3.5" />
+                  Image
+                </Button>
+                {streaming ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1.5 rounded-full border-border/45 px-3 text-[11px]"
+                    onClick={() => {
+                      window.dispatchEvent(new CustomEvent("rocode:stop-streaming"));
+                    }}
+                  >
+                    <span className="size-2 rounded-sm bg-current" />
+                    Stop
                   </Button>
                 ) : null}
 
@@ -254,10 +430,10 @@ export function ComposerPanel({
                   variant="default"
                   size="sm"
                   disabled={!composer.trim() && attachments.length === 0}
-                  className="h-10 rounded-lg px-4"
+                  className="h-9 rounded-full px-4"
                 >
-                  <span className="mr-1 text-xs font-medium">Send</span>
-                  <SendIcon className="size-3.5" />
+                  <span className="mr-1 text-[11px] font-medium">Send</span>
+                  <SendIcon className="size-3.25" />
                 </Button>
               </div>
             </div>

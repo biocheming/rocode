@@ -783,6 +783,80 @@ fn cli_session_insights_lines(
         }
     }
 
+    if let Some(multimodal) = insights.multimodal.as_ref() {
+        lines.push(String::new());
+        lines.push(format!(
+            "Multimodal explain: {}",
+            multimodal.display_label()
+        ));
+        lines.push(format!(
+            "  Message: {} · attachments {} · hard block {}",
+            multimodal.user_message_id,
+            multimodal.attachment_count,
+            if multimodal.hard_block { "yes" } else { "no" }
+        ));
+        lines.push(format!(
+            "  Resolved model: {}",
+            multimodal.resolved_model.as_deref().unwrap_or("--")
+        ));
+        lines.push(format!(
+            "  Kinds: {}",
+            if multimodal.kinds.is_empty() {
+                "--".to_string()
+            } else {
+                multimodal.kinds.join(", ")
+            }
+        ));
+        lines.push(format!(
+            "  Badges: {}",
+            if multimodal.badges.is_empty() {
+                "--".to_string()
+            } else {
+                multimodal.badges.join(", ")
+            }
+        ));
+        lines.push(format!(
+            "  Unsupported parts: {}",
+            if multimodal.unsupported_parts.is_empty() {
+                "none".to_string()
+            } else {
+                multimodal.unsupported_parts.join(", ")
+            }
+        ));
+        lines.push(format!(
+            "  Recommended downgrade: {}",
+            multimodal
+                .recommended_downgrade
+                .as_deref()
+                .unwrap_or("none")
+        ));
+        lines.push(format!(
+            "  Transport replaced parts: {}",
+            if multimodal.transport_replaced_parts.is_empty() {
+                "none".to_string()
+            } else {
+                multimodal.transport_replaced_parts.join(", ")
+            }
+        ));
+        if !multimodal.attachments.is_empty() {
+            lines.push("  Attachments:".to_string());
+            for attachment in &multimodal.attachments {
+                lines.push(format!(
+                    "    {} ({})",
+                    truncate_text(&attachment.filename, 72),
+                    attachment.mime
+                ));
+            }
+        }
+        let combined_warnings = multimodal.combined_warnings();
+        if !combined_warnings.is_empty() {
+            lines.push("  Warnings:".to_string());
+            for warning in &combined_warnings {
+                lines.push(format!("    {}", truncate_text(warning, 108)));
+            }
+        }
+    }
+
     lines
 }
 
@@ -1001,7 +1075,7 @@ async fn cli_print_session_insights(
         Ok(insights) => {
             let lines = cli_session_insights_lines(&session_id, &insights);
             let footer =
-                "Source: /session/{id}/insights · follow with /memory show <id> or /memory hits record=<id>";
+                "Source: /session/{id}/insights · includes persisted telemetry, multimodal explain, and memory explain";
             let _ = print_cli_list_on_surface(Some(runtime), "Session Insights", Some(footer), &lines, style);
         }
         Err(error) => {

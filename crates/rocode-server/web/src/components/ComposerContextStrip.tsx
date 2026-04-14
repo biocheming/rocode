@@ -6,14 +6,14 @@ import {
   attachmentTone,
   attachmentWorkspacePath,
   toWorkspaceReferencePath,
-  type ComposerAttachmentLike,
+  type ComposerAttachmentRecord,
 } from "../lib/composerContext";
 import type { BreadcrumbProvenance } from "../hooks/useSchedulerNavigation";
 import { cn } from "@/lib/utils";
 
 interface ComposerContextStripProps {
   references: string[];
-  attachments: ComposerAttachmentLike[];
+  attachments: ComposerAttachmentRecord[];
   selectedAttachmentIndex: number | null;
   selectedWorkspacePath: string | null;
   workspaceRootPath: string;
@@ -21,7 +21,7 @@ interface ComposerContextStripProps {
   provenance: BreadcrumbProvenance | null;
   onRemoveReference: (reference: string) => void;
   onRemoveAttachment: (index: number) => void;
-  onSelectAttachment: (index: number, attachment: ComposerAttachmentLike) => void;
+  onSelectAttachment: (index: number, attachment: ComposerAttachmentRecord) => void;
   onPreviewStage?: (stageId: string | null) => void;
 }
 

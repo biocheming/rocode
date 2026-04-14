@@ -403,7 +403,7 @@ pub(crate) fn render_help(style: &CliStyle) -> String {
         fmt("/usage", "Show authority-backed session usage"),
         fmt(
             "/insights",
-            "Show persisted runtime explain and memory insights",
+            "Show persisted runtime explain, multimodal explain, and memory insights",
         ),
         fmt("/events [filters]", "Show runtime event log"),
         fmt("/memory [search]", "List workspace memory records"),

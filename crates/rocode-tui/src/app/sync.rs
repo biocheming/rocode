@@ -275,6 +275,7 @@ impl App {
             cost: 0.0,
             tokens: TokenUsage::default(),
             metadata: None,
+            multimodal: None,
             parts: vec![ContextMessagePart::Text {
                 text: content.to_string(),
             }],
@@ -441,9 +442,12 @@ impl App {
             .set_scheduler_profile(Some(target_mode.clone()));
 
         // Auto-dispatch /start-work by sending it as a prompt.
+        let input = handoff_command.unwrap_or_else(|| "/start-work".to_string());
         self.dispatch_prompt_to_session(super::prompt_flow::PromptDispatchRequest {
             session_id,
-            input: handoff_command.unwrap_or_else(|| "/start-work".to_string()),
+            display_text: input.clone(),
+            input,
+            parts: None,
             agent: None,
             scheduler_profile: Some(target_mode),
             display_mode: Some("atlas".to_string()),

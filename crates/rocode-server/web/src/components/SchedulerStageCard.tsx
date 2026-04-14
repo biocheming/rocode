@@ -1,54 +1,8 @@
+import type { FeedMessage } from "@/lib/history";
 import { cn } from "@/lib/utils";
 
-interface DecisionField {
-  label?: string;
-  value?: string;
-  tone?: string;
-}
-
-interface DecisionSection {
-  title?: string;
-  body?: string;
-}
-
-interface SchedulerDecision {
-  title?: string;
-  fields?: DecisionField[];
-  sections?: DecisionSection[];
-}
-
-interface SchedulerStageLike {
-  feedId: string;
-  kind: string;
-  role?: string;
-  stage_id?: string;
-  tool_call_id?: string;
-  title?: string;
-  profile?: string;
-  stage?: string;
-  stage_index?: number;
-  stage_total?: number;
-  step?: number;
-  status?: string;
-  focus?: string;
-  last_event?: string;
-  waiting_on?: string;
-  activity?: string;
-  child_session_id?: string;
-  active_skills?: string[];
-  active_agents?: string[];
-  active_categories?: string[];
-  prompt_tokens?: number;
-  completion_tokens?: number;
-  reasoning_tokens?: number;
-  cache_read_tokens?: number;
-  cache_write_tokens?: number;
-  decision?: SchedulerDecision | null;
-  text?: string;
-}
-
 interface SchedulerStageCardProps {
-  message: SchedulerStageLike;
+  message: FeedMessage;
   highlighted?: boolean;
   onNavigateStage: (stageId: string) => void;
   onNavigateChildSession: (
@@ -57,7 +11,7 @@ interface SchedulerStageCardProps {
   ) => void;
 }
 
-function tokenSummary(message: SchedulerStageLike) {
+function tokenSummary(message: FeedMessage) {
   return [
     message.prompt_tokens ? `in ${message.prompt_tokens}` : null,
     message.completion_tokens ? `out ${message.completion_tokens}` : null,

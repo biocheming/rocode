@@ -63,20 +63,20 @@ export interface FilePromptPart {
   mime?: string;
 }
 
-export interface ComposerAttachmentLike {
+export interface ComposerAttachmentRecord {
   type: string;
   url?: string;
   filename?: string;
   mime?: string;
 }
 
-export interface WorkspaceTreeNodeLike {
+export interface WorkspaceTreeNodeRecord {
   path: string;
   type: "file" | "directory";
-  children?: WorkspaceTreeNodeLike[];
+  children?: WorkspaceTreeNodeRecord[];
 }
 
-function attachmentLanguageSpec(part: ComposerAttachmentLike) {
+function attachmentLanguageSpec(part: ComposerAttachmentRecord) {
   const filename = (part.filename || "").toLowerCase();
   const mime = (part.mime || "").toLowerCase();
 
@@ -96,11 +96,11 @@ function escapeHtml(text: string): string {
     .replaceAll("'", "&#39;");
 }
 
-export function attachmentLabel(part: ComposerAttachmentLike): string {
+export function attachmentLabel(part: ComposerAttachmentRecord): string {
   return part.type === "file" ? part.filename || "attachment" : part.type;
 }
 
-export function attachmentTone(part: ComposerAttachmentLike): string {
+export function attachmentTone(part: ComposerAttachmentRecord): string {
   if (part.mime === "application/x-directory") {
     return "directory";
   }
@@ -113,7 +113,7 @@ export function attachmentTone(part: ComposerAttachmentLike): string {
   return "file";
 }
 
-export function attachmentSource(part: ComposerAttachmentLike): string {
+export function attachmentSource(part: ComposerAttachmentRecord): string {
   if (part.url?.startsWith("data:image/")) {
     return "inline image";
   }
@@ -129,7 +129,7 @@ export function attachmentSource(part: ComposerAttachmentLike): string {
   return "remote";
 }
 
-export function attachmentKind(part: ComposerAttachmentLike): string {
+export function attachmentKind(part: ComposerAttachmentRecord): string {
   if (part.mime === "application/x-directory") {
     return "directory";
   }
@@ -155,12 +155,12 @@ export function filePathFromUrl(url?: string): string | null {
   }
 }
 
-export function attachmentWorkspacePath(part: ComposerAttachmentLike): string | null {
+export function attachmentWorkspacePath(part: ComposerAttachmentRecord): string | null {
   return filePathFromUrl(part.url);
 }
 
 export function attachmentContainsWorkspacePath(
-  part: ComposerAttachmentLike,
+  part: ComposerAttachmentRecord,
   selectedPath: string | null,
 ): boolean {
   const attachmentPath = attachmentWorkspacePath(part);
@@ -175,7 +175,7 @@ export function attachmentContainsWorkspacePath(
   return attachmentPath === selectedPath;
 }
 
-export function attachmentPreviewUrl(part: ComposerAttachmentLike): string | null {
+export function attachmentPreviewUrl(part: ComposerAttachmentRecord): string | null {
   if (part.url?.startsWith("data:image/")) {
     return part.url;
   }
@@ -188,12 +188,12 @@ export function attachmentPreviewUrl(part: ComposerAttachmentLike): string | nul
   return null;
 }
 
-export function attachmentDownloadUrl(part: ComposerAttachmentLike): string | null {
+export function attachmentDownloadUrl(part: ComposerAttachmentRecord): string | null {
   const workspacePath = attachmentWorkspacePath(part);
   return workspacePath ? `/file/download?path=${encodeURIComponent(workspacePath)}` : null;
 }
 
-export function attachmentTextPreview(part: ComposerAttachmentLike): string | null {
+export function attachmentTextPreview(part: ComposerAttachmentRecord): string | null {
   if (!part.mime?.startsWith("text/") || !part.url?.startsWith("data:")) {
     return null;
   }
@@ -216,15 +216,15 @@ export function attachmentTextPreview(part: ComposerAttachmentLike): string | nu
   }
 }
 
-export function attachmentLooksLikeCode(part: ComposerAttachmentLike): boolean {
+export function attachmentLooksLikeCode(part: ComposerAttachmentRecord): boolean {
   return attachmentLanguageSpec(part)?.codeLike ?? false;
 }
 
-export function attachmentLanguageLabel(part: ComposerAttachmentLike): string | null {
+export function attachmentLanguageLabel(part: ComposerAttachmentRecord): string | null {
   return attachmentLanguageSpec(part)?.label ?? null;
 }
 
-export function attachmentTextPreviewState(part: ComposerAttachmentLike): {
+export function attachmentTextPreviewState(part: ComposerAttachmentRecord): {
   preview: string | null;
   truncated: boolean;
 } {
@@ -388,7 +388,7 @@ export function fileUrlFromPath(path: string): string {
   return `file://${encodeURI(path)}`;
 }
 
-export function findFirstFile<T extends WorkspaceTreeNodeLike>(node: T | null): string | null {
+export function findFirstFile<T extends WorkspaceTreeNodeRecord>(node: T | null): string | null {
   if (!node) return null;
   if (node.type === "file") return node.path;
   for (const child of node.children ?? []) {
@@ -398,7 +398,7 @@ export function findFirstFile<T extends WorkspaceTreeNodeLike>(node: T | null): 
   return null;
 }
 
-export function findNodeByPath<T extends WorkspaceTreeNodeLike>(
+export function findNodeByPath<T extends WorkspaceTreeNodeRecord>(
   node: T | null,
   path: string | null,
 ): T | null {

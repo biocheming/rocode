@@ -9,16 +9,10 @@ import {
   FileImageIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
-
-interface FileTreeNode {
-  name: string;
-  path: string;
-  type: "file" | "directory";
-  children?: FileTreeNode[];
-}
+import type { FileTreeNodeRecord } from "@/lib/workspace";
 
 interface WorkspaceTreeNodeProps {
-  node: FileTreeNode;
+  node: FileTreeNodeRecord;
   depth?: number;
   isLast?: boolean;
   parentLines?: boolean[];
@@ -26,11 +20,11 @@ interface WorkspaceTreeNodeProps {
   linkedPath?: string | null;
   linkedLabel?: string | null;
   linkedStageId?: string | null;
-  onSelectNode: (node: FileTreeNode) => void;
+  onSelectNode: (node: FileTreeNodeRecord) => void;
   onPreviewStage?: (stageId: string | null) => void;
 }
 
-function nodeLinked(node: FileTreeNode, linkedPath?: string | null) {
+function nodeLinked(node: FileTreeNodeRecord, linkedPath?: string | null) {
   if (!linkedPath) return false;
   if (node.path === linkedPath) return true;
   return node.type === "directory" && linkedPath.startsWith(`${node.path}/`);

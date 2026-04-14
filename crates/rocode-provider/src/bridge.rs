@@ -13,8 +13,8 @@
 //! closeai-compatible or ethnopic-compatible providers.
 
 use crate::driver::{
-    ApiStyle, ContentBlock, DriverMessage, DriverMessageContent, DriverMessageRole, DriverResponse,
-    ProviderDriver, StreamingEvent,
+    ApiStyle, AudioSource, ContentBlock, DriverMessage, DriverMessageContent, DriverMessageRole,
+    DriverResponse, ProviderDriver, StreamingEvent,
 };
 use crate::message::{ChatResponse, Choice, Message, Usage};
 use crate::protocol::{ProtocolImpl, ProviderConfig};
@@ -470,6 +470,15 @@ fn chat_request_to_driver_messages(request: &crate::ChatRequest) -> Vec<DriverMe
                             .image_url
                             .as_ref()
                             .map(|img| ContentBlock::image_url(img.url.clone())),
+                        "file"
+                            if p.media_type
+                                .as_deref()
+                                .is_some_and(|mime| mime.starts_with("audio/")) =>
+                        {
+                            p.image_url
+                                .as_ref()
+                                .map(|audio| driver_audio_block(&audio.url, p.media_type.clone()))
+                        }
                         "tool_use" => p.tool_use.as_ref().map(|tu| {
                             ContentBlock::tool_use(tu.id.clone(), tu.name.clone(), tu.input.clone())
                         }),
@@ -513,6 +522,41 @@ fn chat_request_to_driver_messages(request: &crate::ChatRequest) -> Vec<DriverMe
     }
 
     messages
+}
+
+fn driver_audio_block(url: &str, media_type: Option<String>) -> ContentBlock {
+    if let Some((resolved_media_type, data)) = decode_data_url(url) {
+        return ContentBlock::audio_base64(data, Some(resolved_media_type));
+    }
+
+    ContentBlock::Audio {
+        source: AudioSource {
+            source_type: "url".to_string(),
+            media_type,
+            data: url.to_string(),
+        },
+    }
+}
+
+fn decode_data_url(url: &str) -> Option<(String, String)> {
+    if !url.starts_with("data:") {
+        return None;
+    }
+
+    let (metadata, payload) = url.split_once(',')?;
+    let media_type = metadata
+        .trim_start_matches("data:")
+        .split(';')
+        .next()
+        .filter(|value| !value.is_empty())?
+        .to_string();
+    let data = if metadata.contains(";base64") {
+        payload.to_string()
+    } else {
+        urlencoding::decode(payload).ok()?.into_owned()
+    };
+
+    Some((media_type, data))
 }
 
 /// Extract usage information from a raw JSON value.
@@ -908,6 +952,44 @@ mod tests {
         let messages = chat_request_to_driver_messages(&request);
         // system prompt + system msg + user + assistant = 4
         assert_eq!(messages.len(), 4);
+    }
+
+    #[test]
+    fn chat_request_to_driver_messages_maps_audio_file_to_audio_block() {
+        let request = crate::ChatRequest::new(
+            "gpt-4o-audio",
+            vec![crate::Message {
+                role: crate::message::Role::User,
+                content: crate::message::Content::Parts(vec![crate::message::ContentPart {
+                    content_type: "file".to_string(),
+                    text: None,
+                    image_url: Some(crate::message::ImageUrl {
+                        url: "data:audio/wav;base64,UklGRg==".to_string(),
+                    }),
+                    tool_use: None,
+                    tool_result: None,
+                    cache_control: None,
+                    filename: Some("voice.wav".to_string()),
+                    media_type: Some("audio/wav".to_string()),
+                    provider_options: None,
+                }]),
+                cache_control: None,
+                provider_options: None,
+            }],
+        );
+
+        let messages = chat_request_to_driver_messages(&request);
+        assert_eq!(messages.len(), 1);
+        let DriverMessageContent::Blocks(blocks) = &messages[0].content else {
+            panic!("expected multimodal blocks");
+        };
+        assert!(matches!(
+            blocks.first(),
+            Some(ContentBlock::Audio { source })
+                if source.source_type == "base64"
+                    && source.media_type.as_deref() == Some("audio/wav")
+                    && source.data == "UklGRg=="
+        ));
     }
 
     #[tokio::test]

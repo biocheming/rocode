@@ -1,57 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type {
+  ManagedSkillRecord,
+  SkillGovernanceTimelineEntryRecord,
+} from "@/lib/skill";
 import { cn } from "@/lib/utils";
 
 type TimelineScope = "all" | "skill" | "source";
 
-interface SkillGuardViolationLike {
-  rule_id: string;
-  severity: "info" | "warn" | "error";
-  message: string;
-  file_path?: string | null;
-}
-
-interface SkillGuardReportLike {
-  skill_name: string;
-  status: "passed" | "warn" | "blocked";
-  violations: SkillGuardViolationLike[];
-  scanned_at: number;
-}
-
-interface SkillSourceRefLike {
-  source_id: string;
-  source_kind: "bundled" | "local_path" | "git" | "archive" | "registry";
-  locator: string;
-  revision?: string | null;
-}
-
-interface ManagedSkillRecordLike {
-  skill_name: string;
-  source?: SkillSourceRefLike | null;
-  installed_revision?: string | null;
-  local_hash?: string | null;
-  last_synced_at?: number | null;
-  locally_modified: boolean;
-  deleted_locally: boolean;
-}
-
-interface SkillGovernanceTimelineEntryLike {
-  entry_id: string;
-  kind: string;
-  created_at: number;
-  skill_name?: string | null;
-  source_id?: string | null;
-  actor?: string | null;
-  title: string;
-  summary: string;
-  status: "info" | "success" | "warn" | "error";
-  managed_record?: ManagedSkillRecordLike | null;
-  guard_report?: SkillGuardReportLike | null;
-}
-
 interface SkillGovernanceTimelineProps {
-  entries: SkillGovernanceTimelineEntryLike[];
+  entries: SkillGovernanceTimelineEntryRecord[];
   selectedSkillName?: string | null;
   selectedSourceId?: string | null;
 }
@@ -61,7 +20,7 @@ function formatTimestamp(ts: number): string {
   return new Date(ts * 1000).toLocaleString();
 }
 
-function statusClasses(status: SkillGovernanceTimelineEntryLike["status"]): string {
+function statusClasses(status: SkillGovernanceTimelineEntryRecord["status"]): string {
   switch (status) {
     case "success":
       return "border-green-300 bg-green-50 text-green-800 dark:border-green-700 dark:bg-green-950/60 dark:text-green-300";
@@ -74,14 +33,14 @@ function statusClasses(status: SkillGovernanceTimelineEntryLike["status"]): stri
   }
 }
 
-function managedStateLabel(record: ManagedSkillRecordLike): string {
+function managedStateLabel(record: ManagedSkillRecord): string {
   if (record.deleted_locally) return "deleted locally";
   if (record.locally_modified) return "locally modified";
   return "clean";
 }
 
 function matchesSkill(
-  entry: SkillGovernanceTimelineEntryLike,
+  entry: SkillGovernanceTimelineEntryRecord,
   selectedSkillName: string | null | undefined,
 ): boolean {
   if (!selectedSkillName?.trim()) return false;
@@ -89,7 +48,7 @@ function matchesSkill(
 }
 
 function matchesSource(
-  entry: SkillGovernanceTimelineEntryLike,
+  entry: SkillGovernanceTimelineEntryRecord,
   selectedSourceId: string | null | undefined,
 ): boolean {
   if (!selectedSourceId?.trim()) return false;

@@ -105,6 +105,22 @@ pub fn render_user_message(
         }
     }
 
+    if let Some(multimodal) = msg
+        .multimodal
+        .as_ref()
+        .filter(|value| value.attachment_count > 0)
+    {
+        lines.extend(render_multimodal_summary_lines(
+            multimodal.summary_line(),
+            multimodal.combined_warnings(),
+            &multimodal.unsupported_parts,
+            multimodal.recommended_downgrade.as_deref(),
+            border_char,
+            border_style,
+            theme,
+        ));
+    }
+
     if show_timestamps {
         let ts = msg.created_at.format("%H:%M").to_string();
         if !lines.is_empty() {
@@ -113,6 +129,56 @@ pub fn render_user_message(
                 Span::styled(ts, Style::default().fg(theme.text_muted)),
             ]));
         }
+    }
+
+    lines
+}
+
+fn render_multimodal_summary_lines(
+    summary: String,
+    warnings: Vec<String>,
+    unsupported_parts: &[String],
+    recommended_downgrade: Option<&str>,
+    border_char: &str,
+    border_style: Style,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let border = border_char.to_string();
+    lines.push(Line::from(vec![
+        Span::styled(border.clone(), border_style),
+        Span::styled("↳ ", Style::default().fg(theme.text_muted)),
+        Span::styled(summary, Style::default().fg(theme.text_muted)),
+    ]));
+
+    for warning in warnings.into_iter().take(2) {
+        lines.push(Line::from(vec![
+            Span::styled(border.clone(), border_style),
+            Span::styled("↳ warning: ", Style::default().fg(theme.warning)),
+            Span::styled(warning, Style::default().fg(theme.text_muted)),
+        ]));
+    }
+
+    if !unsupported_parts.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled(border.clone(), border_style),
+            Span::styled("↳ unsupported: ", Style::default().fg(theme.warning)),
+            Span::styled(
+                unsupported_parts.join(", "),
+                Style::default().fg(theme.text_muted),
+            ),
+        ]));
+    }
+
+    if let Some(downgrade) = recommended_downgrade
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        lines.push(Line::from(vec![
+            Span::styled(border, border_style),
+            Span::styled("↳ fallback: ", Style::default().fg(theme.info)),
+            Span::styled(downgrade.to_string(), Style::default().fg(theme.text_muted)),
+        ]));
     }
 
     lines
@@ -314,6 +380,7 @@ You are Prometheus - Strategic Planning Consultant.",
             cost: 0.0,
             tokens: crate::context::TokenUsage::default(),
             metadata: Some(metadata),
+            multimodal: None,
             parts: Vec::new(),
         };
 
@@ -353,6 +420,7 @@ Boundary: planner-only; never execute code or modify non-markdown files."
             cost: 0.0,
             tokens: crate::context::TokenUsage::default(),
             metadata: Some(metadata),
+            multimodal: None,
             parts: Vec::new(),
         };
 
@@ -389,5 +457,55 @@ line four",
         assert!(preview.contains("line two is much longer…"));
         assert!(preview.contains("line three…"));
         assert!(!preview.contains("line four"));
+    }
+
+    #[test]
+    fn render_user_message_shows_multimodal_summary_and_warning_lines() {
+        let msg = Message {
+            id: "m3".to_string(),
+            role: crate::context::MessageRole::User,
+            content: String::new(),
+            created_at: Utc::now(),
+            agent: None,
+            model: None,
+            mode: None,
+            finish: None,
+            error: None,
+            completed_at: None,
+            cost: 0.0,
+            tokens: crate::context::TokenUsage::default(),
+            metadata: None,
+            multimodal: Some(rocode_multimodal::PersistedMultimodalExplain {
+                attachment_count: 1,
+                kinds: vec!["audio".to_string()],
+                badges: vec!["audio".to_string()],
+                compact_label: Some("[audio input]".to_string()),
+                resolved_model: Some("openai/gpt-4o-audio".to_string()),
+                warnings: vec!["audio not supported".to_string()],
+                unsupported_parts: vec!["voice.wav".to_string()],
+                recommended_downgrade: Some("switch to a model with audio input".to_string()),
+                hard_block: false,
+                transport_replaced_parts: Vec::new(),
+                transport_warnings: vec!["provider downgraded audio".to_string()],
+                attachments: vec![rocode_multimodal::PersistedMultimodalAttachmentInfo {
+                    filename: "voice.wav".to_string(),
+                    mime: "audio/wav".to_string(),
+                }],
+            }),
+            parts: Vec::new(),
+        };
+
+        let lines = render_user_message(&msg, &Theme::default(), false, None, false);
+        let rendered = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<String>();
+
+        assert!(rendered.contains("[audio input]"));
+        assert!(rendered.contains("attachments 1"));
+        assert!(rendered.contains("warning: audio not supported"));
+        assert!(rendered.contains("warning: provider downgraded audio"));
+        assert!(rendered.contains("unsupported: voice.wav"));
+        assert!(rendered.contains("fallback: switch to a model with audio input"));
     }
 }

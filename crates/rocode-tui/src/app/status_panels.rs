@@ -941,7 +941,7 @@ impl App {
                 let lines = tui_session_insights_lines(&session_id, &insights);
                 self.status_dialog.set_title("Insights");
                 self.status_dialog.set_footer_hint(Some(
-                    "Esc close · /memory show <id> · /memory hits record=<id> · values come from /session/{id}/insights".to_string(),
+                    "Esc close · /memory show <id> · /memory hits record=<id> · /session/{id}/insights includes telemetry, multimodal explain, and memory explain".to_string(),
                 ));
                 self.status_dialog.set_status_lines(lines);
                 true
@@ -1895,6 +1895,75 @@ fn tui_session_insights_lines(
                 "/memory hits run={}",
                 run.run_id
             )));
+        }
+    }
+
+    if let Some(multimodal) = insights.multimodal.as_ref() {
+        lines.push(StatusLine::muted(String::new()));
+        lines.push(StatusLine::title("Multimodal Explain"));
+        lines.push(StatusLine::normal(multimodal.display_label().into_owned()));
+        lines.push(StatusLine::normal(format!(
+            "Message: {} · attachments {} · hard block {}",
+            multimodal.user_message_id,
+            multimodal.attachment_count,
+            if multimodal.hard_block { "yes" } else { "no" }
+        )));
+        lines.push(StatusLine::normal(format!(
+            "Resolved model: {}",
+            multimodal.resolved_model.as_deref().unwrap_or("--")
+        )));
+        lines.push(StatusLine::normal(format!(
+            "Kinds: {}",
+            if multimodal.kinds.is_empty() {
+                "--".to_string()
+            } else {
+                multimodal.kinds.join(", ")
+            }
+        )));
+        lines.push(StatusLine::normal(format!(
+            "Badges: {}",
+            if multimodal.badges.is_empty() {
+                "--".to_string()
+            } else {
+                multimodal.badges.join(", ")
+            }
+        )));
+        lines.push(StatusLine::normal(format!(
+            "Unsupported parts: {}",
+            if multimodal.unsupported_parts.is_empty() {
+                "none".to_string()
+            } else {
+                multimodal.unsupported_parts.join(", ")
+            }
+        )));
+        lines.push(StatusLine::normal(format!(
+            "Recommended downgrade: {}",
+            multimodal
+                .recommended_downgrade
+                .as_deref()
+                .unwrap_or("none")
+        )));
+        lines.push(StatusLine::normal(format!(
+            "Transport replaced parts: {}",
+            if multimodal.transport_replaced_parts.is_empty() {
+                "none".to_string()
+            } else {
+                multimodal.transport_replaced_parts.join(", ")
+            }
+        )));
+        if !multimodal.attachments.is_empty() {
+            lines.push(StatusLine::title("Attachments"));
+            for attachment in &multimodal.attachments {
+                lines.push(StatusLine::normal(format!("- {}", attachment.filename)));
+                lines.push(StatusLine::muted(format!("  {}", attachment.mime)));
+            }
+        }
+        let combined_warnings = multimodal.combined_warnings();
+        if !combined_warnings.is_empty() {
+            lines.push(StatusLine::title("Warnings"));
+            for warning in combined_warnings {
+                lines.push(StatusLine::muted(warning));
+            }
         }
     }
 

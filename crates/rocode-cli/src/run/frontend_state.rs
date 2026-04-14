@@ -97,6 +97,11 @@ const CLI_PROMPT_COMMANDS: &[CliPromptCommandSpec] = &[
         description: "list models",
     },
     CliPromptCommandSpec {
+        name: "voice",
+        takes_value: None,
+        description: "record voice input",
+    },
+    CliPromptCommandSpec {
         name: "agent",
         takes_value: Some(CliPromptValueKind::Agent),
         description: "switch agent",

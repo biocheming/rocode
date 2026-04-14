@@ -561,6 +561,52 @@ impl DeepMerge for WebSearchConfig {
     }
 }
 
+impl DeepMerge for MultimodalConfig {
+    fn deep_merge(&mut self, other: Self) {
+        merge_option_deep(&mut self.voice, other.voice);
+        merge_option_deep(&mut self.limits, other.limits);
+        merge_option_deep(&mut self.policy, other.policy);
+    }
+}
+
+impl DeepMerge for MultimodalLimitsConfig {
+    fn deep_merge(&mut self, other: Self) {
+        merge_option_replace(&mut self.max_input_bytes, other.max_input_bytes);
+        merge_option_replace(
+            &mut self.max_attachments_per_prompt,
+            other.max_attachments_per_prompt,
+        );
+    }
+}
+
+impl DeepMerge for MultimodalAttachmentPolicyConfig {
+    fn deep_merge(&mut self, other: Self) {
+        merge_option_replace(&mut self.allow_audio_input, other.allow_audio_input);
+        merge_option_replace(&mut self.allow_image_input, other.allow_image_input);
+        merge_option_replace(&mut self.allow_file_input, other.allow_file_input);
+    }
+}
+
+impl DeepMerge for VoiceConfig {
+    fn deep_merge(&mut self, other: Self) {
+        merge_option_replace(&mut self.duration_seconds, other.duration_seconds);
+        merge_option_replace(&mut self.attach_audio, other.attach_audio);
+        merge_option_replace(&mut self.mime, other.mime);
+        merge_option_replace(&mut self.language, other.language);
+        merge_option_deep(&mut self.record, other.record);
+        merge_option_deep(&mut self.transcribe, other.transcribe);
+    }
+}
+
+impl DeepMerge for VoiceCommandConfig {
+    fn deep_merge(&mut self, other: Self) {
+        if !other.command.is_empty() {
+            self.command = other.command;
+        }
+        merge_map_overwrite_values(&mut self.env, other.env);
+    }
+}
+
 impl DeepMerge for UiPreferencesConfig {
     fn deep_merge(&mut self, other: Self) {
         merge_option_replace(&mut self.theme, other.theme);
@@ -615,6 +661,8 @@ impl Config {
         merge_option_deep(&mut self.permission, other.permission);
         merge_option_map_overwrite_values(&mut self.tools, other.tools);
         merge_option_deep(&mut self.web_search, other.web_search);
+        merge_option_deep(&mut self.multimodal, other.multimodal);
+        merge_option_deep(&mut self.voice, other.voice);
         merge_option_deep(&mut self.enterprise, other.enterprise);
         merge_option_deep(&mut self.compaction, other.compaction);
         merge_option_deep(&mut self.experimental, other.experimental);

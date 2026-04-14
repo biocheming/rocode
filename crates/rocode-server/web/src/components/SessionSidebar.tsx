@@ -5,9 +5,7 @@ import {
   FolderPlus,
   FolderTree,
   Layers2,
-  LayoutGrid,
   Search,
-  ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,22 +17,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import type { SessionTreeNode, WorkspaceSummary } from "@/lib/sidebar";
 import { cn } from "@/lib/utils";
-
-export interface WorkspaceSummary {
-  path: string;
-  label: string;
-  sessionCount: number;
-  rootCount: number;
-}
-
-export interface SessionTreeNode {
-  id: string;
-  title?: string;
-  directory?: string;
-  updated?: number;
-  children: SessionTreeNode[];
-}
 
 interface SessionSidebarProps {
   workspaces: WorkspaceSummary[];
@@ -155,11 +139,6 @@ export function SessionSidebar({
   const [newProjectTitle, setNewProjectTitle] = useState("");
   const [collapsedSessionIds, setCollapsedSessionIds] = useState<Set<string>>(new Set());
 
-  const currentWorkspace = useMemo(
-    () => workspaces.find((workspace) => workspace.path === currentWorkspacePath) ?? null,
-    [currentWorkspacePath, workspaces],
-  );
-
   const filteredWorkspaces = useMemo(() => {
     const query = workspaceQuery.trim().toLowerCase();
     if (!query) return workspaces;
@@ -201,61 +180,7 @@ export function SessionSidebar({
     >
       <div className="space-y-4 px-4 py-4">
         <div className="roc-panel bg-background/88 p-4">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0 space-y-1">
-              <p className="text-[11px] font-medium tracking-[0.18em] text-muted-foreground uppercase">
-                Project Hub
-              </p>
-              <h2 className="truncate text-sm font-semibold text-foreground">
-                {currentWorkspaceLabel || "Projects"}
-              </h2>
-              <p className="break-all text-xs text-muted-foreground">
-                {currentWorkspaceRootPath || "Create or switch project workspaces here."}
-              </p>
-            </div>
-            <div className="rounded-full bg-muted/40 p-2 text-muted-foreground">
-              <LayoutGrid className="h-4 w-4" />
-            </div>
-          </div>
-
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <span className="roc-pill-outline px-3 font-semibold uppercase tracking-[0.14em]">
-              {currentWorkspaceMode === "isolated" ? "Isolated Sandbox" : "Shared Workspace"}
-            </span>
-            {currentWorkspaceRootPath ? (
-              <span className="roc-pill max-w-full break-all px-3">
-                root {currentWorkspaceRootPath}
-              </span>
-            ) : null}
-          </div>
-
-          <div
-            className={cn(
-              "mt-3 rounded-xl border px-3 py-2.5 text-xs leading-relaxed",
-              currentWorkspaceMode === "isolated"
-                ? "border-amber-300/70 bg-amber-50/70 text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-200"
-                : "border-border/40 bg-muted/12 text-muted-foreground",
-            )}
-          >
-            {currentWorkspaceMode === "isolated"
-              ? "Isolated sandbox active. This workspace only uses its local .rocode authority and does not inherit global config."
-              : "Shared workspace active. Runtime settings may incorporate global config together with workspace-local state."}
-          </div>
-
-          <div className="mt-4 grid grid-cols-2 gap-2">
-            <div className="roc-subpanel px-3 py-2.5">
-              <div className="text-[11px] text-muted-foreground">Workspaces</div>
-              <div className="mt-1 text-lg font-semibold text-foreground">{workspaces.length}</div>
-            </div>
-            <div className="roc-subpanel px-3 py-2.5">
-              <div className="text-[11px] text-muted-foreground">Sessions</div>
-              <div className="mt-1 text-lg font-semibold text-foreground">
-                {currentWorkspace?.sessionCount ?? 0}
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-4 grid grid-cols-1 gap-2">
+          <div className="grid grid-cols-1 gap-2">
             <Button
               variant="outline"
               size="sm"
@@ -267,20 +192,21 @@ export function SessionSidebar({
               <FolderPlus className="mr-1.5 h-3.5 w-3.5" />
               New Project
             </Button>
-          </div>
-
-          <div className="mt-3 flex items-center gap-2">
-            <a
-              className="inline-flex h-8 items-center justify-center gap-1.5 rounded-xl border border-border px-3 text-xs text-inherit no-underline transition-colors hover:bg-muted/40"
-              data-testid="legacy-link"
-              href="/legacy"
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-9 rounded-xl"
+              type="button"
+              data-testid="session-new"
+              onClick={onCreateSession}
+              disabled={!currentWorkspacePath}
             >
-              <ExternalLink className="h-3.5 w-3.5" />
-              Legacy
-            </a>
+              <Layers2 className="mr-1.5 h-3.5 w-3.5" />
+              New Session
+            </Button>
           </div>
         </div>
-        <div className="grid min-h-[16rem] max-h-[22rem] grid-rows-[auto_minmax(0,1fr)] rounded-xl border border-border/45 bg-background/78 p-3 shadow-sm">
+        <div className="grid min-h-[16rem] max-h-[22rem] grid-rows-[auto_minmax(0,1fr)] rounded-lg border border-border/40 bg-background p-3 shadow-sm">
           <div className="mb-3 space-y-3">
             <div className="flex items-center justify-between gap-2">
               <div>
@@ -300,7 +226,7 @@ export function SessionSidebar({
                 value={workspaceQuery}
                 onChange={(event) => setWorkspaceQuery(event.target.value)}
                 placeholder="Search workspaces"
-                className="h-9 rounded-xl border-border/60 bg-background pl-8 text-sm"
+                className="h-9 rounded-lg border-border/60 bg-background pl-8 text-sm"
               />
             </div>
           </div>
@@ -308,7 +234,7 @@ export function SessionSidebar({
           <div className="min-h-0 overflow-y-auto pr-1">
             <div className="flex flex-col gap-2">
               {filteredWorkspaces.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-border/45 bg-muted/10 px-3 py-4 text-sm text-muted-foreground">
+                <div className="rounded-lg border border-dashed border-border/40 bg-muted/30 px-3 py-4 text-sm text-muted-foreground">
                   {workspaces.length === 0 ? "No workspaces yet." : "No matching workspaces."}
                 </div>
               ) : (
@@ -346,10 +272,10 @@ export function SessionSidebar({
           </div>
         </div>
         <div
-          className="grid min-h-[18rem] max-h-[28rem] grid-rows-[auto_auto_minmax(0,1fr)] rounded-xl border border-border/45 bg-background/82 p-3 shadow-sm"
+          className="grid min-h-[18rem] max-h-[28rem] grid-rows-[auto_auto_minmax(0,1fr)] rounded-lg border border-border/40 bg-background p-3 shadow-sm"
           data-testid="session-list"
         >
-          <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="mb-3">
             <div>
               <p className="text-[11px] font-medium tracking-[0.18em] text-muted-foreground uppercase">
                 Session Tree
@@ -358,27 +284,15 @@ export function SessionSidebar({
                 {currentWorkspaceLabel ? `${currentWorkspaceLabel} workspace` : "Select a workspace"}
               </p>
             </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 rounded-xl px-3"
-              type="button"
-              data-testid="session-new"
-              onClick={onCreateSession}
-              disabled={!currentWorkspacePath}
-            >
-              <Layers2 className="mr-1.5 h-3.5 w-3.5" />
-              New Session
-            </Button>
           </div>
 
-          <div className="mb-3 rounded-xl border border-dashed border-border/45 bg-muted/12 px-3 py-2 text-[11px] text-muted-foreground">
+          <div className="mb-3 rounded-lg border border-dashed border-border/40 bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
             This tree only shows sessions under the selected workspace.
           </div>
 
           <div className="min-h-0 overflow-y-auto pr-1">
             {sessionTree.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-border/45 bg-muted/10 px-3 py-4 text-sm text-muted-foreground">
+              <div className="rounded-lg border border-dashed border-border/40 bg-muted/30 px-3 py-4 text-sm text-muted-foreground">
                 No sessions in this workspace yet.
               </div>
             ) : (

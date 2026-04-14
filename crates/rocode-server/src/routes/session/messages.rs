@@ -11,6 +11,7 @@ use crate::{ApiError, Result, ServerState};
 use rocode_command::agent_presenter::{
     history_session_event_to_web, history_tool_call_to_web, history_tool_result_to_web,
 };
+use rocode_multimodal::{MultimodalDisplaySummary, PersistedMultimodalExplain, SessionPartAdapter};
 
 use super::session_crud::persist_sessions_if_enabled;
 
@@ -44,10 +45,13 @@ pub(crate) fn prompt_display_text(parts: &[rocode_session::prompt::PartInput]) -
         return text;
     }
 
-    let attachment_count = parts
-        .iter()
-        .filter(|part| !matches!(part, rocode_session::prompt::PartInput::Text { .. }))
-        .count();
+    let multimodal_parts = SessionPartAdapter::from_session_parts(parts);
+    let summary = MultimodalDisplaySummary::from_parts(None, &multimodal_parts);
+    if !summary.compact_label.trim().is_empty() {
+        return summary.compact_label;
+    }
+
+    let attachment_count = multimodal_parts.len();
     if attachment_count == 0 {
         String::new()
     } else if attachment_count == 1 {
@@ -74,6 +78,8 @@ pub(super) struct MessageInfo {
     pub tokens: MessageTokensInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<HashMap<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub multimodal: Option<PersistedMultimodalExplain>,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -475,6 +481,7 @@ fn message_to_info(
             cache_write: usage.cache_write_tokens,
         },
         metadata: (!metadata.is_empty()).then_some(metadata),
+        multimodal: PersistedMultimodalExplain::from_message(message),
     }
 }
 
@@ -967,7 +974,7 @@ pub(super) async fn delete_part(
 
 #[cfg(test)]
 mod tests {
-    use super::message_to_info;
+    use super::{message_to_info, prompt_display_text};
     use std::collections::HashMap;
 
     use rocode_session::{MessagePart, PartType, SessionMessage};
@@ -1018,5 +1025,59 @@ mod tests {
         let expected = rocode_session::sanitize_display_text(reminder_text);
 
         assert_eq!(info.parts[0].text.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn prompt_display_text_uses_multimodal_kind_summary_for_audio() {
+        let parts = vec![rocode_session::prompt::PartInput::File {
+            url: "data:audio/wav;base64,UklGRg==".to_string(),
+            filename: Some("voice.wav".to_string()),
+            mime: Some("audio/wav".to_string()),
+        }];
+
+        assert_eq!(prompt_display_text(&parts), "[audio input]");
+    }
+
+    #[test]
+    fn message_to_info_exposes_persisted_multimodal_read_model() {
+        let mut message = SessionMessage::user("ses_test", "");
+        message.parts.clear();
+        message.parts.push(MessagePart {
+            id: "prt_file".to_string(),
+            part_type: PartType::File {
+                url: "data:audio/wav;base64,UklGRg==".to_string(),
+                filename: "voice.wav".to_string(),
+                mime: "audio/wav".to_string(),
+            },
+            created_at: chrono::Utc::now(),
+            message_id: Some(message.id.clone()),
+        });
+        message.metadata.insert(
+            "multimodal_preflight".to_string(),
+            serde_json::json!({
+                "warnings": ["audio not supported"],
+                "unsupported_parts": ["voice.wav"],
+                "recommended_downgrade": "switch model",
+                "hard_block": false
+            }),
+        );
+        message.metadata.insert(
+            "multimodal_transport".to_string(),
+            serde_json::json!({
+                "replaced_parts": ["voice.wav"],
+                "warnings": ["ERROR: Cannot read voice.wav"]
+            }),
+        );
+
+        let info = message_to_info("ses_test", &message, &HashMap::new(), &mut Vec::new());
+        let multimodal = info.multimodal.expect("multimodal read model");
+
+        assert_eq!(multimodal.attachment_count, 1);
+        assert_eq!(multimodal.kinds, vec!["audio".to_string()]);
+        assert_eq!(
+            multimodal.transport_replaced_parts,
+            vec!["voice.wav".to_string()]
+        );
+        assert_eq!(multimodal.warnings, vec!["audio not supported".to_string()]);
     }
 }

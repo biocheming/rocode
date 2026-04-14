@@ -19,50 +19,10 @@ import {
   BrainCircuitIcon,
 } from "lucide-react";
 import { useState, useCallback } from "react";
-
-interface OutputField {
-  label?: string;
-  value?: string;
-}
-
-interface OutputBlockLike {
-  kind: string;
-  role?: string;
-  id?: string;
-  stage_id?: string;
-  title?: string;
-  summary?: string;
-  text: string;
-  tone?: string;
-  fields?: OutputField[];
-  profile?: string;
-  stage?: string;
-  stage_index?: number;
-  stage_total?: number;
-  step?: number;
-  status?: string;
-  focus?: string;
-  last_event?: string;
-  waiting_on?: string;
-  activity?: string;
-  child_session_id?: string;
-  active_skills?: string[];
-  active_agents?: string[];
-  active_categories?: string[];
-  prompt_tokens?: number;
-  completion_tokens?: number;
-  reasoning_tokens?: number;
-  cache_read_tokens?: number;
-  cache_write_tokens?: number;
-  decision?: {
-    title?: string;
-    fields?: Array<{ label?: string; value?: string; tone?: string }>;
-    sections?: Array<{ title?: string; body?: string }>;
-  } | null;
-}
+import type { FeedMessage, OutputBlock } from "../lib/history";
 
 interface MessageCardProps {
-  message: OutputBlockLike & { feedId: string };
+  message: FeedMessage;
   highlighted?: boolean;
   activeStageId?: string | null;
   activeToolCallId?: string | null;
@@ -107,7 +67,7 @@ function ReasoningBlock({ text }: { text: string }) {
   );
 }
 
-function StatusBlock({ message }: { message: OutputBlockLike }) {
+function StatusBlock({ message }: { message: OutputBlock }) {
   const isError = message.tone === "error";
 
   return (
@@ -125,7 +85,7 @@ function StatusBlock({ message }: { message: OutputBlockLike }) {
   );
 }
 
-function ToolBlock({ message }: { message: OutputBlockLike }) {
+function ToolBlock({ message }: { message: OutputBlock }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -149,6 +109,37 @@ function ToolBlock({ message }: { message: OutputBlockLike }) {
           <MessageResponse>{message.text}</MessageResponse>
         </div>
       )}
+    </div>
+  );
+}
+
+function InfoBlock({ message }: { message: OutputBlock }) {
+  return (
+    <div className="rounded-xl border border-border/50 bg-muted/20 px-3 py-2">
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <ActivityIcon className="size-3.5 shrink-0" />
+        <span className="font-medium">{message.title || "Info"}</span>
+      </div>
+      {message.text ? (
+        <p className="mt-2 text-sm text-foreground whitespace-pre-wrap">{message.text}</p>
+      ) : null}
+      {message.fields?.length ? (
+        <dl className="mt-3 grid gap-1.5 text-sm">
+          {message.fields.map((field, index) => (
+            <div
+              key={`${message.id ?? message.text}-field-${index}`}
+              className="grid grid-cols-[100px_1fr] gap-3 py-1.5 border-b border-border/30 last:border-0"
+            >
+              <dt className="font-medium text-muted-foreground text-xs">
+                {field.label ?? "Field"}
+              </dt>
+              <dd className="text-foreground text-xs whitespace-pre-wrap">
+                {String(field.value ?? "")}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
     </div>
   );
 }
@@ -196,6 +187,10 @@ export function MessageCard({
   // Tool blocks get a compact collapsible
   if (message.kind === "tool") {
     return <ToolBlock message={message} />;
+  }
+
+  if (message.kind === "multimodal_info") {
+    return <InfoBlock message={message} />;
   }
 
   const role = message.role ?? "assistant";

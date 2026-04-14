@@ -84,6 +84,7 @@ pub(super) fn map_api_message(message: &MessageInfo) -> Message {
             cache_write: message.tokens.cache_write,
         },
         metadata: message.metadata.clone(),
+        multimodal: message.multimodal.clone(),
         parts,
     }
 }

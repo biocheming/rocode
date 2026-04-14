@@ -1,25 +1,14 @@
 import type { Dispatch, SetStateAction } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { SessionRecord } from "../lib/session";
 import type { ConversationJumpTarget } from "./useConversationJump";
 import type { useExecutionActivity } from "./useExecutionActivity";
 
-interface SessionLike {
-  id: string;
-  title?: string;
-  parent_id?: string;
-  directory?: string;
-  project_id?: string;
-  updated?: number;
-  time?: {
-    updated?: number;
-  };
-}
-
 interface UseSchedulerNavigationOptions {
-  sessions: SessionLike[];
+  sessions: SessionRecord[];
   selectedSessionId: string | null;
-  currentSession: SessionLike | null;
-  setSessions: Dispatch<SetStateAction<SessionLike[]>>;
+  currentSession: SessionRecord | null;
+  setSessions: Dispatch<SetStateAction<SessionRecord[]>>;
   setSelectedSessionId: Dispatch<SetStateAction<string | null>>;
   apiJson: <T>(path: string, options?: RequestInit) => Promise<T>;
   setBanner: (message: string) => void;
@@ -62,7 +51,7 @@ interface ChildSessionNavigateContext {
   label?: string | null;
 }
 
-function normalizeSession(session: SessionLike): SessionLike {
+function normalizeSession(session: SessionRecord): SessionRecord {
   return {
     ...session,
     title: session.title || "(untitled)",
@@ -70,7 +59,7 @@ function normalizeSession(session: SessionLike): SessionLike {
   };
 }
 
-function upsertSession(current: SessionLike[], incoming: SessionLike) {
+function upsertSession(current: SessionRecord[], incoming: SessionRecord) {
   return [incoming, ...current.filter((session) => session.id !== incoming.id)];
 }
 
@@ -100,7 +89,7 @@ export function useSchedulerNavigation({
   );
 
   const breadcrumbForSession = useCallback(
-    (sessionId: string, session?: SessionLike | null): SessionBreadcrumb => ({
+    (sessionId: string, session?: SessionRecord | null): SessionBreadcrumb => ({
       sessionId,
       title: session?.title || sessionForId(sessionId)?.title || "(untitled)",
     }),
@@ -235,7 +224,7 @@ export function useSchedulerNavigation({
       let nextSession = sessions.find((session) => session.id === sessionId) ?? null;
       if (!nextSession) {
         try {
-          nextSession = normalizeSession(await apiJson<SessionLike>(`/session/${sessionId}`));
+          nextSession = normalizeSession(await apiJson<SessionRecord>(`/session/${sessionId}`));
           setSessions((current) => upsertSession(current, nextSession!));
         } catch (error) {
           setBanner(

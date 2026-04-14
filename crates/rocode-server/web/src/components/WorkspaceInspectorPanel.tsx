@@ -4,6 +4,8 @@ import type { useConversationJump } from "../hooks/useConversationJump";
 import type { useExecutionActivity } from "../hooks/useExecutionActivity";
 import type { useSchedulerNavigation } from "../hooks/useSchedulerNavigation";
 import type { useTerminalSessions } from "../hooks/useTerminalSessions";
+import type { FeedMessage } from "../lib/history";
+import type { FileTreeNodeRecord } from "../lib/workspace";
 import { WorkspaceTreeNode } from "./WorkspaceTreeNode";
 import { DeferredTerminalPanel } from "./DeferredTerminalPanel";
 
@@ -17,23 +19,9 @@ const SessionInsightsPanel = React.lazy(async () => {
   return { default: module.SessionInsightsPanel };
 });
 
-interface FileTreeNodeLike {
-  name: string;
-  path: string;
-  type: "file" | "directory";
-  size?: number | null;
-  modified?: number | null;
-  children?: FileTreeNodeLike[];
-}
-
-interface FeedMessageLike {
-  title?: string;
-  text?: string;
-}
-
 interface WorkspaceInspectorPanelProps {
   workspaceLoading: boolean;
-  fileTree: FileTreeNodeLike | null;
+  fileTree: FileTreeNodeRecord | null;
   workspaceRootLabel: string;
   selectedWorkspacePath: string | null;
   workspaceLinkLabel: string | null;
@@ -49,7 +37,7 @@ interface WorkspaceInspectorPanelProps {
   fileUploading: boolean;
   selectedWorkspaceIsRoot: boolean;
   selectedWorkspaceReference: string | null;
-  lastAssistant: FeedMessageLike | null;
+  lastAssistant: Pick<FeedMessage, "title" | "text"> | null;
   activeStageId: string | null;
   previewStageId: string | null;
   executionActivity: ReturnType<typeof useExecutionActivity>;

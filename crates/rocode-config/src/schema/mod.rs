@@ -150,6 +150,12 @@ pub struct Config {
     pub web_search: Option<WebSearchConfig>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub multimodal: Option<MultimodalConfig>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice: Option<VoiceConfig>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub enterprise: Option<EnterpriseConfig>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -287,6 +293,101 @@ pub struct WebSearchConfig {
     /// arguments (e.g. `{ "livecrawl": "fallback" }`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<HashMap<String, serde_json::Value>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MultimodalConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice: Option<VoiceConfig>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limits: Option<MultimodalLimitsConfig>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy: Option<MultimodalAttachmentPolicyConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MultimodalLimitsConfig {
+    #[serde(
+        rename = "maxInputBytes",
+        alias = "max_input_bytes",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_input_bytes: Option<usize>,
+
+    #[serde(
+        rename = "maxAttachmentsPerPrompt",
+        alias = "max_attachments_per_prompt",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_attachments_per_prompt: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MultimodalAttachmentPolicyConfig {
+    #[serde(
+        rename = "allowAudioInput",
+        alias = "allow_audio_input",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub allow_audio_input: Option<bool>,
+
+    #[serde(
+        rename = "allowImageInput",
+        alias = "allow_image_input",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub allow_image_input: Option<bool>,
+
+    #[serde(
+        rename = "allowFileInput",
+        alias = "allow_file_input",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub allow_file_input: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct VoiceConfig {
+    #[serde(
+        rename = "durationSeconds",
+        alias = "duration_seconds",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub duration_seconds: Option<u64>,
+
+    #[serde(
+        rename = "attachAudio",
+        alias = "attach_audio",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub attach_audio: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record: Option<VoiceCommandConfig>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transcribe: Option<VoiceCommandConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct VoiceCommandConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub command: Vec<String>,
+
+    #[serde(
+        default,
+        alias = "environment",
+        skip_serializing_if = "HashMap::is_empty"
+    )]
+    pub env: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

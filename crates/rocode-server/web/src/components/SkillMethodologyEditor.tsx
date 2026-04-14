@@ -1,26 +1,5 @@
 import { cn } from "@/lib/utils";
-
-export interface SkillMethodologyStepLike {
-  title: string;
-  action: string;
-  outcome?: string | null;
-}
-
-export interface SkillMethodologyReferenceLike {
-  label: string;
-  path: string;
-}
-
-export interface SkillMethodologyTemplateLike {
-  when_to_use: string[];
-  when_not_to_use: string[];
-  prerequisites: string[];
-  core_steps: SkillMethodologyStepLike[];
-  success_criteria: string[];
-  validation: string[];
-  pitfalls: string[];
-  references: SkillMethodologyReferenceLike[];
-}
+import type { SkillMethodologyTemplateRecord } from "@/lib/skill";
 
 export interface SkillMethodologyDraft {
   whenToUse: string;
@@ -115,7 +94,7 @@ export function emptySkillMethodologyDraft(): SkillMethodologyDraft {
 }
 
 export function methodologyDraftFromTemplate(
-  template: SkillMethodologyTemplateLike,
+  template: SkillMethodologyTemplateRecord,
 ): SkillMethodologyDraft {
   return {
     whenToUse: template.when_to_use.join("\n"),
@@ -139,7 +118,7 @@ export function methodologyDraftFromTemplate(
 
 export function buildMethodologyTemplateFromDraft(
   draft: SkillMethodologyDraft,
-): SkillMethodologyTemplateLike {
+): SkillMethodologyTemplateRecord {
   return {
     when_to_use: splitNonEmptyLines(draft.whenToUse),
     when_not_to_use: splitNonEmptyLines(draft.whenNotToUse),

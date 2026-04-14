@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashMap;
 
 #[test]
 fn merges_nested_structs_without_losing_existing_fields() {
@@ -547,4 +548,213 @@ fn web_search_merge_deep_merges_all_fields() {
     assert_eq!(opts.get("livecrawl").unwrap(), "preferred"); // overridden
     assert_eq!(opts.get("region").unwrap(), "us"); // kept from base
     assert_eq!(opts.get("language").unwrap(), "zh"); // added by overlay
+}
+
+#[test]
+fn voice_config_deserializes_from_camel_and_snake_case() {
+    let camel: Config = serde_json::from_value(serde_json::json!({
+        "voice": {
+            "durationSeconds": 20,
+            "attachAudio": true,
+            "mime": "audio/wav",
+            "language": "zh",
+            "record": {
+                "command": ["ffmpeg", "{file}"]
+            }
+        }
+    }))
+    .expect("camelCase voice config should deserialize");
+    let camel_voice = camel.voice.expect("camelCase voice config should exist");
+    assert_eq!(camel_voice.duration_seconds, Some(20));
+    assert_eq!(camel_voice.attach_audio, Some(true));
+    assert_eq!(camel_voice.language.as_deref(), Some("zh"));
+    assert_eq!(
+        camel_voice
+            .record
+            .as_ref()
+            .map(|record| record.command.clone()),
+        Some(vec!["ffmpeg".to_string(), "{file}".to_string()])
+    );
+
+    let snake: Config = serde_json::from_value(serde_json::json!({
+        "voice": {
+            "duration_seconds": 8,
+            "attach_audio": false,
+            "transcribe": {
+                "command": ["whisper-cli", "{file}"],
+                "env": { "MODEL": "base" }
+            }
+        }
+    }))
+    .expect("snake_case voice config should deserialize");
+    let snake_voice = snake.voice.expect("snake_case voice config should exist");
+    assert_eq!(snake_voice.duration_seconds, Some(8));
+    assert_eq!(snake_voice.attach_audio, Some(false));
+    assert_eq!(
+        snake_voice
+            .transcribe
+            .as_ref()
+            .and_then(|command| command.env.get("MODEL"))
+            .map(String::as_str),
+        Some("base")
+    );
+}
+
+#[test]
+fn multimodal_config_deserializes_and_nests_voice() {
+    let config: Config = serde_json::from_value(serde_json::json!({
+        "multimodal": {
+            "limits": {
+                "maxInputBytes": 4096,
+                "max_attachments_per_prompt": 3
+            },
+            "policy": {
+                "allowAudioInput": true,
+                "allow_image_input": false,
+                "allowFileInput": true
+            },
+            "voice": {
+                "durationSeconds": 18,
+                "attachAudio": false
+            }
+        }
+    }))
+    .expect("multimodal config should deserialize");
+
+    let multimodal = config.multimodal.expect("multimodal config should exist");
+    let limits = multimodal.limits.expect("limits should exist");
+    assert_eq!(limits.max_input_bytes, Some(4096));
+    assert_eq!(limits.max_attachments_per_prompt, Some(3));
+
+    let policy = multimodal.policy.expect("policy should exist");
+    assert_eq!(policy.allow_audio_input, Some(true));
+    assert_eq!(policy.allow_image_input, Some(false));
+    assert_eq!(policy.allow_file_input, Some(true));
+
+    let voice = multimodal.voice.expect("voice should exist");
+    assert_eq!(voice.duration_seconds, Some(18));
+    assert_eq!(voice.attach_audio, Some(false));
+}
+
+#[test]
+fn voice_config_merge_deep_merges_record_and_transcribe() {
+    let mut base = Config {
+        voice: Some(VoiceConfig {
+            duration_seconds: Some(15),
+            attach_audio: Some(true),
+            mime: Some("audio/wav".to_string()),
+            language: Some("zh".to_string()),
+            record: Some(VoiceCommandConfig {
+                command: vec!["ffmpeg".to_string(), "{file}".to_string()],
+                env: HashMap::from([("A".to_string(), "1".to_string())]),
+            }),
+            transcribe: None,
+        }),
+        ..Default::default()
+    };
+
+    let overlay = Config {
+        voice: Some(VoiceConfig {
+            duration_seconds: Some(30),
+            attach_audio: None,
+            mime: None,
+            language: Some("en".to_string()),
+            record: Some(VoiceCommandConfig {
+                command: Vec::new(),
+                env: HashMap::from([("B".to_string(), "2".to_string())]),
+            }),
+            transcribe: Some(VoiceCommandConfig {
+                command: vec!["whisper-cli".to_string(), "{file}".to_string()],
+                env: HashMap::new(),
+            }),
+        }),
+        ..Default::default()
+    };
+
+    base.merge(overlay);
+
+    let voice = base.voice.expect("merged voice config should exist");
+    assert_eq!(voice.duration_seconds, Some(30));
+    assert_eq!(voice.attach_audio, Some(true));
+    assert_eq!(voice.language.as_deref(), Some("en"));
+    let record = voice.record.expect("record config should exist");
+    assert_eq!(
+        record.command,
+        vec!["ffmpeg".to_string(), "{file}".to_string()]
+    );
+    assert_eq!(record.env.get("A").map(String::as_str), Some("1"));
+    assert_eq!(record.env.get("B").map(String::as_str), Some("2"));
+    assert_eq!(
+        voice
+            .transcribe
+            .as_ref()
+            .map(|command| command.command.clone()),
+        Some(vec!["whisper-cli".to_string(), "{file}".to_string()])
+    );
+}
+
+#[test]
+fn multimodal_config_merge_deep_merges_limits_policy_and_voice() {
+    let mut base = Config {
+        multimodal: Some(MultimodalConfig {
+            voice: Some(VoiceConfig {
+                duration_seconds: Some(15),
+                attach_audio: Some(true),
+                mime: Some("audio/wav".to_string()),
+                language: None,
+                record: None,
+                transcribe: None,
+            }),
+            limits: Some(MultimodalLimitsConfig {
+                max_input_bytes: Some(2048),
+                max_attachments_per_prompt: Some(2),
+            }),
+            policy: Some(MultimodalAttachmentPolicyConfig {
+                allow_audio_input: Some(true),
+                allow_image_input: Some(false),
+                allow_file_input: Some(true),
+            }),
+        }),
+        ..Default::default()
+    };
+
+    base.merge(Config {
+        multimodal: Some(MultimodalConfig {
+            voice: Some(VoiceConfig {
+                duration_seconds: Some(25),
+                attach_audio: None,
+                mime: None,
+                language: Some("en".to_string()),
+                record: None,
+                transcribe: None,
+            }),
+            limits: Some(MultimodalLimitsConfig {
+                max_input_bytes: None,
+                max_attachments_per_prompt: Some(8),
+            }),
+            policy: Some(MultimodalAttachmentPolicyConfig {
+                allow_audio_input: None,
+                allow_image_input: Some(true),
+                allow_file_input: None,
+            }),
+        }),
+        ..Default::default()
+    });
+
+    let multimodal = base
+        .multimodal
+        .expect("merged multimodal config should exist");
+    let voice = multimodal.voice.expect("merged voice should exist");
+    assert_eq!(voice.duration_seconds, Some(25));
+    assert_eq!(voice.attach_audio, Some(true));
+    assert_eq!(voice.language.as_deref(), Some("en"));
+
+    let limits = multimodal.limits.expect("merged limits should exist");
+    assert_eq!(limits.max_input_bytes, Some(2048));
+    assert_eq!(limits.max_attachments_per_prompt, Some(8));
+
+    let policy = multimodal.policy.expect("merged policy should exist");
+    assert_eq!(policy.allow_audio_input, Some(true));
+    assert_eq!(policy.allow_image_input, Some(true));
+    assert_eq!(policy.allow_file_input, Some(true));
 }

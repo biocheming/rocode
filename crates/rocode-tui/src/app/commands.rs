@@ -1,5 +1,6 @@
 use super::*;
 use rocode_command::ResolvedUiCommand;
+use std::io::{self, Write};
 
 fn mode_matches_action_argument(mode: &Agent, action_id: UiActionId, value: &str) -> bool {
     let needle = value.trim().to_ascii_lowercase();
@@ -302,6 +303,7 @@ impl App {
                 }
             }
             UiActionId::SubmitPrompt => self.submit_prompt()?,
+            UiActionId::VoiceInput => self.capture_voice_prompt()?,
             UiActionId::ClearPrompt => self.prompt.clear(),
             UiActionId::PasteClipboard => self.paste_clipboard_to_prompt(),
             UiActionId::CopyPrompt => self.copy_prompt_to_clipboard(),
@@ -457,6 +459,121 @@ impl App {
         }
 
         Ok(())
+    }
+
+    fn capture_voice_prompt(&mut self) -> anyhow::Result<()> {
+        let Some(client) = self.context.get_api_client() else {
+            self.toast
+                .show(ToastVariant::Error, "API client not initialized.", 2200);
+            return Ok(());
+        };
+
+        let config = client
+            .get_workspace_context()
+            .map(|context| context.config)
+            .or_else(|_| client.get_config())
+            .unwrap_or_default();
+        let multimodal = rocode_multimodal::MultimodalAuthority::from_config(&config);
+        if !multimodal.resolved().allow_audio_input {
+            self.toast.show(
+                ToastVariant::Warning,
+                "Audio input is disabled by current multimodal policy.",
+                2600,
+            );
+            return Ok(());
+        }
+        let duration_seconds = multimodal.voice_config().duration_seconds;
+        let capture_voice_config =
+            rocode_multimodal::MultimodalAuthority::merged_voice_config(&config);
+
+        terminal::restore()?;
+        println!();
+        println!(
+            "Recording voice input for up to {} seconds...",
+            duration_seconds
+        );
+        println!("Configure `multimodal.voice.record.command` / `multimodal.voice.transcribe.command` if autodetect is not enough.");
+        println!();
+        let _ = io::stdout().flush();
+
+        let capture = rocode_voice::capture_voice(rocode_voice::VoiceCaptureOptions {
+            config: Some(capture_voice_config),
+        });
+
+        self.terminal = terminal::init()?;
+        self.event_caused_change = true;
+
+        let capture = match capture {
+            Ok(capture) => capture,
+            Err(error) => {
+                self.toast.show(
+                    ToastVariant::Error,
+                    &format!("Voice capture failed: {}", error),
+                    3200,
+                );
+                return Ok(());
+            }
+        };
+
+        let mut multimodal_parts = Vec::new();
+        if let Some(attachment) = capture.attachment {
+            multimodal_parts.push(multimodal.voice_part_from_data_url(
+                attachment.data_url,
+                attachment.filename,
+                attachment.mime,
+                attachment.bytes,
+            ));
+        }
+        let parts = rocode_multimodal::SessionPartAdapter::to_session_parts(&multimodal_parts);
+        let summary =
+            multimodal.build_display_summary(capture.transcript.as_deref(), &multimodal_parts);
+        let preflight_request = crate::api::MultimodalPreflightRequest {
+            model: None,
+            parts: Vec::new(),
+            session_parts: parts.clone(),
+        };
+
+        if !preflight_request.parts.is_empty() {
+            match client.preflight_multimodal(&preflight_request) {
+                Ok(preflight) => {
+                    if let Some(warning) = preflight
+                        .warnings
+                        .first()
+                        .or_else(|| preflight.result.warnings.first())
+                    {
+                        self.toast.show(ToastVariant::Warning, warning, 3200);
+                    }
+                    if preflight.result.hard_block {
+                        return Ok(());
+                    }
+                }
+                Err(error) => {
+                    self.toast.show(
+                        ToastVariant::Warning,
+                        &format!("Multimodal preflight unavailable: {}", error),
+                        3200,
+                    );
+                }
+            }
+        }
+
+        if capture.transcript.is_none() && !multimodal_parts.is_empty() {
+            self.toast.show(
+                ToastVariant::Info,
+                "Voice captured without transcript; sending audio attachment only.",
+                2600,
+            );
+        }
+
+        self.submit_prompt_payload(
+            capture.transcript.clone().unwrap_or_default(),
+            if summary.compact_label.is_empty() {
+                "[voice input]".to_string()
+            } else {
+                summary.compact_label
+            },
+            (!parts.is_empty()).then_some(parts),
+        )
     }
 
     pub(super) fn execute_typed_interactive_command(

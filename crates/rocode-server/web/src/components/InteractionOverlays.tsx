@@ -1,36 +1,12 @@
-interface QuestionOption {
-  label: string;
-  description?: string;
-}
-
-interface QuestionItem {
-  question: string;
-  header?: string;
-  multiple?: boolean;
-  options?: QuestionOption[];
-}
-
-interface QuestionInteractionLike {
-  request_id: string;
-  session_id?: string;
-  questions: QuestionItem[];
-}
-
-type QuestionAnswerValue = string | string[];
-
-interface PermissionInteractionLike {
-  permission_id: string;
-  session_id?: string;
-  message?: string;
-  permission?: string;
-  command?: string;
-  filepath?: string;
-  patterns?: string[];
-}
+import type {
+  PermissionInteractionRecord,
+  QuestionAnswerValue,
+  QuestionInteractionRecord,
+} from "@/lib/interaction";
 
 interface InteractionOverlaysProps {
-  question: QuestionInteractionLike | null;
-  permission: PermissionInteractionLike | null;
+  question: QuestionInteractionRecord | null;
+  permission: PermissionInteractionRecord | null;
   questionAnswers: Record<number, QuestionAnswerValue>;
   questionSubmitting: boolean;
   permissionSubmitting: boolean;

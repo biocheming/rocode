@@ -191,6 +191,34 @@ pub(super) fn apply_post_load_transforms(config: &mut Config) {
         config.share = Some(crate::schema::ShareMode::Auto);
     }
 
+    if let Some(legacy_voice) = config.voice.clone() {
+        let multimodal = config
+            .multimodal
+            .get_or_insert_with(crate::schema::MultimodalConfig::default);
+        if let Some(current_voice) = multimodal.voice.as_mut() {
+            if current_voice.duration_seconds.is_none() {
+                current_voice.duration_seconds = legacy_voice.duration_seconds;
+            }
+            if current_voice.attach_audio.is_none() {
+                current_voice.attach_audio = legacy_voice.attach_audio;
+            }
+            if current_voice.mime.is_none() {
+                current_voice.mime = legacy_voice.mime;
+            }
+            if current_voice.language.is_none() {
+                current_voice.language = legacy_voice.language;
+            }
+            if current_voice.record.is_none() {
+                current_voice.record = legacy_voice.record;
+            }
+            if current_voice.transcribe.is_none() {
+                current_voice.transcribe = legacy_voice.transcribe;
+            }
+        } else {
+            multimodal.voice = Some(legacy_voice);
+        }
+    }
+
     // Apply flag overrides for compaction settings
     if env::var("ROCODE_DISABLE_AUTOCOMPACT").is_ok() {
         let compaction = config.compaction.get_or_insert_with(Default::default);

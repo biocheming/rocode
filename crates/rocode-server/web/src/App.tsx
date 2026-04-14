@@ -13,15 +13,12 @@ import {
 import { ComposerSection } from "./components/ComposerSection";
 import { ConversationFeedPanel } from "./components/ConversationFeedPanel";
 import { InteractionOverlays } from "./components/InteractionOverlays";
-import {
-  SessionSidebar,
-  type SessionTreeNode,
-  type WorkspaceSummary,
-} from "./components/SessionSidebar";
+import { SessionSidebar } from "./components/SessionSidebar";
 import { WorkspacePanel } from "./components/WorkspacePanel";
 import { cn } from "./lib/utils";
 import { useConversationJump } from "./hooks/useConversationJump";
 import { useExecutionActivity } from "./hooks/useExecutionActivity";
+import { useMultimodalComposer } from "./hooks/useMultimodalComposer";
 import { useSchedulerNavigation } from "./hooks/useSchedulerNavigation";
 import { useTerminalSessions } from "./hooks/useTerminalSessions";
 import { prepareComposerAttachments } from "./lib/composerAttachments";
@@ -42,6 +39,57 @@ import {
   toWorkspaceReferencePath,
 } from "./lib/composerContext";
 import {
+  buildMultimodalHistoryBlocks,
+} from "./lib/multimodal";
+import type {
+  FeedMessage,
+  MessageRecord,
+  OutputBlock,
+  OutputField,
+} from "./lib/history";
+import {
+  type PermissionInteractionRecord,
+  type PromptResponseRecord,
+  type QuestionAnswerValue,
+  type QuestionInfoResponseRecord,
+  type QuestionInteractionRecord,
+  permissionInteractionFromEvent,
+  questionInteractionFromEvent,
+  questionInteractionFromInfo,
+} from "./lib/interaction";
+import type {
+  PendingCommandInvocationRecord,
+  SessionListResponseRecord,
+  SessionRecord,
+} from "./lib/session";
+import {
+  type ConfigProvidersResponseRecord,
+  type ConnectProtocolOption,
+  type KnownProviderEntry,
+  type ProviderRecord,
+  type ProviderConnectSchemaResponseRecord,
+  type ResolveProviderConnectResponseRecord,
+  flattenProviderModels,
+} from "./lib/provider";
+import {
+  basenamePath,
+  buildSessionTree,
+  buildWorkspaceSummaries,
+  normalizeSessionRecord,
+  normalizeSessionRecords,
+} from "./lib/sidebar";
+import type { SessionTreeNode, WorkspaceSummary } from "./lib/sidebar";
+import {
+  type DirectoryCreateResponseRecord,
+  type FileContentResponseRecord,
+  type FileTreeNodeRecord,
+  type PathsResponseRecord,
+  type UploadFilesResponseRecord,
+  type WorkspaceContextRecord,
+  workspaceModeFromContext,
+  workspaceRootFromContext,
+} from "./lib/workspace";
+import {
   FolderTreeIcon,
   PanelLeftIcon,
   PanelLeftCloseIcon,
@@ -49,120 +97,6 @@ import {
 } from "lucide-react";
 
 type ThemeId = "daylight" | "sunset" | "graphite" | "midnight";
-
-interface PersistedStageTelemetrySummary {
-  stage_id: string;
-  stage_name: string;
-  status: string;
-}
-
-interface PersistedSessionTelemetrySnapshot {
-  version: string;
-  usage: {
-    input_tokens: number;
-    output_tokens: number;
-    reasoning_tokens: number;
-    cache_write_tokens: number;
-    cache_read_tokens: number;
-    total_cost: number;
-  };
-  stage_summaries: PersistedStageTelemetrySummary[];
-  last_run_status: string;
-  updated_at: number;
-}
-
-// Mirror of `rocode_types::SessionListHints`.
-interface SessionListHints {
-  current_model?: string | null;
-  model_provider?: string | null;
-  model_id?: string | null;
-  scheduler_profile?: string | null;
-  resolved_scheduler_profile?: string | null;
-  agent?: string | null;
-}
-
-// Mirror of `rocode_types::SessionListItem`.
-interface SessionRecord {
-  id: string;
-  title: string;
-  parent_id?: string;
-  directory?: string;
-  project_id?: string;
-  updated?: number;
-  hints?: SessionListHints | null;
-  pending_command_invocation?: PendingCommandInvocation | null;
-  telemetry?: PersistedSessionTelemetrySnapshot | null;
-  metadata?: Record<string, unknown> | null;
-  time?: {
-    updated?: number;
-  };
-}
-
-// Mirror of `rocode_types::SessionListContract`.
-interface SessionListContractRecord {
-  filter_query_parameters: string[];
-  search_fields: string[];
-  non_search_fields: string[];
-  note: string;
-}
-
-// Mirror of `rocode_types::SessionListResponse`.
-interface SessionListResponseRecord {
-  items: SessionRecord[];
-  contract: SessionListContractRecord;
-}
-
-interface ProviderModel {
-  id: string;
-  name?: string;
-}
-
-interface ProviderRecord {
-  id: string;
-  name: string;
-  models?: ProviderModel[];
-}
-
-interface KnownProviderEntry {
-  id: string;
-  name: string;
-  env: string[];
-  connected: boolean;
-  model_count?: number;
-  base_url?: string | null;
-  protocol?: string | null;
-  npm?: string | null;
-  supports_api_key_connect?: boolean;
-}
-
-interface ConnectProtocolOption {
-  id: string;
-  name: string;
-}
-
-type ProviderConnectDraftMode = "known" | "custom";
-
-interface ProviderConnectDraft {
-  mode: ProviderConnectDraftMode;
-  provider_id: string;
-  known_provider_id?: string | null;
-  name?: string | null;
-  base_url?: string | null;
-  protocol?: string | null;
-  env: string[];
-  connected: boolean;
-  model_count: number;
-  supports_api_key_connect: boolean;
-}
-
-interface ResolveProviderConnectResponse {
-  query: string;
-  suggested_mode: ProviderConnectDraftMode;
-  exact_match: boolean;
-  matches: KnownProviderEntry[];
-  draft: ProviderConnectDraft;
-  custom_draft: ProviderConnectDraft;
-}
 
 interface ExecutionMode {
   id: string;
@@ -194,165 +128,9 @@ type PromptPart =
       agent: string;
     };
 
-interface OutputField {
-  label?: string;
-  value?: string;
-  tone?: string;
-}
-
-interface OutputBlock {
-  kind: string;
-  phase?: string;
-  role?: string;
-  title?: string;
-  event?: string;
-  text?: string;
-  tone?: string;
-  silent?: boolean;
-  id?: string;
-  name?: string;
-  stage_id?: string;
-  status?: string;
-  summary?: string;
-  fields?: OutputField[];
-  preview?: string;
-  body?: string;
-  ts?: number;
-}
-
-interface MessagePart {
-  id: string;
-  type: string;
-  text?: string;
-  output_block?: OutputBlock;
-}
-
-interface MessageRecord {
-  id: string;
-  role: string;
-  parts?: MessagePart[];
-}
-
-interface FileTreeNode {
-  name: string;
-  path: string;
-  type: "file" | "directory";
-  size?: number | null;
-  modified?: number | null;
-  children?: FileTreeNode[];
-}
-
-interface FileContentResponse {
-  path: string;
-  content: string;
-}
-
-interface PathsResponse {
-  cwd: string;
-  home: string;
-  config: string;
-  data: string;
-}
-
-interface WorkspaceIdentity {
-  requested_dir: string;
-  workspace_root: string;
-  config_dir?: string | null;
-  workspace_key: string;
-}
-
-interface WorkspaceContext {
-  identity: WorkspaceIdentity;
-  mode: "shared" | "isolated";
-  config: Record<string, unknown>;
-  recent_models?: Array<{ provider: string; model: string }>;
-}
-
-interface UploadedFileRecord {
-  name: string;
-  path: string;
-  size: number;
-  mime?: string;
-}
-
-interface UploadFilesResponse {
-  files: UploadedFileRecord[];
-}
-
-interface DirectoryCreateResponse {
-  path: string;
-}
-
-interface FeedMessage extends OutputBlock {
-  feedId: string;
-  text: string;
-}
-
 type SessionLiveBlockCache = Record<string, OutputBlock[]>;
 
-interface QuestionOption {
-  label: string;
-  description?: string;
-}
-
-interface QuestionItem {
-  question: string;
-  header?: string;
-  multiple?: boolean;
-  options?: QuestionOption[];
-}
-
-interface QuestionInteraction {
-  request_id: string;
-  session_id?: string;
-  questions: QuestionItem[];
-}
-
-interface PermissionInteraction {
-  permission_id: string;
-  session_id?: string;
-  message?: string;
-  permission?: string;
-  command?: string;
-  filepath?: string;
-  patterns?: string[];
-}
-
-interface PromptResponse {
-  status: string;
-  ok?: boolean;
-  session_id?: string;
-  pending_question_id?: string;
-  command?: string;
-  missing_fields?: string[];
-}
-
-interface PendingCommandInvocation {
-  command: string;
-  rawArguments?: string;
-  missingFields?: string[];
-  schedulerProfile?: string;
-  questionId?: string;
-}
-
-interface QuestionInfoResponse {
-  id: string;
-  session_id?: string;
-  sessionId?: string;
-  questions?: string[];
-  options?: string[][];
-  items?: Array<{
-    question: string;
-    header?: string;
-    multiple?: boolean;
-    options?: Array<{
-      label: string;
-      description?: string;
-    }>;
-  }>;
-}
-
-type QuestionAnswerValue = string | string[];
+type PendingCommandInvocation = PendingCommandInvocationRecord;
 
 const THEMES: Array<{ id: ThemeId; label: string }> = [
   { id: "daylight", label: "Daylight" },
@@ -441,103 +219,6 @@ async function parseSSE(
   flush();
 }
 
-function normalizeSession(session: SessionRecord): SessionRecord {
-  return {
-    ...session,
-    title: session.title || "(untitled)",
-    updated: session.time?.updated ?? session.updated ?? Date.now(),
-  };
-}
-
-function normalizeSessions(sessions: SessionRecord[]): SessionRecord[] {
-  return (sessions ?? [])
-    .map(normalizeSession)
-    .sort((left, right) => (right.updated ?? 0) - (left.updated ?? 0));
-}
-
-function basenamePath(path: string): string {
-  const parts = path.split("/").filter(Boolean);
-  return parts[parts.length - 1] ?? path;
-}
-
-function buildWorkspaceSummaries(
-  sessions: SessionRecord[],
-  serviceRootPath: string,
-): WorkspaceSummary[] {
-  const workspaces = new Map<
-    string,
-    {
-      path: string;
-      label: string;
-      sessionCount: number;
-      rootCount: number;
-      lastUpdated: number;
-    }
-  >();
-
-  for (const session of sessions) {
-    const path = session.directory?.trim();
-    if (!path) continue;
-    if (serviceRootPath && !path.startsWith(serviceRootPath)) continue;
-    const current = workspaces.get(path);
-    if (current) {
-      current.sessionCount += 1;
-      if (!session.parent_id) current.rootCount += 1;
-      current.lastUpdated = Math.max(current.lastUpdated, session.updated ?? 0);
-      continue;
-    }
-    workspaces.set(path, {
-      path,
-      label: basenamePath(path),
-      sessionCount: 1,
-      rootCount: session.parent_id ? 0 : 1,
-      lastUpdated: session.updated ?? 0,
-    });
-  }
-
-  return Array.from(workspaces.values())
-    .sort((left, right) => right.lastUpdated - left.lastUpdated)
-    .map(({ lastUpdated: _lastUpdated, ...workspace }) => workspace);
-}
-
-function buildSessionTree(
-  sessions: SessionRecord[],
-  workspacePath: string | null,
-): SessionTreeNode[] {
-  if (!workspacePath) return [];
-  const workspaceSessions = sessions.filter(
-    (session) => session.directory?.trim() === workspacePath,
-  );
-  if (workspaceSessions.length === 0) return [];
-
-  const sessionMap = new Map(workspaceSessions.map((session) => [session.id, session]));
-  const childMap = new Map<string, SessionRecord[]>();
-
-  for (const session of workspaceSessions) {
-    if (!session.parent_id || !sessionMap.has(session.parent_id)) continue;
-    const children = childMap.get(session.parent_id) ?? [];
-    children.push(session);
-    childMap.set(session.parent_id, children);
-  }
-
-  const sortByUpdated = (items: SessionRecord[]) =>
-    items.slice().sort((left, right) => (right.updated ?? 0) - (left.updated ?? 0));
-
-  const roots = sortByUpdated(
-    workspaceSessions.filter((session) => !session.parent_id || !sessionMap.has(session.parent_id)),
-  );
-
-  const visit = (session: SessionRecord): SessionTreeNode => ({
-    id: session.id,
-    title: session.title,
-    directory: session.directory,
-    updated: session.updated,
-    children: sortByUpdated(childMap.get(session.id) ?? []).map(visit),
-  });
-
-  return roots.map(visit);
-}
-
 function shellQuoteCommandValue(value: string): string {
   if (!value) return '""';
   if (/^[A-Za-z0-9/_.*:-]+$/.test(value)) return value;
@@ -550,82 +231,6 @@ function splitRepeatableAnswer(answer: string): string[] {
     .flatMap((segment) => segment.split(/\s+/))
     .map((value) => value.trim())
     .filter(Boolean);
-}
-
-function normalizeQuestionItems(input: unknown): QuestionItem[] {
-  if (!Array.isArray(input)) return [];
-  return input
-    .map((candidate) => {
-      const item = (candidate ?? {}) as Record<string, unknown>;
-      const options = Array.isArray(item.options)
-        ? item.options
-            .map((option) => {
-              if (typeof option === "string") {
-                return { label: option };
-              }
-              if (!option || typeof option !== "object") return null;
-              const record = option as Record<string, unknown>;
-              const label =
-                typeof record.label === "string"
-                  ? record.label
-                  : typeof record.value === "string"
-                    ? record.value
-                    : "";
-              if (!label) return null;
-              return {
-                label,
-                description:
-                  typeof record.description === "string" ? record.description : undefined,
-              };
-            })
-            .filter((option): option is QuestionOption => Boolean(option))
-        : undefined;
-      const question = typeof item.question === "string" ? item.question : "";
-      if (!question) return null;
-      return {
-        question,
-        header: typeof item.header === "string" ? item.header : undefined,
-        multiple: Boolean(item.multiple),
-        options,
-      };
-    })
-    .filter((item): item is QuestionItem => Boolean(item));
-}
-
-function questionInteractionFromInfo(info: QuestionInfoResponse): QuestionInteraction {
-  const items = normalizeQuestionItems(info.items);
-  if (items.length > 0) {
-    return {
-      request_id: info.id,
-      session_id:
-        typeof info.session_id === "string"
-          ? info.session_id
-          : typeof info.sessionId === "string"
-            ? info.sessionId
-            : undefined,
-      questions: items,
-    };
-  }
-  const questions = Array.isArray(info.questions) ? info.questions : [];
-  const options = Array.isArray(info.options) ? info.options : [];
-  return {
-    request_id: info.id,
-    session_id:
-      typeof info.session_id === "string"
-        ? info.session_id
-        : typeof info.sessionId === "string"
-          ? info.sessionId
-          : undefined,
-    questions: questions.map((question, index) => ({
-      question,
-      multiple: false,
-      options: Array.isArray(options[index])
-        ? options[index]
-            .map((label) => (typeof label === "string" && label ? { label } : null))
-            .filter((option): option is QuestionOption => Boolean(option))
-        : undefined,
-    })),
-  };
 }
 
 function pendingCommandFromSession(
@@ -910,6 +515,16 @@ function buildFeedFromHistory(history: MessageRecord[], showThinking: boolean): 
       }
     }
 
+    for (const block of buildMultimodalHistoryBlocks(message)) {
+      if (block.kind === "message" && startedText) {
+        continue;
+      }
+      messages = applyOutputBlock(messages, block, showThinking);
+      if (block.kind === "message") {
+        startedText = true;
+      }
+    }
+
     if (startedReasoning) {
       messages = applyOutputBlock(
         messages,
@@ -988,25 +603,6 @@ function applyPreferences(config: Record<string, unknown>) {
   };
 }
 
-function workspaceRootFromContext(context: WorkspaceContext | null): string {
-  return context?.identity?.workspace_root?.trim() || "";
-}
-
-function workspaceModeFromContext(
-  context: WorkspaceContext | null,
-): "shared" | "isolated" | null {
-  return context?.mode ?? null;
-}
-
-function flattenModels(providers: ProviderRecord[]) {
-  return providers.flatMap((provider) =>
-    (provider.models ?? []).map((model) => ({
-      key: `${provider.id}/${model.id}`,
-      label: `${provider.name} / ${model.name || model.id}`,
-    })),
-  );
-}
-
 function formatError(error: unknown): string {
   if (error instanceof Error) return error.message;
   return "Unknown error";
@@ -1029,7 +625,7 @@ export default function App() {
   const [knownProviders, setKnownProviders] = useState<KnownProviderEntry[]>([]);
   const [connectProtocols, setConnectProtocols] = useState<ConnectProtocolOption[]>([]);
   const [modes, setModes] = useState<ExecutionMode[]>([]);
-  const [workspaceContext, setWorkspaceContext] = useState<WorkspaceContext | null>(null);
+  const [workspaceContext, setWorkspaceContext] = useState<WorkspaceContextRecord | null>(null);
   const [selectedModel, setSelectedModel] = useState("");
   const [selectedMode, setSelectedMode] = useState("");
   const [connectQuery, setConnectQuery] = useState("");
@@ -1040,7 +636,7 @@ export default function App() {
   const [connectApiKey, setConnectApiKey] = useState("");
   const [connectBaseUrl, setConnectBaseUrl] = useState("");
   const [connectResolution, setConnectResolution] =
-    useState<ResolveProviderConnectResponse | null>(null);
+    useState<ResolveProviderConnectResponseRecord | null>(null);
   const [connectResolveBusy, setConnectResolveBusy] = useState(false);
   const [connectResolveError, setConnectResolveError] = useState<string | null>(null);
   const [connectBusy, setConnectBusy] = useState(false);
@@ -1050,8 +646,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [statusLine, setStatusLine] = useState("ready");
   const [banner, setBanner] = useState<string | null>(null);
-  const [question, setQuestion] = useState<QuestionInteraction | null>(null);
-  const [permission, setPermission] = useState<PermissionInteraction | null>(null);
+  const [question, setQuestion] = useState<QuestionInteractionRecord | null>(null);
+  const [permission, setPermission] = useState<PermissionInteractionRecord | null>(null);
   const [questionAnswers, setQuestionAnswers] = useState<Record<number, QuestionAnswerValue>>({});
   const [questionSubmitting, setQuestionSubmitting] = useState(false);
   const [permissionSubmitting, setPermissionSubmitting] = useState(false);
@@ -1059,7 +655,7 @@ export default function App() {
   const [composerDragActive, setComposerDragActive] = useState(false);
   const [selectedAttachmentIndex, setSelectedAttachmentIndex] = useState<number | null>(null);
   const [terminalExpanded, setTerminalExpanded] = useState(false);
-  const [fileTree, setFileTree] = useState<FileTreeNode | null>(null);
+  const [fileTree, setFileTree] = useState<FileTreeNodeRecord | null>(null);
   const [serviceRootPath, setServiceRootPath] = useState("");
   const [currentWorkspacePath, setCurrentWorkspacePath] = useState<string | null>(null);
   const [workspaceRootPath, setWorkspaceRootPath] = useState("");
@@ -1086,7 +682,7 @@ export default function App() {
   const liveBlocksRef = useRef<SessionLiveBlockCache>({});
   const connectResolveRequestRef = useRef(0);
 
-  const modelOptions = useMemo(() => flattenModels(providers), [providers]);
+  const modelOptions = useMemo(() => flattenProviderModels(providers), [providers]);
   const settingsModeOptions = useMemo(
     () =>
       modes.map((mode) => ({
@@ -1132,6 +728,12 @@ export default function App() {
   const selectedWorkspaceReference = selectedWorkspacePath ? toWorkspaceReferencePath(selectedWorkspacePath, workspaceBasePath || workspaceRootPath) : null;
   const selectedWorkspaceFilename = selectedWorkspacePath ? selectedWorkspacePath.split("/").filter(Boolean).pop() || selectedWorkspacePath : null;
   const selectedWorkspaceIsRoot = Boolean(selectedWorkspacePath) && selectedWorkspaceType === "directory" && selectedWorkspacePath === (workspaceRootPath || workspaceBasePath);
+  const multimodalComposer = useMultimodalComposer({
+    apiJson,
+    selectedModel,
+    attachments,
+    scopeKey: `${workspaceContext?.mode ?? "none"}:${workspaceContext?.identity?.workspace_root ?? ""}`,
+  });
   const executionActivity = useExecutionActivity({
     selectedSessionId,
     apiJson,
@@ -1167,7 +769,7 @@ export default function App() {
   });
 
   const loadPendingQuestion = async (requestId: string, sessionId?: string | null) => {
-    const questions = await apiJson<QuestionInfoResponse[]>("/question");
+    const questions = await apiJson<QuestionInfoResponseRecord[]>("/question");
     const pending = (questions ?? []).find((candidate) => candidate.id === requestId);
     if (!pending) return;
     const interaction = questionInteractionFromInfo(pending);
@@ -1181,26 +783,26 @@ export default function App() {
   const sendPromptRequest = async (
     sessionId: string,
     payload: Record<string, unknown>,
-  ): Promise<PromptResponse> =>
-    apiJson<PromptResponse>(`/session/${sessionId}/prompt`, {
+  ): Promise<PromptResponseRecord> =>
+    apiJson<PromptResponseRecord>(`/session/${sessionId}/prompt`, {
       method: "POST",
       body: JSON.stringify(payload),
     });
 
   const fetchSessions = async (): Promise<SessionRecord[]> => {
     const sessionData = await apiJson<SessionListResponseRecord>("/session?limit=500");
-    return normalizeSessions(sessionData?.items ?? []);
+    return normalizeSessionRecords(sessionData?.items ?? []);
   };
 
   const reloadCoreSettingsData = async () => {
     try {
       const [providersData, modeData, connectSchema, context] = await Promise.all([
-        apiJson<{ providers?: ProviderRecord[]; all?: ProviderRecord[] }>("/config/providers"),
+        apiJson<ConfigProvidersResponseRecord>("/config/providers"),
         apiJson<ExecutionMode[]>("/mode"),
-        apiJson<{ providers: KnownProviderEntry[]; protocols: ConnectProtocolOption[] }>(
+        apiJson<ProviderConnectSchemaResponseRecord>(
           "/provider/connect/schema",
         ),
-        apiJson<WorkspaceContext>("/workspace/context"),
+        apiJson<WorkspaceContextRecord>("/workspace/context"),
       ]);
       const prefs = applyPreferences(context.config ?? {});
       setProviders(providersData.providers ?? providersData.all ?? []);
@@ -1257,7 +859,7 @@ export default function App() {
       setConnectResolveError(null);
       void (async () => {
         try {
-          const response = await apiJson<ResolveProviderConnectResponse>(
+          const response = await apiJson<ResolveProviderConnectResponseRecord>(
             "/provider/connect/resolve",
             {
               method: "POST",
@@ -1312,13 +914,13 @@ export default function App() {
       try {
         const [sessionData, providersData, modeData, context, connectSchema, paths] = await Promise.all([
           fetchSessions(),
-          apiJson<{ providers?: ProviderRecord[]; all?: ProviderRecord[] }>("/config/providers"),
+          apiJson<ConfigProvidersResponseRecord>("/config/providers"),
           apiJson<ExecutionMode[]>("/mode"),
-          apiJson<WorkspaceContext>("/workspace/context"),
-          apiJson<{ providers: KnownProviderEntry[]; protocols: ConnectProtocolOption[] }>(
+          apiJson<WorkspaceContextRecord>("/workspace/context"),
+          apiJson<ProviderConnectSchemaResponseRecord>(
             "/provider/connect/schema",
           ),
-          apiJson<PathsResponse>("/path"),
+          apiJson<PathsResponseRecord>("/path"),
         ]);
 
         if (cancelled) return;
@@ -1432,7 +1034,7 @@ export default function App() {
           currentSession?.directory && currentSession.directory.trim()
             ? `?path=${encodeURIComponent(currentSession.directory)}`
             : "";
-        const tree = await apiJson<FileTreeNode>(`/file/tree${query}`);
+        const tree = await apiJson<FileTreeNodeRecord>(`/file/tree${query}`);
         if (cancelled) return;
         setFileTree(tree);
         setWorkspaceRootPath(tree.path);
@@ -1477,7 +1079,7 @@ export default function App() {
     const loadFile = async () => {
       setFileLoading(true);
       try {
-        const response = await apiJson<FileContentResponse>(
+        const response = await apiJson<FileContentResponseRecord>(
           `/file/content?path=${encodeURIComponent(selectedFilePath)}`,
         );
         if (cancelled) return;
@@ -1525,9 +1127,9 @@ export default function App() {
     const reloadProvidersAndModes = async () => {
       try {
         const [providersData, modeData, connectSchema] = await Promise.all([
-          apiJson<{ providers?: ProviderRecord[]; all?: ProviderRecord[] }>("/config/providers"),
+          apiJson<ConfigProvidersResponseRecord>("/config/providers"),
           apiJson<ExecutionMode[]>("/mode"),
-          apiJson<{ providers: KnownProviderEntry[]; protocols: ConnectProtocolOption[] }>(
+          apiJson<ProviderConnectSchemaResponseRecord>(
             "/provider/connect/schema",
           ),
         ]);
@@ -1622,23 +1224,7 @@ export default function App() {
       }
 
       if (type === "question.created" && eventSessionId === selectedSessionRef.current) {
-        const requestId = String(event.requestID ?? "");
-        setQuestion(
-          questionInteractionFromInfo({
-            id: requestId,
-            session_id: eventSessionId,
-            items:
-              Array.isArray(event.questions) &&
-              event.questions.some((candidate) => candidate && typeof candidate === "object")
-                ? (event.questions as QuestionInfoResponse["items"])
-                : [],
-            questions:
-              Array.isArray(event.questions) &&
-              event.questions.every((candidate) => typeof candidate === "string")
-                ? (event.questions as string[])
-                : undefined,
-          }),
-        );
+        setQuestion(questionInteractionFromEvent(event, eventSessionId));
         setQuestionAnswers({});
         setStreaming(false);
         setStatusLine("awaiting_user");
@@ -1658,25 +1244,7 @@ export default function App() {
       }
 
       if (type === "permission.requested" && eventSessionId === selectedSessionRef.current) {
-        const info = (event.info ?? {}) as Record<string, unknown>;
-        setPermission({
-          permission_id: String(event.permissionID ?? ""),
-          session_id: eventSessionId,
-          message: typeof info.message === "string" ? info.message : undefined,
-          permission: typeof info.tool === "string" ? info.tool : undefined,
-          command:
-            typeof info.input === "object" &&
-            info.input &&
-            typeof (info.input as Record<string, unknown>).command === "string"
-              ? ((info.input as Record<string, unknown>).command as string)
-              : undefined,
-          filepath:
-            typeof info.input === "object" &&
-            info.input &&
-            Array.isArray((info.input as Record<string, unknown>).patterns)
-              ? String(((info.input as Record<string, unknown>).patterns as unknown[])[0] ?? "")
-              : undefined,
-        });
+        setPermission(permissionInteractionFromEvent(event, eventSessionId));
         return;
       }
 
@@ -1726,9 +1294,9 @@ export default function App() {
         project_id: options?.projectId,
       }),
     });
-    const normalized = normalizeSession(created);
+      const normalized = normalizeSessionRecord(created);
     setSessions((current) =>
-      normalizeSessions([normalized, ...current.filter((item) => item.id !== normalized.id)]),
+      normalizeSessionRecords([normalized, ...current.filter((item) => item.id !== normalized.id)]),
     );
     setCurrentWorkspacePath(normalized.directory?.trim() || options?.directory || null);
     setSelectedSessionId(normalized.id);
@@ -1756,7 +1324,7 @@ export default function App() {
     }
 
     try {
-      const directory = await apiJson<DirectoryCreateResponse>("/file/directory", {
+      const directory = await apiJson<DirectoryCreateResponseRecord>("/file/directory", {
         method: "POST",
         body: JSON.stringify({ path: targetPath }),
       });
@@ -1781,6 +1349,19 @@ export default function App() {
     if ((!content && promptParts.length === 0) || streaming) return;
 
     setBanner(null);
+
+    try {
+      const multimodalGate = await multimodalComposer.preflightBeforeSubmit();
+      if (multimodalGate.blocked) {
+        setBanner(multimodalGate.banner);
+        return;
+      }
+      if (multimodalGate.banner) {
+        setBanner(multimodalGate.banner);
+      }
+    } catch (error) {
+      setBanner(`Multimodal preflight unavailable: ${formatError(error)}`);
+    }
 
     let sessionId = selectedSessionRef.current;
     if (!sessionId) {
@@ -2120,7 +1701,7 @@ export default function App() {
     }
 
     try {
-      const response = await apiJson<DirectoryCreateResponse>("/file/directory", {
+      const response = await apiJson<DirectoryCreateResponseRecord>("/file/directory", {
         method: "POST",
         body: JSON.stringify({
           path: targetPath,
@@ -2262,7 +1843,7 @@ export default function App() {
         ),
       );
 
-      const response = await apiJson<UploadFilesResponse>("/file/upload", {
+      const response = await apiJson<UploadFilesResponseRecord>("/file/upload", {
         method: "POST",
         body: JSON.stringify({
           path: workspaceTargetDirectory || workspaceBasePath || undefined,
@@ -2375,6 +1956,16 @@ export default function App() {
               composer={composer}
               composerDragActive={composerDragActive}
               streaming={streaming}
+              multimodalHints={multimodalComposer.hints}
+              allowAudioInput={multimodalComposer.policy?.allow_audio_input ?? true}
+              allowImageInput={multimodalComposer.policy?.allow_image_input ?? true}
+              allowFileInput={multimodalComposer.policy?.allow_file_input ?? true}
+              modeOptions={settingsModeOptions}
+              selectedMode={selectedMode}
+              onModeChange={setSelectedMode}
+              modelOptions={modelOptions}
+              selectedModel={selectedModel}
+              onModelChange={setSelectedModel}
               references={composerReferences}
               attachments={attachments}
               selectedAttachmentIndex={selectedAttachmentIndex}

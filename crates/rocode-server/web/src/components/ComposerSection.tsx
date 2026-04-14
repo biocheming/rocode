@@ -1,16 +1,26 @@
 import type { ChangeEvent, ClipboardEvent, DragEvent, FormEvent } from "react";
 import { ComposerPanel } from "./ComposerPanel";
 import type { BreadcrumbProvenance } from "../hooks/useSchedulerNavigation";
-import type { ComposerAttachmentLike } from "../lib/composerContext";
+import type { ComposerAttachmentRecord } from "../lib/composerContext";
 
 interface ComposerSectionProps {
   composer: string;
   composerDragActive: boolean;
   streaming: boolean;
+  multimodalHints: Array<{ tone: "info" | "warning"; text: string }>;
+  allowAudioInput: boolean;
+  allowImageInput: boolean;
+  allowFileInput: boolean;
+  modeOptions: Array<{ key: string; label: string }>;
+  selectedMode: string;
+  onModeChange: (value: string) => void;
+  modelOptions: Array<{ key: string; label: string }>;
+  selectedModel: string;
+  onModelChange: (value: string) => void;
   references: string[];
-  attachments: ComposerAttachmentLike[];
+  attachments: ComposerAttachmentRecord[];
   selectedAttachmentIndex: number | null;
-  selectedAttachment: ComposerAttachmentLike | null;
+  selectedAttachment: ComposerAttachmentRecord | null;
   selectedWorkspacePath: string | null;
   workspaceRootPath: string;
   activeStageId: string | null;
@@ -19,8 +29,8 @@ interface ComposerSectionProps {
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onRemoveReference: (reference: string) => void;
   onRemoveAttachment: (index: number) => void;
-  onSelectAttachment: (index: number, attachment: ComposerAttachmentLike) => void;
-  onLocateAttachment: (attachment: ComposerAttachmentLike) => void;
+  onSelectAttachment: (index: number, attachment: ComposerAttachmentRecord) => void;
+  onLocateAttachment: (attachment: ComposerAttachmentRecord) => void;
   onNavigateStage: (stageId: string) => void;
   onNavigateProvenanceSession: () => void;
   onNavigateProvenanceStage: () => void;

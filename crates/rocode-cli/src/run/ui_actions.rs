@@ -125,11 +125,189 @@ async fn cli_prompt_action_text(
     }
 }
 
+async fn cli_capture_voice_prompt(
+    runtime: &mut CliExecutionRuntime,
+    api_client: &Arc<CliApiClient>,
+    sse_rx: &mut mpsc::UnboundedReceiver<CliServerEvent>,
+    current_dir: &Path,
+    style: &CliStyle,
+) -> anyhow::Result<()> {
+    let workspace_context = api_client.get_workspace_context().await.ok();
+    let config = workspace_context
+        .map(|context| context.config)
+        .or_else(|| load_config(current_dir).ok())
+        .unwrap_or_default();
+    let multimodal = rocode_multimodal::MultimodalAuthority::from_config(&config);
+    if !multimodal.resolved().allow_audio_input {
+        let _ = print_block(
+            Some(runtime),
+            OutputBlock::Status(StatusBlock::warning(
+                "Audio input is disabled by current multimodal policy.",
+            )),
+            style,
+        );
+        return Ok(());
+    }
+    let duration_seconds = multimodal.voice_config().duration_seconds;
+    let capture_voice_config = rocode_multimodal::MultimodalAuthority::merged_voice_config(&config);
+
+    let prompt_session = runtime
+        .prompt_session_slot
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().cloned());
+    let already_suspended = runtime
+        .terminal_surface
+        .as_ref()
+        .map_or(false, |s| s.prompt_suspended.load(Ordering::Relaxed));
+    if !already_suspended {
+        if let Some(prompt_session) = prompt_session.as_ref() {
+            let _ = prompt_session.suspend();
+        }
+    }
+
+    {
+        let _ = crossterm::terminal::disable_raw_mode();
+        let mut stdout = io::stdout();
+        let _ = crossterm::execute!(
+            stdout,
+            crossterm::cursor::Show,
+            crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
+        );
+        let _ = stdout.flush();
+    }
+
+    println!();
+    println!("  Recording voice input for up to {} seconds...", duration_seconds);
+    println!("  Configure `multimodal.voice.record.command` / `multimodal.voice.transcribe.command` if autodetect is not enough.");
+    println!();
+    let _ = io::stdout().flush();
+
+    let capture = tokio::task::spawn_blocking(move || {
+        rocode_voice::capture_voice(rocode_voice::VoiceCaptureOptions {
+            config: Some(capture_voice_config),
+        })
+    })
+    .await
+    .map_err(|error| anyhow::anyhow!("voice capture task failed: {}", error))?;
+
+    let capture = match capture {
+        Ok(capture) => capture,
+        Err(error) => {
+            if let Some(prompt_session) = prompt_session.as_ref() {
+                let _ = prompt_session.resume();
+            }
+            if let Some(surface) = runtime.terminal_surface.as_ref() {
+                surface.prompt_suspended.store(false, Ordering::Relaxed);
+            }
+            let _ = print_block(
+                Some(runtime),
+                OutputBlock::Status(StatusBlock::error(format!(
+                    "Voice capture failed: {}",
+                    error
+                ))),
+                style,
+            );
+            return Ok(());
+        }
+    };
+
+    let mut multimodal_parts = Vec::new();
+    if let Some(attachment) = capture.attachment.as_ref() {
+        multimodal_parts.push(multimodal.voice_part_from_data_url(
+            attachment.data_url.clone(),
+            attachment.filename.clone(),
+            attachment.mime.clone(),
+            attachment.bytes,
+        ));
+    }
+    let parts = rocode_multimodal::SessionPartAdapter::to_session_parts(&multimodal_parts);
+    let summary = multimodal.build_display_summary(capture.transcript.as_deref(), &multimodal_parts);
+    let preflight_request = crate::api_client::MultimodalPreflightRequest {
+        model: None,
+        parts: Vec::new(),
+        session_parts: parts.clone(),
+    };
+
+    if !preflight_request.parts.is_empty() {
+        match api_client.preflight_multimodal(&preflight_request).await {
+            Ok(preflight) => {
+                for warning in preflight
+                    .warnings
+                    .iter()
+                    .chain(preflight.result.warnings.iter())
+                {
+                    let _ = print_block(
+                        Some(runtime),
+                        OutputBlock::Status(StatusBlock::warning(warning.clone())),
+                        style,
+                    );
+                }
+                if preflight.result.hard_block {
+                    if let Some(prompt_session) = prompt_session.as_ref() {
+                        let _ = prompt_session.resume();
+                    }
+                    if let Some(surface) = runtime.terminal_surface.as_ref() {
+                        surface.prompt_suspended.store(false, Ordering::Relaxed);
+                    }
+                    return Ok(());
+                }
+            }
+            Err(error) => {
+                let _ = print_block(
+                    Some(runtime),
+                    OutputBlock::Status(StatusBlock::warning(format!(
+                        "Multimodal preflight unavailable: {}",
+                        error
+                    ))),
+                    style,
+                );
+            }
+        }
+    }
+
+    if capture.transcript.is_none() && !multimodal_parts.is_empty() {
+        let _ = print_block(
+            Some(runtime),
+            OutputBlock::Status(StatusBlock::warning(
+                "Voice captured without transcript; sending audio attachment only.",
+            )),
+            style,
+        );
+    }
+
+    let result = run_server_prompt_with_parts(
+        runtime,
+        api_client,
+        sse_rx,
+        capture.transcript.as_deref().unwrap_or_default(),
+        if summary.compact_label.is_empty() {
+            "[voice input]"
+        } else {
+            summary.compact_label.as_str()
+        },
+        (!parts.is_empty()).then_some(parts),
+        style,
+        true,
+    )
+    .await;
+
+    if let Some(prompt_session) = prompt_session.as_ref() {
+        let _ = prompt_session.resume();
+    }
+    if let Some(surface) = runtime.terminal_surface.as_ref() {
+        surface.prompt_suspended.store(false, Ordering::Relaxed);
+    }
+
+    result
+}
+
 async fn cli_execute_ui_action(
     action_id: UiActionId,
     argument: Option<&str>,
     runtime: &mut CliExecutionRuntime,
-    api_client: &CliApiClient,
+    api_client: &Arc<CliApiClient>,
+    sse_rx: &mut mpsc::UnboundedReceiver<CliServerEvent>,
     provider_registry: &ProviderRegistry,
     agent_registry: &AgentRegistry,
     current_dir: &Path,
@@ -165,6 +343,10 @@ async fn cli_execute_ui_action(
             Ok(CliUiActionOutcome::Continue)
         }
         UiActionId::Exit => Ok(CliUiActionOutcome::Break),
+        UiActionId::VoiceInput => {
+            cli_capture_voice_prompt(runtime, api_client, sse_rx, current_dir, repl_style).await?;
+            Ok(CliUiActionOutcome::Continue)
+        }
         UiActionId::ShowHelp => {
             let style = CliStyle::detect();
             let rendered = render_help(&style);

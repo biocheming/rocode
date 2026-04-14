@@ -1,5 +1,60 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type {
+  MemoryConsolidationResponseRecord,
+  MemoryConsolidationRunListResponseRecord,
+  MemoryConflictResponseRecord,
+  MemoryDetailResponseRecord,
+  MemoryListResponseRecord,
+  MemoryRetrievalPreviewResponseRecord,
+  MemoryRuleHitListResponseRecord,
+  MemoryRulePackListResponseRecord,
+  MemoryValidationReportResponseRecord,
+} from "@/lib/memory";
+import { memoryRecordIdValue } from "@/lib/memory";
+import type {
+  ManagedSkillRecord,
+  SkillArtifactCacheEntryRecord,
+  SkillCatalogEntry,
+  SkillDetailResponseRecord,
+  SkillDistributionRecord,
+  SkillGovernanceTimelineEntryRecord,
+  SkillGuardReportRecord,
+  SkillHubArtifactCacheResponseRecord,
+  SkillHubAuditResponseRecord,
+  SkillHubDistributionResponseRecord,
+  SkillHubGuardRunRequestRecord,
+  SkillHubGuardRunResponseRecord,
+  SkillHubIndexRefreshResponseRecord,
+  SkillHubIndexResponseRecord,
+  SkillHubLifecycleResponseRecord,
+  SkillHubManagedDetachResponseRecord,
+  SkillHubManagedRemoveResponseRecord,
+  SkillHubManagedResponseRecord,
+  SkillHubPolicyRecord,
+  SkillHubPolicyResponseRecord,
+  SkillHubSyncPlanResponseRecord,
+  SkillHubTimelineResponseRecord,
+  SkillManagedLifecycleRecord,
+  SkillManageResponseRecord,
+  SkillMethodologyExtractResponseRecord,
+  SkillMethodologyPreviewResponseRecord,
+  SkillMethodologyTemplateRecord,
+  SkillRemoteInstallPlanRecord,
+  SkillRemoteInstallResponseRecord,
+  SkillSourceIndexSnapshotRecord,
+  SkillSourceRefRecord,
+  SkillSyncPlanRecord,
+} from "@/lib/skill";
 import { cn } from "@/lib/utils";
+import type {
+  ConnectProtocolOption,
+  KnownProviderEntry,
+  ManagedProviderInfoRecord,
+  ProviderConnectDraft,
+  ProviderRecord,
+  RefreshProviderCatalogueResponseRecord,
+  ResolveProviderConnectResponseRecord,
+} from "@/lib/provider";
 import { SkillGovernanceTimeline } from "./SkillGovernanceTimeline";
 import {
   buildMethodologyTemplateFromDraft,
@@ -7,7 +62,6 @@ import {
   methodologyDraftFromTemplate,
   SkillMethodologyDraft,
   SkillMethodologyEditor,
-  SkillMethodologyTemplateLike,
 } from "./SkillMethodologyEditor";
 
 type SettingsTabId =
@@ -33,72 +87,6 @@ interface ModeOption {
 interface ModelOption {
   key: string;
   label: string;
-}
-
-interface ProviderModelLike {
-  id: string;
-  name?: string;
-}
-
-interface ProviderRecordLike {
-  id: string;
-  name: string;
-  models?: ProviderModelLike[];
-}
-
-interface KnownProviderEntryLike {
-  id: string;
-  name: string;
-  env?: string[];
-  connected?: boolean;
-  model_count?: number;
-  base_url?: string | null;
-  protocol?: string | null;
-}
-
-interface ConnectProtocolOptionLike {
-  id: string;
-  name: string;
-}
-
-type ProviderConnectDraftModeLike = "known" | "custom";
-
-interface ProviderConnectDraftLike {
-  mode: ProviderConnectDraftModeLike;
-  provider_id: string;
-  known_provider_id?: string | null;
-  name?: string | null;
-  base_url?: string | null;
-  protocol?: string | null;
-  env?: string[];
-  connected?: boolean;
-  model_count?: number;
-  supports_api_key_connect?: boolean;
-}
-
-interface ResolveProviderConnectResponseLike {
-  query: string;
-  suggested_mode: ProviderConnectDraftModeLike;
-  exact_match: boolean;
-  matches: KnownProviderEntryLike[];
-  draft: ProviderConnectDraftLike;
-  custom_draft: ProviderConnectDraftLike;
-}
-
-interface ManagedProviderInfo {
-  id: string;
-  name: string;
-  status: string;
-  connected: boolean;
-  configured: boolean;
-  known: boolean;
-  has_auth: boolean;
-  auth_type?: string | null;
-  env?: string[];
-  base_url?: string | null;
-  protocol?: string | null;
-  model_overrides?: Array<{ key: string }>;
-  models?: ProviderModelLike[];
 }
 
 interface SchedulerProfileSummary {
@@ -139,460 +127,7 @@ interface FormatterStatus {
   formatters: string[];
 }
 
-interface MemoryCardViewLike {
-  id: { 0: string } | string;
-  kind: string;
-  scope: string;
-  status: string;
-  title: string;
-  summary: string;
-  derived_skill_name?: string | null;
-  linked_skill_name?: string | null;
-  confidence?: number | null;
-  validation_status: string;
-}
-
-interface MemoryContractLike {
-  filter_query_parameters?: string[];
-  search_fields?: string[];
-  non_search_fields?: string[];
-  note: string;
-}
-
-interface MemoryListResponseLike {
-  items: MemoryCardViewLike[];
-  contract: MemoryContractLike;
-}
-
-interface MemoryEvidenceRefLike {
-  session_id?: string | null;
-  message_id?: string | null;
-  tool_call_id?: string | null;
-  stage_id?: string | null;
-  note?: string | null;
-}
-
-interface MemoryDetailRecordLike {
-  id: { 0: string } | string;
-  kind: string;
-  scope: string;
-  status: string;
-  title: string;
-  summary: string;
-  trigger_conditions?: string[];
-  normalized_facts?: string[];
-  boundaries?: string[];
-  derived_skill_name?: string | null;
-  linked_skill_name?: string | null;
-  confidence?: number | null;
-  evidence_refs?: MemoryEvidenceRefLike[];
-  source_session_id?: string | null;
-  workspace_identity?: string | null;
-  created_at: number;
-  updated_at: number;
-  last_validated_at?: number | null;
-  validation_status: string;
-}
-
-interface MemoryDetailResponseLike {
-  record: MemoryDetailRecordLike;
-}
-
-interface MemoryValidationReportLike {
-  record_id?: { 0: string } | string | null;
-  status: string;
-  issues?: string[];
-  checked_at: number;
-}
-
-interface MemoryValidationReportResponseLike {
-  record_id: { 0: string } | string;
-  latest?: MemoryValidationReportLike | null;
-}
-
-interface MemoryConflictViewLike {
-  id: string;
-  record_id: { 0: string } | string;
-  other_record_id: { 0: string } | string;
-  conflict_kind: string;
-  detail: string;
-  detected_at: number;
-}
-
-interface MemoryConflictResponseLike {
-  record_id: { 0: string } | string;
-  conflicts?: MemoryConflictViewLike[];
-}
-
-interface MemoryRecallViewLike {
-  card: MemoryCardViewLike;
-  why_recalled: string;
-  evidence_summary?: string | null;
-}
-
-interface MemoryRetrievalPacketLike {
-  generated_at: number;
-  snapshot: boolean;
-  query?: string | null;
-  scopes?: string[];
-  items?: MemoryRecallViewLike[];
-  note?: string | null;
-  budget_limit?: number | null;
-}
-
-interface MemoryRetrievalPreviewResponseLike {
-  packet: MemoryRetrievalPacketLike;
-  contract: MemoryContractLike;
-}
-
-interface MemoryRuleDefinitionLike {
-  id: string;
-  description: string;
-  tags?: string[];
-  promotion_target?: string | null;
-}
-
-interface MemoryRulePackLike {
-  id: string;
-  rule_pack_kind: string;
-  version: string;
-  rules?: MemoryRuleDefinitionLike[];
-  created_at: number;
-  updated_at: number;
-}
-
-interface MemoryRulePackListResponseLike {
-  items?: MemoryRulePackLike[];
-}
-
-interface MemoryRuleHitLike {
-  id: string;
-  rule_pack_id?: string | null;
-  memory_id?: { 0: string } | string | null;
-  run_id?: string | null;
-  hit_kind: string;
-  detail?: string | null;
-  created_at: number;
-}
-
-interface MemoryRuleHitListResponseLike {
-  items?: MemoryRuleHitLike[];
-}
-
-interface MemoryConsolidationRunLike {
-  run_id: string;
-  started_at: number;
-  finished_at?: number | null;
-  merged_count: number;
-  promoted_count: number;
-  conflict_count: number;
-}
-
-interface MemoryConsolidationRunListResponseLike {
-  items?: MemoryConsolidationRunLike[];
-}
-
-interface MemoryConsolidationResponseLike {
-  run: MemoryConsolidationRunLike;
-  merged_record_ids?: Array<{ 0: string } | string>;
-  promoted_record_ids?: Array<{ 0: string } | string>;
-  archived_record_ids?: Array<{ 0: string } | string>;
-  reflection_notes?: string[];
-  rule_hits?: MemoryRuleHitLike[];
-}
-
-interface SkillCatalogEntry {
-  name: string;
-  description: string;
-  category?: string | null;
-  location: string;
-  writable: boolean;
-  supporting_files: string[];
-}
-
-interface SkillFileRefLike {
-  relative_path: string;
-  location: string;
-}
-
-interface LoadedSkillMetaLike {
-  name: string;
-  description: string;
-  category?: string | null;
-  location: string;
-  supporting_files: SkillFileRefLike[];
-}
-
-interface LoadedSkillLike {
-  meta: LoadedSkillMetaLike;
-  content: string;
-}
-
-interface SkillDetailResponse {
-  skill: LoadedSkillLike;
-  source: string;
-  writable: boolean;
-}
-
-interface SkillManageResponseLike {
-  result: {
-    action: string;
-    skill_name: string;
-    location: string;
-    supporting_file?: string | null;
-  };
-  guard_report?: SkillGuardReportLike | null;
-}
-
-interface SkillMethodologyPreviewResponseLike {
-  body: string;
-}
-
-interface SkillMethodologyExtractResponseLike {
-  matched: boolean;
-  methodology?: SkillMethodologyTemplateLike | null;
-}
-
 type SkillEditorMode = "methodology" | "raw";
-
-interface SkillGuardViolationLike {
-  rule_id: string;
-  severity: "info" | "warn" | "error";
-  message: string;
-  file_path?: string | null;
-}
-
-interface SkillGuardReportLike {
-  skill_name: string;
-  status: "passed" | "warn" | "blocked";
-  violations: SkillGuardViolationLike[];
-  scanned_at: number;
-}
-
-interface SkillSourceRefLike {
-  source_id: string;
-  source_kind: "bundled" | "local_path" | "git" | "archive" | "registry";
-  locator: string;
-  revision?: string | null;
-}
-
-interface ManagedSkillRecordLike {
-  skill_name: string;
-  source?: SkillSourceRefLike | null;
-  installed_revision?: string | null;
-  local_hash?: string | null;
-  last_synced_at?: number | null;
-  locally_modified: boolean;
-  deleted_locally: boolean;
-}
-
-interface SkillSourceIndexEntryLike {
-  skill_name: string;
-  description?: string | null;
-  category?: string | null;
-  revision?: string | null;
-}
-
-interface SkillSourceIndexSnapshotLike {
-  source: SkillSourceRefLike;
-  updated_at: number;
-  entries: SkillSourceIndexEntryLike[];
-}
-
-interface SkillAuditEventLike {
-  event_id: string;
-  kind: string;
-  skill_name?: string | null;
-  source_id?: string | null;
-  actor: string;
-  created_at: number;
-  payload: unknown;
-}
-
-interface SkillHubManagedResponseLike {
-  managed_skills: ManagedSkillRecordLike[];
-}
-
-interface SkillHubIndexResponseLike {
-  source_indices: SkillSourceIndexSnapshotLike[];
-}
-
-interface SkillHubIndexRefreshResponseLike {
-  snapshot: SkillSourceIndexSnapshotLike;
-}
-
-interface SkillArtifactRefLike {
-  artifact_id: string;
-  kind: string;
-  locator: string;
-  checksum?: string | null;
-  size_bytes?: number | null;
-}
-
-interface SkillDistributionReleaseLike {
-  version?: string | null;
-  revision?: string | null;
-  checksum?: string | null;
-  manifest_path?: string | null;
-  published_at?: number | null;
-}
-
-interface SkillDistributionResolutionLike {
-  resolved_at: number;
-  resolver_kind: string;
-  artifact: SkillArtifactRefLike;
-}
-
-interface SkillInstalledDistributionLike {
-  installed_at: number;
-  workspace_skill_path: string;
-  installed_revision?: string | null;
-  local_hash?: string | null;
-}
-
-interface SkillDistributionRecordLike {
-  distribution_id: string;
-  source: SkillSourceRefLike;
-  skill_name: string;
-  release: SkillDistributionReleaseLike;
-  resolution: SkillDistributionResolutionLike;
-  installed?: SkillInstalledDistributionLike | null;
-  lifecycle: string;
-}
-
-interface SkillManagedLifecycleRecordLike {
-  distribution_id: string;
-  source_id: string;
-  skill_name: string;
-  state: string;
-  updated_at: number;
-  error?: string | null;
-}
-
-interface SkillHubDistributionResponseLike {
-  distributions: SkillDistributionRecordLike[];
-}
-
-interface SkillHubArtifactCacheResponseLike {
-  artifact_cache: SkillArtifactCacheEntryLike[];
-}
-
-interface SkillHubPolicyLike {
-  artifact_cache_retention_seconds: number;
-  fetch_timeout_ms: number;
-  max_download_bytes: number;
-  max_extract_bytes: number;
-}
-
-interface SkillHubPolicyResponseLike {
-  policy: SkillHubPolicyLike;
-}
-
-interface SkillHubLifecycleResponseLike {
-  lifecycle: SkillManagedLifecycleRecordLike[];
-}
-
-interface SkillHubAuditResponseLike {
-  audit_events: SkillAuditEventLike[];
-}
-
-interface SkillGovernanceTimelineEntryLike {
-  entry_id: string;
-  kind: string;
-  created_at: number;
-  skill_name?: string | null;
-  source_id?: string | null;
-  actor?: string | null;
-  title: string;
-  summary: string;
-  status: "info" | "success" | "warn" | "error";
-  managed_record?: ManagedSkillRecordLike | null;
-  guard_report?: SkillGuardReportLike | null;
-}
-
-interface SkillHubTimelineResponseLike {
-  entries: SkillGovernanceTimelineEntryLike[];
-}
-
-interface SkillSyncEntryLike {
-  skill_name: string;
-  action: string;
-  reason: string;
-}
-
-interface SkillSyncPlanLike {
-  source_id: string;
-  entries: SkillSyncEntryLike[];
-}
-
-interface SkillHubSyncPlanResponseLike {
-  plan: SkillSyncPlanLike;
-  guard_reports?: SkillGuardReportLike[];
-}
-
-interface SkillHubGuardRunRequestLike {
-  skill_name?: string;
-  source?: SkillSourceRefLike;
-}
-
-interface SkillHubGuardRunResponseLike {
-  reports: SkillGuardReportLike[];
-}
-
-interface SkillRemoteInstallEntryLike {
-  distribution_id: string;
-  source_id: string;
-  skill_name: string;
-  action: "install" | "update";
-  reason: string;
-}
-
-interface SkillRemoteInstallPlanLike {
-  source_id: string;
-  distribution: SkillDistributionRecordLike;
-  entry: SkillRemoteInstallEntryLike;
-}
-
-interface SkillArtifactCacheEntryLike {
-  artifact: SkillArtifactRefLike;
-  cached_at: number;
-  local_path: string;
-  extracted_path?: string | null;
-  status: string;
-  error?: string | null;
-}
-
-interface SkillGovernanceWriteResultLike {
-  action: string;
-  skill_name: string;
-  location: string;
-  supporting_file?: string | null;
-}
-
-interface SkillRemoteInstallResponseLike {
-  plan: SkillRemoteInstallPlanLike;
-  artifact_cache: SkillArtifactCacheEntryLike;
-  guard_report?: SkillGuardReportLike | null;
-  result: SkillGovernanceWriteResultLike;
-}
-
-interface SkillHubManagedDetachResponseLike {
-  lifecycle: SkillManagedLifecycleRecordLike;
-}
-
-interface SkillHubManagedRemoveResponseLike {
-  lifecycle: SkillManagedLifecycleRecordLike;
-  deleted_from_workspace: boolean;
-  result?: SkillGovernanceWriteResultLike | null;
-}
-
-interface RefreshProviderCatalogueResponse {
-  changed: boolean;
-  generation_before: number;
-  generation_after: number;
-  status: "updated" | "not_modified" | "fallback_cached";
-  error_message?: string | null;
-}
 
 interface AppConfigSnapshot extends Record<string, unknown> {
   provider?: Record<string, unknown>;
@@ -618,12 +153,12 @@ interface SettingsDrawerProps {
   onModelChange: (model: string) => void;
   showThinking: boolean;
   onShowThinkingChange: (value: boolean) => void;
-  providers: ProviderRecordLike[];
-  knownProviders: KnownProviderEntryLike[];
-  connectProtocols: ConnectProtocolOptionLike[];
+  providers: ProviderRecord[];
+  knownProviders: KnownProviderEntry[];
+  connectProtocols: ConnectProtocolOption[];
   connectQuery: string;
   onConnectQueryChange: (value: string) => void;
-  connectResolution: ResolveProviderConnectResponseLike | null;
+  connectResolution: ResolveProviderConnectResponseRecord | null;
   connectResolveBusy: boolean;
   connectResolveError: string | null;
   connectProviderId: string;
@@ -674,13 +209,13 @@ function isolatedWorkspaceNotice(tab: SettingsTabId): string | null {
   }
 }
 
-function managedSkillStateLabel(record: ManagedSkillRecordLike): string {
+function managedSkillStateLabel(record: ManagedSkillRecord): string {
   if (record.deleted_locally) return "deleted locally";
   if (record.locally_modified) return "locally modified";
   return "managed clean";
 }
 
-function latestGuardStatusLabel(report: SkillGuardReportLike): string {
+function latestGuardStatusLabel(report: SkillGuardReportRecord): string {
   switch (report.status) {
     case "blocked":
       return "guard blocked";
@@ -709,7 +244,7 @@ function lifecycleStatusClass(state: string): string {
   if (normalized === "installed" || normalized === "fetched" || normalized === "resolved") {
     return "border-green-300 bg-green-50 text-green-800 dark:border-green-700 dark:bg-green-950 dark:text-green-300";
   }
-  return "border-border bg-card/80 text-muted-foreground";
+  return "border-border/40 bg-muted text-muted-foreground";
 }
 
 function unixTimeLabel(value?: number | null): string {
@@ -725,11 +260,6 @@ function unixTimeLabel(value?: number | null): string {
 function formatError(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error ?? "Unknown error");
-}
-
-function memoryRecordIdValue(value: { 0: string } | string | null | undefined): string {
-  if (!value) return "";
-  return typeof value === "string" ? value : value[0] ?? "";
 }
 
 function arrayOrEmpty<T>(value: T[] | null | undefined): T[] {
@@ -846,27 +376,27 @@ export function SettingsDrawer({
   const [feedback, setFeedback] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [configSnapshot, setConfigSnapshot] = useState<AppConfigSnapshot | null>(null);
-  const [managedProviders, setManagedProviders] = useState<ManagedProviderInfo[]>([]);
+  const [managedProviders, setManagedProviders] = useState<ManagedProviderInfoRecord[]>([]);
   const [schedulerConfig, setSchedulerConfig] = useState<SchedulerConfigResponse | null>(null);
   const [schedulerPathDraft, setSchedulerPathDraft] = useState("");
   const [schedulerContentDraft, setSchedulerContentDraft] = useState("");
   const [memorySearchDraft, setMemorySearchDraft] = useState("");
   const [memoryListLoading, setMemoryListLoading] = useState(false);
-  const [memoryListResponse, setMemoryListResponse] = useState<MemoryListResponseLike | null>(null);
+  const [memoryListResponse, setMemoryListResponse] = useState<MemoryListResponseRecord | null>(null);
   const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
   const [memoryDetailLoading, setMemoryDetailLoading] = useState(false);
-  const [memoryDetail, setMemoryDetail] = useState<MemoryDetailResponseLike | null>(null);
+  const [memoryDetail, setMemoryDetail] = useState<MemoryDetailResponseRecord | null>(null);
   const [memoryValidationReport, setMemoryValidationReport] =
-    useState<MemoryValidationReportResponseLike | null>(null);
-  const [memoryConflicts, setMemoryConflicts] = useState<MemoryConflictResponseLike | null>(null);
+    useState<MemoryValidationReportResponseRecord | null>(null);
+  const [memoryConflicts, setMemoryConflicts] = useState<MemoryConflictResponseRecord | null>(null);
   const [memoryPreviewLoading, setMemoryPreviewLoading] = useState(false);
-  const [memoryPreview, setMemoryPreview] = useState<MemoryRetrievalPreviewResponseLike | null>(null);
-  const [memoryRulePacks, setMemoryRulePacks] = useState<MemoryRulePackListResponseLike | null>(null);
-  const [memoryRuleHits, setMemoryRuleHits] = useState<MemoryRuleHitListResponseLike | null>(null);
+  const [memoryPreview, setMemoryPreview] = useState<MemoryRetrievalPreviewResponseRecord | null>(null);
+  const [memoryRulePacks, setMemoryRulePacks] = useState<MemoryRulePackListResponseRecord | null>(null);
+  const [memoryRuleHits, setMemoryRuleHits] = useState<MemoryRuleHitListResponseRecord | null>(null);
   const [memoryConsolidationRuns, setMemoryConsolidationRuns] =
-    useState<MemoryConsolidationRunListResponseLike | null>(null);
+    useState<MemoryConsolidationRunListResponseRecord | null>(null);
   const [memoryConsolidationResult, setMemoryConsolidationResult] =
-    useState<MemoryConsolidationResponseLike | null>(null);
+    useState<MemoryConsolidationResponseRecord | null>(null);
   const [memoryGovernanceLoading, setMemoryGovernanceLoading] = useState(false);
   const [memoryConsolidating, setMemoryConsolidating] = useState(false);
   const [memoryConsolidateIncludeCandidates, setMemoryConsolidateIncludeCandidates] =
@@ -882,25 +412,24 @@ export function SettingsDrawer({
   const [lspStatus, setLspStatus] = useState<LspStatus | null>(null);
   const [formatterStatus, setFormatterStatus] = useState<FormatterStatus | null>(null);
   const [skillCatalog, setSkillCatalog] = useState<SkillCatalogEntry[]>([]);
-  const [managedSkills, setManagedSkills] = useState<ManagedSkillRecordLike[]>([]);
-  const [skillSourceIndices, setSkillSourceIndices] = useState<SkillSourceIndexSnapshotLike[]>([]);
-  const [skillDistributions, setSkillDistributions] = useState<SkillDistributionRecordLike[]>([]);
-  const [skillArtifactCache, setSkillArtifactCache] = useState<SkillArtifactCacheEntryLike[]>([]);
-  const [skillHubPolicy, setSkillHubPolicy] = useState<SkillHubPolicyLike | null>(null);
-  const [skillLifecycle, setSkillLifecycle] = useState<SkillManagedLifecycleRecordLike[]>([]);
-  const [skillAuditEvents, setSkillAuditEvents] = useState<SkillAuditEventLike[]>([]);
-  const [skillGovernanceTimeline, setSkillGovernanceTimeline] = useState<SkillGovernanceTimelineEntryLike[]>([]);
+  const [managedSkills, setManagedSkills] = useState<ManagedSkillRecord[]>([]);
+  const [skillSourceIndices, setSkillSourceIndices] = useState<SkillSourceIndexSnapshotRecord[]>([]);
+  const [skillDistributions, setSkillDistributions] = useState<SkillDistributionRecord[]>([]);
+  const [skillArtifactCache, setSkillArtifactCache] = useState<SkillArtifactCacheEntryRecord[]>([]);
+  const [skillHubPolicy, setSkillHubPolicy] = useState<SkillHubPolicyRecord | null>(null);
+  const [skillLifecycle, setSkillLifecycle] = useState<SkillManagedLifecycleRecord[]>([]);
+  const [skillGovernanceTimeline, setSkillGovernanceTimeline] = useState<SkillGovernanceTimelineEntryRecord[]>([]);
   const [skillSyncSourceId, setSkillSyncSourceId] = useState("");
-  const [skillSyncSourceKind, setSkillSyncSourceKind] = useState<SkillSourceRefLike["source_kind"]>("local_path");
+  const [skillSyncSourceKind, setSkillSyncSourceKind] = useState<SkillSourceRefRecord["source_kind"]>("local_path");
   const [skillSyncLocator, setSkillSyncLocator] = useState("");
   const [skillSyncRevision, setSkillSyncRevision] = useState("");
-  const [skillSyncPlan, setSkillSyncPlan] = useState<SkillSyncPlanLike | null>(null);
+  const [skillSyncPlan, setSkillSyncPlan] = useState<SkillSyncPlanRecord | null>(null);
   const [remoteInstallSkillName, setRemoteInstallSkillName] = useState("");
-  const [remoteInstallPlan, setRemoteInstallPlan] = useState<SkillRemoteInstallPlanLike | null>(null);
-  const [skillGuardReports, setSkillGuardReports] = useState<SkillGuardReportLike[]>([]);
+  const [remoteInstallPlan, setRemoteInstallPlan] = useState<SkillRemoteInstallPlanRecord | null>(null);
+  const [skillGuardReports, setSkillGuardReports] = useState<SkillGuardReportRecord[]>([]);
   const [skillGuardTarget, setSkillGuardTarget] = useState<string | null>(null);
   const [selectedSkillName, setSelectedSkillName] = useState<string | null>(null);
-  const [skillDetail, setSkillDetail] = useState<SkillDetailResponse | null>(null);
+  const [skillDetail, setSkillDetail] = useState<SkillDetailResponseRecord | null>(null);
   const [skillDetailLoading, setSkillDetailLoading] = useState(false);
   const [skillEditorContent, setSkillEditorContent] = useState("");
   const [editSkillEditorMode, setEditSkillEditorMode] = useState<SkillEditorMode>("raw");
@@ -1016,7 +545,7 @@ export function SettingsDrawer({
     );
   }, [selectedRemoteDistribution, skillArtifactCache]);
   const latestGuardBySkill = useMemo(() => {
-    const result = new Map<string, SkillGuardReportLike>();
+    const result = new Map<string, SkillGuardReportRecord>();
     for (const entry of skillGovernanceTimeline) {
       const key = entry.skill_name?.trim().toLowerCase();
       if (!key || result.has(key) || !entry.guard_report) {
@@ -1050,21 +579,21 @@ export function SettingsDrawer({
       const [config, managed, scheduler, mcp, plugins, lsp, formatter, skills, skillHubManaged, skillHubIndex, skillHubDistributions, skillHubArtifactCache, skillHubPolicyResponse, skillHubLifecycle, skillHubAudit, skillHubTimeline] =
         await Promise.all([
           apiJson<AppConfigSnapshot>("/config"),
-          apiJson<{ providers: ManagedProviderInfo[] }>("/provider/managed"),
+          apiJson<{ providers: ManagedProviderInfoRecord[] }>("/provider/managed"),
           apiJson<SchedulerConfigResponse>("/config/scheduler"),
           apiJson<Record<string, McpStatusInfo>>("/mcp"),
           apiJson<PluginAuthProviderInfo[]>("/plugin/auth").catch(() => []),
           apiJson<LspStatus>("/lsp"),
           apiJson<FormatterStatus>("/formatter"),
           apiJson<SkillCatalogEntry[]>(skillCatalogPath),
-          apiJson<SkillHubManagedResponseLike>("/skill/hub/managed"),
-          apiJson<SkillHubIndexResponseLike>("/skill/hub/index"),
-          apiJson<SkillHubDistributionResponseLike>("/skill/hub/distributions"),
-          apiJson<SkillHubArtifactCacheResponseLike>("/skill/hub/artifact-cache"),
-          apiJson<SkillHubPolicyResponseLike>("/skill/hub/policy"),
-          apiJson<SkillHubLifecycleResponseLike>("/skill/hub/lifecycle"),
-          apiJson<SkillHubAuditResponseLike>("/skill/hub/audit"),
-          apiJson<SkillHubTimelineResponseLike>("/skill/hub/timeline?limit=120"),
+          apiJson<SkillHubManagedResponseRecord>("/skill/hub/managed"),
+          apiJson<SkillHubIndexResponseRecord>("/skill/hub/index"),
+          apiJson<SkillHubDistributionResponseRecord>("/skill/hub/distributions"),
+          apiJson<SkillHubArtifactCacheResponseRecord>("/skill/hub/artifact-cache"),
+          apiJson<SkillHubPolicyResponseRecord>("/skill/hub/policy"),
+          apiJson<SkillHubLifecycleResponseRecord>("/skill/hub/lifecycle"),
+          apiJson<SkillHubAuditResponseRecord>("/skill/hub/audit"),
+          apiJson<SkillHubTimelineResponseRecord>("/skill/hub/timeline?limit=120"),
         ]);
       setConfigSnapshot(config);
       setManagedProviders(managed.providers ?? []);
@@ -1111,7 +640,7 @@ export function SettingsDrawer({
       applyPreview: (body: string, error: string | null) => void,
     ) => {
       try {
-        const response = await apiJson<SkillMethodologyPreviewResponseLike>(
+        const response = await apiJson<SkillMethodologyPreviewResponseRecord>(
           "/skill/methodology/preview",
           {
             method: "POST",
@@ -1142,7 +671,7 @@ export function SettingsDrawer({
       }
       const route = memorySearchDraft.trim() ? "/memory/search" : "/memory/list";
       const path = `${route}${params.toString() ? `?${params.toString()}` : ""}`;
-      const response = await apiJson<MemoryListResponseLike>(path);
+      const response = await apiJson<MemoryListResponseRecord>(path);
       response.items = arrayOrEmpty(response.items);
       if (response.contract) {
         response.contract.search_fields = arrayOrEmpty(response.contract.search_fields);
@@ -1182,7 +711,7 @@ export function SettingsDrawer({
         params.set("session_id", selectedSessionId);
       }
       const path = `/memory/retrieval-preview?${params.toString()}`;
-      const response = await apiJson<MemoryRetrievalPreviewResponseLike>(path);
+      const response = await apiJson<MemoryRetrievalPreviewResponseRecord>(path);
       response.packet.items = arrayOrEmpty(response.packet.items);
       response.packet.scopes = arrayOrEmpty(response.packet.scopes);
       if (response.contract) {
@@ -1206,9 +735,9 @@ export function SettingsDrawer({
     setMemoryGovernanceLoading(true);
     try {
       const [rulePacks, ruleHits, runs] = await Promise.all([
-        apiJson<MemoryRulePackListResponseLike>("/memory/rule-packs"),
-        apiJson<MemoryRuleHitListResponseLike>("/memory/rule-hits?limit=30"),
-        apiJson<MemoryConsolidationRunListResponseLike>("/memory/consolidation/runs?limit=20"),
+        apiJson<MemoryRulePackListResponseRecord>("/memory/rule-packs"),
+        apiJson<MemoryRuleHitListResponseRecord>("/memory/rule-hits?limit=30"),
+        apiJson<MemoryConsolidationRunListResponseRecord>("/memory/consolidation/runs?limit=20"),
       ]);
       rulePacks.items = arrayOrEmpty(rulePacks.items).map((pack) => ({
         ...pack,
@@ -1231,7 +760,7 @@ export function SettingsDrawer({
   const runMemoryConsolidation = useCallback(async () => {
     setMemoryConsolidating(true);
     try {
-      const response = await apiJson<MemoryConsolidationResponseLike>("/memory/consolidate", {
+      const response = await apiJson<MemoryConsolidationResponseRecord>("/memory/consolidate", {
         method: "POST",
         body: JSON.stringify({
           include_candidates: memoryConsolidateIncludeCandidates,
@@ -1304,11 +833,11 @@ export function SettingsDrawer({
     void (async () => {
       try {
         const [detail, validation, conflicts] = await Promise.all([
-          apiJson<MemoryDetailResponseLike>(`/memory/${encodeURIComponent(selectedMemoryId)}`),
-          apiJson<MemoryValidationReportResponseLike>(
+          apiJson<MemoryDetailResponseRecord>(`/memory/${encodeURIComponent(selectedMemoryId)}`),
+          apiJson<MemoryValidationReportResponseRecord>(
             `/memory/${encodeURIComponent(selectedMemoryId)}/validation-report`,
           ),
-          apiJson<MemoryConflictResponseLike>(
+          apiJson<MemoryConflictResponseRecord>(
             `/memory/${encodeURIComponent(selectedMemoryId)}/conflicts`,
           ),
         ]);
@@ -1420,13 +949,13 @@ export function SettingsDrawer({
         const detailPath = selectedSessionId
           ? `/skill/detail?name=${encodeURIComponent(selectedSkillName)}&session_id=${encodeURIComponent(selectedSessionId)}`
           : `/skill/detail?name=${encodeURIComponent(selectedSkillName)}`;
-        const detail = await apiJson<SkillDetailResponse>(
+        const detail = await apiJson<SkillDetailResponseRecord>(
           detailPath,
         );
         if (cancelled) return;
-        let extractedMethodology: SkillMethodologyTemplateLike | null = null;
+        let extractedMethodology: SkillMethodologyTemplateRecord | null = null;
         try {
-          const extracted = await apiJson<SkillMethodologyExtractResponseLike>(
+          const extracted = await apiJson<SkillMethodologyExtractResponseRecord>(
             "/skill/methodology/extract",
             {
               method: "POST",
@@ -1625,7 +1154,7 @@ export function SettingsDrawer({
     setBusyKey("provider:refresh");
     setFeedback(null);
     try {
-      const response = await apiJson<RefreshProviderCatalogueResponse>("/provider/refresh", {
+      const response = await apiJson<RefreshProviderCatalogueResponseRecord>("/provider/refresh", {
         method: "POST",
       });
       await Promise.all([reloadSettingsData(), onReloadCoreData()]);
@@ -1658,7 +1187,7 @@ export function SettingsDrawer({
     );
   };
 
-  const buildSkillSyncSource = useCallback((): SkillSourceRefLike => {
+  const buildSkillSyncSource = useCallback((): SkillSourceRefRecord => {
     if (!skillSyncSourceId.trim()) {
       throw new Error("Skill hub source_id is required.");
     }
@@ -1678,7 +1207,7 @@ export function SettingsDrawer({
     setBusyKey(`skill:sync:plan:${source.source_id}`);
     setFeedback(null);
     try {
-      const response = await apiJson<SkillHubSyncPlanResponseLike>("/skill/hub/sync/plan", {
+      const response = await apiJson<SkillHubSyncPlanResponseRecord>("/skill/hub/sync/plan", {
         method: "POST",
         body: JSON.stringify({ source }),
       });
@@ -1699,7 +1228,7 @@ export function SettingsDrawer({
     setBusyKey(`skill:index:refresh:${source.source_id}`);
     setFeedback(null);
     try {
-      const response = await apiJson<SkillHubIndexRefreshResponseLike>("/skill/hub/index/refresh", {
+      const response = await apiJson<SkillHubIndexRefreshResponseRecord>("/skill/hub/index/refresh", {
         method: "POST",
         body: JSON.stringify({ source }),
       });
@@ -1716,11 +1245,11 @@ export function SettingsDrawer({
     }
   };
 
-  const runGuard = async (request: SkillHubGuardRunRequestLike, targetLabel: string) => {
+  const runGuard = async (request: SkillHubGuardRunRequestRecord, targetLabel: string) => {
     await runMutation(
       `skill:guard:${targetLabel}`,
       async () => {
-        const response = await apiJson<SkillHubGuardRunResponseLike>("/skill/hub/guard/run", {
+        const response = await apiJson<SkillHubGuardRunResponseRecord>("/skill/hub/guard/run", {
           method: "POST",
           body: JSON.stringify(request),
         });
@@ -1742,7 +1271,7 @@ export function SettingsDrawer({
     await runMutation(
       `skill:sync:apply:${source.source_id}`,
       async () => {
-        const response = await apiJson<SkillHubSyncPlanResponseLike>("/skill/hub/sync/apply", {
+        const response = await apiJson<SkillHubSyncPlanResponseRecord>("/skill/hub/sync/apply", {
           method: "POST",
           body: JSON.stringify({
             session_id: selectedSessionId,
@@ -1767,7 +1296,7 @@ export function SettingsDrawer({
     setBusyKey(`skill:install:plan:${source.source_id}:${skillName}`);
     setFeedback(null);
     try {
-      const response = await apiJson<SkillRemoteInstallPlanLike>("/skill/hub/install/plan", {
+      const response = await apiJson<SkillRemoteInstallPlanRecord>("/skill/hub/install/plan", {
         method: "POST",
         body: JSON.stringify({
           source,
@@ -1798,7 +1327,7 @@ export function SettingsDrawer({
     await runMutation(
       `skill:install:apply:${source.source_id}:${skillName}`,
       async () => {
-        const response = await apiJson<SkillRemoteInstallResponseLike>("/skill/hub/install/apply", {
+        const response = await apiJson<SkillRemoteInstallResponseRecord>("/skill/hub/install/apply", {
           method: "POST",
           body: JSON.stringify({
             session_id: selectedSessionId,
@@ -1826,7 +1355,7 @@ export function SettingsDrawer({
     setBusyKey(`skill:update:plan:${source.source_id}:${skillName}`);
     setFeedback(null);
     try {
-      const response = await apiJson<SkillRemoteInstallPlanLike>("/skill/hub/update/plan", {
+      const response = await apiJson<SkillRemoteInstallPlanRecord>("/skill/hub/update/plan", {
         method: "POST",
         body: JSON.stringify({
           source,
@@ -1857,7 +1386,7 @@ export function SettingsDrawer({
     await runMutation(
       `skill:update:apply:${source.source_id}:${skillName}`,
       async () => {
-        const response = await apiJson<SkillRemoteInstallResponseLike>("/skill/hub/update/apply", {
+        const response = await apiJson<SkillRemoteInstallResponseRecord>("/skill/hub/update/apply", {
           method: "POST",
           body: JSON.stringify({
             session_id: selectedSessionId,
@@ -1886,7 +1415,7 @@ export function SettingsDrawer({
     await runMutation(
       `skill:detach:${source.source_id}:${skillName}`,
       async () => {
-        const response = await apiJson<SkillHubManagedDetachResponseLike>("/skill/hub/detach", {
+        const response = await apiJson<SkillHubManagedDetachResponseRecord>("/skill/hub/detach", {
           method: "POST",
           body: JSON.stringify({
             session_id: selectedSessionId,
@@ -1910,7 +1439,7 @@ export function SettingsDrawer({
     await runMutation(
       `skill:remove:${source.source_id}:${skillName}`,
       async () => {
-        const response = await apiJson<SkillHubManagedRemoveResponseLike>("/skill/hub/remove", {
+        const response = await apiJson<SkillHubManagedRemoveResponseRecord>("/skill/hub/remove", {
           method: "POST",
           body: JSON.stringify({
             session_id: selectedSessionId,
@@ -1936,7 +1465,7 @@ export function SettingsDrawer({
           newSkillEditorMode === "methodology"
             ? buildMethodologyTemplateFromDraft(newSkillMethodologyDraft)
             : undefined;
-        const response = await apiJson<SkillManageResponseLike>("/skill/manage", {
+        const response = await apiJson<SkillManageResponseRecord>("/skill/manage", {
           method: "POST",
           body: JSON.stringify({
             session_id: selectedSessionId,
@@ -1971,7 +1500,7 @@ export function SettingsDrawer({
       `skill:edit:${selectedSkillName}`,
       async () => {
         const structuredMode = editSkillEditorMode === "methodology";
-        const response = await apiJson<SkillManageResponseLike>("/skill/manage", {
+        const response = await apiJson<SkillManageResponseRecord>("/skill/manage", {
           method: "POST",
           body: JSON.stringify({
             session_id: selectedSessionId,
@@ -1998,7 +1527,7 @@ export function SettingsDrawer({
     await runMutation(
       `skill:delete:${deletedSkillName}`,
       async () => {
-        await apiJson<SkillManageResponseLike>("/skill/manage", {
+        await apiJson<SkillManageResponseRecord>("/skill/manage", {
           method: "POST",
           body: JSON.stringify({
             session_id: selectedSessionId,
@@ -2023,30 +1552,30 @@ export function SettingsDrawer({
   };
 
   const providerSummary = `${providers.length} connected / ${knownProviders.length} known`;
-  const chooseKnownProvider = (provider: KnownProviderEntryLike) => {
+  const chooseKnownProvider = (provider: KnownProviderEntry) => {
     onConnectQueryChange(provider.id);
   };
   const secondaryButtonClass =
     "roc-action min-h-[36px] px-4 text-foreground text-sm cursor-pointer transition-colors";
   const primaryButtonClass =
-    "min-h-[36px] rounded-lg px-5 border border-foreground bg-foreground text-background text-sm font-semibold inline-flex items-center justify-center cursor-pointer transition-colors disabled:cursor-not-allowed disabled:opacity-60";
-  const summaryCardClass = "rounded-xl border border-border/40 bg-card/72 p-4 grid gap-2";
-  const sectionCardClass = "grid gap-4 rounded-xl border border-border/40 bg-card/65 p-5";
-  const mutedCardClass = "rounded-xl border border-border/35 bg-muted/10 px-4 py-3 text-sm leading-relaxed text-muted-foreground";
+    "min-h-[36px] rounded-lg px-5 bg-foreground text-background text-sm font-semibold inline-flex items-center justify-center cursor-pointer transition-colors disabled:cursor-not-allowed disabled:opacity-60";
+  const summaryCardClass = "rounded-lg border border-border/30 bg-card p-4 grid gap-1";
+  const sectionCardClass = "grid gap-4 rounded-lg bg-muted/30 p-5";
+  const mutedCardClass = "rounded-lg bg-muted/40 px-4 py-3 text-sm leading-relaxed text-muted-foreground";
   const editorTextareaClass =
-    "min-h-40 w-full resize-y rounded-xl border border-border/45 bg-background/78 p-3.5 text-foreground leading-relaxed font-mono text-sm";
+    "min-h-40 w-full resize-y rounded-lg border border-border/40 bg-background p-3.5 text-foreground leading-relaxed font-mono text-sm";
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-start justify-end" data-testid="settings-overlay" onClick={onClose}>
       <section
-        className="h-full w-full max-w-3xl bg-card border-l border-border/50 overflow-y-auto p-8 flex flex-col gap-6"
+        className="h-full w-full max-w-3xl bg-background border-l border-border/60 overflow-y-auto flex flex-col"
         data-testid="settings-drawer"
         onClick={(event) => event.stopPropagation()}
       >
-        <header className="flex items-start justify-between gap-4">
+        <header className="flex items-start justify-between gap-4 px-8 pt-8 pb-6">
           <div>
             <p className="m-0 mb-1.5 text-xs tracking-widest uppercase text-amber-700 font-bold">Settings</p>
-            <h2>General, providers, scheduler, skills, MCP, plugins, LSP</h2>
+            <h2 className="text-xl font-semibold tracking-tight">General, providers, scheduler, skills, MCP, plugins, LSP</h2>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -2063,30 +1592,33 @@ export function SettingsDrawer({
           </div>
         </header>
 
-        <div className="flex flex-wrap gap-2 border-b border-border pb-4">
-          {SETTINGS_TABS.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              data-testid={`settings-tab-${tab.id}`}
-              className={
-                activeTab === tab.id
-                  ? "px-4 py-2 rounded-lg border border-foreground/10 cursor-pointer text-sm bg-foreground text-background font-semibold"
-                  : "px-4 py-2 rounded-lg border border-transparent cursor-pointer text-sm bg-transparent text-foreground hover:bg-accent"
-              }
-              onClick={() => setActiveTab(tab.id)}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+        <nav className="px-8 border-b border-border/60">
+          <div className="flex flex-wrap gap-6">
+            {SETTINGS_TABS.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                data-testid={`settings-tab-${tab.id}`}
+                className={cn(
+                  "relative py-2.5 text-sm font-medium cursor-pointer transition-colors",
+                  activeTab === tab.id ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+                )}
+                onClick={() => setActiveTab(tab.id)}
+              >
+                {tab.label}
+                {activeTab === tab.id && (
+                  <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-foreground rounded-t-sm" />
+                )}
+              </button>
+            ))}
+          </div>
+        </nav>
 
-        {feedback ? <div className="rounded-xl border border-amber-300 bg-amber-50/80 px-5 py-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200">{feedback}</div> : null}
-
-        <div className="flex flex-col gap-6 flex-1 min-h-0">
+        <div className="flex flex-col gap-6 flex-1 min-h-0 px-8 pb-8 pt-6">
+          {feedback ? <div className="rounded-lg border border-amber-300 bg-amber-50/80 px-4 py-2.5 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200">{feedback}</div> : null}
           {loading ? <div className="flex flex-col items-center justify-center gap-3 text-muted-foreground py-8">Loading settings...</div> : null}
           {!loading && isolatedNotice ? (
-            <div className="rounded-xl border border-amber-300 bg-amber-50/80 px-5 py-3 text-sm leading-relaxed text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200">
+            <div className="rounded-lg border border-amber-300 bg-amber-50/80 px-4 py-2.5 text-sm leading-relaxed text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200">
               {isolatedNotice}
             </div>
           ) : null}
@@ -2102,8 +1634,8 @@ export function SettingsDrawer({
                       type="button"
                       className={
                         theme === item.id
-                          ? "px-4 py-2 rounded-lg border border-foreground/10 cursor-pointer text-sm bg-foreground text-background font-semibold"
-                          : "px-4 py-2 rounded-lg border border-transparent cursor-pointer text-sm bg-transparent text-foreground hover:bg-accent"
+                          ? "px-3.5 py-1.5 rounded-md cursor-pointer text-sm bg-foreground text-background font-medium"
+                          : "px-3.5 py-1.5 rounded-md cursor-pointer text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
                       }
                       onClick={() => onThemeChange(item.id)}
                     >
@@ -2175,10 +1707,10 @@ export function SettingsDrawer({
                 ) : null}
                 <div
                   className={cn(
-                    "rounded-xl border px-4 py-3 text-sm leading-relaxed",
+                    "rounded-lg px-4 py-3 text-sm leading-relaxed",
                     workspaceMode === "isolated"
-                      ? "border-amber-300 bg-amber-50/80 text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200"
-                      : "border-border/35 bg-muted/10 text-muted-foreground",
+                      ? "bg-amber-50/80 text-amber-900 dark:bg-amber-950/60 dark:text-amber-200"
+                      : "bg-muted/40 text-muted-foreground",
                   )}
                 >
                   {workspaceMode === "isolated"
@@ -2248,7 +1780,7 @@ export function SettingsDrawer({
                   </button>
                 </div>
 
-                <div className="flex flex-col gap-3 rounded-xl border border-border/35 bg-muted/10 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex flex-col gap-3 rounded-lg bg-muted/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                   <label className="flex items-center gap-3 text-sm cursor-pointer">
                     <input
                       type="checkbox"
@@ -2326,10 +1858,10 @@ export function SettingsDrawer({
                             key={recordId}
                             type="button"
                             className={cn(
-                              "grid gap-2 rounded-xl border px-4 py-3 text-left transition-colors",
+                              "grid gap-2 rounded-lg border px-4 py-3 text-left transition-colors",
                               active
                                 ? "border-foreground/20 bg-foreground text-background"
-                                : "border-border/40 bg-card/50 hover:bg-accent",
+                                : "border-border/40 bg-card hover:bg-accent",
                             )}
                             onClick={() => setSelectedMemoryId(recordId)}
                           >
@@ -2467,7 +1999,7 @@ export function SettingsDrawer({
                           <div className="grid gap-2 text-sm">
                             {arrayOrEmpty(memoryConflicts?.conflicts).length ? (
                               arrayOrEmpty(memoryConflicts?.conflicts).map((conflict) => (
-                                <div key={conflict.id} className="rounded-lg border border-border/35 bg-muted/10 p-3">
+                                <div key={conflict.id} className="rounded-lg bg-muted/40 p-3">
                                   <strong className="block">{conflict.conflict_kind}</strong>
                                   <span className="block text-muted-foreground">
                                     Other: {memoryRecordIdValue(conflict.other_record_id)}
@@ -2490,7 +2022,7 @@ export function SettingsDrawer({
                         <div className="grid gap-2 text-sm">
                           {arrayOrEmpty(memoryDetail.record.evidence_refs).length ? (
                             arrayOrEmpty(memoryDetail.record.evidence_refs).map((ref, index) => (
-                              <div key={`${ref.session_id ?? "session"}-${index}`} className="rounded-lg border border-border/35 bg-muted/10 p-3">
+                              <div key={`${ref.session_id ?? "session"}-${index}`} className="rounded-lg bg-muted/40 p-3">
                                 <div>session: {ref.session_id || "--"}</div>
                                 <div>message: {ref.message_id || "--"}</div>
                                 <div>tool: {ref.tool_call_id || "--"}</div>
@@ -2532,7 +2064,7 @@ export function SettingsDrawer({
                     arrayOrEmpty(memoryPreview?.packet.items).map((item) => (
                       <div
                         key={memoryRecordIdValue(item.card.id)}
-                        className="rounded-xl border border-border/40 bg-card/55 p-4"
+                        className="rounded-lg border border-border/40 bg-card p-4"
                       >
                         <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
                           <span>{item.card.kind}</span>
@@ -2570,7 +2102,7 @@ export function SettingsDrawer({
                       memoryRulePacks.items.map((pack) => (
                         <div
                           key={pack.id}
-                          className="rounded-xl border border-border/40 bg-card/55 p-4"
+                          className="rounded-lg border border-border/40 bg-card p-4"
                         >
                           <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
                             <span>{pack.rule_pack_kind}</span>
@@ -2581,7 +2113,7 @@ export function SettingsDrawer({
                           <div className="mt-3 grid gap-2 text-sm">
                             {arrayOrEmpty(pack.rules).length ? (
                               arrayOrEmpty(pack.rules).map((rule) => (
-                                <div key={rule.id} className="rounded-lg border border-border/35 bg-muted/10 p-3">
+                                <div key={rule.id} className="rounded-lg bg-muted/40 p-3">
                                   <strong className="block">{rule.id}</strong>
                                   <span className="block text-muted-foreground">{rule.description}</span>
                                   {rule.promotion_target ? (
@@ -2622,7 +2154,7 @@ export function SettingsDrawer({
                         arrayOrEmpty(memoryRuleHits?.items).map((hit) => (
                           <div
                             key={hit.id}
-                            className="rounded-xl border border-border/40 bg-card/55 p-4"
+                            className="rounded-lg border border-border/40 bg-card p-4"
                           >
                             <strong className="block text-sm">{hit.hit_kind}</strong>
                             <div className="mt-2 grid gap-1 text-sm">
@@ -2657,7 +2189,7 @@ export function SettingsDrawer({
                     </div>
                     <div className="grid gap-3">
                       {memoryConsolidationResult ? (
-                        <div className="rounded-xl border border-foreground/15 bg-foreground text-background p-4">
+                        <div className="rounded-lg bg-foreground text-background p-4">
                           <strong className="block text-sm">Latest Consolidation</strong>
                           <div className="mt-2 grid gap-1 text-sm text-background/85">
                             <span>run: {memoryConsolidationResult.run.run_id}</span>
@@ -2681,7 +2213,7 @@ export function SettingsDrawer({
                         arrayOrEmpty(memoryConsolidationRuns?.items).map((run) => (
                           <div
                             key={run.run_id}
-                            className="rounded-xl border border-border/40 bg-card/55 p-4"
+                            className="rounded-lg border border-border/40 bg-card p-4"
                           >
                             <strong className="block text-sm">{run.run_id}</strong>
                             <div className="mt-2 grid gap-1 text-sm">
@@ -2821,7 +2353,7 @@ export function SettingsDrawer({
                   <div className="flex items-center gap-2">
                     <span>{providerSummary}</span>
                     <button
-                      className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                      className="min-h-[36px] rounded-lg px-4 border border-border/40 bg-card text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-colors hover:bg-accent"
                       type="button"
                       disabled={busyKey === "provider:refresh"}
                       onClick={() => void refreshProviderCatalogue()}
@@ -2831,7 +2363,7 @@ export function SettingsDrawer({
                   </div>
                 </div>
                 {providers.map((provider) => (
-                  <div key={provider.id} className="rounded-xl border border-border bg-card/70 p-4 flex items-start justify-between gap-4">
+                  <div key={provider.id} className="rounded-lg border border-border/40 bg-card p-4 flex items-start justify-between gap-4">
                     <div>
                       <strong>{provider.name}</strong>
                       <p className="text-sm text-muted-foreground leading-relaxed">
@@ -2839,7 +2371,7 @@ export function SettingsDrawer({
                       </p>
                     </div>
                     <button
-                      className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                      className="min-h-[36px] rounded-lg px-4 border border-border/40 bg-card text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-colors hover:bg-accent"
                       type="button"
                       disabled={busyKey === `provider:delete:${provider.id}`}
                       onClick={() => void removeProvider(provider.id)}
@@ -2856,7 +2388,7 @@ export function SettingsDrawer({
                   <span>{managedProviders.length} items</span>
                 </div>
                 {managedProviders.map((provider) => (
-                  <div key={provider.id} className="rounded-xl border border-border bg-card/70 p-4 flex items-start justify-between gap-4">
+                  <div key={provider.id} className="rounded-lg border border-border/40 bg-card p-4 flex items-start justify-between gap-4">
                     <div>
                       <strong>{provider.name}</strong>
                       <p className="text-sm text-muted-foreground leading-relaxed">
@@ -2914,7 +2446,7 @@ export function SettingsDrawer({
                   </button>
                 </div>
                 {schedulerConfig?.parse_error ? (
-                  <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{schedulerConfig.parse_error}</div>
+                  <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{schedulerConfig.parse_error}</div>
                 ) : null}
               </div>
 
@@ -2925,7 +2457,7 @@ export function SettingsDrawer({
                 </div>
                 {schedulerConfig?.profiles.length ? (
                   schedulerConfig.profiles.map((profile) => (
-                    <div key={profile.key} className="rounded-xl border border-border bg-card/70 p-4 flex items-start justify-between gap-4">
+                    <div key={profile.key} className="rounded-lg border border-border/40 bg-card p-4 flex items-start justify-between gap-4">
                       <div>
                         <strong>{profile.key}</strong>
                         <p className="text-sm text-muted-foreground leading-relaxed">
@@ -2977,7 +2509,7 @@ export function SettingsDrawer({
                   </div>
                 ) : null}
                 {!skillsMutationsEnabled ? (
-                  <div className="rounded-xl border border-amber-300 bg-amber-50/80 px-4 py-3 text-sm leading-relaxed text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200">
+                  <div className="rounded-lg border border-amber-300 bg-amber-50/80 px-4 py-2.5 text-sm leading-relaxed text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200">
                     Select or create a session before managing skills so permission prompts can be
                     routed to the active session.
                   </div>
@@ -3004,7 +2536,7 @@ export function SettingsDrawer({
                   />
                   <select
                     value={skillSyncSourceKind}
-                    onChange={(event) => setSkillSyncSourceKind(event.target.value as SkillSourceRefLike["source_kind"])}
+                    onChange={(event) => setSkillSyncSourceKind(event.target.value as SkillSourceRefRecord["source_kind"])}
                   >
                     <option value="local_path">local_path</option>
                     <option value="bundled">bundled</option>
@@ -3070,7 +2602,7 @@ export function SettingsDrawer({
                   <div className="grid gap-3">
                     <div className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Managed Skills</div>
                     {managedSkills.length ? managedSkills.slice(0, 8).map((record) => (
-                      <div key={record.skill_name} className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm">
+                      <div key={record.skill_name} className="rounded-lg bg-muted/40 p-3 text-sm">
                         <div className="flex items-start justify-between gap-3">
                           <strong>{record.skill_name}</strong>
                           <span className="text-muted-foreground">{record.installed_revision || "--"}</span>
@@ -3080,7 +2612,7 @@ export function SettingsDrawer({
                         </div>
                       </div>
                     )) : (
-                      <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm text-muted-foreground">No managed records yet.</div>
+                      <div className="rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">No managed records yet.</div>
                     )}
                   </div>
 
@@ -3106,12 +2638,12 @@ export function SettingsDrawer({
                         <div className="mt-1 break-all text-xs text-muted-foreground">{snapshot.source.locator}</div>
                       </button>
                     )) : (
-                      <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm text-muted-foreground">No source index cached yet.</div>
+                      <div className="rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">No source index cached yet.</div>
                     )}
                   </div>
                 </div>
 
-                <div className="grid gap-4 rounded-xl border border-border/35 bg-muted/8 p-4">
+                <div className="grid gap-4 rounded-lg bg-muted/30 p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="m-0 text-xs tracking-widest uppercase text-muted-foreground font-semibold">Remote Install</p>
@@ -3230,7 +2762,7 @@ export function SettingsDrawer({
                   </div>
 
                   {selectedRemoteSourceEntry ? (
-                    <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm">
+                    <div className="rounded-lg bg-muted/40 p-3 text-sm">
                       <div className="flex items-start justify-between gap-3">
                         <strong>{selectedRemoteSourceEntry.skill_name}</strong>
                         <span className="text-muted-foreground">
@@ -3245,7 +2777,7 @@ export function SettingsDrawer({
                       </div>
                     </div>
                   ) : (
-                    <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm text-muted-foreground">
+                    <div className="rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">
                       Type a skill name from the selected source index to preview or apply a remote install.
                     </div>
                   )}
@@ -3292,7 +2824,7 @@ export function SettingsDrawer({
                       <div className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">
                         Hub Policy
                       </div>
-                      <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm">
+                      <div className="rounded-lg bg-muted/40 p-3 text-sm">
                         {skillHubPolicy ? (
                           <div className="grid gap-2 text-muted-foreground">
                             <div>
@@ -3321,7 +2853,7 @@ export function SettingsDrawer({
                         Distribution Snapshot
                       </div>
                       {selectedRemoteDistribution ? (
-                        <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm">
+                        <div className="rounded-lg bg-muted/40 p-3 text-sm">
                           <div className="flex items-center justify-between gap-3">
                             <strong>{selectedRemoteDistribution.skill_name}</strong>
                             <span
@@ -3349,7 +2881,7 @@ export function SettingsDrawer({
                           ) : null}
                         </div>
                       ) : (
-                        <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm text-muted-foreground">
+                        <div className="rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">
                           No resolved distribution recorded for the current remote skill yet.
                         </div>
                       )}
@@ -3360,7 +2892,7 @@ export function SettingsDrawer({
                         Artifact Cache
                       </div>
                       {selectedRemoteArtifactCache ? (
-                        <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm">
+                        <div className="rounded-lg bg-muted/40 p-3 text-sm">
                           <div className="flex items-center justify-between gap-3">
                             <strong>{selectedRemoteArtifactCache.artifact.artifact_id}</strong>
                             <span
@@ -3384,7 +2916,7 @@ export function SettingsDrawer({
                             </div>
                           ) : null}
                           {selectedRemoteArtifactCache.error ? (
-                            <div className="mt-2 rounded-xl border border-red-300 bg-red-50/80 px-3 py-2 text-xs leading-relaxed text-red-800 dark:border-red-700 dark:bg-red-950/60 dark:text-red-300">
+                            <div className="mt-2 rounded-lg border border-red-300 bg-red-50/80 px-3 py-2 text-xs leading-relaxed text-red-800 dark:border-red-700 dark:bg-red-950/60 dark:text-red-300">
                               {selectedRemoteArtifactCache.error}
                             </div>
                           ) : (
@@ -3394,7 +2926,7 @@ export function SettingsDrawer({
                           )}
                         </div>
                       ) : (
-                        <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm text-muted-foreground">
+                        <div className="rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">
                           No artifact cache entry captured yet for the current remote skill.
                         </div>
                       )}
@@ -3405,7 +2937,7 @@ export function SettingsDrawer({
                         Lifecycle State
                       </div>
                       {selectedRemoteLifecycle ? (
-                        <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm">
+                        <div className="rounded-lg bg-muted/40 p-3 text-sm">
                           <div className="flex items-center justify-between gap-3">
                             <strong>{selectedRemoteLifecycle.skill_name}</strong>
                             <span
@@ -3421,7 +2953,7 @@ export function SettingsDrawer({
                             updated {unixTimeLabel(selectedRemoteLifecycle.updated_at)}
                           </div>
                           {selectedRemoteLifecycle.error ? (
-                            <div className="mt-2 rounded-xl border border-red-300 bg-red-50/80 px-3 py-2 text-xs leading-relaxed text-red-800 dark:border-red-700 dark:bg-red-950/60 dark:text-red-300">
+                            <div className="mt-2 rounded-lg border border-red-300 bg-red-50/80 px-3 py-2 text-xs leading-relaxed text-red-800 dark:border-red-700 dark:bg-red-950/60 dark:text-red-300">
                               {selectedRemoteLifecycle.error}
                             </div>
                           ) : (
@@ -3431,7 +2963,7 @@ export function SettingsDrawer({
                           )}
                         </div>
                       ) : (
-                        <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm text-muted-foreground">
+                        <div className="rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">
                           No lifecycle record captured yet for the current remote skill.
                         </div>
                       )}
@@ -3440,13 +2972,13 @@ export function SettingsDrawer({
                 </div>
 
                 {skillSyncPlan ? (
-                  <div className="grid gap-3 rounded-xl border border-border/35 bg-muted/8 p-4">
+                  <div className="grid gap-3 rounded-lg bg-muted/30 p-4">
                     <div className="flex items-center justify-between gap-3">
                       <strong>Sync Plan · {skillSyncPlan.source_id}</strong>
                       <span className="text-sm text-muted-foreground">{skillSyncPlan.entries.length} entries</span>
                     </div>
                     {skillSyncPlan.entries.length ? skillSyncPlan.entries.map((entry) => (
-                      <div key={`${entry.skill_name}:${entry.action}`} className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm">
+                      <div key={`${entry.skill_name}:${entry.action}`} className="rounded-lg bg-muted/40 p-3 text-sm">
                         <div className="flex items-start justify-between gap-3">
                           <strong>{entry.skill_name}</strong>
                           <span className="text-xs uppercase tracking-wide text-muted-foreground">{entry.action}</span>
@@ -3454,13 +2986,13 @@ export function SettingsDrawer({
                         <div className="mt-2 text-muted-foreground">{entry.reason}</div>
                       </div>
                     )) : (
-                      <div className="rounded-lg border border-border/35 bg-background/65 p-3 text-sm text-muted-foreground">This source currently produces an empty plan.</div>
+                      <div className="rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">This source currently produces an empty plan.</div>
                     )}
                   </div>
                 ) : null}
 
                 {remoteInstallPlan ? (
-                  <div className="grid gap-3 rounded-xl border border-border/35 bg-muted/8 p-4">
+                  <div className="grid gap-3 rounded-lg bg-muted/30 p-4">
                     <div className="flex items-center justify-between gap-3">
                       <strong>
                         Remote Install Plan · {remoteInstallPlan.entry.skill_name}
@@ -3555,11 +3087,11 @@ export function SettingsDrawer({
                                 </span>
                               </div>
                               <div className="mt-2 flex flex-wrap gap-1.5 text-[10px]">
-                                <span className="rounded-full border border-border bg-card/80 px-2 py-0.5 text-muted-foreground">
+                                <span className="rounded-full border border-border/40 bg-muted px-2 py-0.5 text-muted-foreground">
                                   {skill.supporting_files.length} files
                                 </span>
                                 {skill.category ? (
-                                  <span className="rounded-full border border-border bg-card/80 px-2 py-0.5 text-muted-foreground">
+                                  <span className="rounded-full border border-border/40 bg-muted px-2 py-0.5 text-muted-foreground">
                                     {skill.category}
                                   </span>
                                 ) : null}
@@ -3569,7 +3101,7 @@ export function SettingsDrawer({
                                       "rounded-full border px-2 py-0.5",
                                       managedRecord.locally_modified || managedRecord.deleted_locally
                                         ? "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200"
-                                        : "border-border bg-card/80 text-muted-foreground",
+                                        : "border-border/40 bg-muted text-muted-foreground",
                                     )}
                                   >
                                     {managedSkillStateLabel(managedRecord)}
@@ -3583,7 +3115,7 @@ export function SettingsDrawer({
                                         ? "border-red-300 bg-red-50 text-red-800 dark:border-red-700 dark:bg-red-950/60 dark:text-red-300"
                                         : latestGuard.status === "warn"
                                           ? "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200"
-                                          : "border-border bg-card/80 text-muted-foreground",
+                                          : "border-border/40 bg-muted text-muted-foreground",
                                     )}
                                   >
                                     {latestGuardStatusLabel(latestGuard)}
@@ -3596,7 +3128,7 @@ export function SettingsDrawer({
                       </div>
                     </div>
                   ) : (
-                    <p className="rounded-xl border border-border/35 bg-background/60 px-4 py-6 text-sm text-muted-foreground">
+                    <p className="rounded-lg bg-muted/30 px-4 py-6 text-sm text-muted-foreground">
                       No skills discovered yet.
                     </p>
                   )}
@@ -3717,7 +3249,7 @@ export function SettingsDrawer({
                             <div className="flex flex-wrap gap-2 text-xs">
                               {managedRecord ? (
                                 <>
-                                  <span className="rounded-full border border-border bg-card/80 px-2.5 py-1 text-muted-foreground">
+                                  <span className="rounded-full border border-border/40 bg-muted px-2.5 py-1 text-muted-foreground">
                                     source {managedRecord.source?.source_id || "workspace-local"}
                                   </span>
                                   <span
@@ -3726,7 +3258,7 @@ export function SettingsDrawer({
                                       managedRecord.locally_modified ||
                                         managedRecord.deleted_locally
                                         ? "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200"
-                                        : "border-border bg-card/80 text-muted-foreground",
+                                        : "border-border/40 bg-muted text-muted-foreground",
                                     )}
                                   >
                                     {managedSkillStateLabel(managedRecord)}
@@ -3741,7 +3273,7 @@ export function SettingsDrawer({
                                       ? "border-red-300 bg-red-50 text-red-800 dark:border-red-700 dark:bg-red-950/60 dark:text-red-300"
                                       : latestGuard.status === "warn"
                                         ? "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200"
-                                        : "border-border bg-card/80 text-muted-foreground",
+                                        : "border-border/40 bg-muted text-muted-foreground",
                                   )}
                                 >
                                   {latestGuardStatusLabel(latestGuard)} · {latestGuard.violations.length} violations
@@ -3803,7 +3335,7 @@ export function SettingsDrawer({
                               disabled={!selectedSkillEntry.writable}
                             />
                             {!editSkillMethodologyMatched ? (
-                              <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200">
+                              <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200">
                                 Current SKILL.md did not round-trip into the methodology template. Saving in methodology mode will rewrite the body from this structured form.
                               </div>
                             ) : null}
@@ -3817,7 +3349,7 @@ export function SettingsDrawer({
                           </div>
                         ) : (
                           <textarea
-                            className="min-h-[26rem] w-full resize-y rounded-xl border border-border/45 bg-background/78 p-3.5 text-foreground leading-relaxed font-mono text-sm"
+                            className="min-h-[26rem] w-full resize-y rounded-lg border border-border/40 bg-background p-3.5 text-foreground leading-relaxed font-mono text-sm"
                             value={skillEditorContent}
                             onChange={(event) => setSkillEditorContent(event.target.value)}
                             spellCheck={false}
@@ -3865,7 +3397,7 @@ export function SettingsDrawer({
                         </div>
                       </>
                     ) : (
-                      <p className="rounded-xl border border-border/35 bg-muted/8 px-4 py-6 text-sm text-muted-foreground">
+                      <p className="rounded-lg bg-muted/30 px-4 py-6 text-sm text-muted-foreground">
                         Select a skill from the catalog to inspect or edit its raw <code>SKILL.md</code>.
                       </p>
                     )}
@@ -3883,7 +3415,7 @@ export function SettingsDrawer({
                 </div>
                 {Object.values(mcpStatus).length ? (
                   Object.values(mcpStatus).map((server) => (
-                    <div key={server.name} className="rounded-xl border border-border bg-card/70 p-4 flex items-start justify-between gap-4">
+                    <div key={server.name} className="rounded-lg border border-border/40 bg-card p-4 flex items-start justify-between gap-4">
                       <div>
                         <strong>{server.name}</strong>
                         <p className="text-sm text-muted-foreground leading-relaxed">
@@ -3893,7 +3425,7 @@ export function SettingsDrawer({
                       </div>
                       <div className="flex items-center gap-2">
                         <button
-                          className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                          className="min-h-[36px] rounded-lg px-4 border border-border/40 bg-card text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-colors hover:bg-accent"
                           type="button"
                           disabled={busyKey === `mcp:connect:${server.name}`}
                           onClick={() => void runMcpAction(server.name, "connect")}
@@ -3901,7 +3433,7 @@ export function SettingsDrawer({
                           Connect
                         </button>
                         <button
-                          className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                          className="min-h-[36px] rounded-lg px-4 border border-border/40 bg-card text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-colors hover:bg-accent"
                           type="button"
                           disabled={busyKey === `mcp:disconnect:${server.name}`}
                           onClick={() => void runMcpAction(server.name, "disconnect")}
@@ -3909,7 +3441,7 @@ export function SettingsDrawer({
                           Disconnect
                         </button>
                         <button
-                          className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                          className="min-h-[36px] rounded-lg px-4 border border-border/40 bg-card text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-colors hover:bg-accent"
                           type="button"
                           disabled={busyKey === `mcp:restart:${server.name}`}
                           onClick={() => void runMcpAction(server.name, "restart")}
@@ -3935,7 +3467,7 @@ export function SettingsDrawer({
                   />
                   <div className="flex items-center gap-2">
                     <button
-                      className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                      className="min-h-[36px] rounded-lg px-4 border border-border/40 bg-card text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-colors hover:bg-accent"
                       type="button"
                       disabled={busyKey === `mcp:save:${key}`}
                       onClick={() => void saveMcpConfig(key, mcpDrafts[key] ?? "")}
@@ -3943,7 +3475,7 @@ export function SettingsDrawer({
                       Save
                     </button>
                     <button
-                      className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                      className="min-h-[36px] rounded-lg px-4 border border-border/40 bg-card text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-colors hover:bg-accent"
                       type="button"
                       disabled={busyKey === `mcp:delete:${key}`}
                       onClick={() => void deleteMcpConfig(key)}
@@ -3990,7 +3522,7 @@ export function SettingsDrawer({
                 </div>
                 {pluginAuthProviders.length ? (
                   pluginAuthProviders.map((provider) => (
-                    <div key={provider.provider} className="rounded-xl border border-border bg-card/70 p-4 flex items-start justify-between gap-4">
+                    <div key={provider.provider} className="rounded-lg border border-border/40 bg-card p-4 flex items-start justify-between gap-4">
                       <div>
                         <strong>{provider.provider}</strong>
                         <p className="text-sm text-muted-foreground leading-relaxed">
@@ -4019,7 +3551,7 @@ export function SettingsDrawer({
                   />
                   <div className="flex items-center gap-2">
                     <button
-                      className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                      className="min-h-[36px] rounded-lg px-4 border border-border/40 bg-card text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-colors hover:bg-accent"
                       type="button"
                       disabled={busyKey === `plugin:save:${key}`}
                       onClick={() => void savePluginConfig(key, pluginDrafts[key] ?? "")}
@@ -4027,7 +3559,7 @@ export function SettingsDrawer({
                       Save
                     </button>
                     <button
-                      className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                      className="min-h-[36px] rounded-lg px-4 border border-border/40 bg-card text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-colors hover:bg-accent"
                       type="button"
                       disabled={busyKey === `plugin:delete:${key}`}
                       onClick={() => void deletePluginConfig(key)}
@@ -4074,7 +3606,7 @@ export function SettingsDrawer({
                 </div>
                 {lspStatus?.servers.length ? (
                   lspStatus.servers.map((server) => (
-                    <div key={server} className="rounded-xl border border-border bg-card/70 p-4 flex items-center justify-between gap-4">
+                    <div key={server} className="rounded-lg border border-border/40 bg-card p-4 flex items-center justify-between gap-4">
                       <strong>{server}</strong>
                     </div>
                   ))
@@ -4090,7 +3622,7 @@ export function SettingsDrawer({
                 </div>
                 {formatterStatus?.formatters.length ? (
                   formatterStatus.formatters.map((formatter) => (
-                    <div key={formatter} className="rounded-xl border border-border bg-card/70 p-4 flex items-center justify-between gap-4">
+                    <div key={formatter} className="rounded-lg border border-border/40 bg-card p-4 flex items-center justify-between gap-4">
                       <strong>{formatter}</strong>
                     </div>
                   ))

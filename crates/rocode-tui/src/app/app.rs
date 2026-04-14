@@ -190,6 +190,8 @@ pub struct App {
 #[derive(Clone, Debug)]
 struct QueuedPrompt {
     input: String,
+    display_text: String,
+    parts: Option<Vec<crate::api::PromptPart>>,
     agent: Option<String>,
     scheduler_profile: Option<String>,
     display_mode: Option<String>,
@@ -1777,6 +1779,7 @@ mod tests {
                 cost: 0.0,
                 tokens: TokenUsage::default(),
                 metadata: None,
+                multimodal: None,
                 parts: vec![ContextMessagePart::Text {
                     text: "hello".to_string(),
                 }],
@@ -1833,6 +1836,7 @@ mod tests {
                 ignored: None,
             }],
             metadata: None,
+            multimodal: None,
         })];
 
         apply_incremental_session_sync(&mut session_ctx, session_id, &session, mapped_messages);
