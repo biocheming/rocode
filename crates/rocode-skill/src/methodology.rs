@@ -106,6 +106,8 @@ pub struct SkillMethodologyStep {
     pub action: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub experienced_tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,6 +151,11 @@ pub fn render_methodology_skill_body(
     for (index, step) in template.core_steps.iter().enumerate() {
         let title = step.title.trim();
         let action = step.action.trim();
+        let experienced_suffix = if step.experienced_tools.is_empty() {
+            String::new()
+        } else {
+            format!(" _Experienced: {}_", step.experienced_tools.join(", "))
+        };
         let outcome_suffix = step
             .outcome
             .as_deref()
@@ -157,10 +164,11 @@ pub fn render_methodology_skill_body(
             .map(|value| format!(" Outcome: {}", value))
             .unwrap_or_default();
         lines.push(format!(
-            "{}. **{}**: {}{}",
+            "{}. **{}**: {}{}{}",
             index + 1,
             title,
             action,
+            experienced_suffix,
             outcome_suffix
         ));
     }
@@ -262,6 +270,16 @@ fn validate_methodology_template(template: &SkillMethodologyTemplate) -> Result<
             return Err(SkillError::InvalidSkillContent {
                 message: "each methodology step must include both `title` and `action`".to_string(),
             });
+        }
+        for tool_id in &step.experienced_tools {
+            if tool_id.trim().is_empty() || tool_id.contains(char::is_whitespace) {
+                return Err(SkillError::InvalidSkillContent {
+                    message: format!(
+                        "experienced_tools entry `{}` is invalid: must be non-empty and contain no whitespace",
+                        tool_id
+                    ),
+                });
+            }
         }
     }
     if normalized_non_empty(&template.success_criteria).is_empty() {
@@ -383,6 +401,36 @@ fn parse_methodology_steps(lines: &[String]) -> Option<Vec<SkillMethodologyStep>
         if title.is_empty() || remainder.is_empty() {
             return None;
         }
+        let (remainder, experienced_tools) =
+            if let Some(idx) = remainder.find("_Experienced: ") {
+                let before = remainder[..idx].trim();
+                let after = &remainder[idx + "_Experienced: ".len()..];
+                let parsed = if let Some(end_idx) = after.find("_ Outcome: ") {
+                    Some((after[..end_idx].to_string(), after[end_idx + 1..].trim().to_string()))
+                } else {
+                    after.strip_suffix('_')
+                        .map(|tools| (tools.to_string(), String::new()))
+                };
+                if let Some((tools_str, rest)) = parsed {
+                    let tools = tools_str
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>();
+                    let combined = if before.is_empty() {
+                        rest
+                    } else if rest.is_empty() {
+                        before.to_string()
+                    } else {
+                        format!("{before} {rest}")
+                    };
+                    (combined, tools)
+                } else {
+                    (remainder.to_string(), Vec::new())
+                }
+            } else {
+                (remainder.to_string(), Vec::new())
+            };
         let (action, outcome) = if let Some((action, outcome)) = remainder.split_once(" Outcome: ")
         {
             (
@@ -399,6 +447,7 @@ fn parse_methodology_steps(lines: &[String]) -> Option<Vec<SkillMethodologyStep>
             title,
             action,
             outcome,
+            experienced_tools,
         });
     }
     (!steps.is_empty()).then_some(steps)
@@ -480,6 +529,7 @@ mod tests {
                     title: "Refresh catalog".to_string(),
                     action: "Run the provider refresh entrypoint.".to_string(),
                     outcome: Some("Local provider list matches the latest source.".to_string()),
+                    experienced_tools: vec![],
                 }],
                 success_criteria: vec![
                     "Target provider exposes the expected model ids.".to_string()
@@ -534,6 +584,7 @@ mod tests {
                 title: "Refresh".to_string(),
                 action: "Run the refresh workflow.".to_string(),
                 outcome: Some("The latest models are visible.".to_string()),
+                experienced_tools: vec!["provider_refresh".to_string(), "catalog_diff".to_string()],
             }],
             success_criteria: vec!["Expected model ids appear.".to_string()],
             validation: vec!["Reload the catalog and compare entries.".to_string()],
@@ -569,5 +620,89 @@ Just some prose.
 "#;
 
         assert!(extract_methodology_template_from_markdown(source).is_none());
+    }
+
+    #[test]
+    fn experienced_tools_render_parse_round_trip() {
+        let template = SkillMethodologyTemplate {
+            when_to_use: vec!["Use when a repeated container health check is needed.".to_string()],
+            when_not_to_use: vec!["Do not use for one-off shell experiments.".to_string()],
+            prerequisites: vec![],
+            core_steps: vec![SkillMethodologyStep {
+                title: "Check health".to_string(),
+                action: "Inspect the running service and verify it responds.".to_string(),
+                outcome: Some("The current health status is known.".to_string()),
+                experienced_tools: vec!["docker".to_string(), "curl".to_string()],
+            }],
+            success_criteria: vec!["The service health is confirmed.".to_string()],
+            validation: vec!["Re-run the health check after changes.".to_string()],
+            pitfalls: vec!["Do not restart the service before capturing logs.".to_string()],
+            references: vec![],
+        };
+
+        let body =
+            render_methodology_skill_body("container-health", &template).expect("render should work");
+        assert!(body.contains("_Experienced: docker, curl_"));
+
+        let source = format!(
+            "---\nname: container-health\ndescription: check health\n---\n\n{}\n",
+            body
+        );
+        let parsed = extract_methodology_template_from_markdown(&source)
+            .expect("rendered methodology should parse");
+        assert_eq!(parsed, template);
+    }
+
+    #[test]
+    fn experienced_tools_empty_backward_compat() {
+        let template = SkillMethodologyTemplate {
+            when_to_use: vec!["Use when a repeated provider refresh is needed.".to_string()],
+            when_not_to_use: vec!["Do not use for ad-hoc scratch notes.".to_string()],
+            prerequisites: vec![],
+            core_steps: vec![SkillMethodologyStep {
+                title: "Refresh".to_string(),
+                action: "Run the refresh workflow.".to_string(),
+                outcome: None,
+                experienced_tools: vec![],
+            }],
+            success_criteria: vec!["The latest provider list is visible.".to_string()],
+            validation: vec!["Reload the provider list.".to_string()],
+            pitfalls: vec!["Do not overwrite local overrides.".to_string()],
+            references: vec![],
+        };
+
+        let body = render_methodology_skill_body("provider-refresh", &template)
+            .expect("render should work");
+        assert!(!body.contains("_Experienced:"));
+
+        let source = format!(
+            "---\nname: provider-refresh\ndescription: refresh providers\n---\n\n{}\n",
+            body
+        );
+        let parsed = extract_methodology_template_from_markdown(&source)
+            .expect("rendered methodology should parse");
+        assert_eq!(parsed.core_steps[0].experienced_tools, Vec::<String>::new());
+    }
+
+    #[test]
+    fn experienced_tools_format_validation() {
+        let template = SkillMethodologyTemplate {
+            when_to_use: vec!["Use when repeated container checks are needed.".to_string()],
+            when_not_to_use: vec!["Do not use for one-off notes.".to_string()],
+            prerequisites: vec![],
+            core_steps: vec![SkillMethodologyStep {
+                title: "Check".to_string(),
+                action: "Run the container check.".to_string(),
+                outcome: None,
+                experienced_tools: vec!["docker compose".to_string()],
+            }],
+            success_criteria: vec!["The container state is known.".to_string()],
+            validation: vec!["Confirm the reported state.".to_string()],
+            pitfalls: vec!["Do not restart containers during inspection.".to_string()],
+            references: vec![],
+        };
+
+        let err = validate_methodology_template(&template).expect_err("invalid tools should fail");
+        assert!(matches!(err, SkillError::InvalidSkillContent { .. }));
     }
 }

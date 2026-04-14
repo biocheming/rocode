@@ -2374,6 +2374,7 @@ fn parse_methodology_steps_input(input: &str) -> Result<Vec<SkillMethodologyStep
             title: title.to_string(),
             action: action.to_string(),
             outcome,
+            experienced_tools: vec![],
         });
     }
     Ok(steps)

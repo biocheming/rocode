@@ -1139,6 +1139,7 @@ mod tests {
                         outcome: Some(
                             "Catalog state reflects the latest upstream source.".to_string(),
                         ),
+                        experienced_tools: vec![],
                     }],
                     success_criteria: vec![
                         "Expected provider ids are available after the refresh.".to_string(),
@@ -1226,6 +1227,7 @@ mod tests {
                     title: "Capture".to_string(),
                     action: "Describe the repeatable workflow.".to_string(),
                     outcome: Some("A reusable skill body exists.".to_string()),
+                    experienced_tools: vec![],
                 }],
                 success_criteria: vec!["The workflow is reviewable.".to_string()],
                 validation: vec!["Preview shows the rendered markdown.".to_string()],

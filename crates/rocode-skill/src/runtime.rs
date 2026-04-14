@@ -76,6 +76,14 @@ pub(crate) fn collect_runtime_skill_specs(
     (specs.into_values().collect(), warnings)
 }
 
+pub fn infer_runtime_skill_names(
+    base_dir: &Path,
+    instructions: &[RuntimeInstructionSource],
+) -> Vec<String> {
+    let (specs, _warnings) = collect_runtime_skill_specs(base_dir, instructions);
+    specs.into_iter().map(|spec| spec.name).collect()
+}
+
 fn collect_explicit_specs(
     base_dir: &Path,
     instruction: &RuntimeInstructionSource,
@@ -371,5 +379,41 @@ Use the following explicit create or refresh mapping:
         assert_eq!(specs[1].name, "drug-discovery-propose-modifications");
         assert_eq!(specs[1].source_kind, RuntimeSkillSourceKind::LegacyMarkdown);
         assert!(specs[1].body.contains("./tools/mol propose"));
+    }
+
+    #[test]
+    fn infer_runtime_skill_names_returns_sorted_runtime_skill_names() {
+        let dir = tempdir().unwrap();
+        let agents_path = dir.path().join("AGENTS.md");
+        let legacy_path = dir.path().join("harness/skills/propose_modifications.md");
+        fs::create_dir_all(legacy_path.parent().unwrap()).unwrap();
+        fs::write(&legacy_path, "# Propose\nUse ./tools/mol propose.").unwrap();
+
+        let instruction = RuntimeInstructionSource {
+            path: agents_path,
+            content: r#"
+Use the following explicit create or refresh mapping:
+
+1. For `harness/skills/propose_modifications.md`
+   - target workspace skill: `drug-discovery-propose-modifications`
+   - target path: `.rocode/skills/drug-discovery-propose-modifications/SKILL.md`
+   - description: `Generate local molecular modifications with the workspace ./tools/mol wrapper.`
+
+4. For the harness protocol itself
+   - target workspace skill: `drug-discovery-harness`
+   - target path: `.rocode/skills/drug-discovery-harness/SKILL.md`
+   - description: `Workspace-local harness for molecular optimization using ./tools/mol.`
+"#
+            .to_string(),
+        };
+
+        let names = infer_runtime_skill_names(dir.path(), &[instruction]);
+        assert_eq!(
+            names,
+            vec![
+                "drug-discovery-harness".to_string(),
+                "drug-discovery-propose-modifications".to_string()
+            ]
+        );
     }
 }

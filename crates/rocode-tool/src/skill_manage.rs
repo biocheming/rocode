@@ -54,7 +54,7 @@ impl Tool for SkillManageTool {
     }
 
     fn description(&self) -> &str {
-        "Create, patch, edit, delete, or manage supporting files for workspace-local skills under .rocode/skills. Create when a complex task succeeded (5+ tool calls), you overcame errors, a user-corrected approach worked, you discovered a non-trivial workflow, or the user asks you to remember a procedure. Prefer the structured `methodology` shape when creating or patching a skill so the result includes trigger conditions, core steps, success criteria, validation, and boundaries. Patch when instructions are stale or wrong, a skill fails on a specific OS or environment, steps or pitfalls are missing, or you used a skill and found gaps not covered by it. After difficult or iterative tasks, offer to save the approach as a skill. Skip simple one-offs. Confirm with the user before creating or deleting skills."
+        "Create, patch, edit, delete, or manage supporting files for workspace-local skills under .rocode/skills. Create when a complex task succeeded (5+ tool calls), you overcame errors, a user-corrected approach worked, you discovered a non-trivial workflow, or the user asks you to remember a procedure. Prefer the structured `methodology` shape when creating or patching a skill so the result includes trigger conditions, core steps, success criteria, validation, and boundaries. When creating or patching a methodology skill with core steps, review the current session's tool call history and fill each step's optional `experienced_tools` field with the tool names actually used in that step. For commands invoked through bash, use the command name you actually ran, such as `docker` or `cargo`, instead of `bash`; leave `experienced_tools` empty if you are unsure. Patch when instructions are stale or wrong, a skill fails on a specific OS or environment, steps or pitfalls are missing, or you used a skill and found gaps not covered by it. After difficult or iterative tasks, offer to save the approach as a skill. Skip simple one-offs. Confirm with the user before creating or deleting skills."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -84,7 +84,7 @@ impl Tool for SkillManageTool {
                 },
                 "methodology": {
                     "type": "object",
-                    "description": "Structured methodology template for create or patch. Use this when you want skill_manage to generate a rubric-shaped SKILL body with trigger conditions, core steps, success criteria, validation, and boundaries."
+                    "description": "Structured methodology template for create or patch. Use this when you want skill_manage to generate a rubric-shaped SKILL body with trigger conditions, core steps, success criteria, validation, and boundaries. Each core step may also include an optional experienced_tools array of tool names actually used in that step based on the current session history."
                 },
                 "frontmatter": {
                     "type": "object",
@@ -598,6 +598,8 @@ mod tests {
         let description = SkillManageTool.description();
         assert!(description.contains("complex task succeeded (5+ tool calls)"));
         assert!(description.contains("structured `methodology` shape"));
+        assert!(description.contains("current session's tool call history"));
+        assert!(description.contains("optional `experienced_tools` field"));
         assert!(description.contains("After difficult or iterative tasks"));
         assert!(description.contains("Patch when instructions are stale or wrong"));
         assert!(description.contains("Confirm with the user before creating or deleting"));

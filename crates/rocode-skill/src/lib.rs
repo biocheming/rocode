@@ -34,7 +34,8 @@ pub use methodology::{
     SkillQualityRule,
 };
 pub use runtime::{
-    RuntimeInstructionSource, RuntimeSkillBootstrapReport, RuntimeSkillMaterialization,
+    infer_runtime_skill_names, RuntimeInstructionSource, RuntimeSkillBootstrapReport,
+    RuntimeSkillMaterialization,
     RuntimeSkillMaterializationAction, RuntimeSkillSourceKind,
 };
 pub use sync::SkillSyncPlanner;
@@ -484,6 +485,7 @@ Use the following explicit create or refresh mapping:
                     action: "Run the refresh entrypoint and capture provider/model deltas."
                         .to_string(),
                     outcome: Some("The catalog reflects the latest provider source.".to_string()),
+                    experienced_tools: vec![],
                 }],
                 success_criteria: vec![
                     "The expected provider ids and models appear in the catalog.".to_string(),

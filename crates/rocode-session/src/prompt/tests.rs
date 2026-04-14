@@ -1,13 +1,22 @@
 use super::*;
+use super::skill_reflection::{
+    augment_system_prompt_with_skill_reflection, extract_tool_call_history,
+    prepare_skill_reflection, update_skill_reflection_metadata, SkillReflectionData,
+    SkillUsageSummary, ToolCallSummary,
+};
 use crate::message::MessagePart;
+use crate::SessionMessage;
 use async_trait::async_trait;
 use futures::stream;
 use rocode_execution_types::CompiledExecutionRequest;
 use rocode_provider::{
     ChatRequest, ChatResponse, ModelInfo, ProviderError, StreamEvent, StreamResult, StreamUsage,
 };
+use rocode_skill::RuntimeInstructionSource;
 use rocode_tool::{Tool, ToolContext, ToolError, ToolResult};
+use std::fs;
 use std::sync::Mutex as StdMutex;
+use tempfile::tempdir;
 
 struct StaticModelProvider {
     model: Option<ModelInfo>,
@@ -64,6 +73,21 @@ impl Provider for StaticModelProvider {
 struct ScriptedStreamProvider {
     model: ModelInfo,
     events: Vec<StreamEvent>,
+}
+
+fn write_methodology_skill(
+    root: &std::path::Path,
+    name: &str,
+    template: rocode_skill::SkillMethodologyTemplate,
+) {
+    let skill_dir = root.join(".rocode/skills").join(name);
+    fs::create_dir_all(&skill_dir).unwrap();
+    let body = rocode_skill::render_methodology_skill_body(name, &template).unwrap();
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: test skill\n---\n\n{body}\n",),
+    )
+    .unwrap();
 }
 
 #[async_trait]
@@ -579,7 +603,7 @@ async fn execute_tool_calls_ignores_empty_tool_name() {
     let mut session = Session::new("proj", ".");
     let sid = session.id.clone();
     session
-        .messages
+        .messages_mut()
         .push(SessionMessage::user(sid.clone(), "run tools"));
 
     let mut assistant = SessionMessage::assistant(sid);
@@ -597,7 +621,7 @@ async fn execute_tool_calls_ignores_empty_tool_name() {
         message_id: None,
     });
     assistant.add_tool_call("call_ok", "noarg_echo", serde_json::json!({}));
-    session.messages.push(assistant);
+    session.messages_mut().push(assistant);
 
     let provider: Arc<dyn Provider> =
         Arc::new(StaticModelProvider::with_model("test-model", 8192, 1024));
@@ -639,11 +663,11 @@ async fn execute_tool_calls_runs_no_arg_tool() {
     let mut session = Session::new("proj", ".");
     let sid = session.id.clone();
     session
-        .messages
+        .messages_mut()
         .push(SessionMessage::user(sid.clone(), "run noarg"));
     let mut assistant = SessionMessage::assistant(sid);
     assistant.add_tool_call("call_noarg", "noarg_echo", serde_json::json!({}));
-    session.messages.push(assistant);
+    session.messages_mut().push(assistant);
 
     let provider: Arc<dyn Provider> =
         Arc::new(StaticModelProvider::with_model("test-model", 8192, 1024));
@@ -696,11 +720,11 @@ async fn execute_tool_calls_routes_invalid_arguments_to_invalid_tool() {
     let mut session = Session::new("proj", ".");
     let sid = session.id.clone();
     session
-        .messages
+        .messages_mut()
         .push(SessionMessage::user(sid.clone(), "run invalid"));
     let mut assistant = SessionMessage::assistant(sid);
     assistant.add_tool_call("call_invalid", "needs_path", serde_json::json!({}));
-    session.messages.push(assistant);
+    session.messages_mut().push(assistant);
 
     let provider: Arc<dyn Provider> =
         Arc::new(StaticModelProvider::with_model("test-model", 8192, 1024));
@@ -776,7 +800,7 @@ async fn execute_tool_calls_only_runs_running_tool_calls() {
     let mut session = Session::new("proj", ".");
     let sid = session.id.clone();
     session
-        .messages
+        .messages_mut()
         .push(SessionMessage::user(sid.clone(), "run running only"));
     let mut assistant = SessionMessage::assistant(sid);
     assistant.parts.push(crate::MessagePart {
@@ -796,7 +820,7 @@ async fn execute_tool_calls_only_runs_running_tool_calls() {
         message_id: None,
     });
     assistant.add_tool_call("call_running", "noarg_echo", serde_json::json!({}));
-    session.messages.push(assistant);
+    session.messages_mut().push(assistant);
 
     let provider: Arc<dyn Provider> =
         Arc::new(StaticModelProvider::with_model("test-model", 8192, 1024));
@@ -839,21 +863,21 @@ async fn execute_tool_calls_reused_call_id_in_new_turn_still_executes() {
     let sid = session.id.clone();
 
     session
-        .messages
+        .messages_mut()
         .push(SessionMessage::user(sid.clone(), "turn one"));
     let mut assistant_1 = SessionMessage::assistant(sid.clone());
     assistant_1.add_tool_call("tool-call-0", "noarg_echo", serde_json::json!({}));
-    session.messages.push(assistant_1);
+    session.messages_mut().push(assistant_1);
     let mut tool_msg_1 = SessionMessage::tool(sid.clone());
     tool_msg_1.add_tool_result("tool-call-0", "{}", false);
-    session.messages.push(tool_msg_1);
+    session.messages_mut().push(tool_msg_1);
 
     session
-        .messages
+        .messages_mut()
         .push(SessionMessage::user(sid.clone(), "turn two"));
     let mut assistant_2 = SessionMessage::assistant(sid);
     assistant_2.add_tool_call("tool-call-0", "noarg_echo", serde_json::json!({}));
-    session.messages.push(assistant_2);
+    session.messages_mut().push(assistant_2);
 
     let provider: Arc<dyn Provider> =
         Arc::new(StaticModelProvider::with_model("test-model", 8192, 1024));
@@ -1208,12 +1232,357 @@ fn chat_message_hook_not_triggered_on_user_message_creation() {
     let create_user_fn = source
         .find("async fn create_user_message")
         .expect("create_user_message should exist");
-    let loop_inner_fn = source
-        .find("async fn loop_inner")
-        .expect("loop_inner should exist");
-    let create_user_section = &source[create_user_fn..loop_inner_fn];
+    let rest = &source[create_user_fn..];
+    let next_method = rest[1..]
+        .find("\n    async fn ")
+        .or_else(|| rest[1..].find("\n    pub async fn "))
+        .map(|offset| offset + 1)
+        .unwrap_or(rest.len());
+    let create_user_section = &rest[..next_method];
     assert!(
         !create_user_section.contains("HookEvent::ChatMessage"),
         "ChatMessage hook should not be in create_user_message"
     );
+}
+
+#[test]
+fn runtime_skill_save_suggestion_skips_turns_that_are_only_complex() {
+    let mut session = Session::new("proj", ".");
+    session.add_user_message("optimize this workflow");
+    let assistant = session.add_assistant_message();
+    assistant.finish = Some("stop".to_string());
+    let tool = SessionMessage::tool(session.id.clone());
+    session.messages_mut().push(tool);
+
+    let tool_msg = session.messages_mut().last_mut().unwrap();
+    for index in 0..3 {
+        tool_msg.parts.push(MessagePart {
+            id: format!("prt_tool_{index}"),
+            part_type: PartType::ToolResult {
+                tool_call_id: format!("call_{index}"),
+                content: "ok".to_string(),
+                is_error: false,
+                title: None,
+                metadata: None,
+                attachments: None,
+            },
+            created_at: chrono::Utc::now(),
+            message_id: None,
+        });
+    }
+
+    SessionPrompt::maybe_append_runtime_skill_save_suggestion(&mut session, 0);
+
+    assert!(!session.messages.iter().any(|message| {
+        matches!(message.role, MessageRole::Assistant)
+            && message
+                .metadata
+                .get("runtime_hint")
+                .and_then(|value| value.as_str())
+                == Some("skill_save_suggestion")
+    }));
+}
+
+#[test]
+fn runtime_skill_save_suggestion_triggers_for_methodology_shaped_turns() {
+    let mut session = Session::new("proj", ".");
+    session.add_user_message("fix the failing parser and verify it");
+
+    let assistant = session.add_assistant_message();
+    assistant.finish = Some("tool-calls".to_string());
+    assistant.parts.push(MessagePart {
+        id: "prt_tool_edit".to_string(),
+        part_type: PartType::ToolCall {
+            id: "call_edit".to_string(),
+            name: "edit".to_string(),
+            input: serde_json::json!({
+                "file_path": "src/parser.rs",
+                "old_string": "broken()",
+                "new_string": "fixed()"
+            }),
+            raw: None,
+            status: crate::ToolCallStatus::Completed,
+            state: Some(crate::ToolState::Completed {
+                input: serde_json::json!({
+                    "file_path": "src/parser.rs",
+                    "old_string": "broken()",
+                    "new_string": "fixed()"
+                }),
+                output: "patched parser".to_string(),
+                title: "Edited parser".to_string(),
+                metadata: std::collections::HashMap::new(),
+                time: crate::CompletedTime {
+                    start: chrono::Utc::now().timestamp_millis(),
+                    end: chrono::Utc::now().timestamp_millis(),
+                    compacted: None,
+                },
+                attachments: None,
+            }),
+        },
+        created_at: chrono::Utc::now(),
+        message_id: None,
+    });
+    assistant.parts.push(MessagePart {
+        id: "prt_tool_bash_failed".to_string(),
+        part_type: PartType::ToolCall {
+            id: "call_bash_failed".to_string(),
+            name: "bash".to_string(),
+            input: serde_json::json!({
+                "command": "cargo test parser",
+                "description": "Run parser tests"
+            }),
+            raw: None,
+            status: crate::ToolCallStatus::Error,
+            state: Some(crate::ToolState::Error {
+                input: serde_json::json!({
+                    "command": "cargo test parser",
+                    "description": "Run parser tests"
+                }),
+                error: "parser test still failing".to_string(),
+                metadata: None,
+                time: crate::ErrorTime {
+                    start: chrono::Utc::now().timestamp_millis(),
+                    end: chrono::Utc::now().timestamp_millis(),
+                },
+            }),
+        },
+        created_at: chrono::Utc::now(),
+        message_id: None,
+    });
+
+    let followup = session.add_assistant_message();
+    followup.finish = Some("stop".to_string());
+    followup.add_text("Patched the parser and verified the failure mode; this flow is reusable.");
+
+    SessionPrompt::maybe_append_runtime_skill_save_suggestion(&mut session, 0);
+
+    let note = session
+        .messages
+        .iter()
+        .find(|message| {
+            message
+                .metadata
+                .get("runtime_hint")
+                .and_then(|value| value.as_str())
+                == Some("skill_save_suggestion")
+        })
+        .expect("runtime hint note should be appended");
+
+    assert!(note.parts.iter().any(|part| {
+        matches!(
+            &part.part_type,
+            PartType::Text { text, .. }
+                if text.contains("reusable triggers, steps, validation, and boundaries")
+        )
+    }));
+}
+
+#[test]
+fn extract_tool_call_history_from_session_parts() {
+    let mut session = Session::new("proj", ".");
+    let assistant = session.add_assistant_message();
+    SessionPrompt::upsert_tool_call_part(
+        assistant,
+        "call_bash",
+        Some("bash"),
+        Some(serde_json::json!({"command": "cargo test"})),
+        None,
+        Some(crate::ToolCallStatus::Completed),
+        None,
+    );
+
+    let mut tool_message = SessionMessage::tool(session.id.clone());
+    SessionPrompt::push_tool_result_part(
+        &mut tool_message,
+        "call_bash".to_string(),
+        "ok".to_string(),
+        false,
+        None,
+        None,
+        None,
+    );
+    session.messages_mut().push(tool_message);
+
+    let history = extract_tool_call_history(&session);
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].tool_name, "bash");
+    assert_eq!(history[0].tool_input_summary, "command=cargo test");
+    assert_eq!(history[0].tool_result_summary, "ok");
+}
+
+#[test]
+fn prepare_skill_reflection_returns_none_without_runtime_skills() {
+    let session = Session::new("proj", ".");
+    assert!(prepare_skill_reflection(None, &session).is_none());
+}
+
+#[test]
+fn prepare_skill_reflection_loads_methodology_from_runtime_skill_names() {
+    let dir = tempdir().unwrap();
+    write_methodology_skill(
+        dir.path(),
+        "runtime-check",
+        rocode_skill::SkillMethodologyTemplate {
+            when_to_use: vec!["Use when runtime checks should be repeated.".to_string()],
+            when_not_to_use: vec!["Do not use for ad-hoc notes.".to_string()],
+            prerequisites: vec![],
+            core_steps: vec![rocode_skill::SkillMethodologyStep {
+                title: "Check".to_string(),
+                action: "Run the runtime check.".to_string(),
+                outcome: Some("Runtime state is known.".to_string()),
+                experienced_tools: vec!["cargo".to_string()],
+            }],
+            success_criteria: vec!["The runtime state is visible.".to_string()],
+            validation: vec!["Repeat the check after changes.".to_string()],
+            pitfalls: vec!["Do not patch production configs while checking.".to_string()],
+            references: vec![],
+        },
+    );
+
+    let mut session = Session::new("proj", dir.path().to_string_lossy().to_string());
+    session.insert_metadata(
+        "runtime_skill_instructions",
+        serde_json::to_value(vec![RuntimeInstructionSource {
+            path: dir.path().join("AGENTS.md"),
+            content: r#"
+1. For the harness protocol itself
+   - target workspace skill: `runtime-check`
+   - target path: `.rocode/skills/runtime-check/SKILL.md`
+   - description: `Reusable runtime verification workflow.`
+"#
+            .to_string(),
+        }])
+        .unwrap(),
+    );
+
+    let reflection = prepare_skill_reflection(None, &session).expect("reflection should exist");
+    assert_eq!(reflection.skills_used.len(), 1);
+    assert_eq!(reflection.skills_used[0].name, "runtime-check");
+    assert_eq!(
+        reflection.skills_used[0]
+            .methodology
+            .as_ref()
+            .expect("methodology should load")
+            .core_steps[0]
+            .experienced_tools,
+        vec!["cargo".to_string()]
+    );
+}
+
+#[test]
+fn update_skill_reflection_metadata_removes_stale_value_when_none() {
+    let mut session = Session::new("proj", ".");
+    session.insert_metadata("skill_reflection", serde_json::json!({"stale": true}));
+
+    update_skill_reflection_metadata(None, &mut session);
+    assert!(!session.metadata.contains_key("skill_reflection"));
+}
+
+#[test]
+fn augment_system_prompt_with_skill_reflection_consumes_metadata_once() {
+    let mut session = Session::new("proj", ".");
+    session.insert_metadata(
+        "skill_reflection",
+        serde_json::to_value(SkillReflectionData {
+            skills_used: vec![SkillUsageSummary {
+                name: "runtime-check".to_string(),
+                methodology: None,
+            }],
+            tool_calls: vec![ToolCallSummary {
+                tool_name: "bash".to_string(),
+                tool_input_summary: "command=cargo test".to_string(),
+                tool_result_summary: "ok".to_string(),
+            }],
+        })
+        .unwrap(),
+    );
+
+    let first = augment_system_prompt_with_skill_reflection(&mut session, Some("BASE".to_string()))
+        .expect("prompt should exist");
+    assert!(first.contains("BASE"));
+    assert!(first.contains("## Skill Usage Reflection"));
+    assert!(!session.metadata.contains_key("skill_reflection"));
+
+    let second =
+        augment_system_prompt_with_skill_reflection(&mut session, Some("BASE".to_string()))
+            .expect("base prompt should remain");
+    assert_eq!(second, "BASE");
+}
+
+#[test]
+fn tool_is_validation_accepts_generic_validation_signals() {
+    assert!(tool_is_validation(
+        "health_check",
+        &serde_json::json!({ "operation": "status" })
+    ));
+    assert!(tool_is_validation(
+        "bash",
+        &serde_json::json!({
+            "command": "kubectl apply -f deploy.yaml --dry-run=client"
+        })
+    ));
+    assert!(tool_is_validation(
+        "bash",
+        &serde_json::json!({
+            "command": "acme-cli verify dataset"
+        })
+    ));
+}
+
+#[test]
+fn tool_is_validation_rejects_plain_output_commands() {
+    assert!(!tool_is_validation(
+        "bash",
+        &serde_json::json!({
+            "command": "echo verify deployment"
+        })
+    ));
+    assert!(!tool_is_validation(
+        "bash",
+        &serde_json::json!({
+            "command": "cat verify.txt"
+        })
+    ));
+}
+
+#[test]
+fn runtime_skill_save_suggestion_skips_turns_that_already_used_skill_manage() {
+    let mut session = Session::new("proj", ".");
+    session.add_user_message("optimize this workflow");
+    let assistant = session.add_assistant_message();
+    assistant.finish = Some("stop".to_string());
+    assistant.parts.push(MessagePart {
+        id: "prt_tool_call".to_string(),
+        part_type: PartType::ToolCall {
+            id: "call_skill".to_string(),
+            name: "skill_manage".to_string(),
+            input: serde_json::json!({ "action": "create" }),
+            raw: None,
+            status: crate::ToolCallStatus::Completed,
+            state: Some(crate::ToolState::Completed {
+                input: serde_json::json!({ "action": "create" }),
+                output: "created".to_string(),
+                title: "Skill created".to_string(),
+                metadata: std::collections::HashMap::new(),
+                time: crate::CompletedTime {
+                    start: chrono::Utc::now().timestamp_millis(),
+                    end: chrono::Utc::now().timestamp_millis(),
+                    compacted: None,
+                },
+                attachments: None,
+            }),
+        },
+        created_at: chrono::Utc::now(),
+        message_id: None,
+    });
+
+    SessionPrompt::maybe_append_runtime_skill_save_suggestion(&mut session, 0);
+
+    assert!(!session.messages.iter().any(|message| {
+        message
+            .metadata
+            .get("runtime_hint")
+            .and_then(|value| value.as_str())
+            == Some("skill_save_suggestion")
+    }));
 }
