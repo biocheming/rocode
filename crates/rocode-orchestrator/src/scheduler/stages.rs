@@ -10,6 +10,8 @@ use async_trait::async_trait;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use super::presets::prometheus_planning_stage_tool_policy;
+
 pub const READ_ONLY_STAGE_TOOLS: &[&str] = &["read", "glob", "grep", "ls", "ast_grep_search"];
 
 pub type StageToolArgumentValidator =
@@ -69,6 +71,9 @@ pub fn stage_policy_from_label(label: &str) -> Option<StageToolPolicy> {
     match label.trim() {
         "allow-all" => Some(StageToolPolicy::AllowAll),
         "allow-read-only" => Some(StageToolPolicy::AllowReadOnly),
+        "restricted:prometheus-planning-artifacts" => {
+            Some(prometheus_planning_stage_tool_policy())
+        }
         "disable-all" => Some(StageToolPolicy::DisableAll),
         _ => None,
     }
@@ -297,6 +302,7 @@ impl ToolExecutor for FilteredToolExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scheduler::{SchedulerPresetKind, SchedulerStageKind};
     use serde_json::json;
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -453,6 +459,40 @@ mod tests {
             VALIDATOR_CALLED.load(Ordering::SeqCst) > before,
             "validator was not called"
         );
+    }
+
+    #[test]
+    fn stage_policy_from_label_parses_prometheus_restricted_policy() {
+        let parsed = stage_policy_from_label("restricted:prometheus-planning-artifacts");
+        assert_eq!(parsed, Some(prometheus_planning_stage_tool_policy()));
+    }
+
+    #[test]
+    fn stage_policy_from_label_accepts_all_preset_observability_labels() {
+        let all_stages = [
+            SchedulerStageKind::RequestAnalysis,
+            SchedulerStageKind::Route,
+            SchedulerStageKind::Interview,
+            SchedulerStageKind::Plan,
+            SchedulerStageKind::Delegation,
+            SchedulerStageKind::Review,
+            SchedulerStageKind::ExecutionOrchestration,
+            SchedulerStageKind::Synthesis,
+            SchedulerStageKind::Handoff,
+        ];
+
+        for preset in SchedulerPresetKind::all() {
+            for stage in all_stages {
+                let observability = preset.stage_observability(stage);
+                assert!(
+                    stage_policy_from_label(&observability.tool_policy).is_some(),
+                    "preset={} stage={} emitted unparsable tool policy {}",
+                    preset.as_str(),
+                    stage.event_name(),
+                    observability.tool_policy
+                );
+            }
+        }
     }
 
     #[tokio::test]
