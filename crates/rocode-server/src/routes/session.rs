@@ -1,3 +1,4 @@
+mod autoresearch_target;
 mod cancel;
 mod events;
 mod executions;

@@ -348,10 +348,8 @@ mod tests {
     fn session_insights_builds_multimodal_detail_from_last_user_message() {
         let mut session = Session::new("session-1".to_string(), ".".to_string());
         let user = session.add_user_message("[audio input]");
-        user.metadata.insert(
-            "multimodal_kinds".to_string(),
-            serde_json::json!(["audio"]),
-        );
+        user.metadata
+            .insert("multimodal_kinds".to_string(), serde_json::json!(["audio"]));
         user.metadata.insert(
             "multimodal_badges".to_string(),
             serde_json::json!(["audio"]),
@@ -399,7 +397,10 @@ mod tests {
         assert_eq!(insight.attachments[0].filename, "voice.wav");
         assert_eq!(insight.attachments[0].mime, "audio/wav");
         assert_eq!(insight.warnings, vec!["Audio accepted.".to_string()]);
-        assert_eq!(insight.transport_replaced_parts, vec!["voice.wav".to_string()]);
+        assert_eq!(
+            insight.transport_replaced_parts,
+            vec!["voice.wav".to_string()]
+        );
         assert_eq!(insight.transport_warnings.len(), 1);
         assert!(insight.transport_warnings[0].contains("does not support audio input"));
         assert!(!insight.hard_block);
@@ -413,10 +414,8 @@ mod tests {
             let mut session = sessions.create("project", "/tmp/project");
             session.set_title("Telemetry Session");
             let user = session.add_user_message("[audio input]");
-            user.metadata.insert(
-                "multimodal_kinds".to_string(),
-                serde_json::json!(["audio"]),
-            );
+            user.metadata
+                .insert("multimodal_kinds".to_string(), serde_json::json!(["audio"]));
             user.metadata.insert(
                 "multimodal_compact_label".to_string(),
                 serde_json::json!("[audio input]"),

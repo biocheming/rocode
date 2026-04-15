@@ -86,8 +86,10 @@ async fn get_config_providers(
     let variant_lookup = crate::routes::provider::get_model_variant_lookup(state.as_ref()).await;
     let models = state.providers.read().await.list_models();
     let mut provider_names: HashMap<String, String> = HashMap::new();
-    let mut provider_model_map: HashMap<String, HashMap<String, crate::routes::provider::ModelInfo>> =
-        HashMap::new();
+    let mut provider_model_map: HashMap<
+        String,
+        HashMap<String, crate::routes::provider::ModelInfo>,
+    > = HashMap::new();
     for m in models {
         let provider_id = m.provider.clone();
         let model_id = m.id.clone();

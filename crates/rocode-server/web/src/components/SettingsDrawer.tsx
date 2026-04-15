@@ -55,13 +55,13 @@ import type {
   RefreshProviderCatalogueResponseRecord,
   ResolveProviderConnectResponseRecord,
 } from "@/lib/provider";
-import { SkillGovernanceTimeline } from "./SkillGovernanceTimeline";
+import { MemoryTab } from "./settings-drawer/MemoryTab";
+import { SkillsTab } from "./settings-drawer/SkillsTab";
 import {
   buildMethodologyTemplateFromDraft,
   emptySkillMethodologyDraft,
   methodologyDraftFromTemplate,
   SkillMethodologyDraft,
-  SkillMethodologyEditor,
 } from "./SkillMethodologyEditor";
 
 type SettingsTabId =
@@ -209,54 +209,6 @@ function isolatedWorkspaceNotice(tab: SettingsTabId): string | null {
   }
 }
 
-function managedSkillStateLabel(record: ManagedSkillRecord): string {
-  if (record.deleted_locally) return "deleted locally";
-  if (record.locally_modified) return "locally modified";
-  return "managed clean";
-}
-
-function latestGuardStatusLabel(report: SkillGuardReportRecord): string {
-  switch (report.status) {
-    case "blocked":
-      return "guard blocked";
-    case "warn":
-      return "guard warn";
-    default:
-      return "guard passed";
-  }
-}
-
-function lifecycleStatusClass(state: string): string {
-  const normalized = state.trim().toLowerCase();
-  if (normalized.includes("failed") || normalized === "diverged") {
-    return "border-red-300 bg-red-50 text-red-800 dark:border-red-700 dark:bg-red-950/60 dark:text-red-300";
-  }
-  if (
-    normalized === "updateavailable" ||
-    normalized === "update_available" ||
-    normalized === "plannedinstall" ||
-    normalized === "planned_install" ||
-    normalized === "removepending" ||
-    normalized === "remove_pending"
-  ) {
-    return "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200";
-  }
-  if (normalized === "installed" || normalized === "fetched" || normalized === "resolved") {
-    return "border-green-300 bg-green-50 text-green-800 dark:border-green-700 dark:bg-green-950 dark:text-green-300";
-  }
-  return "border-border/40 bg-muted text-muted-foreground";
-}
-
-function unixTimeLabel(value?: number | null): string {
-  if (!value) return "--";
-  try {
-    const timestamp = value > 1_000_000_000_000 ? value : value * 1000;
-    return new Date(timestamp).toLocaleString();
-  } catch {
-    return String(value);
-  }
-}
-
 function formatError(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error ?? "Unknown error");
@@ -268,31 +220,6 @@ function arrayOrEmpty<T>(value: T[] | null | undefined): T[] {
 
 function stringifyJson(value: unknown) {
   return JSON.stringify(value ?? {}, null, 2);
-}
-
-function formatHubDurationSeconds(value?: number | null): string {
-  if (!value) return "--";
-  if (value % 86400 === 0) return `${value / 86400}d`;
-  if (value % 3600 === 0) return `${value / 3600}h`;
-  if (value % 60 === 0) return `${value / 60}m`;
-  return `${value}s`;
-}
-
-function formatHubDurationMs(value?: number | null): string {
-  if (!value) return "--";
-  if (value % 1000 === 0) return `${value / 1000}s`;
-  return `${value}ms`;
-}
-
-function formatHubBytes(value?: number | null): string {
-  if (!value) return "--";
-  if (value >= 1024 * 1024 && value % (1024 * 1024) === 0) {
-    return `${value / (1024 * 1024)} MiB`;
-  }
-  if (value >= 1024 && value % 1024 === 0) {
-    return `${value / 1024} KiB`;
-  }
-  return `${value} bytes`;
 }
 
 function objectRecord(value: unknown): Record<string, unknown> {
@@ -430,7 +357,6 @@ export function SettingsDrawer({
   const [skillGuardTarget, setSkillGuardTarget] = useState<string | null>(null);
   const [selectedSkillName, setSelectedSkillName] = useState<string | null>(null);
   const [skillDetail, setSkillDetail] = useState<SkillDetailResponseRecord | null>(null);
-  const [skillAuditEvents, setSkillAuditEvents] = useState<unknown[]>([]);
   const [skillDetailLoading, setSkillDetailLoading] = useState(false);
   const [skillEditorContent, setSkillEditorContent] = useState("");
   const [editSkillEditorMode, setEditSkillEditorMode] = useState<SkillEditorMode>("raw");
@@ -622,7 +548,6 @@ export function SettingsDrawer({
       setSkillArtifactCache(skillHubArtifactCache.artifact_cache ?? []);
       setSkillHubPolicy(skillHubPolicyResponse.policy ?? null);
       setSkillLifecycle(skillHubLifecycle.lifecycle ?? []);
-      setSkillAuditEvents(skillHubAudit.audit_events ?? []);
       setSkillGovernanceTimeline(skillHubTimeline.entries ?? []);
     } catch (error) {
       const message = `Failed to load settings data: ${formatError(error)}`;
@@ -889,10 +814,17 @@ export function SettingsDrawer({
       return;
     }
 
-    const current = (selectedSkillName ?? "").trim().toLowerCase();
-    const matched = current
-      ? skillCatalog.find((skill) => skill.name.trim().toLowerCase() === current)
-      : null;
+    // Only auto-select first skill when the current selection is stale
+    // (was removed from catalog). Do NOT auto-select when nothing is selected
+    // so the catalog list is visible to the user.
+    if (!selectedSkillName) {
+      return;
+    }
+
+    const current = selectedSkillName.trim().toLowerCase();
+    const matched = skillCatalog.find(
+      (skill) => skill.name.trim().toLowerCase() === current,
+    );
 
     if (matched) {
       return;
@@ -1563,6 +1495,8 @@ export function SettingsDrawer({
   const summaryCardClass = "rounded-lg border border-border/30 bg-card p-4 grid gap-1";
   const sectionCardClass = "grid gap-4 rounded-lg bg-muted/30 p-5";
   const mutedCardClass = "rounded-lg bg-muted/40 px-4 py-3 text-sm leading-relaxed text-muted-foreground";
+  const insetCardClass = "rounded-lg border border-border/35 bg-card/80 p-4";
+  const disclosureCardClass = "rounded-lg border border-border/35 bg-card/80";
   const editorTextareaClass =
     "min-h-40 w-full resize-y rounded-lg border border-border/40 bg-background p-3.5 text-foreground leading-relaxed font-mono text-sm";
 
@@ -1742,507 +1676,45 @@ export function SettingsDrawer({
           ) : null}
 
           {!loading && activeTab === "memory" ? (
-            <div className="grid gap-6">
-              <div className={sectionCardClass}>
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-                  <div className="grid flex-1 gap-2">
-                    <label htmlFor="settings-memory-search">Search Memory</label>
-                    <input
-                      id="settings-memory-search"
-                      type="text"
-                      placeholder="Search title, summary, normalized facts"
-                      value={memorySearchDraft}
-                      onChange={(event) => setMemorySearchDraft(event.target.value)}
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    className={primaryButtonClass}
-                    onClick={() => void loadMemoryList()}
-                    disabled={memoryListLoading}
-                  >
-                    {memoryListLoading ? "Refreshing..." : "Refresh Memory"}
-                  </button>
-                  <button
-                    type="button"
-                    className={secondaryButtonClass}
-                    onClick={() => void loadMemoryPreview()}
-                    disabled={memoryPreviewLoading}
-                  >
-                    {memoryPreviewLoading ? "Previewing..." : "Preview Injection"}
-                  </button>
-                  <button
-                    type="button"
-                    className={secondaryButtonClass}
-                    onClick={() => void loadMemoryGovernance()}
-                    disabled={memoryGovernanceLoading}
-                  >
-                    {memoryGovernanceLoading ? "Refreshing..." : "Refresh Governance"}
-                  </button>
-                </div>
-
-                <div className="flex flex-col gap-3 rounded-lg bg-muted/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                  <label className="flex items-center gap-3 text-sm cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={memoryConsolidateIncludeCandidates}
-                      onChange={(event) => setMemoryConsolidateIncludeCandidates(event.target.checked)}
-                    />
-                    Include candidate records in consolidation
-                  </label>
-                  <button
-                    type="button"
-                    className={primaryButtonClass}
-                    onClick={() => void runMemoryConsolidation()}
-                    disabled={memoryConsolidating}
-                  >
-                    {memoryConsolidating ? "Consolidating..." : "Run Consolidation"}
-                  </button>
-                </div>
-
-                <div className="grid gap-3 sm:grid-cols-4">
-                  <div className={summaryCardClass}>
-                    <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Session Scope</span>
-                    <strong className="break-all text-sm">{selectedSessionId || "workspace authority"}</strong>
-                  </div>
-                  <div className={summaryCardClass}>
-                    <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Records</span>
-                    <strong>{memoryListResponse?.items.length ?? 0}</strong>
-                  </div>
-                  <div className={summaryCardClass}>
-                    <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Search Fields</span>
-                    <strong className="text-sm">
-                      {arrayOrEmpty(memoryListResponse?.contract.search_fields).join(", ") || "--"}
-                    </strong>
-                  </div>
-                  <div className={summaryCardClass}>
-                    <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Contract</span>
-                    <strong className="text-sm">
-                      {arrayOrEmpty(memoryListResponse?.contract.filter_query_parameters).join(", ") || "--"}
-                    </strong>
-                  </div>
-                  <div className={summaryCardClass}>
-                    <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Rule Packs</span>
-                    <strong>{memoryRulePacks?.items?.length ?? 0}</strong>
-                  </div>
-                  <div className={summaryCardClass}>
-                    <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Recent Rule Hits</span>
-                    <strong>{memoryRuleHits?.items?.length ?? 0}</strong>
-                  </div>
-                  <div className={summaryCardClass}>
-                    <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Consolidation Runs</span>
-                    <strong>{memoryConsolidationRuns?.items?.length ?? 0}</strong>
-                  </div>
-                </div>
-
-                <div className={mutedCardClass}>
-                  {memoryListResponse?.contract.note ||
-                    "Read models come from /memory/list, /memory/{id}, /memory/{id}/validation-report, and /memory/{id}/conflicts."}
-                </div>
-              </div>
-
-              <div className="grid gap-6 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.35fr)]">
-                <div className={sectionCardClass}>
-                  <div className="flex items-center justify-between gap-3">
-                    <h3 className="m-0 text-base">Memory Records</h3>
-                    <span className="text-xs text-muted-foreground">
-                      {memoryListLoading ? "Loading..." : `${memoryListResponse?.items.length ?? 0} records`}
-                    </span>
-                  </div>
-                  <div className="grid gap-3 max-h-[32rem] overflow-y-auto pr-1">
-                    {memoryListResponse?.items.length ? (
-                      memoryListResponse.items.map((item) => {
-                        const recordId = memoryRecordIdValue(item.id);
-                        const active = recordId === selectedMemoryId;
-                        return (
-                          <button
-                            key={recordId}
-                            type="button"
-                            className={cn(
-                              "grid gap-2 rounded-lg border px-4 py-3 text-left transition-colors",
-                              active
-                                ? "border-foreground/20 bg-foreground text-background"
-                                : "border-border/40 bg-card hover:bg-accent",
-                            )}
-                            onClick={() => setSelectedMemoryId(recordId)}
-                          >
-                            <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-wide">
-                              <span>{item.kind}</span>
-                              <span>·</span>
-                              <span>{item.status}</span>
-                              <span>·</span>
-                              <span>{item.validation_status}</span>
-                              {item.linked_skill_name ? (
-                                <>
-                                  <span>·</span>
-                                  <span>linked {item.linked_skill_name}</span>
-                                </>
-                              ) : null}
-                              {item.derived_skill_name ? (
-                                <>
-                                  <span>·</span>
-                                  <span>target {item.derived_skill_name}</span>
-                                </>
-                              ) : null}
-                            </div>
-                            <strong className="text-sm">{item.title}</strong>
-                            <span className={active ? "text-background/85 text-sm" : "text-muted-foreground text-sm"}>
-                              {item.summary}
-                            </span>
-                          </button>
-                        );
-                      })
-                    ) : (
-                      <div className={mutedCardClass}>No memory records matched this query.</div>
-                    )}
-                  </div>
-                </div>
-
-                <div className={sectionCardClass}>
-                  <div className="flex items-center justify-between gap-3">
-                    <h3 className="m-0 text-base">Memory Detail</h3>
-                    <span className="text-xs text-muted-foreground">
-                      {memoryDetailLoading
-                        ? "Loading detail..."
-                        : selectedMemoryCard
-                          ? memoryRecordIdValue(selectedMemoryCard.id)
-                          : "No record selected"}
-                    </span>
-                  </div>
-
-                  {memoryDetail && !memoryDetailLoading ? (
-                    <div className="grid gap-5">
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <div className={summaryCardClass}>
-                          <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Kind / Scope</span>
-                          <strong className="text-sm">
-                            {memoryDetail.record.kind} / {memoryDetail.record.scope}
-                          </strong>
-                        </div>
-                        <div className={summaryCardClass}>
-                          <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Status</span>
-                          <strong className="text-sm">
-                            {memoryDetail.record.status} / {memoryDetail.record.validation_status}
-                          </strong>
-                        </div>
-                      </div>
-
-                      <div className={mutedCardClass}>
-                        <strong className="block text-foreground">{memoryDetail.record.title}</strong>
-                        <span>{memoryDetail.record.summary}</span>
-                        {memoryDetail.record.linked_skill_name || memoryDetail.record.derived_skill_name ? (
-                          <span className="block text-xs text-muted-foreground mt-2">
-                            linked {memoryDetail.record.linked_skill_name || "--"} · target {memoryDetail.record.derived_skill_name || "--"}
-                          </span>
-                        ) : null}
-                      </div>
-
-                      <div className="grid gap-4 sm:grid-cols-2">
-                        <div className={summaryCardClass}>
-                          <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Triggers</span>
-                          <div className="grid gap-1 text-sm">
-                            {arrayOrEmpty(memoryDetail.record.trigger_conditions).length
-                              ? arrayOrEmpty(memoryDetail.record.trigger_conditions).map((value) => (
-                                  <span key={value}>{value}</span>
-                                ))
-                              : <span className="text-muted-foreground">--</span>}
-                          </div>
-                        </div>
-                        <div className={summaryCardClass}>
-                          <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Boundaries</span>
-                          <div className="grid gap-1 text-sm">
-                            {arrayOrEmpty(memoryDetail.record.boundaries).length
-                              ? arrayOrEmpty(memoryDetail.record.boundaries).map((value) => (
-                                  <span key={value}>{value}</span>
-                                ))
-                              : <span className="text-muted-foreground">--</span>}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className={summaryCardClass}>
-                        <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Normalized Facts</span>
-                        <div className="grid gap-1 text-sm">
-                          {arrayOrEmpty(memoryDetail.record.normalized_facts).length
-                            ? arrayOrEmpty(memoryDetail.record.normalized_facts).map((value) => (
-                                <span key={value}>{value}</span>
-                              ))
-                            : <span className="text-muted-foreground">--</span>}
-                        </div>
-                      </div>
-
-                      <div className="grid gap-4 sm:grid-cols-2">
-                        <div className={summaryCardClass}>
-                          <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Validation Report</span>
-                          {memoryValidationReport?.latest ? (
-                            <div className="grid gap-2 text-sm">
-                              <strong>{memoryValidationReport.latest.status}</strong>
-                              <span className="text-muted-foreground">
-                                Checked: {unixTimeLabel(memoryValidationReport.latest.checked_at)}
-                              </span>
-                              <div className="grid gap-1">
-                                {arrayOrEmpty(memoryValidationReport.latest.issues).length
-                                  ? arrayOrEmpty(memoryValidationReport.latest.issues).map((issue) => (
-                                      <span key={issue}>{issue}</span>
-                                    ))
-                                  : <span className="text-muted-foreground">No issues.</span>}
-                              </div>
-                            </div>
-                          ) : (
-                            <span className="text-sm text-muted-foreground">
-                              No validation report recorded yet.
-                            </span>
-                          )}
-                        </div>
-
-                        <div className={summaryCardClass}>
-                          <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Conflicts</span>
-                          <div className="grid gap-2 text-sm">
-                            {arrayOrEmpty(memoryConflicts?.conflicts).length ? (
-                              arrayOrEmpty(memoryConflicts?.conflicts).map((conflict) => (
-                                <div key={conflict.id} className="rounded-lg bg-muted/40 p-3">
-                                  <strong className="block">{conflict.conflict_kind}</strong>
-                                  <span className="block text-muted-foreground">
-                                    Other: {memoryRecordIdValue(conflict.other_record_id)}
-                                  </span>
-                                  <span className="block">{conflict.detail}</span>
-                                  <span className="block text-muted-foreground">
-                                    Detected: {unixTimeLabel(conflict.detected_at)}
-                                  </span>
-                                </div>
-                              ))
-                            ) : (
-                              <span className="text-muted-foreground">No conflicts detected.</span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className={summaryCardClass}>
-                        <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Evidence</span>
-                        <div className="grid gap-2 text-sm">
-                          {arrayOrEmpty(memoryDetail.record.evidence_refs).length ? (
-                            arrayOrEmpty(memoryDetail.record.evidence_refs).map((ref, index) => (
-                              <div key={`${ref.session_id ?? "session"}-${index}`} className="rounded-lg bg-muted/40 p-3">
-                                <div>session: {ref.session_id || "--"}</div>
-                                <div>message: {ref.message_id || "--"}</div>
-                                <div>tool: {ref.tool_call_id || "--"}</div>
-                                <div>stage: {ref.stage_id || "--"}</div>
-                                {ref.note ? <div>note: {ref.note}</div> : null}
-                              </div>
-                            ))
-                          ) : (
-                            <span className="text-muted-foreground">No evidence refs.</span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className={mutedCardClass}>
-                      {memoryDetailLoading
-                        ? "Loading memory detail..."
-                        : "Select a memory record to inspect its detail, validation report, and conflicts."}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className={sectionCardClass}>
-                <div className="flex items-center justify-between gap-3">
-                  <h3 className="m-0 text-base">Retrieval Preview</h3>
-                  <span className="text-xs text-muted-foreground">
-                    {memoryPreviewLoading
-                      ? "Loading preview..."
-                      : `${arrayOrEmpty(memoryPreview?.packet.items).length} recalled`}
-                  </span>
-                </div>
-                <div className={mutedCardClass}>
-                  {memoryPreview?.contract.note ||
-                    "Formal preview of which memory records would be injected into the current turn and why."}
-                </div>
-                <div className="grid gap-3">
-                  {arrayOrEmpty(memoryPreview?.packet.items).length ? (
-                    arrayOrEmpty(memoryPreview?.packet.items).map((item) => (
-                      <div
-                        key={memoryRecordIdValue(item.card.id)}
-                        className="rounded-lg border border-border/40 bg-card p-4"
-                      >
-                        <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
-                          <span>{item.card.kind}</span>
-                          <span>·</span>
-                          <span>{item.card.validation_status}</span>
-                        </div>
-                        <strong className="mt-2 block text-sm">{item.card.title}</strong>
-                        <div className="mt-2 text-sm">
-                          <div>why: {item.why_recalled}</div>
-                          <div>summary: {item.card.summary}</div>
-                          {item.evidence_summary ? <div>evidence: {item.evidence_summary}</div> : null}
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className={mutedCardClass}>
-                      No memory records would be injected for the current search/session scope.
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="grid gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
-                <div className={sectionCardClass}>
-                  <div className="flex items-center justify-between gap-3">
-                    <h3 className="m-0 text-base">Rule Packs</h3>
-                    <span className="text-xs text-muted-foreground">
-                      {memoryGovernanceLoading
-                        ? "Loading..."
-                        : `${memoryRulePacks?.items?.length ?? 0} packs`}
-                    </span>
-                  </div>
-                  <div className="grid gap-3">
-                    {memoryRulePacks?.items?.length ? (
-                      memoryRulePacks.items.map((pack) => (
-                        <div
-                          key={pack.id}
-                          className="rounded-lg border border-border/40 bg-card p-4"
-                        >
-                          <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
-                            <span>{pack.rule_pack_kind}</span>
-                            <span>·</span>
-                            <span>{pack.version}</span>
-                          </div>
-                          <strong className="mt-2 block text-sm">{pack.id}</strong>
-                          <div className="mt-3 grid gap-2 text-sm">
-                            {arrayOrEmpty(pack.rules).length ? (
-                              arrayOrEmpty(pack.rules).map((rule) => (
-                                <div key={rule.id} className="rounded-lg bg-muted/40 p-3">
-                                  <strong className="block">{rule.id}</strong>
-                                  <span className="block text-muted-foreground">{rule.description}</span>
-                                  {rule.promotion_target ? (
-                                    <span className="block text-xs text-muted-foreground">
-                                      promotion target: {rule.promotion_target}
-                                    </span>
-                                  ) : null}
-                                </div>
-                              ))
-                            ) : (
-                              <div className={mutedCardClass}>No rules declared.</div>
-                            )}
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <div className={mutedCardClass}>
-                        {memoryGovernanceLoading
-                          ? "Loading rule packs..."
-                          : "No rule packs available."}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="grid gap-6">
-                  <div className={sectionCardClass}>
-                    <div className="flex items-center justify-between gap-3">
-                      <h3 className="m-0 text-base">Recent Rule Hits</h3>
-                      <span className="text-xs text-muted-foreground">
-                        {memoryGovernanceLoading
-                          ? "Loading..."
-                          : `${memoryRuleHits?.items?.length ?? 0} hits`}
-                      </span>
-                    </div>
-                    <div className="grid gap-3">
-                      {arrayOrEmpty(memoryRuleHits?.items).length ? (
-                        arrayOrEmpty(memoryRuleHits?.items).map((hit) => (
-                          <div
-                            key={hit.id}
-                            className="rounded-lg border border-border/40 bg-card p-4"
-                          >
-                            <strong className="block text-sm">{hit.hit_kind}</strong>
-                            <div className="mt-2 grid gap-1 text-sm">
-                              <span>run: {hit.run_id || "--"}</span>
-                              <span>record: {memoryRecordIdValue(hit.memory_id)}</span>
-                              <span>pack: {hit.rule_pack_id || "--"}</span>
-                              <span className="text-muted-foreground">
-                                {unixTimeLabel(hit.created_at)}
-                              </span>
-                              {hit.detail ? <span>{hit.detail}</span> : null}
-                            </div>
-                          </div>
-                        ))
-                      ) : (
-                        <div className={mutedCardClass}>
-                          {memoryGovernanceLoading
-                            ? "Loading rule hits..."
-                            : "No recent rule hits."}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className={sectionCardClass}>
-                    <div className="flex items-center justify-between gap-3">
-                      <h3 className="m-0 text-base">Consolidation Runs</h3>
-                      <span className="text-xs text-muted-foreground">
-                        {memoryGovernanceLoading
-                          ? "Loading..."
-                          : `${memoryConsolidationRuns?.items?.length ?? 0} runs`}
-                      </span>
-                    </div>
-                    <div className="grid gap-3">
-                      {memoryConsolidationResult ? (
-                        <div className="rounded-lg bg-foreground text-background p-4">
-                          <strong className="block text-sm">Latest Consolidation</strong>
-                          <div className="mt-2 grid gap-1 text-sm text-background/85">
-                            <span>run: {memoryConsolidationResult.run.run_id}</span>
-                            <span>
-                              merged {memoryConsolidationResult.run.merged_count} · promoted{" "}
-                              {memoryConsolidationResult.run.promoted_count} · conflicts{" "}
-                              {memoryConsolidationResult.run.conflict_count}
-                            </span>
-                            {arrayOrEmpty(memoryConsolidationResult.reflection_notes).length ? (
-                              <div className="mt-2 grid gap-1">
-                                {arrayOrEmpty(memoryConsolidationResult.reflection_notes).map((note) => (
-                                  <span key={note}>{note}</span>
-                                ))}
-                              </div>
-                            ) : null}
-                          </div>
-                        </div>
-                      ) : null}
-
-                      {arrayOrEmpty(memoryConsolidationRuns?.items).length ? (
-                        arrayOrEmpty(memoryConsolidationRuns?.items).map((run) => (
-                          <div
-                            key={run.run_id}
-                            className="rounded-lg border border-border/40 bg-card p-4"
-                          >
-                            <strong className="block text-sm">{run.run_id}</strong>
-                            <div className="mt-2 grid gap-1 text-sm">
-                              <span>
-                                merged {run.merged_count} · promoted {run.promoted_count} · conflicts{" "}
-                                {run.conflict_count}
-                              </span>
-                              <span className="text-muted-foreground">
-                                started: {unixTimeLabel(run.started_at)}
-                              </span>
-                              <span className="text-muted-foreground">
-                                finished: {run.finished_at ? unixTimeLabel(run.finished_at) : "--"}
-                              </span>
-                            </div>
-                          </div>
-                        ))
-                      ) : (
-                        <div className={mutedCardClass}>
-                          {memoryGovernanceLoading
-                            ? "Loading consolidation runs..."
-                            : "No consolidation runs recorded yet."}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
+            <MemoryTab
+              selectedSessionId={selectedSessionId}
+              styles={{
+                primaryButtonClass,
+                secondaryButtonClass,
+                summaryCardClass,
+                sectionCardClass,
+                mutedCardClass,
+                insetCardClass,
+                disclosureCardClass,
+              }}
+              memorySearchDraft={memorySearchDraft}
+              onMemorySearchDraftChange={setMemorySearchDraft}
+              memoryListLoading={memoryListLoading}
+              onLoadMemoryList={() => void loadMemoryList()}
+              memoryPreviewLoading={memoryPreviewLoading}
+              onLoadMemoryPreview={() => void loadMemoryPreview()}
+              memoryGovernanceLoading={memoryGovernanceLoading}
+              onLoadMemoryGovernance={() => void loadMemoryGovernance()}
+              memoryConsolidateIncludeCandidates={memoryConsolidateIncludeCandidates}
+              onMemoryConsolidateIncludeCandidatesChange={setMemoryConsolidateIncludeCandidates}
+              memoryConsolidating={memoryConsolidating}
+              onRunMemoryConsolidation={() => void runMemoryConsolidation()}
+              memoryListResponse={memoryListResponse}
+              selectedMemoryId={selectedMemoryId}
+              selectedMemoryCardIdLabel={
+                selectedMemoryCard ? memoryRecordIdValue(selectedMemoryCard.id) : null
+              }
+              onSelectMemoryId={setSelectedMemoryId}
+              memoryDetailLoading={memoryDetailLoading}
+              memoryDetail={memoryDetail}
+              memoryValidationReport={memoryValidationReport}
+              memoryConflicts={memoryConflicts}
+              memoryPreview={memoryPreview}
+              memoryRulePacks={memoryRulePacks}
+              memoryRuleHits={memoryRuleHits}
+              memoryConsolidationRuns={memoryConsolidationRuns}
+              memoryConsolidationResult={memoryConsolidationResult}
+            />
           ) : null}
 
           {!loading && activeTab === "providers" ? (
@@ -2479,932 +1951,94 @@ export function SettingsDrawer({
           ) : null}
 
           {!loading && activeTab === "skills" ? (
-            <div className="grid gap-6">
-              <div className="grid gap-3">
-                <label>Workspace Skill Authority</label>
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <div className={summaryCardClass}>
-                    <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Workspace Root</span>
-                    <strong className="break-all text-sm">{workspaceRootPath || "--"}</strong>
-                  </div>
-                  <div className={summaryCardClass}>
-                    <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Writable Skill Root</span>
-                    <strong className="break-all text-sm">{skillWorkspaceRoot}</strong>
-                  </div>
-                  <div className={summaryCardClass}>
-                    <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Discovered Skills</span>
-                    <strong>{skillCatalog.length}</strong>
-                  </div>
-                </div>
-                <div className={mutedCardClass}>
-                  Writes from this panel go through <code>/skill/manage</code> and land only in the
-                  current workspace authority at <code>{skillWorkspaceRoot}</code>. Global config and
-                  external skill roots stay read-only here.
-                </div>
-                {selectedSessionId ? (
-                  <div className={mutedCardClass}>
-                    Catalog reads now go through <code>/skill/catalog?session_id=...</code>, so the
-                    visible skill set follows the active session's scheduler stage when a stage is
-                    currently constraining tools. Detail preview now uses the same session-aware
-                    scope through <code>/skill/detail?session_id=...</code>.
-                  </div>
-                ) : null}
-                {!skillsMutationsEnabled ? (
-                  <div className="rounded-lg border border-amber-300 bg-amber-50/80 px-4 py-2.5 text-sm leading-relaxed text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200">
-                    Select or create a session before managing skills so permission prompts can be
-                    routed to the active session.
-                  </div>
-                ) : null}
-              </div>
-
-              <div className={sectionCardClass}>
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="m-0 text-xs tracking-widest uppercase text-muted-foreground font-semibold">Skill Hub / Sync</p>
-                    <h3 className="m-0 mt-1">Managed provenance and authority sync</h3>
-                  </div>
-                  <div className="text-sm text-muted-foreground">
-                    managed {managedSkills.length} · sources {skillSourceIndices.length} · distributions {skillDistributions.length} · artifacts {skillArtifactCache.length} · lifecycle {skillLifecycle.length}
-                  </div>
-                </div>
-
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  <input
-                    type="text"
-                    placeholder="source_id"
-                    value={skillSyncSourceId}
-                    onChange={(event) => setSkillSyncSourceId(event.target.value)}
-                  />
-                  <select
-                    value={skillSyncSourceKind}
-                    onChange={(event) => setSkillSyncSourceKind(event.target.value as SkillSourceRefRecord["source_kind"])}
-                  >
-                    <option value="local_path">local_path</option>
-                    <option value="bundled">bundled</option>
-                    <option value="git">git</option>
-                    <option value="archive">archive</option>
-                    <option value="registry">registry</option>
-                  </select>
-                  <input
-                    type="text"
-                    placeholder="locator"
-                    value={skillSyncLocator}
-                    onChange={(event) => setSkillSyncLocator(event.target.value)}
-                  />
-                  <input
-                    type="text"
-                    placeholder="revision (optional)"
-                    value={skillSyncRevision}
-                    onChange={(event) => setSkillSyncRevision(event.target.value)}
-                  />
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    className={primaryButtonClass}
-                    type="button"
-                    disabled={!skillSyncSourceId.trim() || !skillSyncLocator.trim() || busyKey === `skill:sync:plan:${skillSyncSourceId.trim()}`}
-                    onClick={() => void planSkillSync()}
-                  >
-                    {busyKey === `skill:sync:plan:${skillSyncSourceId.trim()}` ? "Planning..." : "Preview Sync Plan"}
-                  </button>
-                  <button
-                    className={secondaryButtonClass}
-                    type="button"
-                    disabled={
-                      !skillsMutationsEnabled ||
-                      !skillSyncSourceId.trim() ||
-                      !skillSyncLocator.trim() ||
-                      busyKey === `skill:sync:apply:${skillSyncSourceId.trim()}`
-                    }
-                    onClick={() => void applySkillSync()}
-                  >
-                    {busyKey === `skill:sync:apply:${skillSyncSourceId.trim()}` ? "Applying..." : "Apply Sync"}
-                  </button>
-                  <button
-                    className={secondaryButtonClass}
-                    type="button"
-                    disabled={!skillSyncSourceId.trim() || !skillSyncLocator.trim() || busyKey === `skill:index:refresh:${skillSyncSourceId.trim()}`}
-                    onClick={() => void refreshSkillSourceIndex()}
-                  >
-                    {busyKey === `skill:index:refresh:${skillSyncSourceId.trim()}` ? "Refreshing Index..." : "Refresh Source Index"}
-                  </button>
-                  <button
-                    className={secondaryButtonClass}
-                    type="button"
-                    disabled={!skillSyncSourceId.trim() || !skillSyncLocator.trim() || busyKey === `skill:guard:source ${skillSyncSourceId.trim()}`}
-                    onClick={() => void runSelectedSourceGuard()}
-                  >
-                    {busyKey === `skill:guard:source ${skillSyncSourceId.trim()}` ? "Scanning..." : "Run Source Guard"}
-                  </button>
-                </div>
-
-                <div className="grid gap-4 xl:grid-cols-2">
-                  <div className="grid gap-3">
-                    <div className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Managed Skills</div>
-                    {managedSkills.length ? managedSkills.slice(0, 8).map((record) => (
-                      <div key={record.skill_name} className="rounded-lg bg-muted/40 p-3 text-sm">
-                        <div className="flex items-start justify-between gap-3">
-                          <strong>{record.skill_name}</strong>
-                          <span className="text-muted-foreground">{record.installed_revision || "--"}</span>
-                        </div>
-                        <div className="mt-2 text-muted-foreground">
-                          {(record.source?.source_id ?? "unmanaged")} · {record.locally_modified ? "locally modified" : record.deleted_locally ? "deleted locally" : "clean"}
-                        </div>
-                      </div>
-                    )) : (
-                      <div className="rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">No managed records yet.</div>
-                    )}
-                  </div>
-
-                  <div className="grid gap-3">
-                    <div className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Indexed Sources</div>
-                    {skillSourceIndices.length ? skillSourceIndices.slice(0, 6).map((snapshot) => (
-                      <button
-                        key={snapshot.source.source_id}
-                        type="button"
-                        className="rounded-lg border border-transparent bg-transparent p-3 text-left transition-colors hover:bg-accent"
-                        onClick={() => {
-                          setSkillSyncSourceId(snapshot.source.source_id);
-                          setSkillSyncSourceKind(snapshot.source.source_kind);
-                          setSkillSyncLocator(snapshot.source.locator);
-                          setSkillSyncRevision(snapshot.source.revision ?? "");
-                          setRemoteInstallSkillName(snapshot.entries[0]?.skill_name ?? "");
-                        }}
-                      >
-                        <strong>{snapshot.source.source_id}</strong>
-                        <div className="mt-2 text-sm text-muted-foreground">
-                          {snapshot.source.source_kind} · {snapshot.entries.length} skills
-                        </div>
-                        <div className="mt-1 break-all text-xs text-muted-foreground">{snapshot.source.locator}</div>
-                      </button>
-                    )) : (
-                      <div className="rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">No source index cached yet.</div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="grid gap-4 rounded-lg bg-muted/30 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="m-0 text-xs tracking-widest uppercase text-muted-foreground font-semibold">Remote Install</p>
-                      <h4 className="m-0 mt-1">Remote distribution plan and apply</h4>
-                    </div>
-                    <div className="text-sm text-muted-foreground">
-                      source {selectedHubSourceSnapshot?.source.source_id ?? "--"}
-                    </div>
-                  </div>
-
-                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1.2fr)_repeat(2,minmax(0,1fr))] xl:grid-cols-[minmax(0,1.4fr)_repeat(4,minmax(0,0.8fr))]">
-                    <input
-                      type="text"
-                      placeholder="remote skill name"
-                      value={remoteInstallSkillName}
-                      onChange={(event) => setRemoteInstallSkillName(event.target.value)}
-                    />
-                    <button
-                      className={primaryButtonClass}
-                      type="button"
-                      disabled={
-                        !skillSyncSourceId.trim() ||
-                        !skillSyncLocator.trim() ||
-                        !remoteInstallSkillName.trim() ||
-                        busyKey === `skill:install:plan:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
-                      }
-                      onClick={() => void planRemoteInstall()}
-                    >
-                      {busyKey === `skill:install:plan:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
-                        ? "Planning..."
-                        : "Preview Install"}
-                    </button>
-                    <button
-                      className={secondaryButtonClass}
-                      type="button"
-                      disabled={
-                        !skillSyncSourceId.trim() ||
-                        !skillSyncLocator.trim() ||
-                        !remoteInstallSkillName.trim() ||
-                        busyKey === `skill:update:plan:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
-                      }
-                      onClick={() => void planRemoteUpdate()}
-                    >
-                      {busyKey === `skill:update:plan:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
-                        ? "Planning..."
-                        : "Preview Update"}
-                    </button>
-                    <button
-                      className={secondaryButtonClass}
-                      type="button"
-                      disabled={
-                        !skillsMutationsEnabled ||
-                        !skillSyncSourceId.trim() ||
-                        !skillSyncLocator.trim() ||
-                        !remoteInstallSkillName.trim() ||
-                        busyKey === `skill:install:apply:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
-                      }
-                      onClick={() => void applyRemoteInstall()}
-                    >
-                      {busyKey === `skill:install:apply:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
-                        ? "Installing..."
-                        : "Install To Workspace"}
-                    </button>
-                    <button
-                      className={secondaryButtonClass}
-                      type="button"
-                      disabled={
-                        !skillsMutationsEnabled ||
-                        !skillSyncSourceId.trim() ||
-                        !skillSyncLocator.trim() ||
-                        !remoteInstallSkillName.trim() ||
-                        busyKey === `skill:update:apply:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
-                      }
-                      onClick={() => void applyRemoteUpdate()}
-                    >
-                      {busyKey === `skill:update:apply:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
-                        ? "Updating..."
-                        : "Update Workspace"}
-                    </button>
-                    <button
-                      className="min-h-[36px] rounded-lg px-4 border border-amber-300 bg-amber-50/80 text-amber-950 text-sm inline-flex items-center justify-center cursor-pointer transition-colors disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200 dark:hover:bg-amber-950/60"
-                      type="button"
-                      disabled={
-                        !skillsMutationsEnabled ||
-                        !skillSyncSourceId.trim() ||
-                        !skillSyncLocator.trim() ||
-                        !remoteInstallSkillName.trim() ||
-                        busyKey === `skill:detach:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
-                      }
-                      onClick={() => void detachManagedSkill()}
-                    >
-                      {busyKey === `skill:detach:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
-                        ? "Detaching..."
-                        : "Detach Managed"}
-                    </button>
-                    <button
-                      className="min-h-[36px] rounded-lg px-4 border border-red-300 bg-red-50/80 text-red-900 text-sm inline-flex items-center justify-center cursor-pointer transition-colors disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-700 dark:bg-red-950/40 dark:text-red-200 dark:hover:bg-red-950/60"
-                      type="button"
-                      disabled={
-                        !skillsMutationsEnabled ||
-                        !skillSyncSourceId.trim() ||
-                        !skillSyncLocator.trim() ||
-                        !remoteInstallSkillName.trim() ||
-                        busyKey === `skill:remove:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
-                      }
-                      onClick={() => void removeManagedSkill()}
-                    >
-                      {busyKey === `skill:remove:${skillSyncSourceId.trim()}:${remoteInstallSkillName.trim()}`
-                        ? "Removing..."
-                        : "Remove Managed"}
-                    </button>
-                  </div>
-
-                  <div className="text-xs text-muted-foreground">
-                    Update re-applies the selected managed source through the unified lifecycle pipeline. Detach drops managed ownership but keeps workspace files. Remove clears managed state and only deletes the workspace copy when the local skill is still clean.
-                  </div>
-
-                  {selectedRemoteSourceEntry ? (
-                    <div className="rounded-lg bg-muted/40 p-3 text-sm">
-                      <div className="flex items-start justify-between gap-3">
-                        <strong>{selectedRemoteSourceEntry.skill_name}</strong>
-                        <span className="text-muted-foreground">
-                          {selectedRemoteSourceEntry.revision || "--"}
-                        </span>
-                      </div>
-                      <div className="mt-2 text-muted-foreground">
-                        {selectedRemoteSourceEntry.category
-                          ? `${selectedRemoteSourceEntry.category} · `
-                          : ""}
-                        {selectedRemoteSourceEntry.description || "No remote description provided."}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">
-                      Type a skill name from the selected source index to preview or apply a remote install.
-                    </div>
-                  )}
-
-                  {selectedHubSourceSnapshot?.entries.length ? (
-                    <div className="grid gap-3">
-                      <div className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">
-                        Indexed Entries for Selected Source
-                      </div>
-                      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                        {selectedHubSourceSnapshot.entries.slice(0, 12).map((entry) => {
-                          const selected =
-                            entry.skill_name.trim().toLowerCase() ===
-                            remoteInstallSkillName.trim().toLowerCase();
-                          return (
-                            <button
-                              key={entry.skill_name}
-                              type="button"
-                              className={cn(
-                                "rounded-lg border p-3 text-left transition-colors",
-                                selected
-                                  ? "border-border/70 bg-accent"
-                                  : "border-transparent bg-transparent hover:bg-accent",
-                              )}
-                              onClick={() => setRemoteInstallSkillName(entry.skill_name)}
-                            >
-                              <strong>{entry.skill_name}</strong>
-                              <div className="mt-1 text-xs text-muted-foreground">
-                                {entry.category ? `${entry.category} · ` : ""}
-                                {entry.revision || "unversioned"}
-                              </div>
-                              <div className="mt-2 text-sm text-muted-foreground">
-                                {entry.description || "No description"}
-                              </div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  <div className="grid gap-4 xl:grid-cols-4">
-                    <div className="grid gap-3">
-                      <div className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">
-                        Hub Policy
-                      </div>
-                      <div className="rounded-lg bg-muted/40 p-3 text-sm">
-                        {skillHubPolicy ? (
-                          <div className="grid gap-2 text-muted-foreground">
-                            <div>
-                              retention {formatHubDurationSeconds(skillHubPolicy.artifact_cache_retention_seconds)}
-                            </div>
-                            <div>
-                              timeout {formatHubDurationMs(skillHubPolicy.fetch_timeout_ms)}
-                            </div>
-                            <div>
-                              max download {formatHubBytes(skillHubPolicy.max_download_bytes)}
-                            </div>
-                            <div>
-                              max extract {formatHubBytes(skillHubPolicy.max_extract_bytes)}
-                            </div>
-                          </div>
-                        ) : (
-                        <div className="text-muted-foreground">
-                          No hub policy payload loaded yet.
-                        </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="grid gap-3">
-                      <div className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">
-                        Distribution Snapshot
-                      </div>
-                      {selectedRemoteDistribution ? (
-                        <div className="rounded-lg bg-muted/40 p-3 text-sm">
-                          <div className="flex items-center justify-between gap-3">
-                            <strong>{selectedRemoteDistribution.skill_name}</strong>
-                            <span
-                              className={cn(
-                                "rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide",
-                                lifecycleStatusClass(selectedRemoteDistribution.lifecycle),
-                              )}
-                            >
-                              {selectedRemoteDistribution.lifecycle}
-                            </span>
-                          </div>
-                          <div className="mt-2 text-muted-foreground">
-                            release {selectedRemoteDistribution.release.version || "--"} · revision{" "}
-                            {selectedRemoteDistribution.release.revision || "--"}
-                          </div>
-                          <div className="mt-1 break-all text-xs text-muted-foreground">
-                            artifact {selectedRemoteDistribution.resolution.artifact.artifact_id} ·{" "}
-                            {selectedRemoteDistribution.resolution.artifact.locator}
-                          </div>
-                          {selectedRemoteDistribution.installed ? (
-                            <div className="mt-2 text-xs text-muted-foreground">
-                              installed at {unixTimeLabel(selectedRemoteDistribution.installed.installed_at)} ·{" "}
-                              {selectedRemoteDistribution.installed.workspace_skill_path}
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : (
-                        <div className="rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">
-                          No resolved distribution recorded for the current remote skill yet.
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="grid gap-3">
-                      <div className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">
-                        Artifact Cache
-                      </div>
-                      {selectedRemoteArtifactCache ? (
-                        <div className="rounded-lg bg-muted/40 p-3 text-sm">
-                          <div className="flex items-center justify-between gap-3">
-                            <strong>{selectedRemoteArtifactCache.artifact.artifact_id}</strong>
-                            <span
-                              className={cn(
-                                "rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide",
-                                lifecycleStatusClass(selectedRemoteArtifactCache.status),
-                              )}
-                            >
-                              {selectedRemoteArtifactCache.status}
-                            </span>
-                          </div>
-                          <div className="mt-2 text-muted-foreground">
-                            cached {unixTimeLabel(selectedRemoteArtifactCache.cached_at)}
-                          </div>
-                          <div className="mt-1 break-all text-xs text-muted-foreground">
-                            local {selectedRemoteArtifactCache.local_path}
-                          </div>
-                          {selectedRemoteArtifactCache.extracted_path ? (
-                            <div className="mt-1 break-all text-xs text-muted-foreground">
-                              extracted {selectedRemoteArtifactCache.extracted_path}
-                            </div>
-                          ) : null}
-                          {selectedRemoteArtifactCache.error ? (
-                            <div className="mt-2 rounded-lg border border-red-300 bg-red-50/80 px-3 py-2 text-xs leading-relaxed text-red-800 dark:border-red-700 dark:bg-red-950/60 dark:text-red-300">
-                              {selectedRemoteArtifactCache.error}
-                            </div>
-                          ) : (
-                            <div className="mt-2 text-xs text-muted-foreground">
-                              No artifact fetch error recorded for this distribution.
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">
-                          No artifact cache entry captured yet for the current remote skill.
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="grid gap-3">
-                      <div className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">
-                        Lifecycle State
-                      </div>
-                      {selectedRemoteLifecycle ? (
-                        <div className="rounded-lg bg-muted/40 p-3 text-sm">
-                          <div className="flex items-center justify-between gap-3">
-                            <strong>{selectedRemoteLifecycle.skill_name}</strong>
-                            <span
-                              className={cn(
-                                "rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide",
-                                lifecycleStatusClass(selectedRemoteLifecycle.state),
-                              )}
-                            >
-                              {selectedRemoteLifecycle.state}
-                            </span>
-                          </div>
-                          <div className="mt-2 text-muted-foreground">
-                            updated {unixTimeLabel(selectedRemoteLifecycle.updated_at)}
-                          </div>
-                          {selectedRemoteLifecycle.error ? (
-                            <div className="mt-2 rounded-lg border border-red-300 bg-red-50/80 px-3 py-2 text-xs leading-relaxed text-red-800 dark:border-red-700 dark:bg-red-950/60 dark:text-red-300">
-                              {selectedRemoteLifecycle.error}
-                            </div>
-                          ) : (
-                            <div className="mt-2 text-xs text-muted-foreground">
-                              No lifecycle error recorded for this distribution.
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">
-                          No lifecycle record captured yet for the current remote skill.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {skillSyncPlan ? (
-                  <div className="grid gap-3 rounded-lg bg-muted/30 p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <strong>Sync Plan · {skillSyncPlan.source_id}</strong>
-                      <span className="text-sm text-muted-foreground">{skillSyncPlan.entries.length} entries</span>
-                    </div>
-                    {skillSyncPlan.entries.length ? skillSyncPlan.entries.map((entry) => (
-                      <div key={`${entry.skill_name}:${entry.action}`} className="rounded-lg bg-muted/40 p-3 text-sm">
-                        <div className="flex items-start justify-between gap-3">
-                          <strong>{entry.skill_name}</strong>
-                          <span className="text-xs uppercase tracking-wide text-muted-foreground">{entry.action}</span>
-                        </div>
-                        <div className="mt-2 text-muted-foreground">{entry.reason}</div>
-                      </div>
-                    )) : (
-                      <div className="rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">This source currently produces an empty plan.</div>
-                    )}
-                  </div>
-                ) : null}
-
-                {remoteInstallPlan ? (
-                  <div className="grid gap-3 rounded-lg bg-muted/30 p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <strong>
-                        Remote Install Plan · {remoteInstallPlan.entry.skill_name}
-                      </strong>
-                      <span
-                        className={cn(
-                          "rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide",
-                          lifecycleStatusClass(remoteInstallPlan.entry.action),
-                        )}
-                      >
-                        {remoteInstallPlan.entry.action}
-                      </span>
-                    </div>
-                    <div className="text-sm text-muted-foreground">
-                      {remoteInstallPlan.entry.reason}
-                    </div>
-                    <div className="grid gap-2 text-sm text-muted-foreground">
-                      <div>
-                        source <code>{remoteInstallPlan.source_id}</code>
-                      </div>
-                      <div>
-                        distribution <code>{remoteInstallPlan.distribution.distribution_id}</code>
-                      </div>
-                      <div>
-                        artifact <code>{remoteInstallPlan.distribution.resolution.artifact.artifact_id}</code>
-                      </div>
-                      <div>
-                        locator <code>{remoteInstallPlan.distribution.resolution.artifact.locator}</code>
-                      </div>
-                    </div>
-                  </div>
-                ) : null}
-
-                {skillGuardTarget ? (
-                  <div className={mutedCardClass}>
-                    Latest guard run targeted <code>{skillGuardTarget}</code> and returned{" "}
-                    {skillGuardReports.length} report{skillGuardReports.length === 1 ? "" : "s"}.
-                    The full result is now folded into the governance timeline below.
-                  </div>
-                ) : null}
-
-                <SkillGovernanceTimeline
-                  entries={skillGovernanceTimeline}
-                  selectedSkillName={selectedSkillName}
-                  selectedSourceId={skillSyncSourceId.trim() || null}
-                />
-              </div>
-
-              <div className="grid gap-6">
-                <div className="grid gap-3 content-start">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Catalog</p>
-                    <span>{skillCatalog.length} skills</span>
-                  </div>
-                  {skillCatalog.length ? (
-                    <div className="max-h-[28rem] overflow-y-auto pr-1">
-                      <div className="grid gap-2">
-                        {skillCatalog.map((skill) => {
-                          const selected = selectedSkillEntry?.name === skill.name;
-                          const managedRecord =
-                            managedRecordBySkill.get(skill.name.trim().toLowerCase()) ?? null;
-                          const latestGuard =
-                            latestGuardBySkill.get(skill.name.trim().toLowerCase()) ?? null;
-                          return (
-                            <button
-                              key={skill.name}
-                              type="button"
-                              className={cn(
-                                "rounded-lg border px-3 py-2.5 text-left transition-colors",
-                                selected
-                                  ? "border-border/70 bg-accent"
-                                  : "border-transparent bg-transparent hover:bg-accent",
-                              )}
-                              onClick={() => setSelectedSkillName(skill.name)}
-                            >
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="min-w-0">
-                                  <strong className="block truncate">{skill.name}</strong>
-                                  <p className="m-0 mt-1 truncate text-xs text-muted-foreground">
-                                    {skill.description || "No description"}
-                                  </p>
-                                </div>
-                                <span
-                                  className={cn(
-                                    "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-                                    skill.writable
-                                      ? "border-green-300 bg-green-50 text-green-800 dark:border-green-700 dark:bg-green-950 dark:text-green-300"
-                                      : "border-border bg-muted text-muted-foreground",
-                                  )}
-                                >
-                                  {skill.writable ? "workspace" : "read only"}
-                                </span>
-                              </div>
-                              <div className="mt-2 flex flex-wrap gap-1.5 text-[10px]">
-                                <span className="rounded-full border border-border/40 bg-muted px-2 py-0.5 text-muted-foreground">
-                                  {skill.supporting_files.length} files
-                                </span>
-                                {skill.category ? (
-                                  <span className="rounded-full border border-border/40 bg-muted px-2 py-0.5 text-muted-foreground">
-                                    {skill.category}
-                                  </span>
-                                ) : null}
-                                {managedRecord ? (
-                                  <span
-                                    className={cn(
-                                      "rounded-full border px-2 py-0.5",
-                                      managedRecord.locally_modified || managedRecord.deleted_locally
-                                        ? "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200"
-                                        : "border-border/40 bg-muted text-muted-foreground",
-                                    )}
-                                  >
-                                    {managedSkillStateLabel(managedRecord)}
-                                  </span>
-                                ) : null}
-                                {latestGuard ? (
-                                  <span
-                                    className={cn(
-                                      "rounded-full border px-2 py-0.5",
-                                      latestGuard.status === "blocked"
-                                        ? "border-red-300 bg-red-50 text-red-800 dark:border-red-700 dark:bg-red-950/60 dark:text-red-300"
-                                        : latestGuard.status === "warn"
-                                          ? "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200"
-                                          : "border-border/40 bg-muted text-muted-foreground",
-                                    )}
-                                  >
-                                    {latestGuardStatusLabel(latestGuard)}
-                                  </span>
-                                ) : null}
-                              </div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="rounded-lg bg-muted/30 px-4 py-6 text-sm text-muted-foreground">
-                      No skills discovered yet.
-                    </p>
-                  )}
-                </div>
-
-                <div className={sectionCardClass}>
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="m-0 text-xs tracking-widest uppercase text-muted-foreground font-semibold">Create Skill</p>
-                      <h3 className="m-0 mt-1">New workspace skill</h3>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {(["methodology", "raw"] as SkillEditorMode[]).map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        className={cn(
-                          "rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors",
-                          newSkillEditorMode === mode
-                            ? "border-border bg-accent text-foreground"
-                            : "border-border/50 bg-background/60 text-muted-foreground hover:bg-accent/60",
-                        )}
-                        onClick={() => setNewSkillEditorMode(mode)}
-                      >
-                        {mode === "methodology" ? "Methodology Form" : "Raw Markdown"}
-                      </button>
-                    ))}
-                  </div>
-                  <input
-                    type="text"
-                    placeholder="skill name"
-                    value={newSkillName}
-                    onChange={(event) => setNewSkillName(event.target.value)}
-                  />
-                  <input
-                    type="text"
-                    placeholder="description"
-                    value={newSkillDescription}
-                    onChange={(event) => setNewSkillDescription(event.target.value)}
-                  />
-                  <input
-                    type="text"
-                    placeholder="category (optional)"
-                    value={newSkillCategory}
-                    onChange={(event) => setNewSkillCategory(event.target.value)}
-                  />
-                  {newSkillEditorMode === "methodology" ? (
-                    <SkillMethodologyEditor
-                      draft={newSkillMethodologyDraft}
-                      onChange={setNewSkillMethodologyDraft}
-                      previewBody={newSkillMethodologyPreview}
-                      previewError={newSkillMethodologyPreviewError}
-                    />
-                  ) : (
-                    <textarea
-                      className={editorTextareaClass}
-                      placeholder="Skill body"
-                      value={newSkillBody}
-                      onChange={(event) => setNewSkillBody(event.target.value)}
-                      spellCheck={false}
-                    />
-                  )}
-                  <div className="flex items-center gap-2">
-                    <button
-                      className={primaryButtonClass}
-                      type="button"
-                      disabled={
-                        !skillsMutationsEnabled ||
-                        !newSkillName.trim() ||
-                        !newSkillDescription.trim() ||
-                        (newSkillEditorMode === "raw"
-                          ? !newSkillBody.trim()
-                          : Boolean(newSkillMethodologyPreviewError)) ||
-                        busyKey === `skill:create:${newSkillName.trim() || "new"}`
-                      }
-                      onClick={() => void createSkill()}
-                    >
-                      {busyKey === `skill:create:${newSkillName.trim() || "new"}`
-                        ? "Creating..."
-                        : "Create Skill"}
-                    </button>
-                  </div>
-                </div>
-
-                <div className={sectionCardClass}>
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="m-0 text-xs tracking-widest uppercase text-muted-foreground font-semibold">Edit Skill</p>
-                        <h3 className="m-0 mt-1">{selectedSkillEntry?.name || "Select a skill"}</h3>
-                      </div>
-                      {selectedSkillEntry ? (
-                        <span
-                          className={cn(
-                            "rounded-full border px-3 py-1.5 text-xs font-semibold",
-                            selectedSkillEntry.writable
-                              ? "border-green-300 bg-green-50 text-green-800 dark:border-green-700 dark:bg-green-950 dark:text-green-300"
-                              : "border-border bg-muted text-muted-foreground",
-                          )}
-                        >
-                          {selectedSkillEntry.writable ? "Workspace writable" : "Read only"}
-                        </span>
-                      ) : null}
-                    </div>
-
-                    {selectedSkillEntry ? (
-                      <>
-                        {(() => {
-                          const managedRecord =
-                            managedRecordBySkill.get(
-                              selectedSkillEntry.name.trim().toLowerCase(),
-                            ) ?? null;
-                          const latestGuard =
-                            latestGuardBySkill.get(
-                              selectedSkillEntry.name.trim().toLowerCase(),
-                            ) ?? null;
-                          return (
-                            <div className="flex flex-wrap gap-2 text-xs">
-                              {managedRecord ? (
-                                <>
-                                  <span className="rounded-full border border-border/40 bg-muted px-2.5 py-1 text-muted-foreground">
-                                    source {managedRecord.source?.source_id || "workspace-local"}
-                                  </span>
-                                  <span
-                                    className={cn(
-                                      "rounded-full border px-2.5 py-1",
-                                      managedRecord.locally_modified ||
-                                        managedRecord.deleted_locally
-                                        ? "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200"
-                                        : "border-border/40 bg-muted text-muted-foreground",
-                                    )}
-                                  >
-                                    {managedSkillStateLabel(managedRecord)}
-                                  </span>
-                                </>
-                              ) : null}
-                              {latestGuard ? (
-                                <span
-                                  className={cn(
-                                    "rounded-full border px-2.5 py-1",
-                                    latestGuard.status === "blocked"
-                                      ? "border-red-300 bg-red-50 text-red-800 dark:border-red-700 dark:bg-red-950/60 dark:text-red-300"
-                                      : latestGuard.status === "warn"
-                                        ? "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200"
-                                        : "border-border/40 bg-muted text-muted-foreground",
-                                  )}
-                                >
-                                  {latestGuardStatusLabel(latestGuard)} · {latestGuard.violations.length} violations
-                                </span>
-                              ) : null}
-                            </div>
-                          );
-                        })()}
-                        <div className="grid gap-2 rounded-lg border border-border/35 bg-muted/8 p-3 text-sm text-muted-foreground">
-                          <div className="break-all">
-                            <strong>Location:</strong> {selectedSkillEntry.location}
-                          </div>
-                          <div>
-                            <strong>Category:</strong> {selectedSkillEntry.category || "--"}
-                          </div>
-                          <div>
-                            <strong>Supporting files:</strong>{" "}
-                            {selectedSkillEntry.supporting_files.length
-                              ? selectedSkillEntry.supporting_files.join(", ")
-                              : "none"}
-                          </div>
-                          {!selectedSkillEntry.writable ? (
-                            <div className="text-amber-700 dark:text-amber-300">
-                              This skill was discovered outside the workspace skill root. You can
-                              inspect it here, but edits and deletes stay disabled because the
-                              governed write path only targets <code>{skillWorkspaceRoot}</code>.
-                            </div>
-                          ) : null}
-                        </div>
-
-                        <div className="flex flex-wrap gap-2">
-                          {(["methodology", "raw"] as SkillEditorMode[]).map((mode) => (
-                            <button
-                              key={mode}
-                              type="button"
-                              className={cn(
-                                "rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors",
-                                editSkillEditorMode === mode
-                                  ? "border-border bg-accent text-foreground"
-                                  : "border-border/50 bg-background/60 text-muted-foreground hover:bg-accent/60",
-                              )}
-                              onClick={() => setEditSkillEditorMode(mode)}
-                              disabled={!selectedSkillEntry.writable || skillDetailLoading}
-                            >
-                              {mode === "methodology" ? "Methodology Form" : "Raw Markdown"}
-                            </button>
-                          ))}
-                        </div>
-
-                        {skillDetailLoading ? (
-                          <p className="m-0 text-sm text-muted-foreground">Loading skill source...</p>
-                        ) : editSkillEditorMode === "methodology" ? (
-                          <div className="grid gap-3">
-                            <input
-                              type="text"
-                              placeholder="description"
-                              value={editSkillDescription}
-                              onChange={(event) => setEditSkillDescription(event.target.value)}
-                              disabled={!selectedSkillEntry.writable}
-                            />
-                            {!editSkillMethodologyMatched ? (
-                              <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200">
-                                Current SKILL.md did not round-trip into the methodology template. Saving in methodology mode will rewrite the body from this structured form.
-                              </div>
-                            ) : null}
-                            <SkillMethodologyEditor
-                              draft={editSkillMethodologyDraft}
-                              onChange={setEditSkillMethodologyDraft}
-                              previewBody={editSkillMethodologyPreview}
-                              previewError={editSkillMethodologyPreviewError}
-                              disabled={!selectedSkillEntry.writable}
-                            />
-                          </div>
-                        ) : (
-                          <textarea
-                            className="min-h-[26rem] w-full resize-y rounded-lg border border-border/40 bg-background p-3.5 text-foreground leading-relaxed font-mono text-sm"
-                            value={skillEditorContent}
-                            onChange={(event) => setSkillEditorContent(event.target.value)}
-                            spellCheck={false}
-                            readOnly={!selectedSkillEntry.writable}
-                          />
-                        )}
-
-                        <div className="flex items-center gap-2">
-                          <button
-                            className={secondaryButtonClass}
-                            type="button"
-                            disabled={busyKey === `skill:guard:skill ${selectedSkillEntry.name}`}
-                            onClick={() => void runSelectedSkillGuard()}
-                          >
-                            {busyKey === `skill:guard:skill ${selectedSkillEntry.name}` ? "Scanning..." : "Run Guard Check"}
-                          </button>
-                          <button
-                            className={primaryButtonClass}
-                            type="button"
-                            disabled={
-                              !skillsMutationsEnabled ||
-                              !selectedSkillEntry.writable ||
-                              skillDetailLoading ||
-                              (editSkillEditorMode === "methodology" &&
-                                (!editSkillDescription.trim() ||
-                                  Boolean(editSkillMethodologyPreviewError))) ||
-                              busyKey === `skill:edit:${selectedSkillEntry.name}`
-                            }
-                            onClick={() => void saveSelectedSkill()}
-                          >
-                            {busyKey === `skill:edit:${selectedSkillEntry.name}` ? "Saving..." : "Save Skill"}
-                          </button>
-                          <button
-                            className={secondaryButtonClass}
-                            type="button"
-                            disabled={
-                              !skillsMutationsEnabled ||
-                              !selectedSkillEntry.writable ||
-                              busyKey === `skill:delete:${selectedSkillEntry.name}`
-                            }
-                            onClick={() => void deleteSelectedSkill()}
-                          >
-                            {busyKey === `skill:delete:${selectedSkillEntry.name}` ? "Deleting..." : "Delete Skill"}
-                          </button>
-                        </div>
-                      </>
-                    ) : (
-                      <p className="rounded-lg bg-muted/30 px-4 py-6 text-sm text-muted-foreground">
-                        Select a skill from the catalog to inspect or edit its raw <code>SKILL.md</code>.
-                      </p>
-                    )}
-                </div>
-              </div>
-            </div>
+            <SkillsTab
+              workspaceRootPath={workspaceRootPath}
+              selectedSessionId={selectedSessionId}
+              skillWorkspaceRoot={skillWorkspaceRoot}
+              skillsMutationsEnabled={skillsMutationsEnabled}
+              styles={{
+                primaryButtonClass,
+                secondaryButtonClass,
+                summaryCardClass,
+                sectionCardClass,
+                mutedCardClass,
+                editorTextareaClass,
+              }}
+              busyKey={busyKey}
+              skillCatalog={skillCatalog}
+              managedSkills={managedSkills}
+              skillSourceIndices={skillSourceIndices}
+              skillDistributions={skillDistributions}
+              skillArtifactCache={skillArtifactCache}
+              skillHubPolicy={skillHubPolicy}
+              skillLifecycle={skillLifecycle}
+              skillGovernanceTimeline={skillGovernanceTimeline}
+              skillSyncSourceId={skillSyncSourceId}
+              onSkillSyncSourceIdChange={setSkillSyncSourceId}
+              skillSyncSourceKind={skillSyncSourceKind}
+              onSkillSyncSourceKindChange={setSkillSyncSourceKind}
+              skillSyncLocator={skillSyncLocator}
+              onSkillSyncLocatorChange={setSkillSyncLocator}
+              skillSyncRevision={skillSyncRevision}
+              onSkillSyncRevisionChange={setSkillSyncRevision}
+              skillSyncPlan={skillSyncPlan}
+              onPlanSkillSync={() => void planSkillSync()}
+              onApplySkillSync={() => void applySkillSync()}
+              onRefreshSkillSourceIndex={() => void refreshSkillSourceIndex()}
+              onRunSelectedSourceGuard={() => void runSelectedSourceGuard()}
+              remoteInstallSkillName={remoteInstallSkillName}
+              onRemoteInstallSkillNameChange={setRemoteInstallSkillName}
+              remoteInstallPlan={remoteInstallPlan}
+              onPlanRemoteInstall={() => void planRemoteInstall()}
+              onPlanRemoteUpdate={() => void planRemoteUpdate()}
+              onApplyRemoteInstall={() => void applyRemoteInstall()}
+              onApplyRemoteUpdate={() => void applyRemoteUpdate()}
+              onDetachManagedSkill={() => void detachManagedSkill()}
+              onRemoveManagedSkill={() => void removeManagedSkill()}
+              skillGuardReports={skillGuardReports}
+              skillGuardTarget={skillGuardTarget}
+              selectedSkillName={selectedSkillName}
+              onSelectedSkillNameChange={setSelectedSkillName}
+              selectedSkillEntry={selectedSkillEntry}
+              skillDetail={skillDetail}
+              skillDetailLoading={skillDetailLoading}
+              skillEditorContent={skillEditorContent}
+              onSkillEditorContentChange={setSkillEditorContent}
+              editSkillEditorMode={editSkillEditorMode}
+              onEditSkillEditorModeChange={setEditSkillEditorMode}
+              editSkillDescription={editSkillDescription}
+              onEditSkillDescriptionChange={setEditSkillDescription}
+              editSkillMethodologyDraft={editSkillMethodologyDraft}
+              onEditSkillMethodologyDraftChange={setEditSkillMethodologyDraft}
+              editSkillMethodologyMatched={editSkillMethodologyMatched}
+              editSkillMethodologyPreview={editSkillMethodologyPreview}
+              editSkillMethodologyPreviewError={editSkillMethodologyPreviewError}
+              newSkillName={newSkillName}
+              onNewSkillNameChange={setNewSkillName}
+              newSkillDescription={newSkillDescription}
+              onNewSkillDescriptionChange={setNewSkillDescription}
+              newSkillCategory={newSkillCategory}
+              onNewSkillCategoryChange={setNewSkillCategory}
+              newSkillBody={newSkillBody}
+              onNewSkillBodyChange={setNewSkillBody}
+              newSkillEditorMode={newSkillEditorMode}
+              onNewSkillEditorModeChange={setNewSkillEditorMode}
+              newSkillMethodologyDraft={newSkillMethodologyDraft}
+              onNewSkillMethodologyDraftChange={setNewSkillMethodologyDraft}
+              newSkillMethodologyPreview={newSkillMethodologyPreview}
+              newSkillMethodologyPreviewError={newSkillMethodologyPreviewError}
+              onCreateSkill={() => void createSkill()}
+              onRunSelectedSkillGuard={() => void runSelectedSkillGuard()}
+              onSaveSelectedSkill={() => void saveSelectedSkill()}
+              onDeleteSelectedSkill={() => void deleteSelectedSkill()}
+              managedRecordBySkill={managedRecordBySkill}
+              latestGuardBySkill={latestGuardBySkill}
+              selectedHubSourceSnapshot={selectedHubSourceSnapshot}
+              selectedRemoteSourceEntry={selectedRemoteSourceEntry}
+              selectedRemoteDistribution={selectedRemoteDistribution}
+              selectedRemoteArtifactCache={selectedRemoteArtifactCache}
+              selectedRemoteLifecycle={selectedRemoteLifecycle}
+            />
           ) : null}
 
           {!loading && activeTab === "mcp" ? (

@@ -38,6 +38,10 @@ use rocode_session::prompt::{OutputBlockEvent, OutputBlockHook};
 
 use super::super::permission::request_permission;
 use super::super::tui::request_question_answers;
+use super::autoresearch_target::{
+    AutoresearchProfileOverrideRecord, AUTORESEARCH_PROFILE_NAME,
+    AUTORESEARCH_PROFILE_OVERRIDE_METADATA_KEY,
+};
 use super::cancel::is_scheduler_cancellation_error;
 use super::messages::resolve_provider_and_model;
 use super::prompt::{
@@ -297,9 +301,38 @@ pub(crate) struct PromptRequestConfigInput<'a> {
     pub session_id: &'a str,
     pub requested_agent: Option<&'a str>,
     pub requested_scheduler_profile: Option<&'a str>,
+    pub scheduler_profile_override: Option<(String, SchedulerProfileConfig)>,
     pub request_model: Option<&'a str>,
     pub request_variant: Option<&'a str>,
     pub route: &'static str,
+}
+
+fn scheduler_request_defaults_from_override(
+    profile_name: &str,
+    profile: &SchedulerProfileConfig,
+) -> Option<SchedulerRequestDefaults> {
+    let plan = scheduler_plan_from_profile(Some(profile_name.to_string()), profile).ok()?;
+    Some(scheduler_request_defaults_from_plan(&plan))
+}
+
+async fn resolve_session_scheduler_profile_override(
+    state: &Arc<ServerState>,
+    session_id: &str,
+    requested_scheduler_profile: Option<&str>,
+) -> Option<(String, SchedulerProfileConfig)> {
+    if requested_scheduler_profile != Some(AUTORESEARCH_PROFILE_NAME) {
+        return None;
+    }
+
+    let sessions = state.sessions.lock().await;
+    let session = sessions.get(session_id)?;
+    let metadata = session
+        .record()
+        .metadata
+        .get(AUTORESEARCH_PROFILE_OVERRIDE_METADATA_KEY)?
+        .clone();
+    let record = serde_json::from_value::<AutoresearchProfileOverrideRecord>(metadata).ok()?;
+    Some((record.profile_name, record.profile))
 }
 
 pub(super) fn resolve_scheduler_profile_config(
@@ -795,6 +828,7 @@ pub(crate) fn resolve_request_skill_tree_plan(
 pub(crate) struct ResolvedPromptRequestConfig {
     pub scheduler_applied: bool,
     pub scheduler_profile_name: Option<String>,
+    pub scheduler_profile_config: Option<SchedulerProfileConfig>,
     pub scheduler_root_agent: Option<String>,
     pub scheduler_skill_tree_applied: bool,
     pub request_skill_tree_plan: Option<SkillTreeRequestPlan>,
@@ -869,17 +903,33 @@ pub(crate) async fn resolve_prompt_request_config(
         session_id,
         requested_agent,
         requested_scheduler_profile,
+        scheduler_profile_override,
         request_model,
         request_variant,
         route,
     } = input;
 
+    let scheduler_profile_override = if let Some(profile_override) = scheduler_profile_override {
+        Some(profile_override)
+    } else {
+        resolve_session_scheduler_profile_override(state, session_id, requested_scheduler_profile)
+            .await
+    };
     let scheduler_defaults =
-        resolve_scheduler_request_defaults_validated(config, requested_scheduler_profile)?;
+        if let Some((profile_name, profile)) = scheduler_profile_override.as_ref() {
+            scheduler_request_defaults_from_override(profile_name, profile)
+        } else {
+            resolve_scheduler_request_defaults_validated(config, requested_scheduler_profile)?
+        };
     let scheduler_applied = scheduler_defaults.is_some();
-    let scheduler_profile_name = scheduler_defaults
+    let scheduler_profile_name = scheduler_profile_override
         .as_ref()
-        .and_then(|defaults| defaults.profile_name.clone());
+        .map(|(profile_name, _)| profile_name.clone())
+        .or_else(|| {
+            scheduler_defaults
+                .as_ref()
+                .and_then(|defaults| defaults.profile_name.clone())
+        });
     let scheduler_root_agent = scheduler_defaults
         .as_ref()
         .and_then(|defaults| defaults.root_agent_name.clone());
@@ -920,10 +970,17 @@ pub(crate) async fn resolve_prompt_request_config(
         );
     }
 
-    let scheduler_profile_config = scheduler_profile_name
-        .as_deref()
-        .and_then(|profile_name| resolve_scheduler_profile_config(config, Some(profile_name)))
-        .map(|(_, profile)| profile);
+    let scheduler_profile_config = scheduler_profile_override
+        .as_ref()
+        .map(|(_, profile)| profile.clone())
+        .or_else(|| {
+            scheduler_profile_name
+                .as_deref()
+                .and_then(|profile_name| {
+                    resolve_scheduler_profile_config(config, Some(profile_name))
+                })
+                .map(|(_, profile)| profile)
+        });
     let scheduler_profile_model = scheduler_profile_config
         .as_ref()
         .and_then(|profile| profile.model.as_ref())
@@ -991,6 +1048,7 @@ pub(crate) async fn resolve_prompt_request_config(
     Ok(ResolvedPromptRequestConfig {
         scheduler_applied,
         scheduler_profile_name,
+        scheduler_profile_config,
         scheduler_root_agent,
         scheduler_skill_tree_applied,
         request_skill_tree_plan,
@@ -1090,6 +1148,7 @@ pub async fn run_local_scheduler_prompt(
         session_id: &session_id,
         requested_agent: None,
         requested_scheduler_profile: Some(req.scheduler_profile.as_str()),
+        scheduler_profile_override: None,
         request_model: req.model.as_deref(),
         request_variant: req.variant.as_deref(),
         route: "cli-local",
@@ -1102,8 +1161,13 @@ pub async fn run_local_scheduler_prompt(
         .clone()
         .ok_or_else(|| anyhow::anyhow!("scheduler profile was not resolved"))?;
     let request_skill_tree_plan = request_config.request_skill_tree_plan.clone();
-    let mut profile_config = resolve_scheduler_profile_config(&config, Some(&profile_name))
-        .map(|(_, profile)| profile)
+    let mut profile_config = request_config
+        .scheduler_profile_config
+        .clone()
+        .or_else(|| {
+            resolve_scheduler_profile_config(&config, Some(&profile_name))
+                .map(|(_, profile)| profile)
+        })
         .ok_or_else(|| anyhow::anyhow!("scheduler profile config not found: {}", profile_name))?;
 
     let mut session = {

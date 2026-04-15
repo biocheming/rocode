@@ -146,6 +146,7 @@ pub(crate) async fn stream_message(
         session_id: &session_id,
         requested_agent: req.agent.as_deref(),
         requested_scheduler_profile: req.scheduler_profile.as_deref(),
+        scheduler_profile_override: None,
         request_model: req.model.as_deref(),
         request_variant: request_variant.as_deref(),
         route: "stream",

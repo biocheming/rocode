@@ -51,6 +51,10 @@ use super::super::{
     apply_plugin_config_hooks, get_plugin_loader, plugin_auth::ensure_plugin_loader_active,
     should_apply_plugin_config_hooks,
 };
+use super::autoresearch_target::{
+    resolve_autoresearch_command, AutoresearchProfileOverrideRecord,
+    AUTORESEARCH_PROFILE_OVERRIDE_METADATA_KEY,
+};
 use super::cancel::is_scheduler_cancellation_error;
 use super::messages::{prompt_display_text, prompt_text_from_parts};
 use super::scheduler::{
@@ -70,8 +74,26 @@ struct ResolvedPromptPayload {
     execution_text: String,
     agent: Option<String>,
     scheduler_profile: Option<String>,
+    scheduler_profile_override: Option<(String, rocode_orchestrator::SchedulerProfileConfig)>,
+    autoresearch_profile_override_record: Option<AutoresearchProfileOverrideRecord>,
     command: Option<Command>,
-    raw_arguments: Option<String>,
+    pending_raw_arguments: Option<String>,
+}
+
+fn set_autoresearch_override_metadata(
+    session: &mut rocode_session::Session,
+    record: Option<&AutoresearchProfileOverrideRecord>,
+) {
+    if let Some(record) = record {
+        if let Ok(value) = serde_json::to_value(record) {
+            session.insert_metadata(
+                AUTORESEARCH_PROFILE_OVERRIDE_METADATA_KEY.to_string(),
+                value,
+            );
+            return;
+        }
+    }
+    session.remove_metadata(AUTORESEARCH_PROFILE_OVERRIDE_METADATA_KEY);
 }
 
 async fn resolve_prompt_payload(
@@ -91,19 +113,41 @@ async fn resolve_prompt_payload(
             execution_text: display_text.to_string(),
             agent: None,
             scheduler_profile: None,
+            scheduler_profile_override: None,
+            autoresearch_profile_override_record: None,
             command: None,
-            raw_arguments: None,
+            pending_raw_arguments: None,
         });
     };
 
     let command = parsed.command.clone();
+    let mut scheduler_profile = command.scheduler_profile.clone();
+    let mut scheduler_profile_override = None;
+    let mut autoresearch_profile_override_record = None;
+    let mut raw_arguments_for_hydration = parsed.raw_arguments.clone();
+    let mut raw_arguments_for_pending = parsed.raw_arguments.clone();
+    if command.name == "autoresearch" {
+        let resolved =
+            resolve_autoresearch_command(config, session_directory, &parsed.raw_arguments)
+                .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+        scheduler_profile = Some(resolved.scheduler_profile_name.clone());
+        raw_arguments_for_hydration = resolved.raw_arguments_for_execution;
+        raw_arguments_for_pending = resolved.raw_arguments_for_pending;
+        autoresearch_profile_override_record = resolved.profile_override.clone();
+        scheduler_profile_override = resolved
+            .profile_override
+            .map(|record| (record.profile_name.clone(), record.profile));
+    }
     let invocation = command.invocation.as_ref();
     let scheduler_defaults = invocation
         .map(|invocation| {
             hydrate_scheduler_command_arguments(
                 config,
                 &command,
-                &parsed.raw_arguments,
+                scheduler_profile_override
+                    .as_ref()
+                    .map(|(_, profile)| profile),
+                &raw_arguments_for_hydration,
                 &invocation.argument_schema,
             )
         })
@@ -111,7 +155,7 @@ async fn resolve_prompt_payload(
     let hydrated_raw_arguments = scheduler_defaults
         .as_ref()
         .map(|(_, raw)| raw.clone())
-        .unwrap_or_else(|| parsed.raw_arguments.clone());
+        .unwrap_or_else(|| raw_arguments_for_hydration.clone());
     let hydrated_arguments = if let Some((arguments, _)) = scheduler_defaults {
         flatten_argument_values(
             &invocation
@@ -125,9 +169,11 @@ async fn resolve_prompt_payload(
 
     let mut ctx =
         CommandContext::new(PathBuf::from(session_directory)).with_arguments(hydrated_arguments);
-    let raw_arguments =
+    let execution_raw_arguments =
         (!hydrated_raw_arguments.trim().is_empty()).then_some(hydrated_raw_arguments);
-    if let Some(raw_arguments) = raw_arguments.as_ref() {
+    let pending_raw_arguments =
+        (!raw_arguments_for_pending.trim().is_empty()).then_some(raw_arguments_for_pending);
+    if let Some(raw_arguments) = execution_raw_arguments.as_ref() {
         ctx = ctx.with_raw_arguments(raw_arguments.clone());
     }
     ctx = ctx
@@ -147,9 +193,11 @@ async fn resolve_prompt_payload(
         display_text: display_text.to_string(),
         execution_text,
         agent: None,
-        scheduler_profile: command.scheduler_profile.clone(),
+        scheduler_profile,
+        scheduler_profile_override,
+        autoresearch_profile_override_record,
         command: Some(command.clone()),
-        raw_arguments,
+        pending_raw_arguments,
     })
 }
 
@@ -530,12 +578,19 @@ fn populate_objective_defaults(
 fn workflow_command_defaults(
     config: &AppConfig,
     command: &Command,
+    scheduler_profile_override: Option<&rocode_orchestrator::SchedulerProfileConfig>,
 ) -> Result<std::collections::HashMap<String, Vec<String>>> {
-    let Some(profile_name) = command.scheduler_profile.as_deref() else {
-        return Ok(std::collections::HashMap::new());
-    };
-    let Some((_, profile)) = resolve_scheduler_profile_config(config, Some(profile_name)) else {
-        return Ok(std::collections::HashMap::new());
+    let profile = if let Some(profile) = scheduler_profile_override {
+        profile.clone()
+    } else {
+        let Some(profile_name) = command.scheduler_profile.as_deref() else {
+            return Ok(std::collections::HashMap::new());
+        };
+        let Some((_, profile)) = resolve_scheduler_profile_config(config, Some(profile_name))
+        else {
+            return Ok(std::collections::HashMap::new());
+        };
+        profile
     };
     let Some(workflow) = profile.workflow() else {
         return Ok(std::collections::HashMap::new());
@@ -572,11 +627,12 @@ fn workflow_command_defaults(
 fn hydrate_scheduler_command_arguments(
     config: &AppConfig,
     command: &Command,
+    scheduler_profile_override: Option<&rocode_orchestrator::SchedulerProfileConfig>,
     raw_arguments: &str,
     fields: &[CommandArgumentField],
 ) -> Result<(std::collections::HashMap<String, Vec<String>>, String)> {
     let mut parsed_arguments = parse_command_argument_map(Some(raw_arguments), fields);
-    let defaults = workflow_command_defaults(config, command)?;
+    let defaults = workflow_command_defaults(config, command, scheduler_profile_override)?;
 
     for field in fields {
         let key = normalize_command_field_key(&field.key);
@@ -665,6 +721,7 @@ async fn create_pending_command_question(
     command: &Command,
     raw_arguments: Option<&str>,
     missing_fields: &[CommandArgumentField],
+    autoresearch_override_record: Option<&AutoresearchProfileOverrideRecord>,
 ) -> Result<String> {
     let questions = missing_fields
         .iter()
@@ -688,6 +745,7 @@ async fn create_pending_command_question(
             "questionId": question_info.id.clone(),
         }),
     );
+    set_autoresearch_override_metadata(&mut session, autoresearch_override_record);
     sessions.update(session);
 
     Ok(question_info.id)
@@ -912,8 +970,10 @@ pub(super) async fn session_prompt(
             execution_text: prompt_text_from_parts(parts),
             agent: None,
             scheduler_profile: None,
+            scheduler_profile_override: None,
+            autoresearch_profile_override_record: None,
             command: None,
-            raw_arguments: None,
+            pending_raw_arguments: None,
         }
     } else {
         resolve_prompt_payload(&display_prompt_text, &id, &session_directory, &config).await?
@@ -924,7 +984,7 @@ pub(super) async fn session_prompt(
         {
             if interactive.when_missing_required != InteractivePolicy::None {
                 let parsed_arguments = parse_command_argument_map(
-                    resolved_prompt.raw_arguments.as_deref(),
+                    resolved_prompt.pending_raw_arguments.as_deref(),
                     &invocation.argument_schema,
                 );
                 let mut missing_fields =
@@ -937,8 +997,11 @@ pub(super) async fn session_prompt(
                         &state,
                         &id,
                         command,
-                        resolved_prompt.raw_arguments.as_deref(),
+                        resolved_prompt.pending_raw_arguments.as_deref(),
                         &missing_fields,
+                        resolved_prompt
+                            .autoresearch_profile_override_record
+                            .as_ref(),
                     )
                     .await?;
                     broadcast_session_updated(
@@ -1011,6 +1074,7 @@ pub(super) async fn session_prompt(
             session_id: &id,
             requested_agent: effective_agent.as_deref(),
             requested_scheduler_profile: effective_scheduler_profile.as_deref(),
+            scheduler_profile_override: resolved_prompt.scheduler_profile_override.clone(),
             request_model: req.model.as_deref(),
             request_variant: req.variant.as_deref(),
             route: "session",
@@ -1037,12 +1101,15 @@ pub(super) async fn session_prompt(
             let capability = authority
                 .capability_authority()
                 .capability_view(provider_id.clone(), &provider_model);
-            let result = authority
-                .capability_authority()
-                .preflight(&capability, &SessionPartAdapter::to_preflight_parts(&multimodal_parts));
-            let transport = authority
-                .capability_authority()
-                .transport_explain(&capability, &provider_model, &prompt_parts);
+            let result = authority.capability_authority().preflight(
+                &capability,
+                &SessionPartAdapter::to_preflight_parts(&multimodal_parts),
+            );
+            let transport = authority.capability_authority().transport_explain(
+                &capability,
+                &provider_model,
+                &prompt_parts,
+            );
             if result.hard_block {
                 return Err(ApiError::BadRequest(
                     result
@@ -1082,10 +1149,9 @@ pub(super) async fn session_prompt(
     let task_recovery = req.recovery.clone();
     let task_prompt_parts = prompt_parts.clone();
     let task_multimodal_explain = multimodal_explain.clone();
-    let task_scheduler_profile_config = task_scheduler_profile_name
-        .as_deref()
-        .and_then(|profile_name| resolve_scheduler_profile_config(&task_config, Some(profile_name)))
-        .map(|(_, profile)| profile);
+    let task_scheduler_profile_config = request_config.scheduler_profile_config.clone();
+    let task_autoresearch_override_record =
+        resolved_prompt.autoresearch_profile_override_record.clone();
     let mut pending_command_cleared = false;
     {
         let mut sessions = state.sessions.lock().await;
@@ -1093,9 +1159,11 @@ pub(super) async fn session_prompt(
             pending_command_cleared = session
                 .remove_metadata("pending_command_invocation")
                 .is_some();
-            if pending_command_cleared {
-                sessions.update(session);
-            }
+            set_autoresearch_override_metadata(
+                &mut session,
+                task_autoresearch_override_record.as_ref(),
+            );
+            sessions.update(session);
         }
     }
     if pending_command_cleared {
@@ -2167,6 +2235,7 @@ mod tests {
         let (arguments, raw_arguments) = hydrate_scheduler_command_arguments(
             &AppConfig::default(),
             command,
+            None,
             "",
             &invocation.argument_schema,
         )
@@ -2174,7 +2243,7 @@ mod tests {
 
         assert_eq!(
             arguments.get("verify"),
-            Some(&vec!["./scripts/verify-autoresearch.sh".to_string()])
+            Some(&vec!["bash ./scripts/verify-autoresearch.sh".to_string()])
         );
         assert_eq!(arguments.get("iterations"), Some(&vec!["6".to_string()]));
         assert_eq!(
@@ -2200,7 +2269,7 @@ mod tests {
                 .is_some_and(|value| value.contains("\"kind\":\"numeric-extract\"")),
             "workflow metric should hydrate command defaults"
         );
-        assert!(raw_arguments.contains("--verify ./scripts/verify-autoresearch.sh"));
+        assert!(raw_arguments.contains("--verify \"bash ./scripts/verify-autoresearch.sh\""));
         assert!(raw_arguments.contains("--iterations 6"));
     }
 
@@ -2216,6 +2285,7 @@ mod tests {
         let (arguments, raw_arguments) = hydrate_scheduler_command_arguments(
             &AppConfig::default(),
             command,
+            None,
             "--goal \"teacher demo goal\" --verify ./custom-verify.sh",
             &invocation.argument_schema,
         )
