@@ -210,8 +210,24 @@ impl SessionView {
         surface: &mut S,
         area: Rect,
     ) {
+        if area.width == 0 || area.height == 0 {
+            let mut next_sidebar = state.sidebar.clone();
+            next_sidebar.close_button_area = None;
+            state.update_sidebar_state(next_sidebar);
+            return;
+        }
+
         let sidebar = Sidebar::new(context.clone(), self.session_id.clone());
+        let theme = context.theme.read();
         let mut next_sidebar = state.sidebar.clone();
+        next_sidebar.close_button_area = Some(Rect {
+            x: area
+                .x
+                .saturating_add(area.width.saturating_sub(SIDEBAR_CLOSE_BUTTON_WIDTH)),
+            y: area.y,
+            width: SIDEBAR_CLOSE_BUTTON_WIDTH.min(area.width),
+            height: 1,
+        });
         sidebar.render(
             surface,
             area,
@@ -219,6 +235,17 @@ impl SessionView {
             &mut next_sidebar.lifecycle,
             false,
         );
+        if let Some(close_area) = next_sidebar.close_button_area {
+            let close = Paragraph::new("✕")
+                .style(
+                    Style::default()
+                        .fg(theme.text)
+                        .bg(theme.background_panel)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .alignment(ratatui::layout::Alignment::Center);
+            surface.render_widget(close, close_area);
+        }
         state.update_sidebar_state(next_sidebar);
     }
 
@@ -488,12 +515,6 @@ impl SessionView {
         area: Rect,
         prompt: &Prompt,
     ) -> Option<MainPaneLayout> {
-        let area = Rect {
-            x: area.x + 2,
-            y: area.y + 1,
-            width: area.width.saturating_sub(4),
-            height: area.height.saturating_sub(2),
-        };
         if area.width == 0 || area.height == 0 {
             return None;
         }
@@ -501,15 +522,15 @@ impl SessionView {
         let show_header = snapshot.show_header;
         let header_height = if show_header {
             if area.width < HEADER_NARROW_THRESHOLD {
-                3u16
-            } else {
                 2u16
+            } else {
+                1u16
             }
         } else {
             0u16
         };
         let session_footer_height = 1u16;
-        let desired_prompt_height = prompt.desired_height(area.width).max(3);
+        let desired_prompt_height = prompt.desired_height(area.width);
         let total_height = area.height;
         let available_after_header = total_height.saturating_sub(header_height);
         let available_after_header_footer =

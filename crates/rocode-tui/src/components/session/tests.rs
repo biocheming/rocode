@@ -257,6 +257,71 @@ fn overlay_sidebar_backdrop_click_closes_sidebar() {
 }
 
 #[test]
+fn docked_sidebar_close_button_click_closes_sidebar() {
+    let context = Arc::new(AppContext::new());
+    let view = SessionView::new("session-1".to_string());
+    let prompt = Prompt::new(context.clone())
+        .with_placeholder("Ask anything... \"Fix a TODO in the codebase\"");
+    let area = Rect::new(0, 0, 140, 30);
+    let mut buffer = Buffer::empty(area);
+    let mut surface = BufferSurface::new(&mut buffer);
+
+    view.render(&context, &mut surface, area, &prompt);
+
+    let close_button = view
+        .state
+        .lock()
+        .sidebar
+        .close_button_area
+        .expect("docked sidebar close button");
+    assert!(view.sidebar_visible(area.width));
+    assert!(view.handle_sidebar_click(&context, close_button.x, close_button.y));
+    assert!(!view.sidebar_visible(area.width));
+}
+
+#[test]
+fn session_messages_area_uses_full_main_width_without_outer_inset() {
+    let context = Arc::new(AppContext::new());
+    let view = SessionView::new("session-1".to_string());
+    let prompt = Prompt::new(context.clone())
+        .with_placeholder("Ask anything... \"Fix a TODO in the codebase\"");
+    let area = Rect::new(0, 0, 100, 30);
+    let mut buffer = Buffer::empty(area);
+    let mut surface = BufferSurface::new(&mut buffer);
+
+    view.render(&context, &mut surface, area, &prompt);
+
+    let messages_area = view
+        .state
+        .lock()
+        .viewport
+        .last_messages_area
+        .expect("messages area");
+    assert_eq!(messages_area.x, area.x);
+}
+
+#[test]
+fn session_messages_start_below_single_row_header_in_wide_layout() {
+    let context = Arc::new(AppContext::new());
+    let view = SessionView::new("session-1".to_string());
+    let prompt = Prompt::new(context.clone())
+        .with_placeholder("Ask anything... \"Fix a TODO in the codebase\"");
+    let area = Rect::new(0, 0, 140, 30);
+    let mut buffer = Buffer::empty(area);
+    let mut surface = BufferSurface::new(&mut buffer);
+
+    view.render(&context, &mut surface, area, &prompt);
+
+    let messages_area = view
+        .state
+        .lock()
+        .viewport
+        .last_messages_area
+        .expect("messages area");
+    assert_eq!(messages_area.y, area.y.saturating_add(1));
+}
+
+#[test]
 fn session_render_model_memo_key_tracks_width_and_reasoning_state() {
     let context = Arc::new(AppContext::new());
     let snapshot = SessionMessagesSnapshot::capture(&context, "session-1");

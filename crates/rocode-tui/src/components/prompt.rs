@@ -31,8 +31,8 @@ const FILE_INDEX_MAX_DEPTH: usize = 8;
 const FILE_SUGGESTION_LIMIT: usize = 20;
 const PROMPT_BLOCK_PAD_LEFT: u16 = 1;
 const PROMPT_BLOCK_PAD_RIGHT: u16 = 1;
-const PROMPT_BLOCK_PAD_TOP: u16 = 1;
-const PROMPT_BLOCK_PAD_BOTTOM: u16 = 1;
+const PROMPT_BLOCK_PAD_TOP: u16 = 0;
+const PROMPT_BLOCK_PAD_BOTTOM: u16 = 0;
 const PROMPT_LINE_H_INSET: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -240,6 +240,10 @@ impl Prompt {
         let selection = self.context.selection_state();
         let variant = self.context.current_model_variant();
         let animations_enabled = *self.context.animations_enabled.read();
+        let show_activity_row = self.shows_activity_row();
+        let inline_token_line = (!show_activity_row)
+            .then(|| self.render_token_line(&theme))
+            .filter(|line| !line.spans.is_empty());
 
         let highlight_color = prompt_agent_color(&theme, mode_name.as_deref().unwrap_or(""));
         let active_color = if matches!(self.mode, PromptMode::Shell) {
@@ -251,7 +255,7 @@ impl Prompt {
 
         let max_content_lines = area
             .height
-            .saturating_sub(3)
+            .saturating_sub(if show_activity_row { 3 } else { 2 })
             .saturating_sub(PROMPT_BLOCK_PAD_TOP)
             .saturating_sub(PROMPT_BLOCK_PAD_BOTTOM)
             .max(PROMPT_MIN_INPUT_LINES);
@@ -259,14 +263,23 @@ impl Prompt {
         let input_lines = content_lines
             .saturating_add(PROMPT_BLOCK_PAD_TOP)
             .saturating_add(PROMPT_BLOCK_PAD_BOTTOM);
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
+        let chunk_constraints = if show_activity_row {
+            vec![
                 Constraint::Length(input_lines),
                 Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Length(1),
-            ])
+            ]
+        } else {
+            vec![
+                Constraint::Length(input_lines),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ]
+        };
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(chunk_constraints)
             .split(area);
 
         let border_set = ratatui::symbols::border::Set {
@@ -383,6 +396,13 @@ impl Prompt {
                 ));
             }
         }
+        if let Some(token_line) = inline_token_line {
+            info_parts.push(Span::styled(
+                "  ",
+                Style::default().bg(theme.background_element),
+            ));
+            info_parts.extend(token_line.spans);
+        }
 
         render_prompt_continuation_row(surface, chunks[1], active_color, theme.background_element);
         let info_row = row_content_area(chunks[1], PROMPT_LINE_H_INSET);
@@ -391,29 +411,35 @@ impl Prompt {
             Paragraph::new(info_line).style(Style::default().bg(theme.background_element));
         surface.render_widget(info_paragraph, info_row);
 
-        let spinner_row = chunks[2];
-        surface.render_widget(
-            Paragraph::new("").style(Style::default().bg(theme.background_element)),
-            spinner_row,
-        );
-        let spinner_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(9), Constraint::Min(0)])
-            .split(spinner_row);
+        if show_activity_row {
+            let spinner_row = chunks[2];
+            surface.render_widget(
+                Paragraph::new("").style(Style::default().bg(theme.background_element)),
+                spinner_row,
+            );
+            let spinner_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Length(9), Constraint::Min(0)])
+                .split(spinner_row);
 
-        self.spinner.render(
-            surface,
-            spinner_chunks[0],
-            animations_enabled,
-            theme.background_element,
-        );
-        let token_line = Paragraph::new(self.render_token_line(&theme))
-            .style(Style::default().bg(theme.background_element));
-        surface.render_widget(token_line, spinner_chunks[1]);
+            self.spinner.render(
+                surface,
+                spinner_chunks[0],
+                animations_enabled,
+                theme.background_element,
+            );
+            let token_line = Paragraph::new(self.render_token_line(&theme))
+                .style(Style::default().bg(theme.background_element));
+            surface.render_widget(token_line, spinner_chunks[1]);
 
-        let status_line = Paragraph::new(self.render_status_line(&theme))
-            .style(Style::default().bg(theme.background_element));
-        surface.render_widget(status_line, chunks[3]);
+            let status_line = Paragraph::new(self.render_status_line(&theme))
+                .style(Style::default().bg(theme.background_element));
+            surface.render_widget(status_line, chunks[3]);
+        } else {
+            let status_line = Paragraph::new(self.render_status_line(&theme))
+                .style(Style::default().bg(theme.background_element));
+            surface.render_widget(status_line, chunks[2]);
+        }
     }
 
     pub fn tick_spinner(&mut self, delta_ms: u64) -> bool {
@@ -644,7 +670,14 @@ impl Prompt {
         self.input_display_lines(width)
             .saturating_add(PROMPT_BLOCK_PAD_TOP)
             .saturating_add(PROMPT_BLOCK_PAD_BOTTOM)
-            .saturating_add(3)
+            .saturating_add(if self.shows_activity_row() { 3 } else { 2 })
+    }
+
+    fn shows_activity_row(&self) -> bool {
+        matches!(
+            self.current_session_status(),
+            Some(SessionStatus::Running | SessionStatus::Retrying { .. })
+        )
     }
 
     pub fn stash_current(&mut self) -> bool {
@@ -1691,6 +1724,13 @@ mod tests {
                 "git status"
             );
             assert_eq!(prompt.placeholder_for_mode_at(PromptMode::Shell, 1), "pwd");
+        });
+    }
+
+    #[test]
+    fn desired_height_is_compact_when_idle_and_empty() {
+        with_isolated_prompt(|prompt| {
+            assert_eq!(prompt.desired_height(80), 3);
         });
     }
 

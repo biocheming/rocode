@@ -260,9 +260,9 @@ impl Sidebar {
         }
 
         let inner = Rect {
-            x: area.x.saturating_add(2),
+            x: area.x.saturating_add(1),
             y: area.y.saturating_add(1),
-            width: area.width.saturating_sub(4),
+            width: area.width.saturating_sub(2),
             height: area.height.saturating_sub(2),
         };
         if inner.width == 0 || inner.height == 0 {
