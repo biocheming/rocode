@@ -86,21 +86,29 @@ impl App {
             .iter()
             .map(|permission| permission.id.clone())
             .collect::<HashSet<_>>();
-        let mut changed = latest_ids != self.pending_permission_ids;
+        let mut changed = latest_ids != self.permission_runtime.pending_ids;
 
         for permission in permissions {
             let permission_id = permission.id.clone();
-            if self.pending_permission_ids.insert(permission_id.clone()) {
+            if self
+                .permission_runtime
+                .pending_ids
+                .insert(permission_id.clone())
+            {
                 self.permission_prompt
                     .add_request(Self::permission_request_to_prompt(&permission));
                 changed = true;
             }
-            self.pending_permissions.insert(permission_id, permission);
+            self.permission_runtime
+                .pending_requests
+                .insert(permission_id, permission);
         }
 
-        self.pending_permission_ids
+        self.permission_runtime
+            .pending_ids
             .retain(|id| latest_ids.contains(id));
-        self.pending_permissions
+        self.permission_runtime
+            .pending_requests
             .retain(|id, _| latest_ids.contains(id));
         self.permission_prompt
             .retain_requests(|request| latest_ids.contains(&request.id));
@@ -117,14 +125,16 @@ impl App {
         let Some(client) = self.context.get_api_client() else {
             self.alert_dialog
                 .set_message("Cannot answer permission request: no API client");
-            self.alert_dialog.open();
+            self.open_alert_dialog();
             return;
         };
 
         match client.reply_permission(permission_id, reply, message) {
             Ok(()) => {
-                self.pending_permission_ids.remove(permission_id);
-                self.pending_permissions.remove(permission_id);
+                self.permission_runtime.pending_ids.remove(permission_id);
+                self.permission_runtime
+                    .pending_requests
+                    .remove(permission_id);
                 self.permission_prompt.remove_request(permission_id);
                 self.toast.show(
                     crate::components::ToastVariant::Success,
@@ -135,7 +145,7 @@ impl App {
             Err(error) => {
                 self.alert_dialog
                     .set_message(&format!("Failed to submit permission response:\n{}", error));
-                self.alert_dialog.open();
+                self.open_alert_dialog();
             }
         }
     }
@@ -144,17 +154,24 @@ impl App {
         &mut self,
         permission: crate::api::PermissionRequestInfo,
     ) {
-        if self.pending_permission_ids.insert(permission.id.clone()) {
+        if self
+            .permission_runtime
+            .pending_ids
+            .insert(permission.id.clone())
+        {
             self.permission_prompt
                 .add_request(Self::permission_request_to_prompt(&permission));
         }
-        self.pending_permissions
+        self.permission_runtime
+            .pending_requests
             .insert(permission.id.clone(), permission);
     }
 
     pub(super) fn clear_permission_request(&mut self, permission_id: &str) {
-        self.pending_permission_ids.remove(permission_id);
-        self.pending_permissions.remove(permission_id);
+        self.permission_runtime.pending_ids.remove(permission_id);
+        self.permission_runtime
+            .pending_requests
+            .remove(permission_id);
         self.permission_prompt.remove_request(permission_id);
     }
 }

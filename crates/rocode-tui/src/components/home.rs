@@ -5,12 +5,12 @@ use ratatui::{
     style::Style,
     text::{Line, Span},
     widgets::Paragraph,
-    Frame,
 };
 
 use crate::branding::{APP_SHORT_NAME, APP_TAGLINE, APP_VERSION_DATE};
 use crate::components::{Logo, Prompt};
 use crate::context::{AppContext, McpConnectionStatus};
+use crate::ui::RenderSurface;
 
 const HOME_TIPS: &[&str] = &[
     "Press {highlight}Tab{/highlight} to cycle modes",
@@ -51,6 +51,12 @@ const HOME_TIPS: &[&str] = &[
     "Use {highlight}/agents{/highlight} to switch active agent",
     "Use {highlight}/skills{/highlight} to inspect installed skills",
 ];
+const HOME_PROMPT_PLACEHOLDERS: &[&str] = &[
+    "Fix a TODO in the codebase",
+    "What is the tech stack of this project?",
+    "Fix broken tests",
+];
+const HOME_SHELL_PLACEHOLDERS: &[&str] = &["ls -la", "git status", "pwd"];
 const TIP_ROTATE_SECONDS: i64 = 12;
 const HOME_MAX_CONTENT_WIDTH: u16 = 75;
 const HOME_OUTER_H_PADDING: u16 = 2;
@@ -65,13 +71,18 @@ impl HomeView {
         Self { context }
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect) {
         let prompt = Prompt::new(self.context.clone())
-            .with_placeholder("Ask anything... \"Fix a TODO in the codebase\"");
-        self.render_with_prompt(frame, area, &prompt);
+            .with_placeholders(HOME_PROMPT_PLACEHOLDERS, HOME_SHELL_PLACEHOLDERS);
+        self.render_with_prompt(surface, area, &prompt);
     }
 
-    pub fn render_with_prompt(&self, frame: &mut Frame, area: Rect, prompt: &Prompt) {
+    pub fn render_with_prompt<S: RenderSurface>(
+        &self,
+        surface: &mut S,
+        area: Rect,
+        prompt: &Prompt,
+    ) {
         let area = Rect {
             x: area.x.saturating_add(HOME_OUTER_H_PADDING),
             y: area.y.saturating_add(HOME_OUTER_V_PADDING),
@@ -100,8 +111,8 @@ impl HomeView {
             .split(area);
 
         let logo = Logo::new(theme.text, theme.text_muted, theme.background);
-        logo.render(frame, layout[1]);
-        self.render_tagline(frame, layout[2]);
+        logo.render(surface, layout[1]);
+        self.render_tagline(surface, layout[2]);
 
         let prompt_width = layout[3].width.min(HOME_MAX_CONTENT_WIDTH);
         let left_pad = (layout[3].width.saturating_sub(prompt_width)) / 2;
@@ -112,16 +123,16 @@ impl HomeView {
             height: layout[3].height,
         };
 
-        prompt.render(frame, prompt_area);
+        prompt.render(surface, prompt_area);
 
         if self.should_show_tips() {
-            self.render_tips(frame, layout[4]);
+            self.render_tips(surface, layout[4]);
         }
 
-        self.render_footer(frame, layout[5]);
+        self.render_footer(surface, layout[5]);
     }
 
-    fn render_tagline(&self, frame: &mut Frame, area: Rect) {
+    fn render_tagline<S: RenderSurface>(&self, surface: &mut S, area: Rect) {
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -131,10 +142,10 @@ impl HomeView {
             Style::default().fg(theme.text_muted),
         )))
         .alignment(ratatui::layout::Alignment::Center);
-        frame.render_widget(line, area);
+        surface.render_widget(line, area);
     }
 
-    fn render_tips(&self, frame: &mut Frame, area: Rect) {
+    fn render_tips<S: RenderSurface>(&self, surface: &mut S, area: Rect) {
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -171,10 +182,10 @@ impl HomeView {
         spans.extend(parse_tip_highlights(tip, &theme));
         let paragraph = Paragraph::new(Line::from(spans));
 
-        frame.render_widget(paragraph, tip_render_area);
+        surface.render_widget(paragraph, tip_render_area);
     }
 
-    fn render_footer(&self, frame: &mut Frame, area: Rect) {
+    fn render_footer<S: RenderSurface>(&self, surface: &mut S, area: Rect) {
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -273,12 +284,12 @@ impl HomeView {
 
         let line = Line::from(spans);
         let paragraph = Paragraph::new(line);
-        frame.render_widget(paragraph, content_area);
+        surface.render_widget(paragraph, content_area);
     }
 
     fn should_show_tips(&self) -> bool {
         let is_first_time_user = self.context.session.read().sessions.is_empty();
-        let tips_hidden = *self.context.tips_hidden.read();
+        let tips_hidden = self.context.tips_hidden();
         !is_first_time_user && !tips_hidden
     }
 }
@@ -334,4 +345,33 @@ fn parse_tip_highlights(tip: &str, theme: &crate::theme::Theme) -> Vec<Span<'sta
     }
 
     spans
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    use crate::ui::BufferSurface;
+
+    #[test]
+    fn home_view_renders_to_buffer_surface() {
+        let context = Arc::new(AppContext::new());
+        let home = HomeView::new(context.clone());
+        let prompt = Prompt::new(context)
+            .with_placeholders(HOME_PROMPT_PLACEHOLDERS, HOME_SHELL_PLACEHOLDERS);
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buffer = Buffer::empty(area);
+        let mut surface = BufferSurface::new(&mut buffer);
+
+        home.render_with_prompt(&mut surface, area, &prompt);
+
+        assert!(surface.cursor_position().is_some());
+        let rendered = buffer
+            .content
+            .iter()
+            .filter(|cell| !cell.symbol().trim().is_empty())
+            .count();
+        assert!(rendered > 0);
+    }
 }

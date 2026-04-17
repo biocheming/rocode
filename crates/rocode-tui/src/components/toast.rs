@@ -2,10 +2,10 @@ use ratatui::{
     layout::Rect,
     style::{Color, Style},
     widgets::{Block, Borders, Paragraph, Wrap},
-    Frame,
 };
 
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 
 const TRANSITION_MS: u64 = 120;
 const SLIDE_OFFSET_COLS: u16 = 4;
@@ -111,7 +111,7 @@ impl Toast {
         (lines + 2).clamp(3, 6)
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect, theme: &Theme) {
         if let Some(msg) = &self.message {
             let progress = self.animation_progress();
             let fade_alpha = MIN_FADE_ALPHA + (1.0 - MIN_FADE_ALPHA) * progress;
@@ -134,7 +134,7 @@ impl Toast {
                         .style(Style::default().bg(panel_bg)),
                 )
                 .wrap(Wrap { trim: true });
-            frame.render_widget(paragraph, area);
+            surface.render_widget(paragraph, area);
         }
     }
 

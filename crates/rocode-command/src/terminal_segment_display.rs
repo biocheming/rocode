@@ -160,6 +160,36 @@ pub fn tool_argument_preview(normalized_name: &str, arguments: &str) -> Option<S
         }
     }
 
+    if normalized_name == "question" {
+        if let Some(questions) = parsed
+            .as_ref()
+            .and_then(|v| v.get("questions"))
+            .and_then(|v| v.as_array())
+        {
+            let count = questions.len();
+            return Some(match count {
+                0 => "0 questions".to_string(),
+                1 => "1 question".to_string(),
+                _ => format!("{count} questions"),
+            });
+        }
+    }
+
+    if matches!(normalized_name, "todowrite" | "todo_write") {
+        if let Some(todos) = parsed
+            .as_ref()
+            .and_then(|v| v.get("todos"))
+            .and_then(|v| v.as_array())
+        {
+            let count = todos.len();
+            return Some(match count {
+                0 => "0 todos".to_string(),
+                1 => "1 todo".to_string(),
+                _ => format!("{count} todos"),
+            });
+        }
+    }
+
     if normalized_name == "task" {
         let category = parsed
             .as_ref()
@@ -550,6 +580,20 @@ mod tests {
         let args = r#"{"toolCalls":[{"tool":"read"},{"tool":"edit"},{"tool":"read"}]}"#;
         let preview = tool_argument_preview("batch", args);
         assert_eq!(preview.as_deref(), Some("3 tools (read, edit)"));
+    }
+
+    #[test]
+    fn question_preview_shows_question_count() {
+        let args = r#"{"questions":[{"question":"Pick one"},{"question":"Pick two"}]}"#;
+        let preview = tool_argument_preview("question", args);
+        assert_eq!(preview.as_deref(), Some("2 questions"));
+    }
+
+    #[test]
+    fn todowrite_preview_shows_todo_count() {
+        let args = r#"{"todos":[{"content":"Add tests"},{"content":"Refine TUI"}]}"#;
+        let preview = tool_argument_preview("todowrite", args);
+        assert_eq!(preview.as_deref(), Some("2 todos"));
     }
 
     #[test]

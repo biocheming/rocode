@@ -3,10 +3,10 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
-    Frame,
 };
 
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 
 pub enum AlertType {
     Info,
@@ -86,7 +86,7 @@ impl AlertDialog {
         }
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect, theme: &Theme) {
         if !self.open {
             return;
         }
@@ -100,7 +100,7 @@ impl AlertDialog {
 
         let dialog_area = centered_rect(dialog_width, dialog_height, area);
 
-        frame.render_widget(Clear, dialog_area);
+        surface.render_widget(Clear, dialog_area);
 
         let block = Block::default()
             .title(Span::styled(
@@ -112,14 +112,14 @@ impl AlertDialog {
             .style(Style::default().bg(theme.background_panel));
 
         let inner = super::dialog_inner(block.inner(dialog_area));
-        frame.render_widget(block, dialog_area);
+        surface.render_widget(block, dialog_area);
 
         let paragraph = Paragraph::new(self.message.clone())
             .style(Style::default().fg(theme.text))
             .wrap(Wrap { trim: false })
             .centered();
 
-        frame.render_widget(
+        surface.render_widget(
             paragraph,
             Rect {
                 x: inner.x,
@@ -135,7 +135,7 @@ impl AlertDialog {
             Span::styled("  [Ctrl+C] ", Style::default().fg(theme.text_muted)),
             Span::styled("Copy", Style::default().fg(theme.text)),
         ]);
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(hint).centered(),
             Rect {
                 x: inner.x,
@@ -150,7 +150,7 @@ impl AlertDialog {
             Style::default().fg(theme.text).bg(color),
         )]);
 
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(ok_button).centered(),
             Rect {
                 x: inner.x,
@@ -170,4 +170,30 @@ impl Default for AlertDialog {
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     super::centered_rect(width, height, area)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::BufferSurface;
+    use ratatui::buffer::Buffer;
+
+    #[test]
+    fn alert_dialog_renders_to_buffer_surface() {
+        let mut dialog = AlertDialog::success("Bridge is using reratui path");
+        dialog.open();
+
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buffer = Buffer::empty(area);
+        let mut surface = BufferSurface::new(&mut buffer);
+
+        dialog.render(&mut surface, area, &Theme::dark());
+
+        let rendered = buffer
+            .content
+            .iter()
+            .filter(|cell| !cell.symbol().trim().is_empty())
+            .count();
+        assert!(rendered > 0);
+    }
 }

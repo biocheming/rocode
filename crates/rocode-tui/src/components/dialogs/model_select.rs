@@ -5,10 +5,10 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
-    Frame,
 };
 
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 
 /// Popular providers shown first (matches TS opencode ordering).
 const POPULAR_PROVIDERS: &[&str] = &[
@@ -237,7 +237,7 @@ impl ModelSelectDialog {
         self.scroll_offset = 0;
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect, theme: &Theme) {
         if !self.open {
             return;
         }
@@ -246,7 +246,7 @@ impl ModelSelectDialog {
         let dialog_height = (self.rows.len() + 4).clamp(6, 20) as u16;
         let dialog_area = centered_rect(dialog_width, dialog_height, area);
 
-        frame.render_widget(Clear, dialog_area);
+        surface.render_widget(Clear, dialog_area);
 
         let block = Block::default()
             .title(Span::styled(
@@ -260,7 +260,7 @@ impl ModelSelectDialog {
             .style(Style::default().bg(theme.background_panel));
 
         let inner_area = super::dialog_inner(block.inner(dialog_area));
-        frame.render_widget(block, dialog_area);
+        surface.render_widget(block, dialog_area);
 
         // Search bar
         let search_line = Line::from(vec![
@@ -268,7 +268,7 @@ impl ModelSelectDialog {
             Span::styled(&self.query, Style::default().fg(theme.text)),
             Span::styled("▏", Style::default().fg(theme.primary)),
         ]);
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(search_line),
             Rect {
                 x: inner_area.x,
@@ -331,7 +331,7 @@ impl ModelSelectDialog {
                             .fg(theme.text_muted)
                             .add_modifier(Modifier::BOLD),
                     ));
-                    frame.render_widget(Paragraph::new(line), row_area);
+                    surface.render_widget(Paragraph::new(line), row_area);
                 }
                 Row::Model { index } => {
                     let m = &self.models[*index];
@@ -367,7 +367,7 @@ impl ModelSelectDialog {
                         Span::styled(" ".repeat(padding), base),
                         Span::styled(ctx_str, base.fg(theme.text_muted)),
                     ]);
-                    frame.render_widget(Paragraph::new(line), row_area);
+                    surface.render_widget(Paragraph::new(line), row_area);
                 }
             }
         }
@@ -390,7 +390,7 @@ impl ModelSelectDialog {
                 .track_style(Style::default().fg(theme.border_subtle))
                 .thumb_symbol("█")
                 .thumb_style(Style::default().fg(theme.primary));
-            frame.render_stateful_widget(sb, scroll_area, &mut sb_state);
+            surface.render_stateful_widget(sb, scroll_area, &mut sb_state);
         }
     }
 }
@@ -414,5 +414,47 @@ fn format_context_window(ctx: u64) -> String {
         format!("{}", ctx)
     } else {
         String::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    use crate::ui::BufferSurface;
+
+    #[test]
+    fn model_select_dialog_renders_to_buffer_surface() {
+        let mut dialog = ModelSelectDialog::new();
+        dialog.set_models(vec![
+            Model {
+                id: "gpt-5".to_string(),
+                name: "GPT-5".to_string(),
+                provider: "openai".to_string(),
+                context_window: 128_000,
+            },
+            Model {
+                id: "gpt-5-mini".to_string(),
+                name: "GPT-5 Mini".to_string(),
+                provider: "openai".to_string(),
+                context_window: 64_000,
+            },
+        ]);
+        dialog.set_current_model(Some("openai/gpt-5".to_string()));
+        dialog.open();
+
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buffer = Buffer::empty(area);
+        let mut surface = BufferSurface::new(&mut buffer);
+
+        dialog.render(&mut surface, area, &Theme::dark());
+
+        let rendered = buffer
+            .content
+            .iter()
+            .filter(|cell| !cell.symbol().trim().is_empty())
+            .count();
+        assert!(rendered > 0);
     }
 }

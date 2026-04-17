@@ -1,6 +1,7 @@
 pub mod api;
 pub mod app;
 pub mod branding;
+pub mod bridge;
 pub mod command;
 pub mod components;
 pub mod context;
@@ -13,7 +14,7 @@ pub mod theme;
 pub mod ui;
 
 pub use api::ApiClient;
-pub use app::App;
+pub use app::{App, RunOutcome};
 pub use event::Event;
 pub use router::{Route, Router};
 pub use terminal::{reset_title, set_session_title, set_title};
@@ -34,12 +35,12 @@ fn setup_panic_hook() {
 pub fn run_tui() -> anyhow::Result<()> {
     setup_panic_hook();
 
-    let mut app = App::new()?;
+    let app = App::new()?;
     let result = app.run();
-    if result.is_ok() {
-        if let Some(summary) = app.exit_summary() {
+    if let Ok(outcome) = &result {
+        if let Some(summary) = outcome.exit_summary.as_deref() {
             println!("{summary}");
         }
     }
-    result
+    result.map(|_| ())
 }

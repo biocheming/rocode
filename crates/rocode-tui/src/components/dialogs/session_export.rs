@@ -3,10 +3,10 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
-    Frame,
 };
 
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 
 pub struct SessionExportDialog {
     open: bool,
@@ -66,13 +66,13 @@ impl SessionExportDialog {
         &self.filename
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect, theme: &Theme) {
         if !self.open {
             return;
         }
 
         let dialog_area = centered_rect(80, 14, area);
-        frame.render_widget(Clear, dialog_area);
+        surface.render_widget(Clear, dialog_area);
 
         let block = Block::default()
             .title(Span::styled(
@@ -85,7 +85,7 @@ impl SessionExportDialog {
             .border_style(Style::default().fg(theme.border))
             .style(Style::default().bg(theme.background_panel));
         let inner = super::dialog_inner(block.inner(dialog_area));
-        frame.render_widget(block, dialog_area);
+        surface.render_widget(block, dialog_area);
 
         let layout = Layout::default()
             .direction(Direction::Vertical)
@@ -102,11 +102,11 @@ impl SessionExportDialog {
             ])
             .split(inner);
 
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new("Output filename:").style(Style::default().fg(theme.text)),
             layout[0],
         );
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled("> ", Style::default().fg(theme.primary)),
                 Span::styled(&self.filename, Style::default().fg(theme.text)),
@@ -115,13 +115,13 @@ impl SessionExportDialog {
             layout[1],
         );
 
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new("Options:").style(Style::default().fg(theme.text_muted)),
             layout[3],
         );
 
         let check = |v: bool| if v { "[x]" } else { "[ ]" };
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(format!(
                 "  1  {} Include thinking blocks",
                 check(self.include_thinking)
@@ -129,7 +129,7 @@ impl SessionExportDialog {
             .style(Style::default().fg(theme.text)),
             layout[4],
         );
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(format!(
                 "  2  {} Include tool call details",
                 check(self.include_tool_details)
@@ -137,7 +137,7 @@ impl SessionExportDialog {
             .style(Style::default().fg(theme.text)),
             layout[5],
         );
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(format!(
                 "  3  {} Include metadata (tokens, cost)",
                 check(self.include_metadata)
@@ -146,7 +146,7 @@ impl SessionExportDialog {
             layout[6],
         );
 
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(
                 "Enter export  Ctrl+C copy transcript  1/2/3 toggle options  Esc cancel",
             )
@@ -164,4 +164,31 @@ impl Default for SessionExportDialog {
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     super::centered_rect(width, height, area)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    use crate::ui::BufferSurface;
+
+    #[test]
+    fn session_export_dialog_renders_to_buffer_surface() {
+        let mut dialog = SessionExportDialog::new();
+        dialog.open("session-1".to_string(), "transcript.md".to_string());
+
+        let area = Rect::new(0, 0, 120, 32);
+        let mut buffer = Buffer::empty(area);
+        let mut surface = BufferSurface::new(&mut buffer);
+
+        dialog.render(&mut surface, area, &Theme::dark());
+
+        let rendered = buffer
+            .content
+            .iter()
+            .filter(|cell| !cell.symbol().trim().is_empty())
+            .count();
+        assert!(rendered > 0);
+    }
 }

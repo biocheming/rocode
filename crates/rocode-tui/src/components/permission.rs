@@ -1,15 +1,14 @@
 use std::cell::Cell;
 
-use ratatui::prelude::Stylize;
 use ratatui::{
     layout::Rect,
     style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
-    Frame,
 };
 
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PermissionType {
@@ -218,7 +217,7 @@ impl PermissionPrompt {
         self.pending_action.take()
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect, theme: &Theme) {
         if !self.is_open || self.requests.is_empty() {
             return;
         }
@@ -242,7 +241,7 @@ impl PermissionPrompt {
         self.last_rendered_area.set(Some(popup_area));
 
         // Clear underlying content so no text bleeds through
-        frame.render_widget(Clear, popup_area);
+        surface.render_widget(Clear, popup_area);
 
         let title = format!(
             "{} {} - Permission Request",
@@ -281,7 +280,7 @@ impl PermissionPrompt {
             )
             .style(Style::default().bg(theme.background_panel));
 
-        frame.render_widget(paragraph, popup_area);
+        surface.render_widget(paragraph, popup_area);
     }
 }
 

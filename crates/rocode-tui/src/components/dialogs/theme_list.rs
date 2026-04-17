@@ -3,10 +3,10 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
-    Frame,
 };
 
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 
 #[derive(Clone, Debug)]
 pub struct ThemeOption {
@@ -126,13 +126,13 @@ impl ThemeListDialog {
         });
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect, theme: &Theme) {
         if !self.open {
             return;
         }
 
         let dialog_area = centered_rect(58, 16, area);
-        frame.render_widget(Clear, dialog_area);
+        surface.render_widget(Clear, dialog_area);
 
         let block = Block::default()
             .title(Span::styled(
@@ -145,7 +145,7 @@ impl ThemeListDialog {
             .border_style(Style::default().fg(theme.border))
             .style(Style::default().bg(theme.background_panel));
         let inner = super::dialog_inner(block.inner(dialog_area));
-        frame.render_widget(block, dialog_area);
+        surface.render_widget(block, dialog_area);
 
         let layout = Layout::default()
             .direction(Direction::Vertical)
@@ -156,7 +156,7 @@ impl ThemeListDialog {
             ])
             .split(inner);
 
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled("> ", Style::default().fg(theme.primary)),
                 Span::styled(&self.query, Style::default().fg(theme.text)),
@@ -185,9 +185,9 @@ impl ThemeListDialog {
                 .bg(theme.background_element)
                 .add_modifier(Modifier::BOLD),
         );
-        frame.render_stateful_widget(list, layout[1], &mut self.state.clone());
+        surface.render_stateful_widget(list, layout[1], &mut self.state.clone());
 
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled("Enter", Style::default().fg(theme.primary)),
                 Span::styled(" apply  ", Style::default().fg(theme.text_muted)),
@@ -235,4 +235,41 @@ fn split_theme_variant(name: &str) -> Option<(&str, &str)> {
         return None;
     }
     Some((base, variant))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    use crate::ui::BufferSurface;
+
+    #[test]
+    fn theme_list_dialog_renders_to_buffer_surface() {
+        let mut dialog = ThemeListDialog::new();
+        dialog.set_options(vec![
+            ThemeOption {
+                id: "opencode@dark".to_string(),
+                name: "OpenCode Dark".to_string(),
+            },
+            ThemeOption {
+                id: "opencode@light".to_string(),
+                name: "OpenCode Light".to_string(),
+            },
+        ]);
+        dialog.open("opencode@dark");
+
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buffer = Buffer::empty(area);
+        let mut surface = BufferSurface::new(&mut buffer);
+
+        dialog.render(&mut surface, area, &Theme::dark());
+
+        let rendered = buffer
+            .content
+            .iter()
+            .filter(|cell| !cell.symbol().trim().is_empty())
+            .count();
+        assert!(rendered > 0);
+    }
 }

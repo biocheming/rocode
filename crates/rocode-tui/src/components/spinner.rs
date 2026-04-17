@@ -3,8 +3,9 @@ use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
     widgets::Paragraph,
-    Frame,
 };
+
+use crate::ui::RenderSurface;
 
 const DEFAULT_WIDTH: usize = 8;
 const DEFAULT_HOLD_START: usize = 30;
@@ -189,9 +190,9 @@ impl KnightRiderSpinner {
         changed
     }
 
-    pub fn render(
+    pub fn render<S: RenderSurface>(
         &self,
-        frame: &mut Frame,
+        surface: &mut S,
         area: Rect,
         animations_enabled: bool,
         background: Color,
@@ -203,7 +204,7 @@ impl KnightRiderSpinner {
         let base_style = Style::default().bg(background);
 
         if matches!(self.mode, SpinnerMode::Braille) {
-            self.render_braille(frame, area, animations_enabled, base_style);
+            self.render_braille(surface, area, animations_enabled, base_style);
             return;
         }
 
@@ -220,13 +221,13 @@ impl KnightRiderSpinner {
                     Style::default().fg(self.inactive_color),
                 ));
             }
-            frame.render_widget(Paragraph::new(Line::from(spans)).style(base_style), area);
+            surface.render_widget(Paragraph::new(Line::from(spans)).style(base_style), area);
             return;
         }
 
         if !animations_enabled {
             let fallback = format!("{:<width$}", "[⋯]", width = self.width);
-            frame.render_widget(Paragraph::new(fallback).style(base_style), area);
+            surface.render_widget(Paragraph::new(fallback).style(base_style), area);
             return;
         }
 
@@ -252,12 +253,12 @@ impl KnightRiderSpinner {
             }
         }
 
-        frame.render_widget(Paragraph::new(Line::from(spans)).style(base_style), area);
+        surface.render_widget(Paragraph::new(Line::from(spans)).style(base_style), area);
     }
 
-    fn render_braille(
+    fn render_braille<S: RenderSurface>(
         &self,
-        frame: &mut Frame,
+        surface: &mut S,
         area: Rect,
         animations_enabled: bool,
         base_style: Style,
@@ -281,7 +282,7 @@ impl KnightRiderSpinner {
             ));
         }
         let line = Line::from(spans);
-        frame.render_widget(Paragraph::new(line).style(base_style), area);
+        surface.render_widget(Paragraph::new(line).style(base_style), area);
     }
 
     fn scanner_state(&self) -> ScannerState {

@@ -13,22 +13,19 @@ pub(super) struct TranscriptOptions {
 
 impl App {
     pub(super) fn current_session_id(&self) -> Option<String> {
-        match self.context.current_route() {
-            Route::Session { session_id } => Some(session_id),
-            _ => self.active_session_id.clone(),
-        }
+        self.context.current_route_session_id()
     }
 
     pub(super) fn handle_show_recovery_actions(&mut self) {
         let Some(session_id) = self.current_session_id() else {
             self.alert_dialog
                 .set_message("No active session for recovery actions.");
-            self.alert_dialog.open();
+            self.open_alert_dialog();
             return;
         };
         let Some(client) = self.context.get_api_client() else {
             self.alert_dialog.set_message("API unavailable.");
-            self.alert_dialog.open();
+            self.open_alert_dialog();
             return;
         };
         let recovery = match client.get_session_recovery(&session_id) {
@@ -36,7 +33,7 @@ impl App {
             Err(error) => {
                 self.alert_dialog
                     .set_message(&format!("Failed to load recovery actions:\n{}", error));
-                self.alert_dialog.open();
+                self.open_alert_dialog();
                 return;
             }
         };
@@ -44,22 +41,22 @@ impl App {
         if items.is_empty() {
             self.alert_dialog
                 .set_message("No recovery actions are available for this session.");
-            self.alert_dialog.open();
+            self.open_alert_dialog();
             return;
         }
-        self.recovery_action_dialog.open(items);
+        self.open_recovery_action_dialog_modal(items);
     }
 
     pub(super) fn handle_execute_recovery_action(&mut self, selector: &str) {
         let Some(session_id) = self.current_session_id() else {
             self.alert_dialog
                 .set_message("No active session for recovery execution.");
-            self.alert_dialog.open();
+            self.open_alert_dialog();
             return;
         };
         let Some(client) = self.context.get_api_client() else {
             self.alert_dialog.set_message("API unavailable.");
-            self.alert_dialog.open();
+            self.open_alert_dialog();
             return;
         };
         let recovery = match client.get_session_recovery(&session_id) {
@@ -67,7 +64,7 @@ impl App {
             Err(error) => {
                 self.alert_dialog
                     .set_message(&format!("Failed to load recovery actions:\n{}", error));
-                self.alert_dialog.open();
+                self.open_alert_dialog();
                 return;
             }
         };
@@ -75,7 +72,7 @@ impl App {
             self.alert_dialog.set_message(
                 "Unknown recovery action. Open /recover and select one from the list.",
             );
-            self.alert_dialog.open();
+            self.open_alert_dialog();
             return;
         };
         match client.execute_session_recovery(
@@ -107,7 +104,7 @@ impl App {
         let Some(session_id) = self.current_session_id() else {
             self.alert_dialog
                 .set_message("No active session to rename.");
-            self.alert_dialog.open();
+            self.open_alert_dialog();
             return;
         };
 
@@ -119,14 +116,14 @@ impl App {
             .get(&session_id)
             .map(|s| s.title.clone())
             .unwrap_or_else(|| "New Session".to_string());
-        self.session_rename_dialog.open(session_id, title);
+        self.open_session_rename_dialog_modal(session_id, title);
     }
 
     pub(super) fn open_session_export_dialog(&mut self) {
         let Some(session_id) = self.current_session_id() else {
             self.alert_dialog
                 .set_message("No active session to export.");
-            self.alert_dialog.open();
+            self.open_alert_dialog();
             return;
         };
 
@@ -139,8 +136,7 @@ impl App {
             .map(|s| s.title.clone())
             .unwrap_or_else(|| "New Session".to_string());
         let default_filename = default_export_filename(&title, &session_id);
-        self.session_export_dialog
-            .open(session_id, default_filename);
+        self.open_session_export_dialog_modal(session_id, default_filename);
     }
 
     pub(super) fn open_prompt_stash_dialog(&mut self) {
@@ -155,23 +151,23 @@ impl App {
             })
             .collect::<Vec<_>>();
         self.prompt_stash_dialog.set_entries(entries);
-        self.prompt_stash_dialog.open();
+        self.open_prompt_stash_dialog_modal();
     }
 
     pub(super) fn open_skill_list_dialog(&mut self) {
         if let Err(err) = self.refresh_skill_list_dialog() {
             self.alert_dialog
                 .set_message(&format!("Failed to refresh skills:\n{}", err));
-            self.alert_dialog.open();
+            self.open_alert_dialog();
         }
-        self.skill_list_dialog.open();
+        self.open_skill_list_dialog_modal();
         let _ = self.refresh_skill_list_detail();
     }
 
     pub(super) fn handle_share_session(&mut self) {
         let Some(session_id) = self.current_session_id() else {
             self.alert_dialog.set_message("No active session to share.");
-            self.alert_dialog.open();
+            self.open_alert_dialog();
             return;
         };
         let Some(client) = self.context.get_api_client() else {
@@ -184,12 +180,12 @@ impl App {
                     "Session shared. Link copied to clipboard:\n{}",
                     response.url
                 ));
-                self.alert_dialog.open();
+                self.open_alert_dialog();
             }
             Err(err) => {
                 self.alert_dialog
                     .set_message(&format!("Failed to share session:\n{}", err));
-                self.alert_dialog.open();
+                self.open_alert_dialog();
             }
         }
     }
@@ -198,7 +194,7 @@ impl App {
         let Some(session_id) = self.current_session_id() else {
             self.alert_dialog
                 .set_message("No active session to unshare.");
-            self.alert_dialog.open();
+            self.open_alert_dialog();
             return;
         };
         let Some(client) = self.context.get_api_client() else {
@@ -208,12 +204,12 @@ impl App {
             Ok(_) => {
                 self.alert_dialog
                     .set_message("Session sharing link revoked.");
-                self.alert_dialog.open();
+                self.open_alert_dialog();
             }
             Err(err) => {
                 self.alert_dialog
                     .set_message(&format!("Failed to unshare session:\n{}", err));
-                self.alert_dialog.open();
+                self.open_alert_dialog();
             }
         }
     }
@@ -222,7 +218,7 @@ impl App {
         let Some(session_id) = self.current_session_id() else {
             self.alert_dialog
                 .set_message("No active session to compact.");
-            self.alert_dialog.open();
+            self.open_alert_dialog();
             return;
         };
         let Some(client) = self.context.get_api_client() else {
@@ -233,12 +229,12 @@ impl App {
                 let _ = self.sync_session_from_server(&session_id);
                 self.alert_dialog
                     .set_message("Session compacted successfully.");
-                self.alert_dialog.open();
+                self.open_alert_dialog();
             }
             Err(err) => {
                 self.alert_dialog
                     .set_message(&format!("Failed to compact session:\n{}", err));
-                self.alert_dialog.open();
+                self.open_alert_dialog();
             }
         }
     }
@@ -246,7 +242,7 @@ impl App {
     pub(super) fn handle_undo(&mut self) {
         let Some(session_id) = self.current_session_id() else {
             self.alert_dialog.set_message("No active session for undo.");
-            self.alert_dialog.open();
+            self.open_alert_dialog();
             return;
         };
         let session_ctx = self.context.session.read();
@@ -258,7 +254,7 @@ impl App {
 
         let Some((msg_id, msg_content)) = last_user_msg else {
             self.alert_dialog.set_message("No user message to revert.");
-            self.alert_dialog.open();
+            self.open_alert_dialog();
             return;
         };
         let Some(client) = self.context.get_api_client() else {
@@ -270,12 +266,12 @@ impl App {
                 let _ = self.sync_session_from_server(&session_id);
                 self.alert_dialog
                     .set_message("Message reverted. Prompt restored.");
-                self.alert_dialog.open();
+                self.open_alert_dialog();
             }
             Err(err) => {
                 self.alert_dialog
                     .set_message(&format!("Failed to revert message:\n{}", err));
-                self.alert_dialog.open();
+                self.open_alert_dialog();
             }
         }
     }
@@ -283,7 +279,7 @@ impl App {
     pub(super) fn handle_redo(&mut self) {
         let Some(_session_id) = self.current_session_id() else {
             self.alert_dialog.set_message("No active session for redo.");
-            self.alert_dialog.open();
+            self.open_alert_dialog();
             return;
         };
         // Redo re-submits the current prompt content (which was restored by undo)
@@ -291,21 +287,21 @@ impl App {
         if input.is_empty() {
             self.alert_dialog
                 .set_message("Nothing to redo. Prompt is empty.");
-            self.alert_dialog.open();
+            self.open_alert_dialog();
             return;
         }
         // Re-submit the prompt to effectively redo
         if let Err(err) = self.submit_prompt() {
             self.alert_dialog
                 .set_message(&format!("Failed to redo:\n{}", err));
-            self.alert_dialog.open();
+            self.open_alert_dialog();
         }
     }
 
     pub(super) fn handle_copy_session(&mut self) {
         let Some(session_id) = self.current_session_id() else {
             self.alert_dialog.set_message("No active session to copy.");
-            self.alert_dialog.open();
+            self.open_alert_dialog();
             return;
         };
         match self.build_session_transcript(
@@ -320,17 +316,17 @@ impl App {
                 if let Err(err) = Clipboard::write_text(&text) {
                     self.alert_dialog
                         .set_message(&format!("Failed to copy transcript to clipboard:\n{}", err));
-                    self.alert_dialog.open();
+                    self.open_alert_dialog();
                 } else {
                     self.alert_dialog
                         .set_message("Session transcript copied to clipboard.");
-                    self.alert_dialog.open();
+                    self.open_alert_dialog();
                 }
             }
             None => {
                 self.alert_dialog
                     .set_message("No transcript available for current session.");
-                self.alert_dialog.open();
+                self.open_alert_dialog();
             }
         }
     }
@@ -339,7 +335,7 @@ impl App {
         let Some(session_id) = self.current_session_id() else {
             self.alert_dialog
                 .set_message("No active session for timeline.");
-            self.alert_dialog.open();
+            self.open_alert_dialog();
             return;
         };
         let session_ctx = self.context.session.read();
@@ -372,13 +368,13 @@ impl App {
             })
             .unwrap_or_default();
         drop(session_ctx);
-        self.timeline_dialog.open(entries);
+        self.open_timeline_dialog_modal(entries);
     }
 
     pub(super) fn handle_fork_session(&mut self) {
         let Some(session_id) = self.current_session_id() else {
             self.alert_dialog.set_message("No active session to fork.");
-            self.alert_dialog.open();
+            self.open_alert_dialog();
             return;
         };
         let session_ctx = self.context.session.read();
@@ -411,7 +407,7 @@ impl App {
             })
             .unwrap_or_default();
         drop(session_ctx);
-        self.fork_dialog.open(session_id, entries);
+        self.open_fork_dialog_modal(session_id, entries);
     }
 
     pub(super) fn build_session_transcript(

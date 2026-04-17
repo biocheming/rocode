@@ -1,22 +1,21 @@
-use ratatui::prelude::Stylize;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Padding, Paragraph, Wrap},
-    Frame,
 };
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use unicode_width::UnicodeWidthChar;
 
 use crate::context::{AppContext, MessageRole, SessionStatus};
 use crate::file_index::FileIndex;
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 
 use super::spinner::{KnightRiderSpinner, SpinnerMode, TaskKind};
 
@@ -27,6 +26,7 @@ const PROMPT_MIN_INPUT_LINES: u16 = 1;
 const PROMPT_MAX_INPUT_LINES: u16 = 6;
 const SHELL_PLACEHOLDER: &str = "Run a command... \"ls -la\"";
 const INTERRUPT_CONFIRM_WINDOW_SECS: u64 = 5;
+const PLACEHOLDER_ROTATE_SECS: u64 = 12;
 const FILE_INDEX_MAX_DEPTH: usize = 8;
 const FILE_SUGGESTION_LIMIT: usize = 20;
 const PROMPT_BLOCK_PAD_LEFT: u16 = 1;
@@ -74,6 +74,8 @@ pub struct Prompt {
     cursor_position: usize,
     focused: bool,
     placeholder: String,
+    placeholder_variants: Vec<String>,
+    shell_placeholders: Vec<String>,
     history: Vec<String>,
     history_index: Option<usize>,
     history_draft: Option<String>,
@@ -120,6 +122,8 @@ impl Prompt {
             cursor_position: 0,
             focused: true,
             placeholder: "Ask anything...".to_string(),
+            placeholder_variants: Vec::new(),
+            shell_placeholders: Vec::new(),
             history,
             history_index: None,
             history_draft: None,
@@ -191,6 +195,29 @@ impl Prompt {
 
     pub fn with_placeholder(mut self, placeholder: &str) -> Self {
         self.placeholder = placeholder.to_string();
+        self.placeholder_variants.clear();
+        self.shell_placeholders.clear();
+        self
+    }
+
+    pub fn with_placeholders(
+        mut self,
+        placeholders: impl IntoIterator<Item = impl AsRef<str>>,
+        shell_placeholders: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Self {
+        self.placeholder_variants = placeholders
+            .into_iter()
+            .map(|value| value.as_ref().to_string())
+            .filter(|value: &String| !value.is_empty())
+            .collect();
+        self.shell_placeholders = shell_placeholders
+            .into_iter()
+            .map(|value| value.as_ref().to_string())
+            .filter(|value: &String| !value.is_empty())
+            .collect();
+        if let Some(first) = self.placeholder_variants.first() {
+            self.placeholder = first.clone();
+        }
         self
     }
 
@@ -207,10 +234,10 @@ impl Prompt {
         self.recompute_suggestions();
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect) {
         let theme = self.context.theme.read();
         let mode_name = current_mode_name(&self.context);
-        let model = self.context.current_model.read();
+        let selection = self.context.selection_state();
         let variant = self.context.current_model_variant();
         let animations_enabled = *self.context.animations_enabled.read();
 
@@ -220,11 +247,7 @@ impl Prompt {
         } else {
             highlight_color
         };
-        let placeholder = if matches!(self.mode, PromptMode::Shell) {
-            SHELL_PLACEHOLDER
-        } else {
-            self.placeholder.as_str()
-        };
+        let placeholder = self.active_placeholder();
 
         let max_content_lines = area
             .height
@@ -303,7 +326,7 @@ impl Prompt {
                 }))
         };
 
-        frame.render_widget(paragraph, chunks[0]);
+        surface.render_widget(paragraph, chunks[0]);
         if self.focused {
             let content_origin_x = chunks[0]
                 .x
@@ -327,7 +350,7 @@ impl Prompt {
             let cursor_y = content_origin_y
                 .saturating_add(cursor_row as u16)
                 .min(chunks[0].bottom().saturating_sub(1));
-            frame.set_cursor(cursor_x, cursor_y);
+            surface.set_cursor_position(cursor_x, cursor_y);
         }
 
         let mut info_parts = vec![
@@ -342,9 +365,8 @@ impl Prompt {
             Span::raw("  "),
         ];
 
-        if let Some(m) = model.as_ref() {
-            let provider = self.context.current_provider.read();
-            if let Some(ref p) = *provider {
+        if let Some(m) = selection.current_model.as_ref() {
+            if let Some(ref p) = selection.current_provider {
                 info_parts.push(Span::styled(m.clone(), Style::default().fg(theme.text)));
                 info_parts.push(Span::styled(
                     format!(" {p}"),
@@ -362,16 +384,16 @@ impl Prompt {
             }
         }
 
-        render_prompt_continuation_row(frame, chunks[1], active_color, theme.background_element);
+        render_prompt_continuation_row(surface, chunks[1], active_color, theme.background_element);
         let info_row = row_content_area(chunks[1], PROMPT_LINE_H_INSET);
         let info_line = Line::from(info_parts);
         let info_paragraph =
             Paragraph::new(info_line).style(Style::default().bg(theme.background_element));
-        frame.render_widget(info_paragraph, info_row);
+        surface.render_widget(info_paragraph, info_row);
 
         let spinner_row = chunks[2];
-        frame.render_widget(
-            Paragraph::new("").style(Style::default().bg(theme.background)),
+        surface.render_widget(
+            Paragraph::new("").style(Style::default().bg(theme.background_element)),
             spinner_row,
         );
         let spinner_chunks = Layout::default()
@@ -380,18 +402,18 @@ impl Prompt {
             .split(spinner_row);
 
         self.spinner.render(
-            frame,
+            surface,
             spinner_chunks[0],
             animations_enabled,
-            theme.background,
+            theme.background_element,
         );
         let token_line = Paragraph::new(self.render_token_line(&theme))
-            .style(Style::default().bg(theme.background));
-        frame.render_widget(token_line, spinner_chunks[1]);
+            .style(Style::default().bg(theme.background_element));
+        surface.render_widget(token_line, spinner_chunks[1]);
 
         let status_line = Paragraph::new(self.render_status_line(&theme))
-            .style(Style::default().bg(theme.background));
-        frame.render_widget(status_line, chunks[3]);
+            .style(Style::default().bg(theme.background_element));
+        surface.render_widget(status_line, chunks[3]);
     }
 
     pub fn tick_spinner(&mut self, delta_ms: u64) -> bool {
@@ -1170,6 +1192,41 @@ impl Prompt {
         changed
     }
 
+    fn active_placeholder(&self) -> &str {
+        self.placeholder_for_mode_at(self.mode, self.current_placeholder_slot())
+    }
+
+    fn current_placeholder_slot(&self) -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            / PLACEHOLDER_ROTATE_SECS
+    }
+
+    fn placeholder_for_mode_at(&self, mode: PromptMode, slot: u64) -> &str {
+        let variants = match mode {
+            PromptMode::Normal => &self.placeholder_variants,
+            PromptMode::Shell => &self.shell_placeholders,
+        };
+
+        if variants.is_empty() {
+            return match mode {
+                PromptMode::Normal => self.placeholder.as_str(),
+                PromptMode::Shell => SHELL_PLACEHOLDER,
+            };
+        }
+
+        let index = (slot as usize) % variants.len();
+        variants
+            .get(index)
+            .map(String::as_str)
+            .unwrap_or(match mode {
+                PromptMode::Normal => self.placeholder.as_str(),
+                PromptMode::Shell => SHELL_PLACEHOLDER,
+            })
+    }
+
     fn hint_line(&self, theme: &Theme) -> Line<'static> {
         if let Some((_, _, token)) = self.current_token() {
             if token.starts_with('/') {
@@ -1327,8 +1384,8 @@ fn row_content_area(area: Rect, horizontal_padding: u16) -> Rect {
     inset_horizontal(inner, horizontal_padding)
 }
 
-fn render_prompt_continuation_row(
-    frame: &mut Frame,
+fn render_prompt_continuation_row<S: RenderSurface>(
+    surface: &mut S,
     area: Rect,
     border_color: Color,
     background: Color,
@@ -1349,7 +1406,7 @@ fn render_prompt_continuation_row(
         ));
     }
 
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    surface.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn legacy_subsequence_score(query: &str, target: &str) -> Option<i32> {
@@ -1376,12 +1433,10 @@ fn legacy_subsequence_score(query: &str, target: &str) -> Option<i32> {
 
 fn current_mode_name(context: &Arc<AppContext>) -> Option<String> {
     context
-        .current_scheduler_profile
-        .read()
-        .clone()
+        .current_scheduler_profile()
         .filter(|value| !value.trim().is_empty())
         .or_else(|| {
-            let agent = context.current_agent.read().clone();
+            let agent = context.current_agent();
             (!agent.trim().is_empty()).then_some(agent)
         })
 }
@@ -1612,6 +1667,30 @@ mod tests {
 
             prompt.history_next_entry();
             assert_eq!(prompt.get_input(), "draft");
+        });
+    }
+
+    #[test]
+    fn placeholder_sets_rotate_by_mode() {
+        with_isolated_prompt(|prompt| {
+            let prompt = prompt.with_placeholders(
+                ["Fix broken tests", "Explain this repo"],
+                ["git status", "pwd"],
+            );
+
+            assert_eq!(
+                prompt.placeholder_for_mode_at(PromptMode::Normal, 0),
+                "Fix broken tests"
+            );
+            assert_eq!(
+                prompt.placeholder_for_mode_at(PromptMode::Normal, 1),
+                "Explain this repo"
+            );
+            assert_eq!(
+                prompt.placeholder_for_mode_at(PromptMode::Shell, 0),
+                "git status"
+            );
+            assert_eq!(prompt.placeholder_for_mode_at(PromptMode::Shell, 1), "pwd");
         });
     }
 

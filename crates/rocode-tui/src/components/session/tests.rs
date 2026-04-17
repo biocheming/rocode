@@ -1,0 +1,448 @@
+use super::{
+    build_session_render_model_memo_key, build_session_viewport_content_memo_key,
+    map_scrollbar_row_to_offset, render_session_messages_child, reset_session_render_perf_counters,
+    resolve_session_render_model, snapshot_session_render_perf_counters, SessionMessageOutputCache,
+    SessionMessageViewportState, SessionMessagesSnapshot, SessionReasoningState,
+    SessionRenderModelCache, SessionView,
+};
+use chrono::Utc;
+use parking_lot::Mutex;
+use ratatui::{buffer::Buffer, layout::Rect};
+use reratui::fiber_tree::{clear_fiber_tree, set_fiber_tree};
+use reratui::{
+    clear_current_event, clear_global_handlers, clear_render_context, init_render_context,
+    reset_component_position_counter, with_render_context_mut, Component, Element, FiberTree,
+};
+
+use crate::{
+    components::Prompt,
+    context::{AppContext, Message, MessagePart, MessageRole, TokenUsage},
+    ui::BufferSurface,
+};
+use std::collections::HashSet;
+use std::sync::Arc;
+
+struct TestSessionMessagesRender {
+    area: Rect,
+    snapshot: SessionMessagesSnapshot,
+    viewport: SessionMessageViewportState,
+    reasoning: SessionReasoningState,
+    message_cache: SessionMessageOutputCache,
+    render_model_cache: SessionRenderModelCache,
+    output: Arc<Mutex<Option<super::SessionMessagesOutput>>>,
+}
+
+impl Component for TestSessionMessagesRender {
+    fn render(&self, _area: Rect, buffer: &mut reratui::Buffer) {
+        let output = render_session_messages_child(
+            self.area,
+            &self.snapshot,
+            &self.viewport,
+            &self.reasoning,
+            &self.message_cache,
+            &self.render_model_cache,
+            buffer,
+        );
+        *self.output.lock() = Some(output);
+    }
+}
+
+fn make_message(id: &str, role: MessageRole, content: String, parts: Vec<MessagePart>) -> Message {
+    Message {
+        id: id.to_string(),
+        role,
+        content,
+        created_at: Utc::now(),
+        agent: None,
+        model: Some("openai/gpt-5".to_string()),
+        mode: None,
+        finish: None,
+        error: None,
+        completed_at: None,
+        cost: 0.0,
+        tokens: TokenUsage::default(),
+        metadata: None,
+        multimodal: None,
+        parts,
+    }
+}
+
+fn long_block(label: &str, repeat: usize) -> String {
+    std::iter::repeat_n(
+        format!("{label} keeps the viewport busy with a wider paragraph for reratui caching."),
+        repeat,
+    )
+    .collect::<Vec<_>>()
+    .join(" ")
+}
+
+fn multiline_reasoning_block(label: &str, lines: usize) -> String {
+    (0..lines)
+        .map(|idx| {
+            format!(
+                "{label} step {} keeps the reasoning panel expanded.",
+                idx + 1
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn build_perf_session_messages() -> Vec<Message> {
+    vec![
+        make_message(
+            "user-1",
+            MessageRole::User,
+            long_block("user-1", 4),
+            vec![MessagePart::Text {
+                text: long_block("user-1", 4),
+            }],
+        ),
+        make_message(
+            "assistant-1",
+            MessageRole::Assistant,
+            long_block("assistant-1", 4),
+            vec![
+                MessagePart::Reasoning {
+                    text: multiline_reasoning_block("assistant-1 reasoning", 8),
+                },
+                MessagePart::Text {
+                    text: long_block("assistant-1 reply", 6),
+                },
+            ],
+        ),
+        make_message(
+            "user-2",
+            MessageRole::User,
+            long_block("user-2", 3),
+            vec![MessagePart::Text {
+                text: long_block("user-2", 3),
+            }],
+        ),
+        make_message(
+            "assistant-2",
+            MessageRole::Assistant,
+            long_block("assistant-2", 5),
+            vec![MessagePart::Text {
+                text: long_block("assistant-2", 5),
+            }],
+        ),
+        make_message(
+            "user-3",
+            MessageRole::User,
+            long_block("user-3", 3),
+            vec![MessagePart::Text {
+                text: long_block("user-3", 3),
+            }],
+        ),
+        make_message(
+            "assistant-3",
+            MessageRole::Assistant,
+            long_block("assistant-3", 5),
+            vec![MessagePart::Text {
+                text: long_block("assistant-3", 5),
+            }],
+        ),
+    ]
+}
+
+fn perf_snapshot_with_messages() -> (Arc<AppContext>, String, SessionMessagesSnapshot) {
+    let context = Arc::new(AppContext::new());
+    let session_id = {
+        let mut session = context.session.write();
+        let session_id = session.create_session(Some("Perf Session".to_string()));
+        session.set_messages(&session_id, build_perf_session_messages());
+        session_id
+    };
+    let snapshot = SessionMessagesSnapshot::capture(&context, &session_id);
+    (context, session_id, snapshot)
+}
+
+fn render_perf_session_messages(
+    area: Rect,
+    snapshot: &SessionMessagesSnapshot,
+    viewport: &SessionMessageViewportState,
+    reasoning: &SessionReasoningState,
+    message_cache: &SessionMessageOutputCache,
+    render_model_cache: &SessionRenderModelCache,
+) -> super::SessionMessagesOutput {
+    clear_fiber_tree();
+    clear_render_context();
+    set_fiber_tree(FiberTree::new());
+    init_render_context();
+    with_render_context_mut(|ctx| ctx.prepare_for_render());
+    reset_component_position_counter();
+    clear_global_handlers();
+
+    let output = Arc::new(Mutex::new(None));
+    let root = Element::component(TestSessionMessagesRender {
+        area,
+        snapshot: snapshot.clone(),
+        viewport: viewport.clone(),
+        reasoning: reasoning.clone(),
+        message_cache: message_cache.clone(),
+        render_model_cache: render_model_cache.clone(),
+        output: output.clone(),
+    });
+    let mut buffer = Buffer::empty(area);
+    root.render(area, &mut buffer);
+
+    with_render_context_mut(|ctx| {
+        ctx.mark_unseen_for_unmount();
+        ctx.process_unmounts();
+        ctx.begin_batch();
+        let _ = ctx.end_batch();
+        ctx.flush_effects();
+    });
+    clear_current_event();
+    clear_fiber_tree();
+    clear_render_context();
+
+    let result = output.lock().take().expect("session messages output");
+    result
+}
+
+#[test]
+fn scrollbar_row_maps_to_expected_offsets() {
+    let area = Some(Rect {
+        x: 10,
+        y: 5,
+        width: 1,
+        height: 11,
+    });
+    assert_eq!(map_scrollbar_row_to_offset(area, 5, 100), 0);
+    assert_eq!(map_scrollbar_row_to_offset(area, 10, 100), 50);
+    assert_eq!(map_scrollbar_row_to_offset(area, 15, 100), 100);
+}
+
+#[test]
+fn session_view_renders_to_buffer_surface() {
+    let context = Arc::new(AppContext::new());
+    let view = SessionView::new("session-1".to_string());
+    let prompt = Prompt::new(context.clone())
+        .with_placeholder("Ask anything... \"Fix a TODO in the codebase\"");
+    let area = Rect::new(0, 0, 100, 30);
+    let mut buffer = Buffer::empty(area);
+    let cursor = {
+        let mut surface = BufferSurface::new(&mut buffer);
+        view.render(&context, &mut surface, area, &prompt);
+        surface.cursor_position()
+    };
+
+    let rendered = buffer
+        .content
+        .iter()
+        .filter(|cell| !cell.symbol().trim().is_empty())
+        .count();
+    assert!(rendered > 0);
+    assert!(cursor.is_some());
+}
+
+#[test]
+fn overlay_sidebar_backdrop_click_closes_sidebar() {
+    let context = Arc::new(AppContext::new());
+    let view = SessionView::new("session-1".to_string());
+    view.toggle_sidebar(100);
+    let prompt = Prompt::new(context.clone())
+        .with_placeholder("Ask anything... \"Fix a TODO in the codebase\"");
+    let area = Rect::new(0, 0, 100, 30);
+    let mut buffer = Buffer::empty(area);
+    let mut surface = BufferSurface::new(&mut buffer);
+
+    view.render(&context, &mut surface, area, &prompt);
+
+    assert!(view.sidebar_visible(area.width));
+    assert!(view.handle_sidebar_click(&context, 1, 1));
+    assert!(!view.sidebar_visible(area.width));
+}
+
+#[test]
+fn session_render_model_memo_key_tracks_width_and_reasoning_state() {
+    let context = Arc::new(AppContext::new());
+    let snapshot = SessionMessagesSnapshot::capture(&context, "session-1");
+
+    let base = build_session_render_model_memo_key(&snapshot, 80, &HashSet::new());
+    let same = build_session_render_model_memo_key(&snapshot, 80, &HashSet::new());
+    assert_eq!(base, same);
+
+    let mut expanded = HashSet::new();
+    expanded.insert("message-1:0".to_string());
+    assert_ne!(
+        base,
+        build_session_render_model_memo_key(&snapshot, 80, &expanded)
+    );
+    assert_ne!(
+        base,
+        build_session_render_model_memo_key(&snapshot, 79, &HashSet::new())
+    );
+}
+
+#[test]
+fn session_render_model_cache_reuses_model_on_identical_inputs() {
+    let context = Arc::new(AppContext::new());
+    let snapshot = SessionMessagesSnapshot::capture(&context, "session-1");
+    let area = Rect::new(0, 0, 80, 20);
+    let mut buffer = Buffer::empty(area);
+
+    let (model, _, cache) = resolve_session_render_model(
+        area,
+        &snapshot,
+        &HashSet::new(),
+        &SessionMessageOutputCache::default(),
+        &SessionRenderModelCache::default(),
+        &mut buffer,
+    );
+    let (reused_model, _, _) = resolve_session_render_model(
+        area,
+        &snapshot,
+        &HashSet::new(),
+        &SessionMessageOutputCache::default(),
+        &cache,
+        &mut buffer,
+    );
+
+    assert!(Arc::ptr_eq(&model, &reused_model));
+}
+
+#[test]
+fn session_viewport_content_memo_key_tracks_scroll_and_height() {
+    let base = build_session_viewport_content_memo_key(42, 10, 20);
+    assert_eq!(base, build_session_viewport_content_memo_key(42, 10, 20));
+    assert_ne!(base, build_session_viewport_content_memo_key(42, 11, 20));
+    assert_ne!(base, build_session_viewport_content_memo_key(42, 10, 21));
+    assert_ne!(base, build_session_viewport_content_memo_key(43, 10, 20));
+}
+
+#[test]
+fn message_render_output_clone_shares_line_storage() {
+    let output = super::MessageRenderOutput::new(vec![ratatui::text::Line::from("hello")]);
+    let cloned = output.clone();
+    assert!(Arc::ptr_eq(&output.lines, &cloned.lines));
+}
+
+#[test]
+fn scroll_only_reuses_render_model_and_skips_message_rebuilds() {
+    let (_context, _session_id, snapshot) = perf_snapshot_with_messages();
+    let area = Rect::new(0, 0, 72, 10);
+    let first = render_perf_session_messages(
+        area,
+        &snapshot,
+        &SessionMessageViewportState::default(),
+        &SessionReasoningState::default(),
+        &SessionMessageOutputCache::default(),
+        &SessionRenderModelCache::default(),
+    );
+
+    let mut scrolled_viewport = first.viewport.clone();
+    scrolled_viewport.scroll_offset = scrolled_viewport.scroll_offset.saturating_sub(6);
+    reset_session_render_perf_counters();
+    let second = render_perf_session_messages(
+        area,
+        &snapshot,
+        &scrolled_viewport,
+        &first.reasoning,
+        &first.message_cache,
+        &first.render_model_cache,
+    );
+    let counters = snapshot_session_render_perf_counters();
+
+    assert_eq!(counters.render_model_cache_hits, 1);
+    assert_eq!(counters.render_model_rebuilds, 0);
+    assert_eq!(counters.message_cache_hits, 0);
+    assert_eq!(counters.message_cache_misses, 0);
+    assert_eq!(counters.visible_range_recomputes, 1);
+    assert!(counters.visible_lines_written > 0);
+    assert_eq!(
+        second.render_model_cache.memo_key,
+        first.render_model_cache.memo_key
+    );
+    assert_eq!(
+        second.viewport.render_model_memo_key,
+        first.viewport.render_model_memo_key
+    );
+}
+
+#[test]
+fn reasoning_toggle_rebuilds_only_affected_message_output() {
+    let (_context, _session_id, snapshot) = perf_snapshot_with_messages();
+    let area = Rect::new(0, 0, 72, 10);
+    let first = render_perf_session_messages(
+        area,
+        &snapshot,
+        &SessionMessageViewportState::default(),
+        &SessionReasoningState::default(),
+        &SessionMessageOutputCache::default(),
+        &SessionRenderModelCache::default(),
+    );
+
+    let reasoning_id = first
+        .reasoning
+        .toggle_hits
+        .first()
+        .map(|hit| hit.reasoning_id.clone())
+        .expect("collapsed reasoning toggle should be present");
+    let mut expanded_reasoning = first.reasoning.clone();
+    expanded_reasoning.expanded.insert(reasoning_id.clone());
+    reset_session_render_perf_counters();
+    let second = render_perf_session_messages(
+        area,
+        &snapshot,
+        &first.viewport,
+        &expanded_reasoning,
+        &first.message_cache,
+        &first.render_model_cache,
+    );
+    let counters = snapshot_session_render_perf_counters();
+
+    assert_eq!(counters.render_model_cache_hits, 0);
+    assert_eq!(counters.render_model_rebuilds, 1);
+    assert_eq!(counters.message_cache_hits, 5);
+    assert_eq!(counters.message_cache_misses, 1);
+    assert_eq!(counters.visible_range_recomputes, 1);
+    assert!(counters.visible_lines_written > 0);
+    assert!(second
+        .reasoning
+        .toggle_hits
+        .iter()
+        .any(|hit| hit.reasoning_id == reasoning_id));
+    assert!(
+        second.viewport.rendered_line_count > first.viewport.rendered_line_count,
+        "expanded reasoning should increase rendered line count"
+    );
+}
+
+#[test]
+fn scroll_to_message_uses_compact_message_first_line_index() {
+    let (context, session_id, snapshot) = perf_snapshot_with_messages();
+    let view = SessionView::new(session_id);
+    let output = render_perf_session_messages(
+        Rect::new(0, 0, 72, 10),
+        &snapshot,
+        &SessionMessageViewportState::default(),
+        &SessionReasoningState::default(),
+        &SessionMessageOutputCache::default(),
+        &SessionRenderModelCache::default(),
+    );
+    {
+        let mut state = view.state.lock();
+        state.viewport = output.viewport.clone();
+    }
+
+    let expected_scroll_offset = output
+        .viewport
+        .message_first_lines
+        .get("assistant-2")
+        .copied()
+        .expect("message first line should be indexed after render")
+        .min(
+            output
+                .viewport
+                .rendered_line_count
+                .saturating_sub(output.viewport.messages_viewport_height),
+        );
+
+    view.scroll_to_message(&context, "assistant-2");
+
+    let state = view.state.lock();
+    assert_eq!(state.viewport.scroll_offset, expected_scroll_offset);
+}

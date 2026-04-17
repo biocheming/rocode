@@ -1,11 +1,12 @@
 use ratatui::{
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState},
-    Frame,
 };
 
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 
 #[derive(Clone, Debug)]
 pub struct RecoveryActionItem {
@@ -75,13 +76,13 @@ impl RecoveryActionDialog {
             .map(|item| item.key.clone())
     }
 
-    pub fn render(&mut self, frame: &mut Frame, theme: &Theme) {
+    pub fn render<S: RenderSurface>(&mut self, surface: &mut S, area: Rect, theme: &Theme) {
         if !self.open {
             return;
         }
 
-        let area = super::centered_rect(72, 18, frame.size());
-        frame.render_widget(Clear, area);
+        let area = super::centered_rect(72, 18, area);
+        surface.render_widget(Clear, area);
 
         let items = self
             .items
@@ -115,12 +116,43 @@ impl RecoveryActionDialog {
             )
             .highlight_symbol("> ");
 
-        frame.render_stateful_widget(list, area, &mut self.state);
+        surface.render_stateful_widget(list, area, &mut self.state);
     }
 }
 
 impl Default for RecoveryActionDialog {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    use crate::ui::BufferSurface;
+
+    #[test]
+    fn recovery_action_dialog_renders_to_buffer_surface() {
+        let mut dialog = RecoveryActionDialog::new();
+        dialog.open(vec![RecoveryActionItem {
+            key: "resume".to_string(),
+            label: "Resume".to_string(),
+            description: "Continue the interrupted execution".to_string(),
+        }]);
+
+        let area = Rect::new(0, 0, 120, 32);
+        let mut buffer = Buffer::empty(area);
+        let mut surface = BufferSurface::new(&mut buffer);
+
+        dialog.render(&mut surface, area, &Theme::dark());
+
+        let rendered = buffer
+            .content
+            .iter()
+            .filter(|cell| !cell.symbol().trim().is_empty())
+            .count();
+        assert!(rendered > 0);
     }
 }

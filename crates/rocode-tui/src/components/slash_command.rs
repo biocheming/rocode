@@ -3,13 +3,13 @@ use ratatui::{
     style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState},
-    Frame,
 };
 
 use rocode_command::{CommandRegistry, UiActionId};
 
 use crate::command::fuzzy_match;
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 
 pub struct SlashCommandPopup {
     pub registry: CommandRegistry,
@@ -133,7 +133,7 @@ impl SlashCommandPopup {
         }
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect, theme: &Theme) {
         if !self.open || self.filtered.is_empty() {
             return;
         }
@@ -192,12 +192,39 @@ impl SlashCommandPopup {
             )
             .highlight_style(Style::default().fg(theme.primary));
 
-        frame.render_widget(list, popup_area);
+        surface.render_widget(list, popup_area);
     }
 }
 
 impl Default for SlashCommandPopup {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    use crate::ui::BufferSurface;
+
+    #[test]
+    fn slash_popup_renders_to_buffer_surface() {
+        let mut popup = SlashCommandPopup::new();
+        popup.open();
+
+        let area = Rect::new(0, 10, 100, 20);
+        let mut buffer = Buffer::empty(area);
+        let mut surface = BufferSurface::new(&mut buffer);
+
+        popup.render(&mut surface, area, &Theme::dark());
+
+        let rendered = buffer
+            .content
+            .iter()
+            .filter(|cell| !cell.symbol().trim().is_empty())
+            .count();
+        assert!(rendered > 0);
     }
 }

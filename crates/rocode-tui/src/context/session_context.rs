@@ -268,6 +268,10 @@ impl SessionContext {
         self.current_session_id = Some(id);
     }
 
+    pub fn clear_current_session_id(&mut self) {
+        self.current_session_id = None;
+    }
+
     pub fn set_messages(&mut self, session_id: &str, messages: Vec<Message>) {
         let mut index = HashMap::with_capacity(messages.len());
         for (pos, message) in messages.iter().enumerate() {

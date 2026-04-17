@@ -3,10 +3,10 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState},
-    Frame,
 };
 
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 
 #[derive(Clone, Debug)]
 pub struct ToolCallItem {
@@ -87,13 +87,13 @@ impl ToolCallCancelDialog {
             .map(|item| item.id.clone())
     }
 
-    pub fn render(&mut self, frame: &mut Frame, theme: &Theme) {
+    pub fn render<S: RenderSurface>(&mut self, surface: &mut S, area: Rect, theme: &Theme) {
         if !self.open {
             return;
         }
 
-        let area = centered_rect(60, 50, frame.size());
-        frame.render_widget(Clear, area);
+        let area = centered_rect(60, 50, area);
+        surface.render_widget(Clear, area);
 
         let title = Block::default()
             .borders(Borders::ALL)
@@ -125,7 +125,7 @@ impl ToolCallCancelDialog {
             )
             .highlight_symbol("> ");
 
-        frame.render_stateful_widget(list, area, &mut self.state);
+        surface.render_stateful_widget(list, area, &mut self.state);
     }
 }
 
@@ -153,4 +153,39 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::BufferSurface;
+    use ratatui::buffer::Buffer;
+
+    #[test]
+    fn tool_call_cancel_dialog_renders_to_buffer_surface() {
+        let mut dialog = ToolCallCancelDialog::new();
+        dialog.open(vec![
+            ToolCallItem {
+                id: "tool-call-12345678".to_string(),
+                tool_name: "exec_command".to_string(),
+            },
+            ToolCallItem {
+                id: "tool-call-abcdef12".to_string(),
+                tool_name: "apply_patch".to_string(),
+            },
+        ]);
+
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buffer = Buffer::empty(area);
+        let mut surface = BufferSurface::new(&mut buffer);
+
+        dialog.render(&mut surface, area, &Theme::dark());
+
+        let rendered = buffer
+            .content
+            .iter()
+            .filter(|cell| !cell.symbol().trim().is_empty())
+            .count();
+        assert!(rendered > 0);
+    }
 }

@@ -23,7 +23,7 @@ impl App {
             Err(err) => {
                 self.alert_dialog
                     .set_message(&format!("Failed to read clipboard:\n{}", err));
-                self.alert_dialog.open();
+                self.open_alert_dialog();
             }
         }
     }
@@ -48,7 +48,7 @@ impl App {
         if let Err(err) = Clipboard::write_text(content) {
             self.alert_dialog
                 .set_message(&format!("Failed to write clipboard:\n{}", err));
-            self.alert_dialog.open();
+            self.open_alert_dialog();
         }
     }
 
@@ -60,7 +60,7 @@ impl App {
         if let Err(err) = Clipboard::write_text(content) {
             self.alert_dialog
                 .set_message(&format!("Failed to write clipboard:\n{}", err));
-            self.alert_dialog.open();
+            self.open_alert_dialog();
             return;
         }
         self.prompt.clear();
@@ -155,9 +155,8 @@ impl App {
                 self.set_session_status(&optimistic_session_id, SessionStatus::Running);
                 self.prompt.set_spinner_task_kind(TaskKind::LlmRequest);
                 self.prompt.set_spinner_active(true);
-                // Render immediately so the user sees their message before network I/O.
-                let _ = self.draw();
-                let event_tx = self.event_tx.clone();
+                self.event_caused_change = true;
+                let context = self.context.clone();
                 thread::spawn(move || {
                     let (created_session, response, error) = match client
                         .create_session(None, selected_mode.scheduler_profile.clone())
@@ -176,15 +175,13 @@ impl App {
                         },
                         Err(err) => (None, None, Some(err.to_string())),
                     };
-                    let _ = event_tx.send(Event::Custom(Box::new(
-                        CustomEvent::PromptDispatchHomeFinished {
-                            optimistic_session_id,
-                            optimistic_message_id: opt_id,
-                            created_session: created_session.map(Box::new),
-                            response,
-                            error,
-                        },
-                    )));
+                    let _ = context.emit_custom_event(CustomEvent::PromptDispatchHomeFinished {
+                        optimistic_session_id,
+                        optimistic_message_id: opt_id,
+                        created_session: created_session.map(Box::new),
+                        response,
+                        error,
+                    });
                 });
             }
             Route::Session { session_id } => {
@@ -231,7 +228,8 @@ impl App {
     pub(super) fn enqueue_prompt(&mut self, session_id: &str, queued: QueuedPrompt) {
         let count = {
             let queue = self
-                .pending_prompt_queue
+                .prompt_runtime
+                .pending_queue
                 .entry(session_id.to_string())
                 .or_default();
             queue.push_back(queued);
@@ -275,10 +273,9 @@ impl App {
         self.prompt.set_spinner_task_kind(TaskKind::LlmRequest);
         self.prompt.set_spinner_active(true);
         self.ensure_session_view(session_id);
-        // Render immediately so the user sees their message before network I/O.
-        let _ = self.draw();
+        self.event_caused_change = true;
 
-        let event_tx = self.event_tx.clone();
+        let context = self.context.clone();
         let session_id = session_id.to_string();
         thread::spawn(move || {
             let (response, error) = match client.send_prompt(
@@ -293,14 +290,12 @@ impl App {
                 Ok(response) => (Some(response), None),
                 Err(err) => (None, Some(err.to_string())),
             };
-            let _ = event_tx.send(Event::Custom(Box::new(
-                CustomEvent::PromptDispatchSessionFinished {
-                    session_id,
-                    optimistic_message_id: opt_id,
-                    response,
-                    error,
-                },
-            )));
+            let _ = context.emit_custom_event(CustomEvent::PromptDispatchSessionFinished {
+                session_id,
+                optimistic_message_id: opt_id,
+                response,
+                error,
+            });
         });
     }
 
@@ -310,7 +305,7 @@ impl App {
         }
 
         let queued = {
-            let Some(queue) = self.pending_prompt_queue.get_mut(session_id) else {
+            let Some(queue) = self.prompt_runtime.pending_queue.get_mut(session_id) else {
                 self.context.set_queued_prompts(session_id, 0);
                 return false;
             };
@@ -321,7 +316,7 @@ impl App {
         };
 
         if queued.1 {
-            self.pending_prompt_queue.remove(session_id);
+            self.prompt_runtime.pending_queue.remove(session_id);
         }
 
         if let Some(queued) = queued.0 {
@@ -372,19 +367,17 @@ impl App {
                     session_id: optimistic_session_id.clone(),
                 });
                 self.ensure_session_view(&optimistic_session_id);
-                let _ = self.draw();
+                self.event_caused_change = true;
 
                 let session =
                     match client.create_session(None, selected_mode.scheduler_profile.clone()) {
                         Ok(session) => session,
                         Err(err) => {
                             self.remove_optimistic_session(&optimistic_session_id);
-                            self.context.navigate(Route::Home);
-                            self.active_session_id = None;
-                            self.session_view = None;
+                            self.context.navigate_home();
                             self.alert_dialog
                                 .set_message(&format!("Failed to create session:\n{}", err));
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                             return Ok(());
                         }
                     };
@@ -397,7 +390,7 @@ impl App {
                 if let Err(err) = client.execute_shell(&session.id, command.clone(), None) {
                     self.alert_dialog
                         .set_message(&format!("Failed to execute shell command:\n{}", err));
-                    self.alert_dialog.open();
+                    self.open_alert_dialog();
                     return Ok(());
                 }
 
@@ -413,12 +406,12 @@ impl App {
                     variant.clone(),
                 );
                 self.ensure_session_view(&session_id);
-                let _ = self.draw();
+                self.event_caused_change = true;
                 if let Err(err) = client.execute_shell(&session_id, command.clone(), None) {
                     self.remove_optimistic_message(&session_id, &opt_id);
                     self.alert_dialog
                         .set_message(&format!("Failed to execute shell command:\n{}", err));
-                    self.alert_dialog.open();
+                    self.open_alert_dialog();
                     return Ok(());
                 }
                 self.set_session_status(&session_id, SessionStatus::Idle);

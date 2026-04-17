@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::terminal;
 use rocode_command::ResolvedUiCommand;
 use std::io::{self, Write};
 
@@ -128,7 +129,7 @@ impl App {
             }
             UiActionId::ConnectProvider => {
                 self.populate_provider_dialog();
-                self.provider_dialog.open();
+                self.open_provider_dialog_modal();
                 if let Some(query) = argument {
                     self.provider_dialog.search_query = query.to_string();
                     self.resolve_provider_dialog_search();
@@ -202,10 +203,9 @@ impl App {
                         };
                         match client.delete_session(&session_id) {
                             Ok(_) => {
-                                if self.active_session_id.as_deref() == Some(session_id.as_str()) {
-                                    self.context.navigate(Route::Home);
-                                    self.active_session_id = None;
-                                    self.session_view = None;
+                                if self.current_session_id().as_deref() == Some(session_id.as_str())
+                                {
+                                    self.context.navigate_home();
                                 }
                                 self.refresh_session_list_dialog();
                                 self.toast.show(
@@ -271,9 +271,9 @@ impl App {
     pub(super) fn execute_ui_action(&mut self, action: UiActionId) -> anyhow::Result<()> {
         match action {
             UiActionId::AbortExecution => {
-                if let Some(session_id) = &self.active_session_id {
+                if let Some(session_id) = self.current_session_id() {
                     if let Some(api) = self.context.get_api_client() {
-                        match api.abort_session(session_id) {
+                        match api.abort_session(&session_id) {
                             Err(e) => {
                                 self.toast.show(
                                     ToastVariant::Error,
@@ -310,13 +310,13 @@ impl App {
             UiActionId::CutPrompt => self.cut_prompt_to_clipboard(),
             UiActionId::HistoryPrevious => self.prompt.history_previous_entry(),
             UiActionId::HistoryNext => self.prompt.history_next_entry(),
-            UiActionId::ToggleSidebar => self.context.toggle_sidebar(),
+            UiActionId::ToggleSidebar => self.toggle_session_sidebar(),
             UiActionId::ToggleHeader => self.context.toggle_header(),
             UiActionId::ToggleScrollbar => self.context.toggle_scrollbar(),
             UiActionId::OpenSessionList => {
                 self.refresh_session_list_dialog();
-                self.session_list_dialog
-                    .open(self.active_session_id.as_deref());
+                let current_session_id = self.current_session_id();
+                self.open_session_list_dialog_modal(current_session_id.as_deref());
             }
             UiActionId::NavigateParentSession => {
                 self.navigate_to_parent_session();
@@ -330,11 +330,11 @@ impl App {
             UiActionId::PromptStashPush => {
                 if self.prompt.stash_current() {
                     self.alert_dialog.set_message("Prompt stashed.");
-                    self.alert_dialog.open();
+                    self.open_alert_dialog();
                 } else {
                     self.alert_dialog
                         .set_message("Prompt is empty, nothing to stash.");
-                    self.alert_dialog.open();
+                    self.open_alert_dialog();
                 }
             }
             UiActionId::PromptStashList => {
@@ -346,7 +346,7 @@ impl App {
             UiActionId::OpenThemeList => {
                 self.refresh_theme_list_dialog();
                 let current_theme = self.context.current_theme_name();
-                self.theme_list_dialog.open(&current_theme);
+                self.open_theme_list_dialog_modal(&current_theme);
             }
             UiActionId::CycleVariant => {
                 self.cycle_model_variant();
@@ -359,38 +359,36 @@ impl App {
             }
             UiActionId::ToggleMcp => {
                 let _ = self.refresh_mcp_dialog();
-                self.mcp_dialog.open();
+                self.open_mcp_dialog_modal();
             }
             UiActionId::ToggleTips => {
                 self.context.toggle_tips_hidden();
             }
             UiActionId::OpenModelList => {
                 self.refresh_model_dialog();
-                self.model_select.open();
+                self.open_model_select_dialog();
             }
             UiActionId::OpenModeList => {
                 self.refresh_agent_dialog();
-                self.agent_select.open();
+                self.open_agent_select_dialog();
             }
             UiActionId::OpenAgentList => {
                 self.refresh_agent_dialog();
-                self.agent_select.open();
+                self.open_agent_select_dialog();
             }
             UiActionId::OpenPresetList => {
                 self.refresh_agent_dialog();
-                self.agent_select.open();
+                self.open_agent_select_dialog();
             }
             UiActionId::NewSession => {
-                self.context.navigate(Route::Home);
-                self.active_session_id = None;
-                self.session_view = None;
+                self.context.navigate_home();
             }
             UiActionId::ShowHelp => {
-                self.help_dialog.open();
+                self.open_help_dialog();
             }
             UiActionId::ToggleCommandPalette => {
                 self.sync_command_palette_labels();
-                self.command_palette.open();
+                self.open_command_palette_dialog();
             }
             UiActionId::ToggleTimestamps => {
                 self.context.toggle_timestamps();
@@ -410,7 +408,7 @@ impl App {
             UiActionId::ExternalEditor => {}
             UiActionId::ConnectProvider => {
                 self.populate_provider_dialog();
-                self.provider_dialog.open();
+                self.open_provider_dialog_modal();
             }
             UiActionId::ShareSession => {
                 self.handle_share_session();
@@ -450,7 +448,7 @@ impl App {
             }
             UiActionId::OpenMcpList => {
                 let _ = self.refresh_mcp_dialog();
-                self.mcp_dialog.open();
+                self.open_mcp_dialog_modal();
             }
             UiActionId::Exit => self.state = AppState::Exiting,
             UiActionId::ListTasks => {
@@ -500,7 +498,7 @@ impl App {
             config: Some(capture_voice_config),
         });
 
-        self.terminal = terminal::init()?;
+        terminal::resume()?;
         self.event_caused_change = true;
 
         let capture = match capture {

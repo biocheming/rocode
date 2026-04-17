@@ -179,8 +179,10 @@ pub fn build_tool_body_items(
         return items;
     }
 
-    if let Some(items) = build_display_hint_items(info) {
-        return items;
+    if !prefers_specialized_block_body(&normalized) {
+        if let Some(items) = build_display_hint_items(info) {
+            return items;
+        }
     }
 
     match normalized.as_str() {
@@ -211,6 +213,15 @@ pub fn build_tool_body_items(
         value if is_read_tool(value) => Vec::new(),
         _ => build_generic_result_items(&info.output, show_tool_details),
     }
+}
+
+fn prefers_specialized_block_body(normalized_name: &str) -> bool {
+    matches!(
+        normalized_name,
+        "task" | "todowrite" | "todo_write" | "batch" | "question"
+    ) || is_write_tool(normalized_name)
+        || is_edit_tool(normalized_name)
+        || is_patch_tool(normalized_name)
 }
 
 pub fn build_batch_result_items(
@@ -1550,9 +1561,10 @@ mod tests {
     use super::{
         build_edit_result_items, build_file_items, build_image_items, build_patch_result_items,
         build_task_result_items, build_task_running_items, build_todowrite_result_items,
-        build_write_result_items, parse_write_summary, summarize_block_items_inline,
-        TerminalToolBlockItem,
+        build_tool_body_items, build_write_result_items, parse_write_summary,
+        summarize_block_items_inline, TerminalToolBlockItem,
     };
+    use crate::terminal_presentation::{TerminalToolResultInfo, TerminalToolState};
     use std::collections::HashMap;
 
     #[test]
@@ -1673,6 +1685,77 @@ mod tests {
             item,
             TerminalToolBlockItem::Markdown { content }
                 if content.contains("## Summary") && content.contains("Done.")
+        )));
+    }
+
+    #[test]
+    fn build_tool_body_items_prefers_task_renderer_over_display_hints() {
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "display.summary".to_string(),
+            serde_json::json!("Delegated inspect task via session child-1"),
+        );
+        metadata.insert("hasTextOutput".to_string(), serde_json::json!(true));
+        let result = TerminalToolResultInfo {
+            output: "task_id: child-1\ntask_status: completed\n<task_result>\n## Summary\nDone.\n</task_result>"
+                .to_string(),
+            is_error: false,
+            title: Some("Completed Task child-1".to_string()),
+            metadata: Some(metadata),
+        };
+
+        let items = build_tool_body_items(
+            "task",
+            r###"{"category":"analysis","description":"Inspect migration status"}"###,
+            TerminalToolState::Completed,
+            Some(&result),
+            false,
+        );
+
+        assert!(items.iter().any(|item| matches!(
+            item,
+            TerminalToolBlockItem::Line(line) if line.text == "Task ID: child-1"
+        )));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            TerminalToolBlockItem::Markdown { content } if content.contains("## Summary")
+        )));
+    }
+
+    #[test]
+    fn build_tool_body_items_prefers_question_renderer_over_display_hints() {
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "display.summary".to_string(),
+            serde_json::json!("1 question answered"),
+        );
+        metadata.insert(
+            "display.fields".to_string(),
+            serde_json::json!([{ "key": "Scope", "value": "Proceed" }]),
+        );
+        let result = TerminalToolResultInfo {
+            output: r#"{"answers":["Proceed"]}"#.to_string(),
+            is_error: false,
+            title: Some("User response received".to_string()),
+            metadata: Some(metadata),
+        };
+
+        let items = build_tool_body_items(
+            "question",
+            r#"{"questions":[{"question":"Choose rollout scope","options":[{"label":"Proceed"}]}]}"#,
+            TerminalToolState::Completed,
+            Some(&result),
+            true,
+        );
+
+        assert!(items.iter().any(|item| matches!(
+            item,
+            TerminalToolBlockItem::Line(line)
+                if line.text.contains("Q: Choose rollout scope")
+        )));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            TerminalToolBlockItem::Line(line) if line.text.contains("A: Proceed")
         )));
     }
 

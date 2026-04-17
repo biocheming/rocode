@@ -3,10 +3,10 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
-    Frame,
 };
 
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 
 pub struct HelpDialog {
     open: bool,
@@ -29,13 +29,13 @@ impl HelpDialog {
         self.open
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect, theme: &Theme) {
         if !self.open {
             return;
         }
 
         let dialog_area = centered_rect(74, 20, area);
-        frame.render_widget(Clear, dialog_area);
+        surface.render_widget(Clear, dialog_area);
 
         let block = Block::default()
             .title(Span::styled(
@@ -48,7 +48,7 @@ impl HelpDialog {
             .border_style(Style::default().fg(theme.border))
             .style(Style::default().bg(theme.background_panel));
         let inner = super::dialog_inner(block.inner(dialog_area));
-        frame.render_widget(block, dialog_area);
+        surface.render_widget(block, dialog_area);
 
         let layout = Layout::default()
             .direction(Direction::Vertical)
@@ -97,11 +97,11 @@ impl HelpDialog {
             Line::from("  Use command palette -> Toggle appearance to switch dark/light"),
         ];
 
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(lines).style(Style::default().fg(theme.text)),
             layout[0],
         );
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled("Esc", Style::default().fg(theme.primary)),
                 Span::styled(" close", Style::default().fg(theme.text_muted)),
@@ -119,4 +119,30 @@ impl Default for HelpDialog {
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     super::centered_rect(width, height, area)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::BufferSurface;
+    use ratatui::buffer::Buffer;
+
+    #[test]
+    fn help_dialog_renders_to_buffer_surface() {
+        let mut dialog = HelpDialog::new();
+        dialog.open();
+
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buffer = Buffer::empty(area);
+        let mut surface = BufferSurface::new(&mut buffer);
+
+        dialog.render(&mut surface, area, &Theme::dark());
+
+        let rendered = buffer
+            .content
+            .iter()
+            .filter(|cell| !cell.symbol().trim().is_empty())
+            .count();
+        assert!(rendered > 0);
+    }
 }

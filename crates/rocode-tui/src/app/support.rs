@@ -272,7 +272,7 @@ pub(super) fn resolve_command_execution_mode(
 }
 
 pub(super) fn selected_execution_mode(context: &Arc<AppContext>) -> SelectedExecutionMode {
-    let scheduler_profile = context.current_scheduler_profile.read().clone();
+    let scheduler_profile = context.current_scheduler_profile();
     if let Some(profile) = scheduler_profile
         .as_deref()
         .map(str::trim)
@@ -285,7 +285,7 @@ pub(super) fn selected_execution_mode(context: &Arc<AppContext>) -> SelectedExec
         };
     }
 
-    let agent = context.current_agent.read().clone();
+    let agent = context.current_agent();
     if agent.trim().is_empty() {
         return SelectedExecutionMode::default();
     }

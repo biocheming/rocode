@@ -3,7 +3,6 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
-    Frame,
 };
 use rocode_skill::{
     extract_methodology_template_from_markdown, render_methodology_skill_body,
@@ -16,7 +15,7 @@ use crate::api::{
     SkillHubPolicy, SkillManagedLifecycleRecord, SkillRemoteInstallPlan, SkillSourceIndexSnapshot,
     SkillSyncPlan,
 };
-use crate::theme::Theme;
+use crate::{theme::Theme, ui::RenderSurface};
 
 #[derive(Clone, Debug, Default)]
 struct TextEditorState {
@@ -1209,27 +1208,27 @@ impl SkillListDialog {
         self.detail_scroll = 0;
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect, theme: &Theme) {
         if !self.open {
             return;
         }
 
         match &self.mode {
-            SkillListMode::Browse => self.render_browse(frame, area, theme),
-            SkillListMode::Create(draft) => self.render_create(frame, area, theme, draft),
-            SkillListMode::Edit(draft) => self.render_edit(frame, area, theme, draft),
+            SkillListMode::Browse => self.render_browse(surface, area, theme),
+            SkillListMode::Create(draft) => self.render_create(surface, area, theme, draft),
+            SkillListMode::Edit(draft) => self.render_edit(surface, area, theme, draft),
             SkillListMode::ConfirmDelete { name } => {
-                self.render_delete_confirm(frame, area, theme, name)
+                self.render_delete_confirm(surface, area, theme, name)
             }
         }
     }
 
-    fn render_browse(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    fn render_browse<S: RenderSurface>(&self, surface: &mut S, area: Rect, theme: &Theme) {
         let total_count = self.skills.len();
         let matched_count = self.filtered.len();
         let title = format!(" Skills ({}/{}) ", matched_count, total_count);
         let dialog_area = centered_rect(88, 22, area);
-        frame.render_widget(Clear, dialog_area);
+        surface.render_widget(Clear, dialog_area);
 
         let block = Block::default()
             .title(Span::styled(
@@ -1242,7 +1241,7 @@ impl SkillListDialog {
             .border_style(Style::default().fg(theme.border))
             .style(Style::default().bg(theme.background_panel));
         let inner = super::dialog_inner(block.inner(dialog_area));
-        frame.render_widget(block, dialog_area);
+        surface.render_widget(block, dialog_area);
 
         let layout = Layout::default()
             .direction(Direction::Vertical)
@@ -1253,7 +1252,7 @@ impl SkillListDialog {
             ])
             .split(inner);
 
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled("> ", Style::default().fg(theme.primary)),
                 Span::styled(&self.query, Style::default().fg(theme.text)),
@@ -1327,7 +1326,7 @@ impl SkillListDialog {
                 .collect::<Vec<_>>()
         };
 
-        frame.render_stateful_widget(
+        surface.render_stateful_widget(
             List::new(items).highlight_style(
                 Style::default()
                     .bg(theme.background_element)
@@ -1352,7 +1351,7 @@ impl SkillListDialog {
             .border_style(Style::default().fg(theme.border))
             .style(Style::default().bg(theme.background_panel));
         let preview_inner = super::dialog_inner(preview_block.inner(content_layout[1]));
-        frame.render_widget(preview_block, content_layout[1]);
+        surface.render_widget(preview_block, content_layout[1]);
 
         let preview_lines = match self.browse_pane {
             SkillBrowsePane::Preview => {
@@ -1413,7 +1412,7 @@ impl SkillListDialog {
             SkillBrowsePane::Timeline => self.timeline_lines(theme),
         };
 
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(preview_lines)
                 .wrap(Wrap { trim: false })
                 .scroll((self.detail_scroll, 0))
@@ -1425,21 +1424,21 @@ impl SkillListDialog {
             "Enter insert /skill  c create  e edit  d delete  g guard-skill  G guard-source  i cycle-source  x refresh-index  p plan-sync  a apply-sync  u/U install plan/apply  v/V update plan/apply  D detach  R remove  r refresh-hub  t preview/timeline  PgUp/PgDn scroll  Esc close  Matched: {}/{}",
             matched_count, total_count
         );
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(footer).style(Style::default().fg(theme.text_muted)),
             layout[2],
         );
     }
 
-    fn render_create(
+    fn render_create<S: RenderSurface>(
         &self,
-        frame: &mut Frame,
+        surface: &mut S,
         area: Rect,
         theme: &Theme,
         draft: &SkillCreateDraft,
     ) {
         let dialog_area = centered_rect(94, 28, area);
-        frame.render_widget(Clear, dialog_area);
+        surface.render_widget(Clear, dialog_area);
 
         let block = Block::default()
             .title(Span::styled(
@@ -1452,7 +1451,7 @@ impl SkillListDialog {
             .border_style(Style::default().fg(theme.border))
             .style(Style::default().bg(theme.background_panel));
         let inner = super::dialog_inner(block.inner(dialog_area));
-        frame.render_widget(block, dialog_area);
+        surface.render_widget(block, dialog_area);
 
         let layout = Layout::default()
             .direction(Direction::Vertical)
@@ -1467,7 +1466,7 @@ impl SkillListDialog {
             .split(inner);
 
         render_field_line(
-            frame,
+            surface,
             layout[0],
             theme,
             "Name",
@@ -1475,7 +1474,7 @@ impl SkillListDialog {
             matches!(draft.active_field, SkillCreateField::Name),
         );
         render_field_line(
-            frame,
+            surface,
             layout[1],
             theme,
             "Description",
@@ -1483,7 +1482,7 @@ impl SkillListDialog {
             matches!(draft.active_field, SkillCreateField::Description),
         );
         render_field_line(
-            frame,
+            surface,
             layout[2],
             theme,
             "Category",
@@ -1491,7 +1490,7 @@ impl SkillListDialog {
             matches!(draft.active_field, SkillCreateField::Category),
         );
         render_field_line(
-            frame,
+            surface,
             layout[3],
             theme,
             "Editor",
@@ -1501,7 +1500,7 @@ impl SkillListDialog {
 
         let body_inner = match draft.editor_mode {
             SkillManageEditorMode::Raw => Some(self.render_raw_skill_editor(
-                frame,
+                surface,
                 layout[4],
                 theme,
                 "Body",
@@ -1511,7 +1510,7 @@ impl SkillListDialog {
             )),
             SkillManageEditorMode::Methodology => {
                 self.render_methodology_editor(
-                    frame,
+                    surface,
                     layout[4],
                     theme,
                     draft.name.trim(),
@@ -1533,15 +1532,20 @@ impl SkillListDialog {
                 Style::default().fg(theme.text_muted),
             )),
         ];
-        frame.render_widget(Paragraph::new(footer), layout[5]);
+        surface.render_widget(Paragraph::new(footer), layout[5]);
 
         match draft.active_field {
             SkillCreateField::Name => {
-                set_line_cursor(frame, layout[0], "Name", draft.name.chars().count() as u16);
+                set_line_cursor(
+                    surface,
+                    layout[0],
+                    "Name",
+                    draft.name.chars().count() as u16,
+                );
             }
             SkillCreateField::Description => {
                 set_line_cursor(
-                    frame,
+                    surface,
                     layout[1],
                     "Description",
                     draft.description.chars().count() as u16,
@@ -1549,7 +1553,7 @@ impl SkillListDialog {
             }
             SkillCreateField::Category => {
                 set_line_cursor(
-                    frame,
+                    surface,
                     layout[2],
                     "Category",
                     draft.category.chars().count() as u16,
@@ -1565,19 +1569,25 @@ impl SkillListDialog {
                     .saturating_add(row.saturating_sub(draft.body.scroll));
                 let cursor_x = body_inner.x.saturating_add(col);
                 if cursor_y < body_inner.y.saturating_add(body_inner.height) {
-                    frame.set_cursor(cursor_x, cursor_y);
+                    surface.set_cursor_position(cursor_x, cursor_y);
                 }
             }
             SkillCreateField::MethodologyEditor => {
-                self.set_methodology_editor_cursor(frame, &draft.methodology, layout[4]);
+                self.set_methodology_editor_cursor(surface, &draft.methodology, layout[4]);
             }
             SkillCreateField::EditorMode | SkillCreateField::MethodologySection => {}
         }
     }
 
-    fn render_edit(&self, frame: &mut Frame, area: Rect, theme: &Theme, draft: &SkillEditDraft) {
+    fn render_edit<S: RenderSurface>(
+        &self,
+        surface: &mut S,
+        area: Rect,
+        theme: &Theme,
+        draft: &SkillEditDraft,
+    ) {
         let dialog_area = centered_rect(94, 28, area);
-        frame.render_widget(Clear, dialog_area);
+        surface.render_widget(Clear, dialog_area);
 
         let block = Block::default()
             .title(Span::styled(
@@ -1590,7 +1600,7 @@ impl SkillListDialog {
             .border_style(Style::default().fg(theme.border))
             .style(Style::default().bg(theme.background_panel));
         let inner = super::dialog_inner(block.inner(dialog_area));
-        frame.render_widget(block, dialog_area);
+        surface.render_widget(block, dialog_area);
 
         let layout = Layout::default()
             .direction(Direction::Vertical)
@@ -1604,7 +1614,7 @@ impl SkillListDialog {
             .split(inner);
 
         render_field_line(
-            frame,
+            surface,
             layout[0],
             theme,
             "Description",
@@ -1612,7 +1622,7 @@ impl SkillListDialog {
             matches!(draft.active_field, SkillEditField::Description),
         );
         render_field_line(
-            frame,
+            surface,
             layout[1],
             theme,
             "Editor",
@@ -1622,7 +1632,7 @@ impl SkillListDialog {
 
         let editor_inner = match draft.editor_mode {
             SkillManageEditorMode::Raw => Some(self.render_raw_skill_editor(
-                frame,
+                surface,
                 layout[3],
                 theme,
                 "Source",
@@ -1632,7 +1642,7 @@ impl SkillListDialog {
             )),
             SkillManageEditorMode::Methodology => {
                 self.render_methodology_editor(
-                    frame,
+                    surface,
                     layout[3],
                     theme,
                     draft.name.trim(),
@@ -1644,7 +1654,7 @@ impl SkillListDialog {
             }
         };
 
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(vec![
                 Line::from(Span::styled(
                     format!(
@@ -1669,7 +1679,7 @@ impl SkillListDialog {
             layout[2],
         );
 
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new("Saving uses POST /skill/manage action=edit for raw mode, or action=patch with methodology for structured mode.")
                 .style(Style::default().fg(theme.text_muted)),
             layout[4],
@@ -1678,7 +1688,7 @@ impl SkillListDialog {
         match draft.active_field {
             SkillEditField::Description => {
                 set_line_cursor(
-                    frame,
+                    surface,
                     layout[0],
                     "Description",
                     draft.description.chars().count() as u16,
@@ -1694,19 +1704,19 @@ impl SkillListDialog {
                     .saturating_add(row.saturating_sub(draft.source.scroll));
                 let cursor_x = editor_inner.x.saturating_add(col);
                 if cursor_y < editor_inner.y.saturating_add(editor_inner.height) {
-                    frame.set_cursor(cursor_x, cursor_y);
+                    surface.set_cursor_position(cursor_x, cursor_y);
                 }
             }
             SkillEditField::MethodologyEditor => {
-                self.set_methodology_editor_cursor(frame, &draft.methodology, layout[3]);
+                self.set_methodology_editor_cursor(surface, &draft.methodology, layout[3]);
             }
             SkillEditField::EditorMode | SkillEditField::MethodologySection => {}
         }
     }
 
-    fn render_raw_skill_editor(
+    fn render_raw_skill_editor<S: RenderSurface>(
         &self,
-        frame: &mut Frame,
+        surface: &mut S,
         area: Rect,
         theme: &Theme,
         title: &str,
@@ -1723,8 +1733,8 @@ impl SkillListDialog {
             .border_style(field_block_style(theme, active))
             .style(Style::default().bg(theme.background_panel));
         let editor_inner = super::dialog_inner(editor_block.inner(area));
-        frame.render_widget(editor_block, area);
-        frame.render_widget(
+        surface.render_widget(editor_block, area);
+        surface.render_widget(
             Paragraph::new(if editor.text.is_empty() {
                 vec![Line::from(Span::styled(
                     placeholder,
@@ -1749,9 +1759,9 @@ impl SkillListDialog {
         editor_inner
     }
 
-    fn render_methodology_editor(
+    fn render_methodology_editor<S: RenderSurface>(
         &self,
-        frame: &mut Frame,
+        surface: &mut S,
         area: Rect,
         theme: &Theme,
         skill_name: &str,
@@ -1777,7 +1787,7 @@ impl SkillListDialog {
             .border_style(field_block_style(theme, section_active))
             .style(Style::default().bg(theme.background_panel));
         let selector_inner = super::dialog_inner(selector_block.inner(columns[0]));
-        frame.render_widget(selector_block, columns[0]);
+        surface.render_widget(selector_block, columns[0]);
         let selector_items = SkillMethodologySection::ALL
             .iter()
             .map(|section| {
@@ -1797,7 +1807,7 @@ impl SkillListDialog {
                 ]))
             })
             .collect::<Vec<_>>();
-        frame.render_widget(List::new(selector_items), selector_inner);
+        surface.render_widget(List::new(selector_items), selector_inner);
 
         let editor_block = Block::default()
             .title(Span::styled(
@@ -1808,9 +1818,9 @@ impl SkillListDialog {
             .border_style(field_block_style(theme, editor_active))
             .style(Style::default().bg(theme.background_panel));
         let editor_inner = super::dialog_inner(editor_block.inner(columns[1]));
-        frame.render_widget(editor_block, columns[1]);
+        surface.render_widget(editor_block, columns[1]);
         let selected_editor = draft.selected_editor();
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(if selected_editor.text.is_empty() {
                 vec![Line::from(Span::styled(
                     draft.selected_section.hint(),
@@ -1844,7 +1854,7 @@ impl SkillListDialog {
             .border_style(Style::default().fg(theme.border))
             .style(Style::default().bg(theme.background_panel));
         let preview_inner = super::dialog_inner(preview_block.inner(columns[2]));
-        frame.render_widget(preview_block, columns[2]);
+        surface.render_widget(preview_block, columns[2]);
         let preview_name = if skill_name.trim().is_empty() {
             "draft-skill"
         } else {
@@ -1871,7 +1881,7 @@ impl SkillListDialog {
                 Line::from(Span::styled(error, Style::default().fg(theme.text_muted))),
             ],
         };
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(preview_lines)
                 .wrap(Wrap { trim: false })
                 .style(Style::default().bg(theme.background_panel)),
@@ -1879,9 +1889,9 @@ impl SkillListDialog {
         );
     }
 
-    fn set_methodology_editor_cursor(
+    fn set_methodology_editor_cursor<S: RenderSurface>(
         &self,
-        frame: &mut Frame,
+        surface: &mut S,
         draft: &SkillMethodologyDraft,
         area: Rect,
     ) {
@@ -1902,13 +1912,19 @@ impl SkillListDialog {
             .saturating_add(row.saturating_sub(selected_editor.scroll));
         let cursor_x = editor_inner.x.saturating_add(col);
         if cursor_y < editor_inner.y.saturating_add(editor_inner.height) {
-            frame.set_cursor(cursor_x, cursor_y);
+            surface.set_cursor_position(cursor_x, cursor_y);
         }
     }
 
-    fn render_delete_confirm(&self, frame: &mut Frame, area: Rect, theme: &Theme, name: &str) {
+    fn render_delete_confirm<S: RenderSurface>(
+        &self,
+        surface: &mut S,
+        area: Rect,
+        theme: &Theme,
+        name: &str,
+    ) {
         let dialog_area = centered_rect(64, 8, area);
-        frame.render_widget(Clear, dialog_area);
+        surface.render_widget(Clear, dialog_area);
 
         let block = Block::default()
             .title(Span::styled(
@@ -1921,14 +1937,14 @@ impl SkillListDialog {
             .border_style(Style::default().fg(theme.warning))
             .style(Style::default().bg(theme.background_panel));
         let inner = super::dialog_inner(block.inner(dialog_area));
-        frame.render_widget(block, dialog_area);
+        surface.render_widget(block, dialog_area);
 
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(1), Constraint::Length(1)])
             .split(inner);
 
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(vec![
                 Line::from(Span::styled(
                     format!("Delete workspace skill `{}`?", name),
@@ -1942,7 +1958,7 @@ impl SkillListDialog {
             ]),
             layout[0],
         );
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new("Enter confirm  Esc cancel")
                 .style(Style::default().fg(theme.text_muted)),
             layout[1],
@@ -2414,8 +2430,8 @@ impl Default for SkillListDialog {
     }
 }
 
-fn render_field_line(
-    frame: &mut Frame,
+fn render_field_line<S: RenderSurface>(
+    surface: &mut S,
     area: Rect,
     theme: &Theme,
     label: &str,
@@ -2431,8 +2447,8 @@ fn render_field_line(
         .border_style(field_block_style(theme, active))
         .style(Style::default().bg(theme.background_panel));
     let inner = super::dialog_inner(block.inner(area));
-    frame.render_widget(block, area);
-    frame.render_widget(
+    surface.render_widget(block, area);
+    surface.render_widget(
         Paragraph::new(if value.is_empty() {
             Line::from(Span::styled(" ", Style::default().fg(theme.text_muted)))
         } else {
@@ -2545,10 +2561,10 @@ fn format_bytes(value: u64) -> String {
     }
 }
 
-fn set_line_cursor(frame: &mut Frame, area: Rect, label: &str, value_width: u16) {
+fn set_line_cursor<S: RenderSurface>(surface: &mut S, area: Rect, label: &str, value_width: u16) {
     let x = area.x.saturating_add(label.len() as u16).saturating_add(4);
     let y = area.y.saturating_add(1);
-    frame.set_cursor(x.saturating_add(value_width), y);
+    surface.set_cursor_position(x.saturating_add(value_width), y);
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
@@ -2589,4 +2605,39 @@ fn line_end(input: &str, cursor_position: usize) -> usize {
         .find('\n')
         .map(|idx| cursor_position + idx)
         .unwrap_or(input.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    use crate::ui::BufferSurface;
+
+    #[test]
+    fn skill_list_dialog_renders_to_buffer_surface() {
+        let mut dialog = SkillListDialog::new();
+        dialog.set_skills(vec![SkillCatalogEntry {
+            name: "review".to_string(),
+            description: "Review the current implementation".to_string(),
+            location: "/tmp/review/SKILL.md".to_string(),
+            category: Some("analysis".to_string()),
+            supporting_files: vec!["references/checklist.md".to_string()],
+            writable: true,
+        }]);
+        dialog.open();
+
+        let area = Rect::new(0, 0, 120, 36);
+        let mut buffer = Buffer::empty(area);
+        let mut surface = BufferSurface::new(&mut buffer);
+
+        dialog.render(&mut surface, area, &Theme::dark());
+
+        let rendered = buffer
+            .content
+            .iter()
+            .filter(|cell| !cell.symbol().trim().is_empty())
+            .count();
+        assert!(rendered > 0);
+    }
 }

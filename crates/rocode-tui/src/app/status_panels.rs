@@ -2,15 +2,17 @@ use super::*;
 
 impl App {
     pub(super) fn open_overview_status_dialog(&mut self) {
-        self.status_dialog_view = StatusDialogView::Overview;
+        self.context
+            .set_status_dialog_view(StatusDialogView::Overview);
         self.refresh_active_status_dialog();
-        self.status_dialog.open();
+        self.open_status_dialog_modal();
     }
 
     pub(super) fn open_runtime_status_dialog(&mut self) -> bool {
         if self.render_runtime_status_dialog() {
-            self.status_dialog_view = StatusDialogView::Runtime;
-            self.status_dialog.open();
+            self.context
+                .set_status_dialog_view(StatusDialogView::Runtime);
+            self.open_status_dialog_modal();
             true
         } else {
             false
@@ -19,8 +21,8 @@ impl App {
 
     pub(super) fn open_usage_status_dialog(&mut self) -> bool {
         if self.render_usage_status_dialog() {
-            self.status_dialog_view = StatusDialogView::Usage;
-            self.status_dialog.open();
+            self.context.set_status_dialog_view(StatusDialogView::Usage);
+            self.open_status_dialog_modal();
             true
         } else {
             false
@@ -29,8 +31,9 @@ impl App {
 
     pub(super) fn open_insights_status_dialog(&mut self) -> bool {
         if self.render_insights_status_dialog() {
-            self.status_dialog_view = StatusDialogView::Insights;
-            self.status_dialog.open();
+            self.context
+                .set_status_dialog_view(StatusDialogView::Insights);
+            self.open_status_dialog_modal();
             true
         } else {
             false
@@ -53,7 +56,7 @@ impl App {
         };
 
         let command = rocode_command::interactive::parse_events_browser_command(raw_filter);
-        let remembered = match &self.status_dialog_view {
+        let remembered = match self.context.status_dialog_view() {
             StatusDialogView::Events(state) if state.session_id == session_id => {
                 Some(state.clone())
             }
@@ -186,11 +189,12 @@ impl App {
                     " · page <n> · clear"
                 )));
 
-                self.status_dialog_view = StatusDialogView::Events(TuiEventsBrowserState {
-                    session_id,
-                    filter,
-                    offset,
-                });
+                self.context
+                    .set_status_dialog_view(StatusDialogView::Events(TuiEventsBrowserState {
+                        session_id,
+                        filter,
+                        offset,
+                    }));
                 self.status_dialog.set_title("Events");
                 self.status_dialog.set_footer_hint(Some(
                     "Esc close · ←/p prev · →/n next · Home/0 first · c clear".to_string(),
@@ -236,15 +240,17 @@ impl App {
         match response {
             Ok(response) => {
                 let lines = tui_memory_list_status_lines(&query, &response);
-                self.status_dialog_view =
-                    StatusDialogView::MemoryList(TuiMemoryListState { query: query_text });
+                self.context
+                    .set_status_dialog_view(StatusDialogView::MemoryList(TuiMemoryListState {
+                        query: query_text,
+                    }));
                 self.status_dialog.set_title("Memory");
                 self.status_dialog.set_footer_hint(Some(
                     "Esc close · /memory show <id> · /memory rules · /memory runs · /memory consolidate"
                         .to_string(),
                 ));
                 self.status_dialog.set_status_lines(lines);
-                self.status_dialog.open();
+                self.open_status_dialog_modal();
                 true
             }
             Err(error) => {
@@ -284,14 +290,16 @@ impl App {
         match client.get_memory_retrieval_preview(&query) {
             Ok(response) => {
                 let lines = tui_memory_preview_status_lines(&query, &response);
-                self.status_dialog_view =
-                    StatusDialogView::MemoryPreview(TuiMemoryPreviewState { query: query_text });
+                self.context
+                    .set_status_dialog_view(StatusDialogView::MemoryPreview(
+                        TuiMemoryPreviewState { query: query_text },
+                    ));
                 self.status_dialog.set_title("Memory Preview");
                 self.status_dialog.set_footer_hint(Some(
                     "Esc close · shows why records would be injected this turn".to_string(),
                 ));
                 self.status_dialog.set_status_lines(lines);
-                self.status_dialog.open();
+                self.open_status_dialog_modal();
                 true
             }
             Err(error) => {
@@ -315,15 +323,16 @@ impl App {
         match client.get_memory_detail(record_id) {
             Ok(detail) => {
                 let lines = tui_memory_detail_status_lines(&detail);
-                self.status_dialog_view = StatusDialogView::MemoryDetail(TuiMemoryDetailState {
-                    record_id: record_id.to_string(),
-                });
+                self.context
+                    .set_status_dialog_view(StatusDialogView::MemoryDetail(TuiMemoryDetailState {
+                        record_id: record_id.to_string(),
+                    }));
                 self.status_dialog.set_title("Memory Detail");
                 self.status_dialog.set_footer_hint(Some(
                     "Esc close · /memory validation <id> · /memory conflicts <id> · /memory hits record=<id>".to_string(),
                 ));
                 self.status_dialog.set_status_lines(lines);
-                self.status_dialog.open();
+                self.open_status_dialog_modal();
                 true
             }
             Err(error) => {
@@ -347,16 +356,18 @@ impl App {
         match client.get_memory_validation_report(record_id) {
             Ok(report) => {
                 let lines = tui_memory_validation_status_lines(&report);
-                self.status_dialog_view =
-                    StatusDialogView::MemoryValidation(TuiMemoryDetailState {
-                        record_id: record_id.to_string(),
-                    });
+                self.context
+                    .set_status_dialog_view(StatusDialogView::MemoryValidation(
+                        TuiMemoryDetailState {
+                            record_id: record_id.to_string(),
+                        },
+                    ));
                 self.status_dialog.set_title("Memory Validation");
                 self.status_dialog.set_footer_hint(Some(
                     "Esc close · values come from /memory/{id}/validation-report".to_string(),
                 ));
                 self.status_dialog.set_status_lines(lines);
-                self.status_dialog.open();
+                self.open_status_dialog_modal();
                 true
             }
             Err(error) => {
@@ -380,15 +391,18 @@ impl App {
         match client.get_memory_conflicts(record_id) {
             Ok(conflicts) => {
                 let lines = tui_memory_conflict_status_lines(&conflicts);
-                self.status_dialog_view = StatusDialogView::MemoryConflicts(TuiMemoryDetailState {
-                    record_id: record_id.to_string(),
-                });
+                self.context
+                    .set_status_dialog_view(StatusDialogView::MemoryConflicts(
+                        TuiMemoryDetailState {
+                            record_id: record_id.to_string(),
+                        },
+                    ));
                 self.status_dialog.set_title("Memory Conflicts");
                 self.status_dialog.set_footer_hint(Some(
                     "Esc close · values come from /memory/{id}/conflicts".to_string(),
                 ));
                 self.status_dialog.set_status_lines(lines);
-                self.status_dialog.open();
+                self.open_status_dialog_modal();
                 true
             }
             Err(error) => {
@@ -415,13 +429,14 @@ impl App {
         match client.list_memory_rule_packs() {
             Ok(response) => {
                 let lines = tui_memory_rule_pack_status_lines(&response);
-                self.status_dialog_view = StatusDialogView::MemoryRulePacks;
+                self.context
+                    .set_status_dialog_view(StatusDialogView::MemoryRulePacks);
                 self.status_dialog.set_title("Memory Rule Packs");
                 self.status_dialog.set_footer_hint(Some(
                     "Esc close · values come from /memory/rule-packs".to_string(),
                 ));
                 self.status_dialog.set_status_lines(lines);
-                self.status_dialog.open();
+                self.open_status_dialog_modal();
                 true
             }
             Err(error) => {
@@ -455,19 +470,21 @@ impl App {
         match client.list_memory_rule_hits(Some(&query)) {
             Ok(response) => {
                 let lines = tui_memory_rule_hit_status_lines(&query, &response);
-                self.status_dialog_view =
-                    StatusDialogView::MemoryRuleHits(TuiMemoryRuleHitsState {
-                        raw_query: raw_query
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                            .map(ToOwned::to_owned),
-                    });
+                self.context
+                    .set_status_dialog_view(StatusDialogView::MemoryRuleHits(
+                        TuiMemoryRuleHitsState {
+                            raw_query: raw_query
+                                .map(str::trim)
+                                .filter(|value| !value.is_empty())
+                                .map(ToOwned::to_owned),
+                        },
+                    ));
                 self.status_dialog.set_title("Memory Rule Hits");
                 self.status_dialog.set_footer_hint(Some(
                     "Esc close · filter with /memory hits run=<id> record=<id>".to_string(),
                 ));
                 self.status_dialog.set_status_lines(lines);
-                self.status_dialog.open();
+                self.open_status_dialog_modal();
                 true
             }
             Err(error) => {
@@ -496,13 +513,14 @@ impl App {
         )) {
             Ok(response) => {
                 let lines = tui_memory_consolidation_runs_status_lines(&response);
-                self.status_dialog_view = StatusDialogView::MemoryConsolidationRuns;
+                self.context
+                    .set_status_dialog_view(StatusDialogView::MemoryConsolidationRuns);
                 self.status_dialog.set_title("Memory Consolidation Runs");
                 self.status_dialog.set_footer_hint(Some(
                     "Esc close · values come from /memory/consolidation/runs".to_string(),
                 ));
                 self.status_dialog.set_status_lines(lines);
-                self.status_dialog.open();
+                self.open_status_dialog_modal();
                 true
             }
             Err(error) => {
@@ -538,19 +556,21 @@ impl App {
         match client.run_memory_consolidation(&request) {
             Ok(response) => {
                 let lines = tui_memory_consolidation_result_status_lines(&response);
-                self.status_dialog_view =
-                    StatusDialogView::MemoryConsolidationResult(TuiMemoryConsolidationState {
-                        raw_request: raw_request
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                            .map(ToOwned::to_owned),
-                    });
+                self.context
+                    .set_status_dialog_view(StatusDialogView::MemoryConsolidationResult(
+                        TuiMemoryConsolidationState {
+                            raw_request: raw_request
+                                .map(str::trim)
+                                .filter(|value| !value.is_empty())
+                                .map(ToOwned::to_owned),
+                        },
+                    ));
                 self.status_dialog.set_title("Memory Consolidation");
                 self.status_dialog.set_footer_hint(Some(
                     "Esc close · /memory runs · /memory hits run=<id>".to_string(),
                 ));
                 self.status_dialog.set_status_lines(lines);
-                self.status_dialog.open();
+                self.open_status_dialog_modal();
                 true
             }
             Err(error) => {
@@ -565,7 +585,7 @@ impl App {
     }
 
     pub(super) fn refresh_active_status_dialog(&mut self) {
-        match self.status_dialog_view.clone() {
+        match self.context.status_dialog_view() {
             StatusDialogView::Overview => self.refresh_status_dialog(),
             StatusDialogView::Runtime => {
                 let _ = self.render_runtime_status_dialog();
@@ -728,7 +748,7 @@ impl App {
     }
 
     pub(super) fn execution_status_blocks(&self, session_id: &str) -> Vec<StatusBlock> {
-        let topology = match self.context.execution_topology.read().clone() {
+        let topology = match self.context.execution_topology() {
             Some(topology) => topology,
             None => {
                 let Some(client) = self.context.get_api_client() else {
@@ -775,9 +795,9 @@ impl App {
     }
 
     pub(super) fn session_telemetry_status_blocks(&self) -> Vec<StatusBlock> {
-        let runtime = self.context.session_runtime.read().clone();
-        let usage = self.context.session_usage.read().clone();
-        let stages = self.context.stage_summaries.read().clone();
+        let runtime = self.context.session_runtime();
+        let usage = self.context.session_usage();
+        let stages = self.context.stage_summaries();
         let Some(runtime) = runtime else {
             return vec![
                 StatusBlock::title("Session Telemetry"),
@@ -962,15 +982,18 @@ impl App {
             return false;
         }
 
-        if !matches!(self.status_dialog_view, StatusDialogView::Events(_)) {
+        if !matches!(
+            self.context.status_dialog_view(),
+            StatusDialogView::Events(_)
+        ) {
             if matches!(key.code, KeyCode::Esc | KeyCode::Enter) {
-                self.status_dialog.close();
+                self.close_status_dialog_modal();
             }
             return true;
         }
 
         match key.code {
-            KeyCode::Esc | KeyCode::Enter => self.status_dialog.close(),
+            KeyCode::Esc | KeyCode::Enter => self.close_status_dialog_modal(),
             KeyCode::Left | KeyCode::PageUp => {
                 let _ = self.open_events_status_dialog(Some("prev"));
             }
@@ -1085,7 +1108,7 @@ impl App {
             .map(status_line_from_block)
             .collect::<Vec<_>>();
         self.status_dialog.set_status_lines(lines);
-        self.status_dialog.open();
+        self.open_status_dialog_modal();
     }
 
     pub(super) fn handle_show_task(&mut self, id: &str) {
@@ -1133,7 +1156,7 @@ impl App {
                     .map(status_line_from_block)
                     .collect::<Vec<_>>();
                 self.status_dialog.set_status_lines(lines);
-                self.status_dialog.open();
+                self.open_status_dialog_modal();
             }
             None => {
                 self.toast.show(

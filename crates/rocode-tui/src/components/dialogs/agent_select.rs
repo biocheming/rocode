@@ -3,10 +3,10 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState},
-    Frame,
 };
 
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ModeKind {
@@ -128,7 +128,7 @@ impl AgentSelectDialog {
         self.state.selected().and_then(|i| self.agents.get(i))
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect, theme: &Theme) {
         if !self.open {
             return;
         }
@@ -137,7 +137,7 @@ impl AgentSelectDialog {
         let dialog_height = (self.agents.len() + 2).min(12) as u16;
         let dialog_area = centered_rect(dialog_width, dialog_height, area);
 
-        frame.render_widget(Clear, dialog_area);
+        surface.render_widget(Clear, dialog_area);
 
         let block = Block::default()
             .title(Span::styled(
@@ -151,7 +151,7 @@ impl AgentSelectDialog {
             .style(Style::default().bg(theme.background_panel));
 
         let inner_area = super::dialog_inner(block.inner(dialog_area));
-        frame.render_widget(block, dialog_area);
+        surface.render_widget(block, dialog_area);
 
         let items: Vec<ListItem> = self
             .agents
@@ -183,7 +183,7 @@ impl AgentSelectDialog {
             .collect();
 
         let list = List::new(items);
-        frame.render_stateful_widget(list, inner_area, &mut self.state.clone());
+        surface.render_stateful_widget(list, inner_area, &mut self.state.clone());
     }
 }
 

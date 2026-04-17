@@ -1,20 +1,20 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use ratatui::prelude::Stylize;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
-    Frame,
 };
 
 use crate::branding::{APP_NAME, APP_SHORT_NAME, APP_VERSION_DATE};
 use crate::context::{
-    AppContext, LspConnectionStatus, McpConnectionStatus, MessageRole, TodoStatus,
+    AppContext, LspConnectionStatus, McpConnectionStatus, MessageRole, SidebarLifecycleState,
+    TodoStatus,
 };
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 use rocode_core::process_registry::ProcessKind;
 
 pub struct Sidebar {
@@ -22,14 +22,14 @@ pub struct Sidebar {
     session_id: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 struct SidebarToggleHit {
     line_index: usize,
     section_key: &'static str,
 }
 
-#[derive(Default)]
-pub struct SidebarState {
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct SidebarRenderState {
     collapsed_sections: HashMap<&'static str, bool>,
     scroll_offset: usize,
     content_lines: usize,
@@ -37,16 +37,8 @@ pub struct SidebarState {
     sidebar_area: Option<Rect>,
     sections_area: Option<Rect>,
     toggle_hits: Vec<SidebarToggleHit>,
-    /// Index of the currently selected process in the process list.
-    pub process_selected: usize,
-    /// Whether the process panel has keyboard focus.
-    pub process_focus: bool,
     /// Maps rendered line index → process list index (for click selection).
     process_line_hits: Vec<(usize, usize)>,
-    /// Index of the currently selected child session in the child sessions list.
-    pub child_session_selected: usize,
-    /// Whether the child sessions panel has keyboard focus.
-    pub child_session_focus: bool,
     /// Maps rendered line index → child session list index (for click selection).
     child_session_line_hits: Vec<(usize, usize)>,
     /// Pending navigation target set by click-to-activate on an already-selected child session.
@@ -54,7 +46,7 @@ pub struct SidebarState {
     pending_navigate_child: Option<usize>,
 }
 
-impl SidebarState {
+impl SidebarRenderState {
     pub fn reset_hidden(&mut self) {
         self.sidebar_area = None;
         self.sections_area = None;
@@ -85,7 +77,12 @@ impl SidebarState {
         contains_point(self.sidebar_area, col, row)
     }
 
-    pub fn handle_click(&mut self, col: u16, row: u16) -> bool {
+    pub fn handle_click(
+        &mut self,
+        lifecycle: &mut SidebarLifecycleState,
+        col: u16,
+        row: u16,
+    ) -> bool {
         let Some(area) = self.sections_area else {
             return false;
         };
@@ -102,9 +99,9 @@ impl SidebarState {
             .iter()
             .find(|(li, _)| *li == line_index)
         {
-            self.process_selected = *proc_idx;
-            self.process_focus = true;
-            self.child_session_focus = false;
+            lifecycle.process_selected = *proc_idx;
+            lifecycle.process_focus = true;
+            lifecycle.child_session_focus = false;
             return true;
         }
 
@@ -114,14 +111,14 @@ impl SidebarState {
             .iter()
             .find(|(li, _)| *li == line_index)
         {
-            if self.child_session_focus && self.child_session_selected == *cs_idx {
+            if lifecycle.child_session_focus && lifecycle.child_session_selected == *cs_idx {
                 // Already selected and focused — treat as activation (navigate)
                 self.pending_navigate_child = Some(*cs_idx);
             } else {
                 // First click — select and focus
-                self.child_session_selected = *cs_idx;
-                self.child_session_focus = true;
-                self.process_focus = false;
+                lifecycle.child_session_selected = *cs_idx;
+                lifecycle.child_session_focus = true;
+                lifecycle.process_focus = false;
             }
             return true;
         }
@@ -187,46 +184,26 @@ impl SidebarState {
         }
     }
 
-    pub fn process_select_up(&mut self) {
-        self.process_selected = self.process_selected.saturating_sub(1);
-    }
-
-    pub fn process_select_down(&mut self, count: usize) {
-        if count > 0 {
-            self.process_selected = (self.process_selected + 1).min(count - 1);
-        }
-    }
-
-    pub fn clamp_process_selected(&mut self, count: usize) {
-        if count == 0 {
-            self.process_selected = 0;
-        } else if self.process_selected >= count {
-            self.process_selected = count - 1;
-        }
-    }
-
-    pub fn child_session_select_up(&mut self) {
-        self.child_session_selected = self.child_session_selected.saturating_sub(1);
-    }
-
-    pub fn child_session_select_down(&mut self, count: usize) {
-        if count > 0 {
-            self.child_session_selected = (self.child_session_selected + 1).min(count - 1);
-        }
-    }
-
-    pub fn clamp_child_session_selected(&mut self, count: usize) {
-        if count == 0 {
-            self.child_session_selected = 0;
-        } else if self.child_session_selected >= count {
-            self.child_session_selected = count - 1;
-        }
-    }
-
     /// Take the pending child session navigation index, if any.
     /// Returns the index into the child_sessions list that was clicked for activation.
     pub fn take_pending_navigate_child(&mut self) -> Option<usize> {
         self.pending_navigate_child.take()
+    }
+}
+
+fn clamp_sidebar_process_selection(lifecycle: &mut SidebarLifecycleState, count: usize) {
+    if count == 0 {
+        lifecycle.process_selected = 0;
+    } else if lifecycle.process_selected >= count {
+        lifecycle.process_selected = count - 1;
+    }
+}
+
+fn clamp_sidebar_child_session_selection(lifecycle: &mut SidebarLifecycleState, count: usize) {
+    if count == 0 {
+        lifecycle.child_session_selected = 0;
+    } else if lifecycle.child_session_selected >= count {
+        lifecycle.child_session_selected = count - 1;
     }
 }
 
@@ -246,15 +223,23 @@ impl Sidebar {
         }
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, state: &mut SidebarState, floating: bool) {
-        self.render_with_bg(frame, area, state, floating, None);
+    pub fn render<S: RenderSurface>(
+        &self,
+        surface: &mut S,
+        area: Rect,
+        state: &mut SidebarRenderState,
+        lifecycle: &mut SidebarLifecycleState,
+        floating: bool,
+    ) {
+        self.render_with_bg(surface, area, state, lifecycle, floating, None);
     }
 
-    pub fn render_with_bg(
+    pub fn render_with_bg<S: RenderSurface>(
         &self,
-        frame: &mut Frame,
+        surface: &mut S,
         area: Rect,
-        state: &mut SidebarState,
+        state: &mut SidebarRenderState,
+        lifecycle: &mut SidebarLifecycleState,
         floating: bool,
         bg_override: Option<ratatui::style::Color>,
     ) {
@@ -271,7 +256,7 @@ impl Sidebar {
             let block = Block::default()
                 .borders(Borders::NONE)
                 .style(Style::default().bg(panel_bg));
-            frame.render_widget(block, area);
+            surface.render_widget(block, area);
         }
 
         let inner = Rect {
@@ -290,16 +275,19 @@ impl Sidebar {
             .constraints([Constraint::Min(0), Constraint::Length(3)])
             .split(inner);
 
-        self.render_sections_with_bg(frame, layout[0], &theme, state, floating, panel_bg);
-        self.render_footer_with_bg(frame, layout[1], &theme, floating, panel_bg);
+        self.render_sections_with_bg(
+            surface, layout[0], &theme, state, lifecycle, floating, panel_bg,
+        );
+        self.render_footer_with_bg(surface, layout[1], &theme, floating, panel_bg);
     }
 
-    fn render_sections_with_bg(
+    fn render_sections_with_bg<S: RenderSurface>(
         &self,
-        frame: &mut Frame,
+        surface: &mut S,
         area: Rect,
         theme: &Theme,
-        state: &mut SidebarState,
+        state: &mut SidebarRenderState,
+        lifecycle: &mut SidebarLifecycleState,
         floating: bool,
         panel_bg: ratatui::style::Color,
     ) {
@@ -360,8 +348,7 @@ impl Sidebar {
 
         let total_cost = self
             .context
-            .session_usage
-            .read()
+            .session_usage()
             .as_ref()
             .map(|usage| usage.total_cost)
             .unwrap_or_else(|| {
@@ -373,8 +360,7 @@ impl Sidebar {
             });
         let total_tokens = self
             .context
-            .session_usage
-            .read()
+            .session_usage()
             .as_ref()
             .map(total_session_tokens)
             .unwrap_or_else(|| {
@@ -405,16 +391,17 @@ impl Sidebar {
                     Span::styled("Ctx    ", Style::default().fg(theme.text_muted)),
                     Span::styled(format_number(total_tokens), Style::default().fg(theme.text)),
                 ];
-                if let Some(model) = active_model_info.as_ref().filter(|model| model.context_window > 0)
+                if let Some(model) = active_model_info
+                    .as_ref()
+                    .filter(|model| model.context_window > 0)
                 {
                     context_spans.push(Span::styled(
                         format!("/{}", format_number(model.context_window)),
                         Style::default().fg(theme.text_muted),
                     ));
                     if total_tokens > 0 {
-                        let used_pct =
-                            ((total_tokens as f64 / model.context_window as f64) * 100.0).round()
-                                as u64;
+                        let used_pct = ((total_tokens as f64 / model.context_window as f64) * 100.0)
+                            .round() as u64;
                         context_spans.push(Span::styled(
                             format!("  {}%", used_pct),
                             Style::default().fg(theme.text_muted),
@@ -608,11 +595,11 @@ impl Sidebar {
 
         // Processes section
         let proc_list = self.context.processes.read().clone();
-        state.clamp_process_selected(proc_list.len());
+        clamp_sidebar_process_selection(lifecycle, proc_list.len());
         if !proc_list.is_empty() {
             let mut proc_lines: Vec<Line<'static>> = Vec::new();
             for (idx, proc) in proc_list.iter().enumerate() {
-                let selected = state.process_focus && idx == state.process_selected;
+                let selected = lifecycle.process_focus && idx == lifecycle.process_selected;
                 let prefix = if selected { "▸ " } else { "  " };
                 let kind_color = match proc.kind {
                     ProcessKind::Plugin => theme.info,
@@ -671,8 +658,8 @@ impl Sidebar {
 
         // Agents section — sourced from execution topology (server-side)
         {
-            let topo_guard = self.context.execution_topology.read();
-            let agent_nodes = collect_agent_nodes_from_topology(&topo_guard);
+            let topology = self.context.execution_topology();
+            let agent_nodes = collect_agent_nodes_from_topology(&topology);
             if !agent_nodes.is_empty() {
                 let mut agent_lines: Vec<Line<'static>> = Vec::new();
                 let mut running = 0usize;
@@ -717,12 +704,13 @@ impl Sidebar {
         }
 
         // Child Sessions section
-        let child_list = self.context.child_sessions.read().clone();
-        state.clamp_child_session_selected(child_list.len());
+        let child_list = self.context.child_sessions();
+        clamp_sidebar_child_session_selection(lifecycle, child_list.len());
         if !child_list.is_empty() {
             let mut cs_lines: Vec<Line<'static>> = Vec::new();
             for (idx, child) in child_list.iter().enumerate() {
-                let selected = state.child_session_focus && idx == state.child_session_selected;
+                let selected =
+                    lifecycle.child_session_focus && idx == lifecycle.child_session_selected;
                 let prefix = if selected { "▸ " } else { "  " };
                 let (status_symbol, status_color) = match child.status.as_str() {
                     "running" => ("●", theme.info),
@@ -891,7 +879,7 @@ impl Sidebar {
                 .block(Block::default().borders(Borders::NONE))
                 .style(Style::default().bg(panel_bg));
         }
-        frame.render_widget(paragraph, sections_text_area);
+        surface.render_widget(paragraph, sections_text_area);
 
         if let Some(scroll_area) = scrollbar_area {
             let mut scrollbar_state = ScrollbarState::new(state.content_lines)
@@ -904,13 +892,13 @@ impl Sidebar {
                 .track_style(Style::default().fg(theme.border_subtle))
                 .thumb_symbol("█")
                 .thumb_style(Style::default().fg(theme.primary));
-            frame.render_stateful_widget(scrollbar, scroll_area, &mut scrollbar_state);
+            surface.render_stateful_widget(scrollbar, scroll_area, &mut scrollbar_state);
         }
     }
 
-    fn render_footer_with_bg(
+    fn render_footer_with_bg<S: RenderSurface>(
         &self,
-        frame: &mut Frame,
+        surface: &mut S,
         area: Rect,
         theme: &Theme,
         floating: bool,
@@ -941,7 +929,7 @@ impl Sidebar {
         if !floating {
             paragraph = paragraph.style(Style::default().bg(panel_bg));
         }
-        frame.render_widget(paragraph, area);
+        surface.render_widget(paragraph, area);
     }
 }
 

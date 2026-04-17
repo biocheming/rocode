@@ -621,9 +621,9 @@ impl App {
             variants.sort();
         }
         self.model_select.set_models(models);
-        let current_key = self.context.current_model.read().as_ref().map(|m| {
-            let provider = self.context.current_provider.read();
-            if let Some(ref p) = *provider {
+        let current_key = self.context.current_model().as_ref().map(|m| {
+            let provider = self.context.current_provider();
+            if let Some(ref p) = provider {
                 format!("{}/{}", p, m)
             } else {
                 m.clone()
@@ -645,7 +645,7 @@ impl App {
         });
         self.sync_current_model_variant();
 
-        let model_missing = self.context.current_model.read().is_none();
+        let model_missing = self.context.current_model().is_none();
         if model_missing {
             let restored = self
                 .model_select

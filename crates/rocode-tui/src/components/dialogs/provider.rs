@@ -1,4 +1,3 @@
-use ratatui::prelude::Stylize;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::Style,
@@ -7,7 +6,6 @@ use ratatui::{
         Block, Borders, Clear, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
         ScrollbarState, Wrap,
     },
-    Frame,
 };
 use std::collections::HashSet;
 
@@ -16,6 +14,7 @@ use crate::api::{
     ResolveProviderConnectResponse,
 };
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 
 #[derive(Clone, Debug)]
 pub struct Provider {
@@ -585,7 +584,7 @@ impl ProviderDialog {
     pub fn set_submit_result(&mut self, result: SubmitResult) {
         self.submit_result = Some(result);
     }
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect, theme: &Theme) {
         if !self.open {
             return;
         }
@@ -601,20 +600,20 @@ impl ProviderDialog {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme.border));
         let content_area = super::dialog_inner(block.inner(popup_area));
-        frame.render_widget(Clear, popup_area);
+        surface.render_widget(Clear, popup_area);
 
         if self.custom_state.is_some() {
-            self.render_custom_input_mode(frame, popup_area, content_area, block, theme);
+            self.render_custom_input_mode(surface, popup_area, content_area, block, theme);
         } else if self.input_mode {
-            self.render_input_mode(frame, popup_area, content_area, block, theme);
+            self.render_input_mode(surface, popup_area, content_area, block, theme);
         } else {
-            self.render_list_mode(frame, popup_area, content_area, block, theme);
+            self.render_list_mode(surface, popup_area, content_area, block, theme);
         }
     }
 
-    fn render_input_mode(
+    fn render_input_mode<S: RenderSurface>(
         &self,
-        frame: &mut Frame,
+        surface: &mut S,
         popup_area: Rect,
         content_area: Rect,
         block: Block,
@@ -710,25 +709,25 @@ impl ProviderDialog {
             Span::styled(" back", Style::default().fg(theme.text_muted)),
         ]));
 
-        frame.render_widget(
+        surface.render_widget(
             block.style(Style::default().bg(theme.background_panel)),
             popup_area,
         );
         let paragraph = Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .style(Style::default().bg(theme.background_panel));
-        frame.render_widget(paragraph, content_area);
+        surface.render_widget(paragraph, content_area);
     }
 
-    fn render_list_mode(
+    fn render_list_mode<S: RenderSurface>(
         &self,
-        frame: &mut Frame,
+        surface: &mut S,
         popup_area: Rect,
         content_area: Rect,
         block: Block,
         theme: &Theme,
     ) {
-        frame.render_widget(
+        surface.render_widget(
             block.style(Style::default().bg(theme.background_panel)),
             popup_area,
         );
@@ -768,7 +767,7 @@ impl ProviderDialog {
             }
         };
 
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(vec![
                 Line::from(vec![
                     Span::styled("Known", known_style),
@@ -792,7 +791,7 @@ impl ProviderDialog {
         match self.connect_mode {
             ProviderConnectMode::Known => {
                 if self.providers.is_empty() {
-                    frame.render_widget(
+                    surface.render_widget(
                         Paragraph::new("No known providers available. Switch to Custom to enter an endpoint manually.")
                             .wrap(Wrap { trim: false })
                             .style(Style::default().fg(theme.text_muted).bg(theme.background_panel)),
@@ -807,7 +806,7 @@ impl ProviderDialog {
                         "No known match. Press Enter to use the current search text as a custom provider id."
                             .to_string()
                     };
-                    frame.render_widget(
+                    surface.render_widget(
                         Paragraph::new(message).wrap(Wrap { trim: false }).style(
                             Style::default()
                                 .fg(theme.text_muted)
@@ -882,7 +881,7 @@ impl ProviderDialog {
                                     }),
                                 ),
                             ]);
-                            frame.render_widget(Paragraph::new(line), row_area);
+                            surface.render_widget(Paragraph::new(line), row_area);
                         }
 
                         if visible.len() > viewport {
@@ -902,7 +901,7 @@ impl ProviderDialog {
                                 .track_style(Style::default().fg(theme.border_subtle))
                                 .thumb_symbol("█")
                                 .thumb_style(Style::default().fg(theme.primary));
-                            frame.render_stateful_widget(
+                            surface.render_stateful_widget(
                                 scrollbar,
                                 scroll_area,
                                 &mut scrollbar_state,
@@ -938,7 +937,7 @@ impl ProviderDialog {
                     }
                 }
 
-                frame.render_widget(
+                surface.render_widget(
                     Paragraph::new(lines)
                         .wrap(Wrap { trim: false })
                         .style(Style::default().bg(theme.background_panel)),
@@ -980,7 +979,7 @@ impl ProviderDialog {
                 )),
             ],
         };
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(footer).wrap(Wrap { trim: false }).style(
                 Style::default()
                     .fg(theme.text_muted)
@@ -990,9 +989,9 @@ impl ProviderDialog {
         );
     }
 
-    fn render_custom_input_mode(
+    fn render_custom_input_mode<S: RenderSurface>(
         &self,
-        frame: &mut Frame,
+        surface: &mut S,
         popup_area: Rect,
         content_area: Rect,
         block: Block,
@@ -1122,20 +1121,56 @@ impl ProviderDialog {
             ]));
         }
 
-        frame.render_widget(
+        surface.render_widget(
             block.style(Style::default().bg(theme.background_panel)),
             popup_area,
         );
         let paragraph = Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .style(Style::default().bg(theme.background_panel));
-        frame.render_widget(paragraph, content_area);
+        surface.render_widget(paragraph, content_area);
     }
 }
 
 impl Default for ProviderDialog {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    use crate::ui::BufferSurface;
+
+    #[test]
+    fn provider_dialog_renders_to_buffer_surface() {
+        let mut dialog = ProviderDialog::new();
+        dialog.set_providers(vec![Provider {
+            id: "openai".to_string(),
+            name: "OpenAI".to_string(),
+            env_hint: "OPENAI_API_KEY".to_string(),
+            base_url: Some("https://api.openai.com/v1".to_string()),
+            protocol: Some("openai".to_string()),
+            model_count: 3,
+            status: ProviderStatus::Disconnected,
+        }]);
+        dialog.open();
+
+        let area = Rect::new(0, 0, 120, 32);
+        let mut buffer = Buffer::empty(area);
+        let mut surface = BufferSurface::new(&mut buffer);
+
+        dialog.render(&mut surface, area, &Theme::dark());
+
+        let rendered = buffer
+            .content
+            .iter()
+            .filter(|cell| !cell.symbol().trim().is_empty())
+            .count();
+        assert!(rendered > 0);
     }
 }
 

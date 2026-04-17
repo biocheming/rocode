@@ -1,15 +1,14 @@
 use std::cell::Cell;
 
-use ratatui::prelude::Stylize;
 use ratatui::{
     layout::Rect,
     style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
-    Frame,
 };
 
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 
 pub const OTHER_OPTION_ID: &str = "__other__";
 pub const OTHER_OPTION_LABEL: &str = "Other (type your own)";
@@ -199,7 +198,7 @@ impl QuestionPrompt {
         }
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect, theme: &Theme) {
         if !self.is_open {
             return;
         }
@@ -315,8 +314,8 @@ impl QuestionPrompt {
             )
             .style(Style::default().bg(theme.background_panel));
 
-        frame.render_widget(Clear, popup_area);
-        frame.render_widget(paragraph, popup_area);
+        surface.render_widget(Clear, popup_area);
+        surface.render_widget(paragraph, popup_area);
     }
 
     fn custom_input_active(&self) -> bool {
@@ -339,6 +338,9 @@ impl Default for QuestionPrompt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    use crate::{theme::Theme, ui::BufferSurface};
 
     fn choice_prompt() -> QuestionPrompt {
         let mut prompt = QuestionPrompt::new();
@@ -391,5 +393,22 @@ mod tests {
 
         let (_request, answers) = prompt.confirm().expect("should confirm");
         assert_eq!(answers, vec!["fast".to_string()]);
+    }
+
+    #[test]
+    fn question_prompt_renders_to_buffer_surface() {
+        let prompt = choice_prompt();
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buffer = Buffer::empty(area);
+        let mut surface = BufferSurface::new(&mut buffer);
+
+        prompt.render(&mut surface, area, &Theme::dark());
+
+        let rendered = buffer
+            .content
+            .iter()
+            .filter(|cell| !cell.symbol().trim().is_empty())
+            .count();
+        assert!(rendered > 0);
     }
 }

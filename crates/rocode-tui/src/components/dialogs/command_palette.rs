@@ -3,7 +3,6 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
-    Frame,
 };
 
 use rocode_command::{CommandRegistry, UiActionId};
@@ -11,6 +10,7 @@ use rocode_command::{CommandRegistry, UiActionId};
 use crate::command::fuzzy_match;
 use crate::context::MessageDensity;
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 
 pub struct VisibilityLabels {
     pub show_thinking: bool,
@@ -208,7 +208,7 @@ impl CommandPalette {
         }
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect, theme: &Theme) {
         if !self.open {
             return;
         }
@@ -218,7 +218,7 @@ impl CommandPalette {
 
         let dialog_area = centered_rect(dialog_width, dialog_height, area);
 
-        frame.render_widget(Clear, dialog_area);
+        surface.render_widget(Clear, dialog_area);
 
         let block = Block::default()
             .title(Span::styled(
@@ -232,7 +232,7 @@ impl CommandPalette {
             .style(Style::default().bg(theme.background_panel));
 
         let inner_area = super::dialog_inner(block.inner(dialog_area));
-        frame.render_widget(block, dialog_area);
+        surface.render_widget(block, dialog_area);
 
         let search_line = Line::from(vec![
             Span::styled("> ", Style::default().fg(theme.primary)),
@@ -241,7 +241,7 @@ impl CommandPalette {
         ]);
 
         let search_paragraph = Paragraph::new(search_line);
-        frame.render_widget(
+        surface.render_widget(
             search_paragraph,
             Rect {
                 x: inner_area.x,
@@ -295,7 +295,7 @@ impl CommandPalette {
             height: inner_area.height.saturating_sub(2),
         };
 
-        frame.render_stateful_widget(list, list_area, &mut self.state.clone());
+        surface.render_stateful_widget(list, list_area, &mut self.state.clone());
     }
 }
 
@@ -307,4 +307,31 @@ impl Default for CommandPalette {
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     super::centered_rect(width, height, area)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    use crate::ui::BufferSurface;
+
+    #[test]
+    fn command_palette_renders_to_buffer_surface() {
+        let mut dialog = CommandPalette::new();
+        dialog.open();
+
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buffer = Buffer::empty(area);
+        let mut surface = BufferSurface::new(&mut buffer);
+
+        dialog.render(&mut surface, area, &Theme::dark());
+
+        let rendered = buffer
+            .content
+            .iter()
+            .filter(|cell| !cell.symbol().trim().is_empty())
+            .count();
+        assert!(rendered > 0);
+    }
 }

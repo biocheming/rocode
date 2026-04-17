@@ -1,13 +1,12 @@
-use ratatui::prelude::Stylize;
 use ratatui::{
     layout::Rect,
     style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
-    Frame,
 };
 
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 
 #[derive(Clone, Debug)]
 pub struct SubagentInfo {
@@ -65,7 +64,7 @@ impl SubagentDialog {
         }
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect, theme: &Theme) {
         if !self.open {
             return;
         }
@@ -111,18 +110,53 @@ impl SubagentDialog {
             .border_style(Style::default().fg(theme.border))
             .style(Style::default().bg(theme.background_panel));
         let content_area = super::dialog_inner(block.inner(popup_area));
-        frame.render_widget(block, popup_area);
+        surface.render_widget(block, popup_area);
 
         let paragraph = Paragraph::new(lines)
             .style(Style::default().bg(theme.background_panel))
             .scroll((self.scroll_offset, 0));
 
-        frame.render_widget(paragraph, content_area);
+        surface.render_widget(paragraph, content_area);
     }
 }
 
 impl Default for SubagentDialog {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    use crate::ui::BufferSurface;
+
+    #[test]
+    fn subagent_dialog_renders_to_buffer_surface() {
+        let mut dialog = SubagentDialog::new();
+        dialog.open(SubagentInfo {
+            id: "sub-1".to_string(),
+            name: "Explorer".to_string(),
+            category: "explorer".to_string(),
+            messages: vec![SubagentMessage {
+                role: "assistant".to_string(),
+                content: "Mapped the remaining overlays.".to_string(),
+            }],
+        });
+
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buffer = Buffer::empty(area);
+        let mut surface = BufferSurface::new(&mut buffer);
+
+        dialog.render(&mut surface, area, &Theme::dark());
+
+        let rendered = buffer
+            .content
+            .iter()
+            .filter(|cell| !cell.symbol().trim().is_empty())
+            .count();
+        assert!(rendered > 0);
     }
 }

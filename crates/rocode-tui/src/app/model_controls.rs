@@ -26,7 +26,7 @@ impl App {
     }
 
     pub(super) fn sync_current_model_variant(&mut self) {
-        let Some(model_ref) = self.context.current_model.read().clone() else {
+        let Some(model_ref) = self.context.current_model() else {
             self.context.set_model_variant(None);
             return;
         };
@@ -56,7 +56,7 @@ impl App {
     }
 
     pub(super) fn cycle_model_variant(&mut self) {
-        let Some(model_ref) = self.context.current_model.read().clone() else {
+        let Some(model_ref) = self.context.current_model() else {
             return;
         };
         let (model_key, explicit_variant) =
@@ -93,7 +93,7 @@ impl App {
     }
 
     pub(super) fn current_model_label(&self) -> String {
-        let Some(model) = self.context.current_model.read().clone() else {
+        let Some(model) = self.context.current_model() else {
             return "(not selected)".to_string();
         };
         let (base_model, _) =
@@ -105,7 +105,7 @@ impl App {
     }
 
     pub(super) fn selected_model_for_prompt(&self) -> Option<String> {
-        let model = self.context.current_model.read().clone()?;
+        let model = self.context.current_model()?;
         let (base, inline_variant) =
             parse_model_ref_selection(&model, &self.available_models, &self.model_variants);
         let variant = self.context.current_model_variant();
@@ -379,22 +379,16 @@ impl App {
     }
 
     pub(super) fn sync_command_palette_labels(&mut self) {
-        let show_thinking = *self.context.show_thinking.read();
-        let show_tool_details = *self.context.show_tool_details.read();
-        let density = *self.context.message_density.read();
-        let semantic_hl = *self.context.semantic_highlight.read();
-        let show_header = *self.context.show_header.read();
-        let show_scrollbar = *self.context.show_scrollbar.read();
-        let tips_hidden = *self.context.tips_hidden.read();
+        let prefs = self.context.ui_preferences();
         self.command_palette
             .sync_visibility_labels(crate::components::VisibilityLabels {
-                show_thinking,
-                show_tool_details,
-                density,
-                semantic_highlight: semantic_hl,
-                show_header,
-                show_scrollbar,
-                tips_hidden,
+                show_thinking: prefs.show_thinking,
+                show_tool_details: prefs.show_tool_details,
+                density: prefs.message_density,
+                semantic_highlight: prefs.semantic_highlight,
+                show_header: prefs.show_header,
+                show_scrollbar: prefs.show_scrollbar,
+                tips_hidden: prefs.tips_hidden,
             });
     }
 }

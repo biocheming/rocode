@@ -3,10 +3,11 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::Paragraph,
-    Frame,
 };
 
 use rocode_command::branding::{logo_lines, LOGO};
+
+use crate::ui::RenderSurface;
 
 /// Re-export for backward compatibility.
 pub fn exit_logo_lines(pad: &str) -> Vec<String> {
@@ -26,7 +27,7 @@ impl Logo {
         }
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect) {
         let lines: Vec<Line> = LOGO
             .iter()
             .enumerate()
@@ -46,6 +47,6 @@ impl Logo {
         let paragraph =
             Paragraph::new(Text::from(lines)).alignment(ratatui::layout::Alignment::Center);
 
-        frame.render_widget(paragraph, area);
+        surface.render_widget(paragraph, area);
     }
 }

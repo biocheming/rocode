@@ -28,18 +28,15 @@ mod sync;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
-use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use chrono::{TimeZone, Utc};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use rocode_command::interactive::{
-    parse_interactive_command, InteractiveCommand, InteractiveEventsQuery,
-};
+use ratatui::{buffer::Buffer, layout::Rect, style::Style, widgets::Block};
+use rocode_command::interactive::{parse_interactive_command, InteractiveCommand};
 use rocode_command::output_blocks::{BlockTone, StatusBlock};
 use rocode_command::{CommandRegistry, UiActionId};
 use rocode_core::agent_task_registry::{global_task_registry, AgentTaskStatus};
@@ -53,26 +50,29 @@ use crate::api::{
     SessionRecoveryProtocol, SessionRevertInfo,
 };
 use crate::app::state::AppState;
-use crate::app::terminal;
 use crate::components::{
     exit_logo_lines, Agent, AgentSelectDialog, AlertDialog, CommandPalette, ForkDialog, ForkEntry,
     HelpDialog, HomeView, McpDialog, McpItem, ModeKind, Model, ModelSelectDialog, PendingSubmit,
     PermissionAction, PermissionPrompt, Prompt, PromptStashDialog, ProviderDialog, QuestionOption,
     QuestionPrompt, QuestionRequest, QuestionType, RecoveryActionDialog, RecoveryActionItem,
     SessionDeleteState, SessionExportDialog, SessionItem, SessionListDialog, SessionRenameDialog,
-    SessionView, SkillListDialog, SlashCommandPopup, StashItem, StatusDialog, StatusLine,
-    SubagentDialog, TagDialog, TaskKind, ThemeListDialog, ThemeOption, TimelineDialog,
-    TimelineEntry, Toast, ToastVariant, ToolCallCancelDialog, ToolCallItem, OTHER_OPTION_ID,
-    OTHER_OPTION_LABEL,
+    SkillListDialog, SlashCommandPopup, StashItem, StatusDialog, StatusLine, SubagentDialog,
+    TagDialog, TaskKind, ThemeListDialog, ThemeOption, TimelineDialog, TimelineEntry, Toast,
+    ToastVariant, ToolCallCancelDialog, ToolCallItem, OTHER_OPTION_ID, OTHER_OPTION_LABEL,
 };
 use crate::context::keybind::{is_primary_key_event, normalize_key_event, LeaderKeyState};
 use crate::context::{
     collect_child_sessions, AppContext, McpConnectionStatus, McpServerStatus, Message,
-    MessagePart as ContextMessagePart, MessageRole, RevertInfo, Session, SessionStatus, TokenUsage,
+    MessagePart as ContextMessagePart, MessageRole, RevertInfo, Session, SessionStatus,
+    StatusDialogView, TokenUsage, TuiEventsBrowserState, TuiMemoryConsolidationState,
+    TuiMemoryDetailState, TuiMemoryListState, TuiMemoryPreviewState, TuiMemoryRuleHitsState,
 };
 use crate::event::{CustomEvent, Event, StateChange};
 use crate::router::Route;
-use crate::ui::{line_from_cells, strip_session_gutter, truncate, Clipboard, Selection};
+use crate::ui::{
+    apply_selection_highlight, capture_screen_lines, strip_session_gutter, truncate, BufferSurface,
+    Clipboard, RenderSurface, Selection,
+};
 
 use self::mappers::{
     agent_color_from_name, apply_incremental_session_sync, infer_task_kind_from_message,
@@ -80,7 +80,7 @@ use self::mappers::{
     map_api_todo, map_mcp_status, provider_from_model,
 };
 use self::server_events::{
-    env_var_enabled, env_var_with_fallback, resolve_tui_base_url, spawn_server_event_listener,
+    env_var_enabled, env_var_with_fallback, resolve_tui_base_url, spawn_server_event_listener_task,
     SessionFilter,
 };
 use self::support::{
@@ -92,7 +92,6 @@ use self::support::{
 
 // TS parity: renderer targetFps is 60, ~16ms frame budget.
 const TICK_RATE_MS: u64 = 16;
-const MAX_EVENTS_PER_FRAME: usize = 256;
 const SESSION_SYNC_DEBOUNCE_MS: u64 = 180;
 const SESSION_FULL_SYNC_INTERVAL_SECS: u64 = 10;
 const QUESTION_SYNC_FALLBACK_SECS: u64 = 5;
@@ -121,13 +120,9 @@ fn session_update_requires_sync(source: Option<&str>) -> bool {
 pub struct App {
     context: Arc<AppContext>,
     state: AppState,
-    terminal: terminal::Tui,
-    event_tx: Sender<Event>,
-    event_rx: Receiver<Event>,
+    viewport_area: Rect,
     prompt: Prompt,
     selection: Selection,
-    session_view: Option<SessionView>,
-    active_session_id: Option<String>,
     command_palette: CommandPalette,
     slash_popup: SlashCommandPopup,
     leader_state: LeaderKeyState,
@@ -142,7 +137,6 @@ pub struct App {
     skill_list_dialog: SkillListDialog,
     theme_list_dialog: ThemeListDialog,
     status_dialog: StatusDialog,
-    status_dialog_view: StatusDialogView,
     mcp_dialog: McpDialog,
     timeline_dialog: TimelineDialog,
     fork_dialog: ForkDialog,
@@ -159,32 +153,25 @@ pub struct App {
     available_models: HashSet<String>,
     model_variants: HashMap<String, Vec<String>>,
     model_variant_selection: HashMap<String, Option<String>>,
-    pending_prompt_queue: HashMap<String, VecDeque<QueuedPrompt>>,
-    pending_permission_ids: HashSet<String>,
-    pending_permissions: HashMap<String, PermissionRequestInfo>,
-    pending_question_ids: HashSet<String>,
-    pending_question_queue: VecDeque<String>,
-    pending_questions: HashMap<String, QuestionInfo>,
-    pending_question_drafts: HashMap<String, PendingQuestionDraft>,
-    pending_initial_submit: bool,
-    pending_session_sync: Option<String>,
-    pending_session_sync_due_at: Option<Instant>,
-    last_session_sync: Instant,
-    last_full_session_sync: Instant,
-    last_question_sync: Instant,
-    last_permission_sync: Instant,
-    last_aux_sync: Instant,
-    last_process_refresh: Instant,
-    last_perf_log: Instant,
-    perf: PerfCounters,
-    perf_log_info: bool,
+    prompt_runtime: PromptRuntimeState,
+    permission_runtime: PermissionRuntimeState,
+    question_runtime: QuestionRuntimeState,
+    sync_runtime: SyncLifecycleState,
+    diagnostics: DiagnosticsState,
     event_caused_change: bool,
     /// Session IDs whose scheduler handoff metadata has been consumed.
     consumed_handoffs: HashSet<String>,
-    /// Shared session filter for the SSE listener thread.
+    /// Base URL for the server event stream.
+    server_event_base_url: String,
+    /// Shared session filter for the SSE listener task.
     /// Updated when navigating to a different session so the listener
     /// reconnects with `?session={id}`.
     sse_session_filter: SessionFilter,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct RunOutcome {
+    pub exit_summary: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -206,10 +193,60 @@ struct PendingQuestionDraft {
 }
 
 #[derive(Clone, Debug, Default)]
+struct PromptRuntimeState {
+    pending_queue: HashMap<String, VecDeque<QueuedPrompt>>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct PermissionRuntimeState {
+    pending_ids: HashSet<String>,
+    pending_requests: HashMap<String, PermissionRequestInfo>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct QuestionRuntimeState {
+    pending_ids: HashSet<String>,
+    pending_queue: VecDeque<String>,
+    pending_questions: HashMap<String, QuestionInfo>,
+    pending_drafts: HashMap<String, PendingQuestionDraft>,
+}
+
+#[derive(Clone, Debug, Default)]
 struct SelectedExecutionMode {
     agent: Option<String>,
     scheduler_profile: Option<String>,
     display_mode: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct SyncLifecycleState {
+    pending_initial_submit: bool,
+    pending_session_sync: Option<String>,
+    pending_session_sync_due_at: Option<Instant>,
+    last_session_sync: Instant,
+    last_full_session_sync: Instant,
+    last_question_sync: Instant,
+    last_permission_sync: Instant,
+    last_aux_sync: Instant,
+    last_process_refresh: Instant,
+    last_perf_log: Instant,
+}
+
+impl SyncLifecycleState {
+    fn new(now: Instant, pending_initial_submit: bool) -> Self {
+        Self {
+            pending_initial_submit,
+            pending_session_sync: None,
+            pending_session_sync_due_at: None,
+            last_session_sync: now,
+            last_full_session_sync: now,
+            last_question_sync: now,
+            last_permission_sync: now,
+            last_aux_sync: now,
+            last_process_refresh: now,
+            last_perf_log: now,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -223,54 +260,9 @@ struct PerfCounters {
 }
 
 #[derive(Clone, Debug, Default)]
-struct TuiEventsBrowserState {
-    session_id: String,
-    filter: InteractiveEventsQuery,
-    offset: usize,
-}
-
-#[derive(Clone, Debug, Default)]
-struct TuiMemoryListState {
-    query: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-struct TuiMemoryDetailState {
-    record_id: String,
-}
-
-#[derive(Clone, Debug, Default)]
-struct TuiMemoryPreviewState {
-    query: Option<String>,
-}
-
-#[derive(Clone, Debug, Default)]
-struct TuiMemoryRuleHitsState {
-    raw_query: Option<String>,
-}
-
-#[derive(Clone, Debug, Default)]
-struct TuiMemoryConsolidationState {
-    raw_request: Option<String>,
-}
-
-#[derive(Clone, Debug, Default)]
-enum StatusDialogView {
-    #[default]
-    Overview,
-    Runtime,
-    Usage,
-    Insights,
-    Events(TuiEventsBrowserState),
-    MemoryList(TuiMemoryListState),
-    MemoryPreview(TuiMemoryPreviewState),
-    MemoryDetail(TuiMemoryDetailState),
-    MemoryValidation(TuiMemoryDetailState),
-    MemoryConflicts(TuiMemoryDetailState),
-    MemoryRulePacks,
-    MemoryRuleHits(TuiMemoryRuleHitsState),
-    MemoryConsolidationRuns,
-    MemoryConsolidationResult(TuiMemoryConsolidationState),
+struct DiagnosticsState {
+    perf: PerfCounters,
+    perf_log_info: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -281,10 +273,7 @@ enum SessionSyncMode {
 
 impl App {
     pub fn new() -> anyhow::Result<Self> {
-        let (event_tx, event_rx) = mpsc::channel();
-        let event_tx_input = event_tx.clone();
         let context = Arc::new(AppContext::new());
-        let terminal = terminal::init()?;
         let mut prompt = Prompt::new(context.clone())
             .with_placeholder("Ask anything... \"Fix a TODO in the codebase\"");
         let mut pending_initial_submit = false;
@@ -298,7 +287,6 @@ impl App {
         let api_client = Arc::new(ApiClient::new(base_url.clone()));
         context.set_api_client(api_client);
         let sse_session_filter: SessionFilter = Arc::new(std::sync::Mutex::new(None));
-        spawn_server_event_listener(event_tx.clone(), base_url, sse_session_filter.clone());
 
         if let Some(agent) = env_var_with_fallback("ROCODE_TUI_AGENT", "OPENCODE_TUI_AGENT") {
             let agent = agent.trim();
@@ -344,59 +332,13 @@ impl App {
             prompt.set_spinner_color(agent_color_from_name(&theme, &mode_name));
         }
 
-        let tick_rate = Duration::from_millis(TICK_RATE_MS);
-        thread::spawn(move || {
-            let mut last_tick = Instant::now();
-
-            loop {
-                let timeout = tick_rate
-                    .checked_sub(last_tick.elapsed())
-                    .unwrap_or(tick_rate);
-
-                if crossterm::event::poll(timeout).unwrap_or(false) {
-                    let event = match crossterm::event::read() {
-                        Ok(crossterm::event::Event::Key(key)) if is_primary_key_event(key) => {
-                            Some(Event::Key(key))
-                        }
-                        Ok(crossterm::event::Event::Key(_)) => None,
-                        Ok(crossterm::event::Event::Mouse(mouse))
-                            if !matches!(mouse.kind, crossterm::event::MouseEventKind::Moved) =>
-                        {
-                            Some(Event::Mouse(mouse))
-                        }
-                        Ok(crossterm::event::Event::Resize(w, h)) => Some(Event::Resize(w, h)),
-                        Ok(crossterm::event::Event::FocusGained) => Some(Event::FocusGained),
-                        Ok(crossterm::event::Event::FocusLost) => Some(Event::FocusLost),
-                        Ok(crossterm::event::Event::Paste(s)) => Some(Event::Paste(s)),
-                        _ => None,
-                    };
-
-                    if let Some(e) = event {
-                        if event_tx_input.send(e).is_err() {
-                            break;
-                        }
-                    }
-                }
-
-                if last_tick.elapsed() >= tick_rate {
-                    if event_tx_input.send(Event::Tick).is_err() {
-                        break;
-                    }
-                    last_tick = Instant::now();
-                }
-            }
-        });
-
+        let now = Instant::now();
         let mut app = Self {
             context,
             state: AppState::default(),
-            terminal,
-            event_tx,
-            event_rx,
+            viewport_area: Rect::default(),
             prompt,
             selection: Selection::new(),
-            session_view: None,
-            active_session_id: None,
             command_palette: CommandPalette::new(),
             slash_popup: SlashCommandPopup::new(),
             leader_state: LeaderKeyState::new(),
@@ -411,7 +353,6 @@ impl App {
             skill_list_dialog: SkillListDialog::new(),
             theme_list_dialog: ThemeListDialog::new(),
             status_dialog: StatusDialog::new(),
-            status_dialog_view: StatusDialogView::Overview,
             mcp_dialog: McpDialog::new(),
             timeline_dialog: TimelineDialog::new(),
             fork_dialog: ForkDialog::new(),
@@ -427,27 +368,17 @@ impl App {
             available_models: HashSet::new(),
             model_variants: HashMap::new(),
             model_variant_selection: HashMap::new(),
-            pending_prompt_queue: HashMap::new(),
-            pending_permission_ids: HashSet::new(),
-            pending_permissions: HashMap::new(),
-            pending_question_ids: HashSet::new(),
-            pending_question_queue: VecDeque::new(),
-            pending_questions: HashMap::new(),
-            pending_question_drafts: HashMap::new(),
-            pending_initial_submit,
-            pending_session_sync: None,
-            pending_session_sync_due_at: None,
-            last_session_sync: Instant::now(),
-            last_full_session_sync: Instant::now(),
-            last_question_sync: Instant::now(),
-            last_permission_sync: Instant::now(),
-            last_aux_sync: Instant::now(),
-            last_process_refresh: Instant::now(),
-            last_perf_log: Instant::now(),
-            perf: PerfCounters::default(),
-            perf_log_info: env_var_enabled("ROCODE_PERF_LOG"),
+            prompt_runtime: PromptRuntimeState::default(),
+            permission_runtime: PermissionRuntimeState::default(),
+            question_runtime: QuestionRuntimeState::default(),
+            sync_runtime: SyncLifecycleState::new(now, pending_initial_submit),
+            diagnostics: DiagnosticsState {
+                perf: PerfCounters::default(),
+                perf_log_info: env_var_enabled("ROCODE_PERF_LOG"),
+            },
             event_caused_change: true,
             consumed_handoffs: HashSet::new(),
+            server_event_base_url: base_url,
             sse_session_filter,
         };
 
@@ -472,71 +403,8 @@ impl App {
         Ok(app)
     }
 
-    pub fn run(&mut self) -> anyhow::Result<()> {
-        self.draw()?;
-
-        while self.state != AppState::Exiting {
-            let mut should_draw = false;
-
-            let first_event = match self
-                .event_rx
-                .recv_timeout(Duration::from_millis(TICK_RATE_MS))
-            {
-                Ok(event) => Some(event),
-                Err(mpsc::RecvTimeoutError::Timeout) => None,
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            };
-
-            if let Some(event) = first_event {
-                self.handle_event(&event)?;
-                should_draw |= self.event_caused_change;
-
-                let mut deferred_mouse_move: Option<Event> = None;
-                for _ in 0..MAX_EVENTS_PER_FRAME {
-                    let next = match self.event_rx.try_recv() {
-                        Ok(next) => next,
-                        Err(mpsc::TryRecvError::Empty) => break,
-                        Err(mpsc::TryRecvError::Disconnected) => {
-                            self.state = AppState::Exiting;
-                            break;
-                        }
-                    };
-
-                    let is_mouse_move = matches!(
-                        next,
-                        Event::Mouse(crossterm::event::MouseEvent {
-                            kind: crossterm::event::MouseEventKind::Moved,
-                            ..
-                        })
-                    );
-
-                    if is_mouse_move {
-                        deferred_mouse_move = Some(next);
-                        continue;
-                    }
-
-                    if let Some(moved) = deferred_mouse_move.take() {
-                        self.handle_event(&moved)?;
-                        should_draw |= self.event_caused_change;
-                    }
-
-                    self.handle_event(&next)?;
-                    should_draw |= self.event_caused_change;
-                }
-
-                if let Some(moved) = deferred_mouse_move {
-                    self.handle_event(&moved)?;
-                    should_draw |= self.event_caused_change;
-                }
-            }
-
-            if should_draw {
-                self.draw()?;
-            }
-        }
-
-        terminal::restore()?;
-        Ok(())
+    pub fn run(self) -> anyhow::Result<RunOutcome> {
+        crate::bridge::run_app(self)
     }
 
     pub fn exit_summary(&self) -> Option<String> {
@@ -564,6 +432,155 @@ impl App {
         ));
         lines.push(String::new());
         Some(lines.join("\n"))
+    }
+
+    pub(crate) fn process_event(&mut self, event: &Event) -> anyhow::Result<bool> {
+        self.context.record_ui_event(event);
+        self.handle_event(event)?;
+        Ok(self.event_caused_change)
+    }
+
+    pub(crate) fn drain_pending_events(&mut self, limit: usize) -> anyhow::Result<bool> {
+        let mut should_draw = false;
+
+        for next in self.context.drain_ui_events(limit) {
+            should_draw |= self.process_event(&next)?;
+        }
+
+        Ok(should_draw)
+    }
+
+    pub(crate) fn is_exiting(&self) -> bool {
+        self.state == AppState::Exiting
+    }
+
+    pub(crate) fn spawn_server_event_listener_task(&self) -> tokio::task::JoinHandle<()> {
+        spawn_server_event_listener_task(
+            self.context.ui_bridge.clone(),
+            self.server_event_base_url.clone(),
+            self.sse_session_filter.clone(),
+        )
+    }
+
+    pub(crate) fn set_viewport_area(&mut self, area: Rect) {
+        self.viewport_area = area;
+    }
+
+    pub(crate) fn can_render_reactive_route(&self) -> bool {
+        !self.has_non_reactive_dialog_layer()
+    }
+
+    pub(crate) fn context_handle(&self) -> Arc<AppContext> {
+        self.context.clone()
+    }
+
+    pub(crate) fn begin_reactive_render(&mut self, area: Rect) {
+        self.viewport_area = area;
+        self.context
+            .set_pending_permissions(self.permission_prompt.pending_count());
+    }
+
+    pub(crate) fn render_home_view<S: RenderSurface>(&self, surface: &mut S, area: Rect) {
+        let home = HomeView::new(self.context.clone());
+        home.render_with_prompt(surface, area, &self.prompt);
+    }
+
+    pub(crate) fn render_session_view(
+        &self,
+        view: &crate::components::SessionView,
+        context: &Arc<AppContext>,
+        buffer: &mut Buffer,
+        area: Rect,
+    ) -> Option<(u16, u16)> {
+        let mut surface = BufferSurface::new(buffer);
+        view.render(context, &mut surface, area, &self.prompt);
+        surface.cursor_position()
+    }
+
+    pub(crate) fn render_reactive_dialog_layer<S: RenderSurface>(
+        &mut self,
+        surface: &mut S,
+        area: Rect,
+        theme: &crate::theme::Theme,
+    ) {
+        if !self.has_reactive_home_dialog_layer()
+            && !self.permission_prompt.is_open
+            && !self.question_prompt.is_open
+            && !self.tool_call_cancel_dialog.is_open()
+        {
+            return;
+        }
+
+        if self.has_reactive_home_dialog_layer()
+            || self.permission_prompt.is_open
+            || self.question_prompt.is_open
+        {
+            let modal_backdrop = Block::default().style(Style::default().bg(theme.background_menu));
+            surface.render_widget(modal_backdrop, area);
+        }
+        self.slash_popup.render(surface, area, theme);
+        self.help_dialog.render(surface, area, theme);
+        self.alert_dialog.render(surface, area, theme);
+        self.command_palette.render(surface, area, theme);
+        self.model_select.render(surface, area, theme);
+        self.agent_select.render(surface, area, theme);
+        self.session_list_dialog.render(surface, area, theme);
+        self.theme_list_dialog.render(surface, area, theme);
+        self.mcp_dialog.render(surface, area, theme);
+        self.timeline_dialog.render(surface, area, theme);
+        self.fork_dialog.render(surface, area, theme);
+        self.subagent_dialog.render(surface, area, theme);
+        self.tag_dialog.render(surface, area, theme);
+        self.recovery_action_dialog.render(surface, area, theme);
+        self.status_dialog.render(surface, area, theme);
+        self.session_rename_dialog.render(surface, area, theme);
+        self.session_export_dialog.render(surface, area, theme);
+        self.prompt_stash_dialog.render(surface, area, theme);
+        self.skill_list_dialog.render(surface, area, theme);
+        self.provider_dialog.render(surface, area, theme);
+        self.permission_prompt.render(surface, area, theme);
+        self.question_prompt.render(surface, area, theme);
+        self.tool_call_cancel_dialog.render(surface, area, theme);
+    }
+
+    pub(crate) fn render_reactive_toast<S: RenderSurface>(
+        &self,
+        surface: &mut S,
+        area: Rect,
+        theme: &crate::theme::Theme,
+    ) {
+        if !self.toast.is_visible() {
+            return;
+        }
+
+        let toast_width = 60u16.min(area.width.saturating_sub(4));
+        let toast_height = self.toast.desired_height(toast_width);
+        let base_x = area.x + area.width.saturating_sub(toast_width.saturating_add(2));
+        let max_x = area.x + area.width.saturating_sub(toast_width);
+        let toast_x = base_x.saturating_add(self.toast.slide_offset()).min(max_x);
+        let toast_area = Rect {
+            x: toast_x,
+            y: 2.min(area.height.saturating_sub(1)),
+            width: toast_width,
+            height: toast_height.min(area.height.saturating_sub(2)),
+        };
+        self.toast.render(surface, toast_area, &theme);
+    }
+
+    pub(crate) fn capture_reactive_screen_lines(&mut self, buffer: &Buffer, area: Rect) {
+        let should_capture_screen_lines =
+            self.selection.is_active() || self.selection.is_selecting();
+        if !should_capture_screen_lines {
+            return;
+        }
+
+        self.screen_lines = capture_screen_lines(buffer, area);
+        self.diagnostics.perf.screen_snapshots =
+            self.diagnostics.perf.screen_snapshots.saturating_add(1);
+    }
+
+    pub(crate) fn apply_reactive_selection(&self, buffer: &mut Buffer, area: Rect) {
+        apply_selection_highlight(buffer, area, &self.selection);
     }
 
     fn handle_event(&mut self, event: &Event) -> anyhow::Result<()> {
@@ -702,7 +719,7 @@ impl App {
                 // Ctrl+K to cancel current running tool call or session
                 if key.code == KeyCode::Char('k') && key.modifiers == KeyModifiers::CONTROL {
                     tracing::info!("Ctrl+K pressed");
-                    if let Some(session_id) = &self.active_session_id {
+                    if let Some(session_id) = self.current_session_id() {
                         let active_tool_calls = self.context.get_active_tool_calls();
                         let tool_call_count = active_tool_calls.len();
                         tracing::info!(
@@ -720,12 +737,12 @@ impl App {
                                     tool_name: info.tool_name.clone(),
                                 })
                                 .collect();
-                            self.tool_call_cancel_dialog.open(items);
+                            self.open_tool_call_cancel_dialog_modal(items);
                         } else if tool_call_count == 1 {
                             // Single tool call - cancel directly
                             if let Some(api) = self.context.get_api_client() {
                                 let tool_call_id = active_tool_calls.keys().next().unwrap().clone();
-                                if let Err(e) = api.cancel_tool_call(session_id, &tool_call_id) {
+                                if let Err(e) = api.cancel_tool_call(&session_id, &tool_call_id) {
                                     self.toast.show(
                                         ToastVariant::Error,
                                         &format!("Failed to cancel tool: {}", e),
@@ -742,7 +759,7 @@ impl App {
                         } else {
                             // No tool calls - cancel session
                             if let Some(api) = self.context.get_api_client() {
-                                match api.abort_session(session_id) {
+                                match api.abort_session(&session_id) {
                                     Err(e) => {
                                         self.toast.show(
                                             ToastVariant::Error,
@@ -780,13 +797,8 @@ impl App {
                 }
 
                 if key.code == KeyCode::Esc {
-                    if let Some(ref mut sv) = self.session_view {
-                        if sv.sidebar_state_mut().process_focus {
-                            sv.sidebar_state_mut().process_focus = false;
-                            return Ok(());
-                        }
-                        if sv.sidebar_state_mut().child_session_focus {
-                            sv.sidebar_state_mut().child_session_focus = false;
+                    if let Some(sv) = self.context.session_view_handle() {
+                        if sv.clear_sidebar_focus() {
                             return Ok(());
                         }
                     }
@@ -797,75 +809,72 @@ impl App {
                 }
 
                 // Process panel keyboard handling (when focused)
-                if let Some(ref mut sv) = self.session_view {
-                    let ss = sv.sidebar_state_mut();
-                    if ss.process_focus {
-                        let proc_count = self.context.processes.read().len();
-                        match key.code {
-                            KeyCode::Up => {
-                                ss.process_select_up();
-                                return Ok(());
-                            }
-                            KeyCode::Down => {
-                                ss.process_select_down(proc_count);
-                                return Ok(());
-                            }
-                            KeyCode::Char('d') | KeyCode::Delete => {
-                                let procs = self.context.processes.read().clone();
-                                if let Some(proc) = procs.get(ss.process_selected) {
-                                    let _ = rocode_orchestrator::global_lifecycle()
-                                        .kill_process(proc.pid);
-                                    *self.context.processes.write() =
-                                        rocode_core::process_registry::global_registry().list();
-                                    ss.clamp_process_selected(self.context.processes.read().len());
-                                }
-                                return Ok(());
-                            }
-                            _ => {}
+                if let Some(sv) = self
+                    .context
+                    .session_view_handle()
+                    .filter(|sv| sv.sidebar_process_focus())
+                {
+                    let proc_count = self.context.processes.read().len();
+                    match key.code {
+                        KeyCode::Up => {
+                            sv.move_sidebar_process_selection_up();
+                            return Ok(());
                         }
+                        KeyCode::Down => {
+                            sv.move_sidebar_process_selection_down(proc_count);
+                            return Ok(());
+                        }
+                        KeyCode::Char('d') | KeyCode::Delete => {
+                            let procs = self.context.processes.read().clone();
+                            if let Some(proc) = procs.get(sv.sidebar_process_selected()) {
+                                let _ =
+                                    rocode_orchestrator::global_lifecycle().kill_process(proc.pid);
+                                *self.context.processes.write() =
+                                    rocode_core::process_registry::global_registry().list();
+                                sv.clamp_sidebar_process_selection(
+                                    self.context.processes.read().len(),
+                                );
+                            }
+                            return Ok(());
+                        }
+                        _ => {}
                     }
                 }
 
                 // Child session panel keyboard handling (when focused)
-                if let Some(ref mut sv) = self.session_view {
-                    let ss = sv.sidebar_state_mut();
-                    if ss.child_session_focus {
-                        match key.code {
-                            KeyCode::Up => {
-                                ss.child_session_select_up();
-                                return Ok(());
-                            }
-                            KeyCode::Down => {
-                                let count = self.context.child_sessions.read().len();
-                                ss.child_session_select_down(count);
-                                return Ok(());
-                            }
-                            KeyCode::Enter => {
-                                let sessions = self.context.child_sessions.read().clone();
-                                if let Some(child) = sessions.get(ss.child_session_selected) {
-                                    let child_id = child.session_id.clone();
-                                    drop(sessions);
-                                    self.context.navigate(Route::Session {
-                                        session_id: child_id.clone(),
-                                    });
-                                    self.ensure_session_view(&child_id);
-                                    let _ = self.sync_session_from_server(&child_id);
-                                }
-                                return Ok(());
-                            }
-                            _ => {}
+                if let Some(sv) = self
+                    .context
+                    .session_view_handle()
+                    .filter(|sv| sv.sidebar_child_session_focus())
+                {
+                    match key.code {
+                        KeyCode::Up => {
+                            sv.move_sidebar_child_session_selection_up();
+                            return Ok(());
                         }
+                        KeyCode::Down => {
+                            let count = self.context.child_sessions().len();
+                            sv.move_sidebar_child_session_selection_down(count);
+                            return Ok(());
+                        }
+                        KeyCode::Enter => {
+                            let sessions = self.context.child_sessions();
+                            if let Some(child) = sessions.get(sv.sidebar_child_session_selected()) {
+                                let child_id = child.session_id.clone();
+                                self.context.navigate_session(child_id.clone());
+                                self.ensure_session_view(&child_id);
+                                let _ = self.sync_session_from_server(&child_id);
+                            }
+                            return Ok(());
+                        }
+                        _ => {}
                     }
                 }
 
                 // 'p' toggles process panel focus when sidebar is visible
                 if key.code == KeyCode::Char('p') && key.modifiers.is_empty() {
-                    let sidebar_visible = *self.context.show_sidebar.read();
-                    if sidebar_visible {
-                        if let Some(ref mut sv) = self.session_view {
-                            let ss = sv.sidebar_state_mut();
-                            ss.process_focus = !ss.process_focus;
-                            ss.child_session_focus = false;
+                    if let Some(sv) = self.context.session_view_handle() {
+                        if sv.toggle_sidebar_process_focus(self.terminal_width()) {
                             return Ok(());
                         }
                     }
@@ -926,7 +935,7 @@ impl App {
                 }
                 if self.matches_keybind("page_up", key) {
                     if let Route::Session { .. } = self.context.current_route() {
-                        if let Some(ref mut sv) = self.session_view {
+                        if let Some(sv) = self.context.session_view_handle() {
                             sv.scroll_page_up();
                             return Ok(());
                         }
@@ -934,7 +943,7 @@ impl App {
                 }
                 if self.matches_keybind("page_down", key) {
                     if let Route::Session { .. } = self.context.current_route() {
-                        if let Some(ref mut sv) = self.session_view {
+                        if let Some(sv) = self.context.session_view_handle() {
                             sv.scroll_page_down();
                             return Ok(());
                         }
@@ -943,12 +952,12 @@ impl App {
 
                 if self.matches_keybind("command_palette", key) {
                     self.sync_command_palette_labels();
-                    self.command_palette.open();
+                    self.open_command_palette_dialog();
                     return Ok(());
                 }
                 if self.matches_keybind("model_cycle", key) {
                     self.refresh_model_dialog();
-                    self.model_select.open();
+                    self.open_model_select_dialog();
                     return Ok(());
                 }
                 if self.matches_keybind("agent_cycle", key) {
@@ -972,18 +981,13 @@ impl App {
                     return Ok(());
                 }
                 if self.matches_keybind("session_child_cycle", key) {
-                    let sidebar_visible = *self.context.show_sidebar.read();
-                    if sidebar_visible {
-                        if let Some(ref mut sv) = self.session_view {
-                            let ss = sv.sidebar_state_mut();
-                            ss.child_session_focus = !ss.child_session_focus;
-                            ss.process_focus = false;
-                        }
+                    if let Some(sv) = self.context.session_view_handle() {
+                        let _ = sv.toggle_sidebar_child_session_focus(self.terminal_width());
                     }
                     return Ok(());
                 }
                 if self.matches_keybind("sidebar_toggle", key) {
-                    self.context.toggle_sidebar();
+                    self.toggle_session_sidebar();
                     return Ok(());
                 }
                 if self.matches_keybind("display_thinking", key) {
@@ -1006,7 +1010,7 @@ impl App {
                     }
                 }
                 if self.matches_keybind("help_toggle", key) {
-                    self.help_dialog.open();
+                    self.open_help_dialog();
                     return Ok(());
                 }
 
@@ -1030,8 +1034,8 @@ impl App {
                     }
                 }
             }
-            Event::Resize(_, _) => {
-                self.terminal.autoresize()?;
+            Event::Resize(width, height) => {
+                self.viewport_area = Rect::new(0, 0, *width, *height);
             }
             Event::Mouse(mouse_event) => {
                 use crossterm::event::{MouseButton, MouseEventKind};
@@ -1098,20 +1102,14 @@ impl App {
 
                         if button == MouseButton::Left {
                             if let Route::Session { .. } = self.context.current_route() {
-                                if let Some(ref mut sv) = self.session_view {
-                                    if sv.handle_sidebar_click(col, row) {
+                                if let Some(sv) = self.context.session_view_handle() {
+                                    if sv.handle_sidebar_click(&self.context, col, row) {
                                         // Check if the click triggered a child session navigation
-                                        if let Some(cs_idx) =
-                                            sv.sidebar_state_mut().take_pending_navigate_child()
-                                        {
-                                            let sessions =
-                                                self.context.child_sessions.read().clone();
+                                        if let Some(cs_idx) = sv.take_pending_navigate_child() {
+                                            let sessions = self.context.child_sessions();
                                             if let Some(child) = sessions.get(cs_idx) {
                                                 let child_id = child.session_id.clone();
-                                                drop(sessions);
-                                                self.context.navigate(Route::Session {
-                                                    session_id: child_id.clone(),
-                                                });
+                                                self.context.navigate_session(child_id.clone());
                                                 self.ensure_session_view(&child_id);
                                                 let _ = self.sync_session_from_server(&child_id);
                                             }
@@ -1137,7 +1135,7 @@ impl App {
                         if self.handle_dialog_mouse(mouse_event)? {
                             return Ok(());
                         }
-                        if let Some(ref mut sv) = self.session_view {
+                        if let Some(sv) = self.context.session_view_handle() {
                             if !sv.scroll_sidebar_up_at(mouse_event.column, mouse_event.row) {
                                 sv.scroll_up_mouse();
                             }
@@ -1147,7 +1145,7 @@ impl App {
                         if self.handle_dialog_mouse(mouse_event)? {
                             return Ok(());
                         }
-                        if let Some(ref mut sv) = self.session_view {
+                        if let Some(sv) = self.context.session_view_handle() {
                             if !sv.scroll_sidebar_down_at(mouse_event.column, mouse_event.row) {
                                 sv.scroll_down_mouse();
                             }
@@ -1156,7 +1154,7 @@ impl App {
                     MouseEventKind::Drag(_) => {
                         let col = mouse_event.column;
                         let row = mouse_event.row;
-                        if let Some(ref mut sv) = self.session_view {
+                        if let Some(sv) = self.context.session_view_handle() {
                             if sv.handle_scrollbar_drag(col, row) {
                                 return Ok(());
                             }
@@ -1170,7 +1168,7 @@ impl App {
                         self.event_caused_change = false;
                     }
                     MouseEventKind::Up(_) => {
-                        if let Some(ref mut sv) = self.session_view {
+                        if let Some(sv) = self.context.session_view_handle() {
                             if sv.stop_scrollbar_drag() {
                                 return Ok(());
                             }
@@ -1218,7 +1216,7 @@ impl App {
                             self.sync_prompt_spinner_state();
                             self.alert_dialog
                                 .set_message(&format!("Failed to send prompt:\n{}", err));
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         } else {
                             match response.as_ref().map(|response| response.status.as_str()) {
                                 Some("awaiting_user") => {
@@ -1239,16 +1237,14 @@ impl App {
                         if let Route::Session { session_id: active } = self.context.current_route()
                         {
                             if active == *optimistic_session_id {
-                                self.context.navigate(Route::Home);
-                                self.active_session_id = None;
-                                self.session_view = None;
+                                self.context.navigate_home();
                             }
                         }
                         self.prompt.set_spinner_active(false);
                         if let Some(err) = error {
                             self.alert_dialog
                                 .set_message(&format!("Failed to create session:\n{}", err));
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                     }
                     self.event_caused_change = true;
@@ -1266,7 +1262,7 @@ impl App {
                         self.sync_prompt_spinner_state();
                         self.alert_dialog
                             .set_message(&format!("Failed to send prompt:\n{}", err));
-                        self.alert_dialog.open();
+                        self.open_alert_dialog();
                     } else if matches!(
                         response.as_ref().map(|response| response.status.as_str()),
                         Some("awaiting_user")
@@ -1279,13 +1275,16 @@ impl App {
                     self.event_caused_change = true;
                 }
                 CustomEvent::StateChanged(StateChange::SessionUpdated { session_id, source }) => {
-                    self.perf.session_updated_events =
-                        self.perf.session_updated_events.saturating_add(1);
+                    self.diagnostics.perf.session_updated_events = self
+                        .diagnostics
+                        .perf
+                        .session_updated_events
+                        .saturating_add(1);
                     if let Route::Session { session_id: active } = self.context.current_route() {
                         if active == *session_id && session_update_requires_sync(source.as_deref())
                         {
-                            self.pending_session_sync = Some(session_id.to_string());
-                            self.pending_session_sync_due_at = Some(
+                            self.sync_runtime.pending_session_sync = Some(session_id.to_string());
+                            self.sync_runtime.pending_session_sync_due_at = Some(
                                 Instant::now() + Duration::from_millis(SESSION_SYNC_DEBOUNCE_MS),
                             );
                         }
@@ -1334,7 +1333,7 @@ impl App {
                     };
                     if should_sync {
                         self.event_caused_change = self.sync_question_requests();
-                        self.last_question_sync = Instant::now();
+                        self.sync_runtime.last_question_sync = Instant::now();
                     }
                 }
                 CustomEvent::StateChanged(StateChange::PermissionRequested {
@@ -1349,7 +1348,7 @@ impl App {
                     };
                     if should_surface {
                         self.enqueue_permission_request(permission.clone());
-                        self.last_permission_sync = Instant::now();
+                        self.sync_runtime.last_permission_sync = Instant::now();
                         self.event_caused_change = true;
                     }
                 }
@@ -1365,7 +1364,7 @@ impl App {
                     };
                     if should_surface {
                         self.clear_permission_request(permission_id);
-                        self.last_permission_sync = Instant::now();
+                        self.sync_runtime.last_permission_sync = Instant::now();
                         self.event_caused_change = true;
                     }
                 }
@@ -1443,17 +1442,20 @@ impl App {
                 tick_changed |= self.prompt.tick_spinner(TICK_RATE_MS);
                 tick_changed |= self.sync_prompt_spinner_state();
 
-                if self.pending_initial_submit && !self.prompt.get_input().trim().is_empty() {
-                    self.pending_initial_submit = false;
+                if self.sync_runtime.pending_initial_submit
+                    && !self.prompt.get_input().trim().is_empty()
+                {
+                    self.sync_runtime.pending_initial_submit = false;
                     self.submit_prompt()?;
                     tick_changed = true;
                 }
 
                 let route = self.context.current_route();
                 if let Route::Session { session_id } = &route {
-                    let should_sync_pending = self.pending_session_sync.as_deref()
+                    let should_sync_pending = self.sync_runtime.pending_session_sync.as_deref()
                         == Some(session_id.as_str())
                         && self
+                            .sync_runtime
                             .pending_session_sync_due_at
                             .map(|due| Instant::now() >= due)
                             .unwrap_or(false);
@@ -1477,10 +1479,10 @@ impl App {
                                 self.refresh_active_status_dialog();
                             }
                         }
-                        self.pending_session_sync = None;
-                        self.pending_session_sync_due_at = None;
+                        self.sync_runtime.pending_session_sync = None;
+                        self.sync_runtime.pending_session_sync_due_at = None;
                     }
-                    if self.last_full_session_sync.elapsed()
+                    if self.sync_runtime.last_full_session_sync.elapsed()
                         >= Duration::from_secs(SESSION_FULL_SYNC_INTERVAL_SECS)
                         && self
                             .sync_session_from_server_with_mode(session_id, SessionSyncMode::Full)
@@ -1493,36 +1495,36 @@ impl App {
                         }
                     }
                 }
-                if self.last_question_sync.elapsed()
+                if self.sync_runtime.last_question_sync.elapsed()
                     >= Duration::from_secs(QUESTION_SYNC_FALLBACK_SECS)
                 {
                     tick_changed |= self.sync_question_requests();
-                    self.last_question_sync = Instant::now();
+                    self.sync_runtime.last_question_sync = Instant::now();
                 }
-                if self.last_permission_sync.elapsed()
+                if self.sync_runtime.last_permission_sync.elapsed()
                     >= Duration::from_secs(PERMISSION_SYNC_FALLBACK_SECS)
                 {
                     tick_changed |= self.sync_permission_requests();
-                    self.last_permission_sync = Instant::now();
+                    self.sync_runtime.last_permission_sync = Instant::now();
                 }
-                if self.last_aux_sync.elapsed() >= Duration::from_secs(5) {
+                if self.sync_runtime.last_aux_sync.elapsed() >= Duration::from_secs(5) {
                     self.refresh_session_list_dialog();
                     let _ = self.refresh_skill_list_dialog();
                     let _ = self.refresh_lsp_status();
                     let _ = self.refresh_mcp_dialog();
-                    self.last_aux_sync = Instant::now();
+                    self.sync_runtime.last_aux_sync = Instant::now();
                     tick_changed = true;
                 }
-                if self.last_process_refresh.elapsed() >= Duration::from_secs(2) {
+                if self.sync_runtime.last_process_refresh.elapsed() >= Duration::from_secs(2) {
                     let should_refresh_processes =
-                        matches!(route, Route::Session { .. }) && *self.context.show_sidebar.read();
+                        matches!(route, Route::Session { .. }) && self.session_sidebar_visible();
                     if should_refresh_processes {
                         rocode_core::process_registry::global_registry().refresh_stats();
                         *self.context.processes.write() =
                             rocode_core::process_registry::global_registry().list();
                         tick_changed = true;
                     }
-                    self.last_process_refresh = Instant::now();
+                    self.sync_runtime.last_process_refresh = Instant::now();
                 }
                 self.maybe_log_perf_snapshot();
                 self.event_caused_change = tick_changed;
@@ -1533,213 +1535,49 @@ impl App {
         Ok(())
     }
 
-    fn draw(&mut self) -> anyhow::Result<()> {
-        self.perf.draws = self.perf.draws.saturating_add(1);
+    fn terminal_width(&self) -> u16 {
+        self.viewport_area.width
+    }
+
+    fn session_sidebar_visible(&self) -> bool {
         self.context
-            .set_pending_permissions(self.permission_prompt.pending_count());
+            .session_view_handle()
+            .map(|sv| sv.sidebar_visible(self.terminal_width()))
+            .unwrap_or(false)
+    }
 
-        let route = self.context.current_route();
-        if let Route::Session { session_id } = &route {
-            self.ensure_session_view(session_id);
-        } else {
-            self.active_session_id = None;
-            self.session_view = None;
+    fn toggle_session_sidebar(&self) {
+        if let Some(sv) = self.context.session_view_handle() {
+            sv.toggle_sidebar(self.terminal_width());
         }
-
-        let context = self.context.clone();
-        let prompt = &self.prompt;
-        let route_for_draw = route.clone();
-        let show_modal_overlay = self.has_open_dialog_layer()
-            || self.permission_prompt.is_open
-            || self.question_prompt.is_open;
-        let session_view = self.session_view.as_mut();
-        let theme = self.context.theme.read().clone();
-        let command_palette = &self.command_palette;
-        let model_select = &self.model_select;
-        let agent_select = &self.agent_select;
-        let session_list_dialog = &self.session_list_dialog;
-        let theme_list_dialog = &self.theme_list_dialog;
-        let status_dialog = &self.status_dialog;
-        let mcp_dialog = &self.mcp_dialog;
-        let help_dialog = &self.help_dialog;
-        let alert_dialog = &self.alert_dialog;
-        let session_rename_dialog = &self.session_rename_dialog;
-        let session_export_dialog = &self.session_export_dialog;
-        let prompt_stash_dialog = &self.prompt_stash_dialog;
-        let skill_list_dialog = &self.skill_list_dialog;
-        let timeline_dialog = &self.timeline_dialog;
-        let fork_dialog = &self.fork_dialog;
-        let provider_dialog = &self.provider_dialog;
-        let subagent_dialog = &self.subagent_dialog;
-        let tag_dialog = &self.tag_dialog;
-        let permission_prompt = &self.permission_prompt;
-        let question_prompt = &self.question_prompt;
-        let slash_popup = &self.slash_popup;
-        let toast = &self.toast;
-        let selection = &self.selection;
-        let capture_screen_lines = selection.is_active() || selection.is_selecting();
-
-        let mut captured_lines: Vec<String> = Vec::new();
-
-        self.terminal.draw(|frame| {
-            let area = frame.size();
-            if area.width < 10 || area.height < 10 {
-                return;
-            }
-
-            match route_for_draw {
-                Route::Home => {
-                    let home = HomeView::new(context.clone());
-                    home.render_with_prompt(frame, area, prompt);
-                }
-                Route::Session { .. } => {
-                    if let Some(view) = session_view {
-                        view.render(frame, area, prompt);
-                    } else {
-                        let home = HomeView::new(context.clone());
-                        home.render_with_prompt(frame, area, prompt);
-                    }
-                }
-                _ => {
-                    let home = HomeView::new(context.clone());
-                    home.render_with_prompt(frame, area, prompt);
-                }
-            }
-
-            if show_modal_overlay {
-                let modal_backdrop = ratatui::widgets::Block::default()
-                    .style(ratatui::style::Style::default().bg(theme.background_menu));
-                frame.render_widget(modal_backdrop, area);
-            }
-
-            slash_popup.render(frame, area, &theme);
-            command_palette.render(frame, area, &theme);
-            model_select.render(frame, area, &theme);
-            agent_select.render(frame, area, &theme);
-            session_list_dialog.render(frame, area, &theme);
-            theme_list_dialog.render(frame, area, &theme);
-            status_dialog.render(frame, area, &theme);
-            mcp_dialog.render(frame, area, &theme);
-            help_dialog.render(frame, area, &theme);
-            alert_dialog.render(frame, area, &theme);
-            session_rename_dialog.render(frame, area, &theme);
-            session_export_dialog.render(frame, area, &theme);
-            prompt_stash_dialog.render(frame, area, &theme);
-            skill_list_dialog.render(frame, area, &theme);
-            timeline_dialog.render(frame, area, &theme);
-            fork_dialog.render(frame, area, &theme);
-            provider_dialog.render(frame, area, &theme);
-            subagent_dialog.render(frame, area, &theme);
-            tag_dialog.render(frame, area, &theme);
-            self.tool_call_cancel_dialog.render(frame, &theme);
-            self.recovery_action_dialog.render(frame, &theme);
-            permission_prompt.render(frame, area, &theme);
-            question_prompt.render(frame, area, &theme);
-
-            // Render toast notification (top-right corner)
-            if toast.is_visible() {
-                let toast_width = 60u16.min(area.width.saturating_sub(4));
-                let toast_height = toast.desired_height(toast_width);
-                let base_x = area.x + area.width.saturating_sub(toast_width.saturating_add(2));
-                let max_x = area.x + area.width.saturating_sub(toast_width);
-                let toast_x = base_x.saturating_add(toast.slide_offset()).min(max_x);
-                let toast_area = ratatui::layout::Rect {
-                    x: toast_x,
-                    y: 2.min(area.height.saturating_sub(1)),
-                    width: toast_width,
-                    height: toast_height.min(area.height.saturating_sub(2)),
-                };
-                toast.render(frame, toast_area, &theme);
-            }
-
-            let buf = frame.buffer_mut();
-            if capture_screen_lines {
-                // Snapshot the rendered buffer for text selection (before highlight overlay)
-                captured_lines.clear();
-                for y in area.y..area.y + area.height {
-                    let line = line_from_cells(
-                        (area.x..area.x + area.width).map(|x| buf.get(x, y).symbol()),
-                    );
-                    let trimmed = line.trim_end().to_string();
-                    captured_lines.push(trimmed);
-                }
-            }
-
-            // Render selection highlight — invert colors on non-empty cells,
-            // matching standard terminal selection behavior (like opentui).
-            if selection.is_active() {
-                use ratatui::style::Color;
-                for y in area.y..area.y + area.height {
-                    for x in area.x..area.x + area.width {
-                        if !selection.is_selected(y, x) {
-                            continue;
-                        }
-                        let cell = buf.get(x, y);
-                        let sym = cell.symbol();
-                        // Only highlight cells with visible text content
-                        if sym.is_empty() || sym.chars().all(|c| c == ' ') {
-                            continue;
-                        }
-                        let cell = buf.get_mut(x, y);
-                        // Resolve Reset to concrete terminal defaults before swapping.
-                        // Reset fg = terminal default foreground (typically white/light).
-                        // Reset bg = terminal default background (typically black/dark).
-                        let fg = if cell.fg == Color::Reset {
-                            Color::White
-                        } else {
-                            cell.fg
-                        };
-                        let bg = if cell.bg == Color::Reset {
-                            Color::Black
-                        } else {
-                            cell.bg
-                        };
-                        cell.fg = bg;
-                        cell.bg = fg;
-                    }
-                }
-            }
-        })?;
-
-        if capture_screen_lines {
-            self.screen_lines = captured_lines;
-            self.perf.screen_snapshots = self.perf.screen_snapshots.saturating_add(1);
-        }
-        Ok(())
     }
 
     fn maybe_log_perf_snapshot(&mut self) {
-        if self.last_perf_log.elapsed() < Duration::from_secs(PERF_LOG_INTERVAL_SECS) {
+        if self.sync_runtime.last_perf_log.elapsed() < Duration::from_secs(PERF_LOG_INTERVAL_SECS) {
             return;
         }
-        self.last_perf_log = Instant::now();
-        if self.perf_log_info {
+        self.sync_runtime.last_perf_log = Instant::now();
+        if self.diagnostics.perf_log_info {
             tracing::info!(
-                draws = self.perf.draws,
-                screen_snapshots = self.perf.screen_snapshots,
-                session_sync_full = self.perf.session_sync_full,
-                session_sync_incremental = self.perf.session_sync_incremental,
-                question_sync = self.perf.question_sync,
-                session_updated_events = self.perf.session_updated_events,
+                draws = self.diagnostics.perf.draws,
+                screen_snapshots = self.diagnostics.perf.screen_snapshots,
+                session_sync_full = self.diagnostics.perf.session_sync_full,
+                session_sync_incremental = self.diagnostics.perf.session_sync_incremental,
+                question_sync = self.diagnostics.perf.question_sync,
+                session_updated_events = self.diagnostics.perf.session_updated_events,
                 "tui perf snapshot"
             );
         } else {
             tracing::debug!(
-                draws = self.perf.draws,
-                screen_snapshots = self.perf.screen_snapshots,
-                session_sync_full = self.perf.session_sync_full,
-                session_sync_incremental = self.perf.session_sync_incremental,
-                question_sync = self.perf.question_sync,
-                session_updated_events = self.perf.session_updated_events,
+                draws = self.diagnostics.perf.draws,
+                screen_snapshots = self.diagnostics.perf.screen_snapshots,
+                session_sync_full = self.diagnostics.perf.session_sync_full,
+                session_sync_incremental = self.diagnostics.perf.session_sync_incremental,
+                question_sync = self.diagnostics.perf.question_sync,
+                session_updated_events = self.diagnostics.perf.session_updated_events,
                 "tui perf snapshot"
             );
         }
-    }
-}
-
-impl Drop for App {
-    fn drop(&mut self) {
-        let _ = terminal::restore();
     }
 }
 

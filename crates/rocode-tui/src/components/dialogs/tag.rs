@@ -3,10 +3,10 @@ use ratatui::{
     style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState},
-    Frame,
 };
 
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 
 #[derive(Clone, Debug)]
 pub struct Tag {
@@ -79,7 +79,7 @@ impl TagDialog {
         &self.selected_tags
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect, theme: &Theme) {
         if !self.open || self.tags.is_empty() {
             return;
         }
@@ -107,16 +107,48 @@ impl TagDialog {
             })
             .collect();
 
-        frame.render_widget(block, popup_area);
+        surface.render_widget(block, popup_area);
 
         let list = List::new(items).highlight_style(Style::default().fg(theme.primary));
 
-        frame.render_widget(list, content_area);
+        surface.render_widget(list, content_area);
     }
 }
 
 impl Default for TagDialog {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    use crate::ui::BufferSurface;
+
+    #[test]
+    fn tag_dialog_renders_to_buffer_surface() {
+        let mut dialog = TagDialog::new();
+        dialog.set_tags(vec![Tag {
+            id: "frontend".to_string(),
+            name: "Frontend".to_string(),
+            color: None,
+        }]);
+        dialog.open();
+
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buffer = Buffer::empty(area);
+        let mut surface = BufferSurface::new(&mut buffer);
+
+        dialog.render(&mut surface, area, &Theme::dark());
+
+        let rendered = buffer
+            .content
+            .iter()
+            .filter(|cell| !cell.symbol().trim().is_empty())
+            .count();
+        assert!(rendered > 0);
     }
 }

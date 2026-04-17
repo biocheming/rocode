@@ -3,10 +3,10 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
-    Frame,
 };
 
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 
 pub struct SessionRenameDialog {
     open: bool,
@@ -57,13 +57,13 @@ impl SessionRenameDialog {
         Some((session_id, title))
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect, theme: &Theme) {
         if !self.open {
             return;
         }
 
         let dialog_area = centered_rect(70, 8, area);
-        frame.render_widget(Clear, dialog_area);
+        surface.render_widget(Clear, dialog_area);
 
         let block = Block::default()
             .title(Span::styled(
@@ -76,7 +76,7 @@ impl SessionRenameDialog {
             .border_style(Style::default().fg(theme.border))
             .style(Style::default().bg(theme.background_panel));
         let inner = super::dialog_inner(block.inner(dialog_area));
-        frame.render_widget(block, dialog_area);
+        surface.render_widget(block, dialog_area);
 
         let layout = Layout::default()
             .direction(Direction::Vertical)
@@ -87,7 +87,7 @@ impl SessionRenameDialog {
             ])
             .split(inner);
 
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled("> ", Style::default().fg(theme.primary)),
                 Span::styled(&self.input, Style::default().fg(theme.text)),
@@ -96,7 +96,7 @@ impl SessionRenameDialog {
             layout[0],
         );
 
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new("Enter save  Esc cancel").style(Style::default().fg(theme.text_muted)),
             layout[2],
         );
@@ -111,4 +111,31 @@ impl Default for SessionRenameDialog {
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     super::centered_rect(width, height, area)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    use crate::ui::BufferSurface;
+
+    #[test]
+    fn session_rename_dialog_renders_to_buffer_surface() {
+        let mut dialog = SessionRenameDialog::new();
+        dialog.open("session-1".to_string(), "Migration".to_string());
+
+        let area = Rect::new(0, 0, 100, 24);
+        let mut buffer = Buffer::empty(area);
+        let mut surface = BufferSurface::new(&mut buffer);
+
+        dialog.render(&mut surface, area, &Theme::dark());
+
+        let rendered = buffer
+            .content
+            .iter()
+            .filter(|cell| !cell.symbol().trim().is_empty())
+            .count();
+        assert!(rendered > 0);
+    }
 }

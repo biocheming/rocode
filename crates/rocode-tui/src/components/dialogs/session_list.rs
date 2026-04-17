@@ -4,10 +4,10 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
-    Frame,
 };
 
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 
 #[derive(Clone, Debug)]
 pub struct SessionItem {
@@ -209,13 +209,13 @@ impl SessionListDialog {
         });
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect, theme: &Theme) {
         if !self.open {
             return;
         }
 
         let dialog_area = centered_rect(82, 24, area);
-        frame.render_widget(Clear, dialog_area);
+        surface.render_widget(Clear, dialog_area);
 
         let block = Block::default()
             .title(Span::styled(
@@ -228,7 +228,7 @@ impl SessionListDialog {
             .border_style(Style::default().fg(theme.border))
             .style(Style::default().bg(theme.background_panel));
         let inner = super::dialog_inner(block.inner(dialog_area));
-        frame.render_widget(block, dialog_area);
+        surface.render_widget(block, dialog_area);
 
         let layout = Layout::default()
             .direction(Direction::Vertical)
@@ -240,7 +240,7 @@ impl SessionListDialog {
             ])
             .split(inner);
 
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled("> ", Style::default().fg(theme.primary)),
                 Span::styled(&self.query, Style::default().fg(theme.text)),
@@ -306,7 +306,7 @@ impl SessionListDialog {
                 .bg(theme.background_element)
                 .add_modifier(Modifier::BOLD),
         );
-        frame.render_stateful_widget(list, layout[1], &mut self.state.clone());
+        surface.render_stateful_widget(list, layout[1], &mut self.state.clone());
 
         let action_line = if self.is_renaming() {
             Line::from(vec![
@@ -322,7 +322,7 @@ impl SessionListDialog {
                 Span::styled(" delete", Style::default().fg(theme.text_muted)),
             ])
         };
-        frame.render_widget(Paragraph::new(action_line), layout[2]);
+        surface.render_widget(Paragraph::new(action_line), layout[2]);
 
         let footer = if self.is_renaming() {
             Paragraph::new(Line::from(vec![
@@ -339,7 +339,7 @@ impl SessionListDialog {
                 Span::styled(" close", Style::default().fg(theme.text_muted)),
             ]))
         };
-        frame.render_widget(footer, layout[3]);
+        surface.render_widget(footer, layout[3]);
     }
 }
 
@@ -366,4 +366,39 @@ fn format_session_time(updated_at_ms: i64) -> (String, String) {
     };
 
     (category, updated_local.format("%H:%M").to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    use crate::ui::BufferSurface;
+
+    #[test]
+    fn session_list_dialog_renders_to_buffer_surface() {
+        let mut dialog = SessionListDialog::new();
+        dialog.set_sessions(vec![SessionItem {
+            id: "session-123".to_string(),
+            title: "Migration Work".to_string(),
+            directory: "/tmp/rocode".to_string(),
+            parent_id: None,
+            updated_at: 0,
+            is_busy: false,
+        }]);
+        dialog.open(None);
+
+        let area = Rect::new(0, 0, 120, 32);
+        let mut buffer = Buffer::empty(area);
+        let mut surface = BufferSurface::new(&mut buffer);
+
+        dialog.render(&mut surface, area, &Theme::dark());
+
+        let rendered = buffer
+            .content
+            .iter()
+            .filter(|cell| !cell.symbol().trim().is_empty())
+            .count();
+        assert!(rendered > 0);
+    }
 }

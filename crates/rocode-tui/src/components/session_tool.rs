@@ -13,7 +13,7 @@ use rocode_command::terminal_tool_block_display::{
     build_batch_result_items, build_display_hint_items, build_edit_result_items,
     build_patch_result_items, build_question_result_items, build_task_result_items,
     build_task_running_items, build_todowrite_result_items, build_write_result_items,
-    TerminalToolBlockItem, ToolWriteSummary,
+    summarize_block_items_inline, TerminalToolBlockItem, ToolWriteSummary,
 };
 
 use super::markdown::MarkdownRenderer;
@@ -30,7 +30,12 @@ struct ReadSummary {
 type WriteSummary = ToolWriteSummary;
 
 /// Returns true if this tool typically produces block-level output
-fn is_block_tool(name: &str, result: Option<&TerminalToolResultInfo>) -> bool {
+fn is_block_tool(
+    name: &str,
+    state: TerminalToolState,
+    result: Option<&TerminalToolResultInfo>,
+    show_tool_details: bool,
+) -> bool {
     // Check display.mode override from metadata
     if let Some(info) = result {
         if let Some(mode) = info
@@ -44,13 +49,22 @@ fn is_block_tool(name: &str, result: Option<&TerminalToolResultInfo>) -> bool {
     }
 
     let normalized = normalize_tool_name(name);
-    // Tools that always produce block output
     match normalized.as_str() {
-        "bash" | "shell" | "apply_patch" | "batch" | "question" | "task" | "todowrite"
-        | "todo_write" => return true,
+        "task" | "question" | "todowrite" | "todo_write" => {
+            return matches!(state, TerminalToolState::Completed)
+                && show_tool_details
+                && result.is_some();
+        }
+        "bash" | "shell" => return result.is_some(),
+        "apply_patch" | "applypatch" | "batch" => {
+            return matches!(state, TerminalToolState::Completed)
+                && show_tool_details
+                && result.is_some();
+        }
         "skill" | "skills_list" | "skill_view" => return false,
         _ => {}
     }
+
     // edit/write tools with diff metadata are block-level
     if is_write_tool(&normalized) || is_edit_tool(&normalized) {
         if let Some(info) = result {
@@ -96,6 +110,15 @@ fn is_patch_tool(normalized_name: &str) -> bool {
     matches!(normalized_name, "apply_patch" | "applypatch")
 }
 
+fn prefers_specialized_block_body(normalized_name: &str) -> bool {
+    matches!(
+        normalized_name,
+        "task" | "todowrite" | "todo_write" | "batch" | "question"
+    ) || is_write_tool(normalized_name)
+        || is_edit_tool(normalized_name)
+        || is_patch_tool(normalized_name)
+}
+
 fn split_list_output<'a>(lines: &'a [&'a str]) -> (Option<&'a str>, Vec<&'a str>) {
     if lines.is_empty() {
         return (None, Vec::new());
@@ -105,6 +128,39 @@ fn split_list_output<'a>(lines: &'a [&'a str]) -> (Option<&'a str>, Vec<&'a str>
         (Some(first), lines[1..].to_vec())
     } else {
         (None, lines.to_vec())
+    }
+}
+
+fn display_summary(info: &TerminalToolResultInfo) -> Option<&str> {
+    info.metadata
+        .as_ref()
+        .and_then(|m| m.get("display.summary"))
+        .and_then(|v| v.as_str())
+        .filter(|summary| !summary.trim().is_empty())
+}
+
+fn result_title(info: &TerminalToolResultInfo) -> Option<&str> {
+    info.title
+        .as_deref()
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+}
+
+fn should_show_inline_argument_preview(
+    normalized: &str,
+    state: TerminalToolState,
+    result: Option<&TerminalToolResultInfo>,
+) -> bool {
+    match state {
+        TerminalToolState::Pending | TerminalToolState::Running => !matches!(
+            normalized,
+            "question" | "todowrite" | "todo_write" | "apply_patch" | "applypatch" | "batch"
+        ),
+        TerminalToolState::Completed if result.is_some() => !matches!(
+            normalized,
+            "question" | "todowrite" | "todo_write" | "apply_patch" | "applypatch"
+        ),
+        _ => true,
     }
 }
 
@@ -120,12 +176,21 @@ pub fn render_tool_call(
     let normalized = normalize_tool_name(name);
     if matches!(state, TerminalToolState::Completed)
         && !show_tool_details
-        && !matches!(normalized.as_str(), "task" | "todowrite" | "todo_write")
+        && !matches!(
+            normalized.as_str(),
+            "task"
+                | "question"
+                | "todowrite"
+                | "todo_write"
+                | "batch"
+                | "apply_patch"
+                | "applypatch"
+        )
     {
         return Vec::new();
     }
 
-    let block_mode = is_block_tool(name, result);
+    let block_mode = is_block_tool(name, state, result, show_tool_details);
     let read_summary = if is_read_tool(&normalized) {
         result.and_then(|info| {
             if info.is_error {
@@ -160,10 +225,7 @@ pub fn render_tool_call(
                 format!("  {}", preview),
                 Style::default().fg(theme.text_muted).bg(bg),
             ));
-        } else if let Some(title) = result
-            .and_then(|info| info.title.as_deref())
-            .filter(|t| !t.is_empty())
-        {
+        } else if let Some(title) = result.and_then(result_title) {
             main_spans.push(Span::styled(
                 format!("  {}", format_preview_line(title, 60)),
                 Style::default().fg(theme.text_muted).bg(bg),
@@ -214,7 +276,9 @@ pub fn render_tool_call(
                         bg,
                     ));
                 }
-            } else if render_display_hints(info, theme, bg, &mut lines) {
+            } else if !prefers_specialized_block_body(&normalized)
+                && render_display_hints(info, theme, bg, &mut lines)
+            {
                 // Display hints handled the rendering
             } else if normalized == "task" {
                 render_task_result_block(
@@ -278,6 +342,14 @@ pub fn render_tool_call(
             } else if normalized == "question" {
                 render_question_result_block(result_text, arguments, theme, bg, &mut lines);
             } else if show_tool_details {
+                if let Some(title) = result_title(info) {
+                    lines.push(block_content_line(
+                        format_preview_line(title, 96),
+                        Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
+                        theme,
+                        bg,
+                    ));
+                }
                 let output_lines = result_text.lines().collect::<Vec<_>>();
                 let (list_root, list_entries) = if is_list_tool(&normalized) {
                     split_list_output(&output_lines)
@@ -343,6 +415,11 @@ pub fn render_tool_call(
             )
         {
             render_task_running_block(arguments, theme, bg, &mut lines);
+        } else if matches!(
+            state,
+            TerminalToolState::Pending | TerminalToolState::Running
+        ) {
+            render_pending_block_items(&normalized, arguments, theme, bg, &mut lines);
         }
 
         return lines;
@@ -356,19 +433,26 @@ pub fn render_tool_call(
     ];
 
     // Argument preview on the same line as tool name (e.g. "◯ → ls → .")
-    if let Some(argument_preview) = tool_argument_preview(&normalized, arguments) {
-        main_spans.push(Span::styled(
-            format!("  {}", argument_preview),
-            Style::default().fg(theme.text_muted),
-        ));
+    if should_show_inline_argument_preview(&normalized, state, result) {
+        if let Some(argument_preview) = tool_argument_preview(&normalized, arguments) {
+            main_spans.push(Span::styled(
+                format!("  {}", argument_preview),
+                Style::default().fg(theme.text_muted),
+            ));
+        }
     }
 
     // Inline result summary for completed non-block tools
     if let Some(info) = result {
         if info.is_error {
-            let first_line = info.output.lines().next().unwrap_or(&info.output).trim();
             main_spans.push(Span::styled(
-                format!(" — {}", format_preview_line(first_line, 96)),
+                format!(
+                    " — {}",
+                    format_preview_line(
+                        info.output.lines().next().unwrap_or(&info.output).trim(),
+                        96
+                    )
+                ),
                 Style::default().fg(theme.error),
             ));
             if is_denied {
@@ -380,18 +464,40 @@ pub fn render_tool_call(
                 ));
             }
         } else {
-            // Check for display.summary override
-            let display_summary = info
-                .metadata
-                .as_ref()
-                .and_then(|m| m.get("display.summary"))
-                .and_then(|v| v.as_str());
-
-            if let Some(summary) = display_summary {
+            if let Some(summary) = display_summary(info) {
                 main_spans.push(Span::styled(
                     format!(" — {}", format_preview_line(summary, 80)),
                     Style::default().fg(theme.text_muted),
                 ));
+            } else if let Some(title) = result_title(info) {
+                main_spans.push(Span::styled(
+                    format!(" — {}", format_preview_line(title, 80)),
+                    Style::default().fg(theme.text_muted),
+                ));
+            } else if normalized == "batch" {
+                let summary = summarize_block_items_inline(&build_batch_result_items(
+                    &info.output,
+                    arguments,
+                    false,
+                ));
+                if !summary.is_empty() {
+                    main_spans.push(Span::styled(
+                        format!(" — {}", format_preview_line(&summary, 80)),
+                        Style::default().fg(theme.text_muted),
+                    ));
+                }
+            } else if is_patch_tool(&normalized) {
+                let summary = summarize_block_items_inline(&build_patch_result_items(
+                    &info.output,
+                    info.metadata.as_ref(),
+                    false,
+                ));
+                if !summary.is_empty() {
+                    main_spans.push(Span::styled(
+                        format!(" — {}", format_preview_line(&summary, 80)),
+                        Style::default().fg(theme.text_muted),
+                    ));
+                }
             } else {
                 let result_text = &info.output;
                 if is_write_tool(&normalized) {
@@ -443,6 +549,16 @@ pub fn render_tool_call(
                 }
             }
         }
+    } else if matches!(
+        state,
+        TerminalToolState::Pending | TerminalToolState::Running
+    ) {
+        if let Some(status) = inline_pending_status(&normalized, arguments) {
+            main_spans.push(Span::styled(
+                format!(" — {}", status),
+                Style::default().fg(theme.text_muted),
+            ));
+        }
     }
 
     lines.push(Line::from(main_spans));
@@ -492,6 +608,77 @@ fn render_shared_block_items(
                 render_inline_diff(&content, theme, bg, lines);
             }
         }
+    }
+}
+
+fn render_pending_block_items(
+    normalized: &str,
+    arguments: &str,
+    theme: &Theme,
+    bg: ratatui::style::Color,
+    lines: &mut Vec<Line<'static>>,
+) {
+    let (status, detail) = match normalized {
+        "bash" | "shell" => (
+            "Executing command…",
+            tool_argument_preview(normalized, arguments),
+        ),
+        "apply_patch" | "applypatch" => ("Preparing patch…", None),
+        "batch" => (
+            "Running batch tool calls…",
+            tool_argument_preview(normalized, arguments),
+        ),
+        "question" => (
+            "Waiting for answers…",
+            tool_argument_preview(normalized, arguments),
+        ),
+        "todowrite" | "todo_write" => (
+            "Updating todo list…",
+            tool_argument_preview(normalized, arguments),
+        ),
+        _ => return,
+    };
+
+    lines.push(block_content_line(
+        status,
+        Style::default()
+            .fg(theme.warning)
+            .add_modifier(Modifier::BOLD),
+        theme,
+        bg,
+    ));
+
+    if let Some(detail) = detail.filter(|detail| !detail.trim().is_empty()) {
+        lines.push(block_content_line(
+            format_preview_line(&detail, 96),
+            Style::default().fg(theme.text_muted),
+            theme,
+            bg,
+        ));
+    }
+}
+
+fn inline_pending_status(normalized: &str, arguments: &str) -> Option<String> {
+    match normalized {
+        "question" => tool_argument_preview(normalized, arguments).map(|preview| {
+            if preview == "1 question" {
+                "Asking 1 question…".to_string()
+            } else {
+                format!("Asking {}…", preview)
+            }
+        }),
+        "todowrite" | "todo_write" => tool_argument_preview(normalized, arguments).map(|preview| {
+            if preview == "1 todo" {
+                "Updating 1 todo…".to_string()
+            } else {
+                format!("Updating {}…", preview)
+            }
+        }),
+        "task" => Some("Delegating…".to_string()),
+        "apply_patch" | "applypatch" => Some("Preparing patch…".to_string()),
+        "batch" => tool_argument_preview(normalized, arguments)
+            .map(|preview| format!("Running {}…", preview)),
+        _ => None,
     }
 }
 
@@ -801,6 +988,7 @@ mod tests {
     use super::{
         format_read_summary, parse_read_summary, parse_write_summary, tool_argument_preview,
     };
+    use std::collections::HashMap;
 
     #[test]
     fn list_tool_preview_shows_path() {
@@ -1027,5 +1215,384 @@ mod tests {
             full_text.contains("line1") || full_text.contains("+"),
             "Should render diff content"
         );
+    }
+
+    #[test]
+    fn inline_tool_prefers_result_title_as_summary() {
+        use super::render_tool_call;
+        use rocode_command::terminal_presentation::{TerminalToolResultInfo, TerminalToolState};
+
+        let theme = crate::theme::Theme::dark();
+        let result = TerminalToolResultInfo {
+            output: "raw body line 1\nraw body line 2".to_string(),
+            is_error: false,
+            title: Some("Loaded skill: planner".to_string()),
+            metadata: None,
+        };
+
+        let lines = render_tool_call(
+            "skill_view",
+            r#"{"name":"planner"}"#,
+            TerminalToolState::Completed,
+            Some(&result),
+            true,
+            &theme,
+        );
+
+        let full_text: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(full_text.contains("Loaded skill: planner"));
+        assert!(!full_text.contains("raw body line 1 (+1 lines)"));
+    }
+
+    #[test]
+    fn block_tool_details_show_result_title_line() {
+        use super::render_tool_call;
+        use rocode_command::terminal_presentation::{TerminalToolResultInfo, TerminalToolState};
+
+        let theme = crate::theme::Theme::dark();
+        let result = TerminalToolResultInfo {
+            output: "first output line\nsecond output line\nthird output line\nfourth output line"
+                .to_string(),
+            is_error: false,
+            title: Some("Repository Status".to_string()),
+            metadata: Some(HashMap::new()),
+        };
+
+        let lines = render_tool_call(
+            "repo_status",
+            r#"{"path":"."}"#,
+            TerminalToolState::Completed,
+            Some(&result),
+            true,
+            &theme,
+        );
+
+        let full_text: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(full_text.contains("Repository Status"));
+        assert!(full_text.contains("(4 lines of output)"));
+    }
+
+    #[test]
+    fn running_bash_without_output_stays_inline() {
+        use super::render_tool_call;
+        use rocode_command::terminal_presentation::TerminalToolState;
+
+        let theme = crate::theme::Theme::dark();
+        let lines = render_tool_call(
+            "bash",
+            r#"{"command":"cargo test -p rocode-tui","description":"Run tests"}"#,
+            TerminalToolState::Running,
+            None,
+            true,
+            &theme,
+        );
+
+        let full_text: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(full_text.contains("$ cargo test -p rocode-tui"));
+        assert!(!full_text.contains("│"));
+    }
+
+    #[test]
+    fn pending_apply_patch_stays_inline() {
+        use super::render_tool_call;
+        use rocode_command::terminal_presentation::TerminalToolState;
+
+        let theme = crate::theme::Theme::dark();
+        let lines = render_tool_call(
+            "apply_patch",
+            "*** Begin Patch\n*** End Patch",
+            TerminalToolState::Pending,
+            None,
+            true,
+            &theme,
+        );
+
+        let full_text: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(full_text.contains("Preparing patch"));
+        assert!(!full_text.contains("│"));
+    }
+
+    #[test]
+    fn question_result_uses_structured_q_and_a_over_display_hints() {
+        use super::render_tool_call;
+        use rocode_command::terminal_presentation::{TerminalToolResultInfo, TerminalToolState};
+
+        let theme = crate::theme::Theme::dark();
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "display.summary".to_string(),
+            serde_json::json!("1 question answered"),
+        );
+        metadata.insert(
+            "display.fields".to_string(),
+            serde_json::json!([{ "key": "Scope", "value": "Proceed" }]),
+        );
+        let result = TerminalToolResultInfo {
+            output: r#"{"answers":["Proceed"]}"#.to_string(),
+            is_error: false,
+            title: Some("User response received".to_string()),
+            metadata: Some(metadata),
+        };
+
+        let lines = render_tool_call(
+            "question",
+            r#"{"questions":[{"question":"Choose rollout scope","options":[{"label":"Proceed"}]}]}"#,
+            TerminalToolState::Completed,
+            Some(&result),
+            true,
+            &theme,
+        );
+
+        let full_text: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(full_text.contains("Q: Choose rollout scope"));
+        assert!(full_text.contains("A: Proceed"));
+    }
+
+    #[test]
+    fn pending_question_stays_inline_with_status_summary() {
+        use super::render_tool_call;
+        use rocode_command::terminal_presentation::TerminalToolState;
+
+        let theme = crate::theme::Theme::dark();
+        let lines = render_tool_call(
+            "question",
+            r#"{"questions":[{"question":"Choose rollout scope"}]}"#,
+            TerminalToolState::Pending,
+            None,
+            true,
+            &theme,
+        );
+
+        let full_text: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(full_text.contains("1 question"));
+        assert!(full_text.contains("Asking 1 question"));
+        assert!(!full_text.contains("│"));
+    }
+
+    #[test]
+    fn completed_question_without_details_stays_visible_inline() {
+        use super::render_tool_call;
+        use rocode_command::terminal_presentation::{TerminalToolResultInfo, TerminalToolState};
+
+        let theme = crate::theme::Theme::dark();
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "display.summary".to_string(),
+            serde_json::json!("1 question answered"),
+        );
+        let result = TerminalToolResultInfo {
+            output: r#"{"answers":["Proceed"]}"#.to_string(),
+            is_error: false,
+            title: Some("User response received".to_string()),
+            metadata: Some(metadata),
+        };
+
+        let lines = render_tool_call(
+            "question",
+            r#"{"questions":[{"question":"Choose rollout scope"}]}"#,
+            TerminalToolState::Completed,
+            Some(&result),
+            false,
+            &theme,
+        );
+
+        let full_text: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(full_text.contains("1 question answered"));
+        assert!(!full_text.contains("│"));
+    }
+
+    #[test]
+    fn pending_todowrite_stays_inline_with_status_summary() {
+        use super::render_tool_call;
+        use rocode_command::terminal_presentation::TerminalToolState;
+
+        let theme = crate::theme::Theme::dark();
+        let lines = render_tool_call(
+            "todowrite",
+            r#"{"todos":[{"content":"Add tests"},{"content":"Refine TUI"}]}"#,
+            TerminalToolState::Running,
+            None,
+            true,
+            &theme,
+        );
+
+        let full_text: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(full_text.contains("2 todos"));
+        assert!(full_text.contains("Updating 2 todos"));
+        assert!(!full_text.contains("│"));
+    }
+
+    #[test]
+    fn task_result_without_details_stays_visible_inline() {
+        use super::render_tool_call;
+        use rocode_command::terminal_presentation::{TerminalToolResultInfo, TerminalToolState};
+
+        let theme = crate::theme::Theme::dark();
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "display.summary".to_string(),
+            serde_json::json!("Delegated inspect task via session child-1"),
+        );
+        metadata.insert("hasTextOutput".to_string(), serde_json::json!(true));
+        let result = TerminalToolResultInfo {
+            output: "task_id: child-1\ntask_status: completed\n<task_result>\n## Summary\nDone.\n</task_result>"
+                .to_string(),
+            is_error: false,
+            title: Some("Completed Task child-1".to_string()),
+            metadata: Some(metadata),
+        };
+
+        let lines = render_tool_call(
+            "task",
+            r###"{"category":"analysis","description":"Inspect migration status"}"###,
+            TerminalToolState::Completed,
+            Some(&result),
+            false,
+            &theme,
+        );
+
+        let full_text: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(full_text.contains("Delegated inspect task via session child-1"));
+        assert!(!full_text.contains("│"));
+    }
+
+    #[test]
+    fn task_result_with_details_uses_structured_block_body() {
+        use super::render_tool_call;
+        use rocode_command::terminal_presentation::{TerminalToolResultInfo, TerminalToolState};
+
+        let theme = crate::theme::Theme::dark();
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "display.summary".to_string(),
+            serde_json::json!("Delegated inspect task via session child-1"),
+        );
+        metadata.insert("hasTextOutput".to_string(), serde_json::json!(true));
+        let result = TerminalToolResultInfo {
+            output: "task_id: child-1\ntask_status: completed\n<task_result>\n## Summary\nDone.\n</task_result>"
+                .to_string(),
+            is_error: false,
+            title: Some("Completed Task child-1".to_string()),
+            metadata: Some(metadata),
+        };
+
+        let lines = render_tool_call(
+            "task",
+            r###"{"category":"analysis","description":"Inspect migration status"}"###,
+            TerminalToolState::Completed,
+            Some(&result),
+            true,
+            &theme,
+        );
+
+        let full_text: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(full_text.contains("Task ID: child-1"));
+        assert!(full_text.contains("Status: completed"));
+        assert!(full_text.contains("Summary"));
+        assert!(full_text.contains("│"));
+    }
+
+    #[test]
+    fn completed_batch_without_details_stays_visible_inline() {
+        use super::render_tool_call;
+        use rocode_command::terminal_presentation::{TerminalToolResultInfo, TerminalToolState};
+
+        let theme = crate::theme::Theme::dark();
+        let result = TerminalToolResultInfo {
+            output:
+                r#"{"results":[{"success":true,"output":"ok"},{"success":false,"error":"boom"}]}"#
+                    .to_string(),
+            is_error: false,
+            title: None,
+            metadata: Some(HashMap::new()),
+        };
+
+        let lines = render_tool_call(
+            "batch",
+            r#"{"toolCalls":[{"tool":"read","parameters":{"file_path":"a.txt"}},{"tool":"edit","parameters":{"file_path":"b.txt"}}]}"#,
+            TerminalToolState::Completed,
+            Some(&result),
+            false,
+            &theme,
+        );
+
+        let full_text: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(full_text.contains("batch"));
+        assert!(full_text.contains("2 tools (read, edit)"));
+        assert!(full_text.contains("2 tools: 1 ok, 1 failed"));
+        assert!(!full_text.contains("│"));
+    }
+
+    #[test]
+    fn completed_apply_patch_without_details_stays_visible_inline() {
+        use super::render_tool_call;
+        use rocode_command::terminal_presentation::{TerminalToolResultInfo, TerminalToolState};
+
+        let theme = crate::theme::Theme::dark();
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "files".to_string(),
+            serde_json::json!([
+                { "path": "src/a.rs" },
+                { "path": "src/b.rs" }
+            ]),
+        );
+        let result = TerminalToolResultInfo {
+            output: "Patch applied".to_string(),
+            is_error: false,
+            title: None,
+            metadata: Some(metadata),
+        };
+
+        let lines = render_tool_call(
+            "apply_patch",
+            "*** Begin Patch\n*** End Patch",
+            TerminalToolState::Completed,
+            Some(&result),
+            false,
+            &theme,
+        );
+
+        let full_text: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(full_text.contains("apply_patch"));
+        assert!(full_text.contains("Patch"));
+        assert!(full_text.contains("Patch Applied"));
+        assert!(!full_text.contains("│"));
     }
 }

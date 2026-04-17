@@ -11,16 +11,8 @@ impl App {
         Ok(())
     }
 
-    pub(super) fn ensure_session_view(&mut self, session_id: &str) {
-        if self.active_session_id.as_deref() == Some(session_id) {
-            return;
-        }
-
-        self.active_session_id = Some(session_id.to_string());
-        self.session_view = Some(SessionView::new(
-            self.context.clone(),
-            session_id.to_string(),
-        ));
+    pub(crate) fn ensure_session_view(&mut self, session_id: &str) {
+        self.context.ensure_session_view_handle(session_id);
 
         // Update the SSE session filter so the listener reconnects
         // with server-side filtering for this session.
@@ -87,9 +79,7 @@ impl App {
             })
         };
         if let Some(child_id) = child_id {
-            self.context.navigate(Route::Session {
-                session_id: child_id.clone(),
-            });
+            self.context.navigate_session(child_id.clone());
             self.ensure_session_view(&child_id);
             let _ = self.sync_session_from_server(&child_id);
         }
@@ -109,37 +99,23 @@ impl App {
         });
 
         if let Some(parent_id) = parent_id {
-            self.context.navigate(Route::Session {
-                session_id: parent_id.clone(),
-            });
+            self.context.navigate_session(parent_id.clone());
             self.ensure_session_view(&parent_id);
             let _ = self.sync_session_from_server(&parent_id);
             return;
         }
 
-        let previous_route = {
-            let mut router = self.context.router.write();
-            if router.go_back() {
-                Some(router.current().clone())
-            } else {
-                None
-            }
-        };
+        let previous_route = self.context.go_back();
 
         match previous_route {
             Some(Route::Session { session_id }) => {
                 self.ensure_session_view(&session_id);
                 let _ = self.sync_session_from_server(&session_id);
             }
-            Some(Route::Home) => {
-                self.active_session_id = None;
-                self.session_view = None;
-            }
+            Some(Route::Home) => {}
             Some(_) => {}
             None => {
-                self.context.navigate(Route::Home);
-                self.active_session_id = None;
-                self.session_view = None;
+                self.context.navigate_home();
             }
         }
     }
@@ -156,7 +132,7 @@ impl App {
             .map(|msgs| collect_child_sessions(msgs))
             .unwrap_or_default();
         drop(session_ctx);
-        *self.context.child_sessions.write() = children;
+        self.context.set_child_sessions(children);
     }
 
     pub(super) fn cache_session_from_api(&self, session: &SessionInfo) {
@@ -196,7 +172,7 @@ impl App {
         if session_ctx.current_session_id.as_deref() == Some(session_id) {
             session_ctx.current_session_id = None;
         }
-        self.pending_prompt_queue.remove(session_id);
+        self.prompt_runtime.pending_queue.remove(session_id);
         self.context.set_queued_prompts(session_id, 0);
     }
 
@@ -241,9 +217,15 @@ impl App {
             session_ctx.revert.insert(real_session_id, revert);
         }
 
-        if let Some(queued) = self.pending_prompt_queue.remove(optimistic_session_id) {
+        if let Some(queued) = self
+            .prompt_runtime
+            .pending_queue
+            .remove(optimistic_session_id)
+        {
             let count = queued.len();
-            self.pending_prompt_queue.insert(session.id.clone(), queued);
+            self.prompt_runtime
+                .pending_queue
+                .insert(session.id.clone(), queued);
             self.context.set_queued_prompts(optimistic_session_id, 0);
             self.context.set_queued_prompts(&session.id, count);
         } else {
@@ -360,9 +342,12 @@ impl App {
                 }
                 drop(session_ctx);
 
-                self.last_session_sync = Instant::now();
-                self.perf.session_sync_incremental =
-                    self.perf.session_sync_incremental.saturating_add(1);
+                self.sync_runtime.last_session_sync = Instant::now();
+                self.diagnostics.perf.session_sync_incremental = self
+                    .diagnostics
+                    .perf
+                    .session_sync_incremental
+                    .saturating_add(1);
                 return Ok(());
             }
         }
@@ -404,9 +389,10 @@ impl App {
         }
         drop(session_ctx);
 
-        self.last_session_sync = Instant::now();
-        self.last_full_session_sync = self.last_session_sync;
-        self.perf.session_sync_full = self.perf.session_sync_full.saturating_add(1);
+        self.sync_runtime.last_session_sync = Instant::now();
+        self.sync_runtime.last_full_session_sync = self.sync_runtime.last_session_sync;
+        self.diagnostics.perf.session_sync_full =
+            self.diagnostics.perf.session_sync_full.saturating_add(1);
         Ok(())
     }
 

@@ -3,10 +3,10 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
-    Frame,
 };
 
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 
 #[derive(Clone, Debug)]
 pub struct StashItem {
@@ -113,13 +113,13 @@ impl PromptStashDialog {
         });
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect, theme: &Theme) {
         if !self.open {
             return;
         }
 
         let dialog_area = centered_rect(84, 20, area);
-        frame.render_widget(Clear, dialog_area);
+        surface.render_widget(Clear, dialog_area);
 
         let block = Block::default()
             .title(Span::styled(
@@ -132,7 +132,7 @@ impl PromptStashDialog {
             .border_style(Style::default().fg(theme.border))
             .style(Style::default().bg(theme.background_panel));
         let inner = super::dialog_inner(block.inner(dialog_area));
-        frame.render_widget(block, dialog_area);
+        surface.render_widget(block, dialog_area);
 
         let layout = Layout::default()
             .direction(Direction::Vertical)
@@ -143,7 +143,7 @@ impl PromptStashDialog {
             ])
             .split(inner);
 
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled("> ", Style::default().fg(theme.primary)),
                 Span::styled(&self.query, Style::default().fg(theme.text)),
@@ -172,7 +172,7 @@ impl PromptStashDialog {
             })
             .collect::<Vec<_>>();
 
-        frame.render_stateful_widget(
+        surface.render_stateful_widget(
             List::new(items).highlight_style(
                 Style::default()
                     .bg(theme.background_element)
@@ -182,7 +182,7 @@ impl PromptStashDialog {
             &mut self.state.clone(),
         );
 
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new("Enter load  d delete  Esc close")
                 .style(Style::default().fg(theme.text_muted)),
             layout[2],
@@ -198,4 +198,35 @@ impl Default for PromptStashDialog {
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     super::centered_rect(width, height, area)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    use crate::ui::BufferSurface;
+
+    #[test]
+    fn prompt_stash_dialog_renders_to_buffer_surface() {
+        let mut dialog = PromptStashDialog::new();
+        dialog.set_entries(vec![StashItem {
+            input: "Summarize the latest migration state".to_string(),
+            created_at: 0,
+        }]);
+        dialog.open();
+
+        let area = Rect::new(0, 0, 120, 32);
+        let mut buffer = Buffer::empty(area);
+        let mut surface = BufferSurface::new(&mut buffer);
+
+        dialog.render(&mut surface, area, &Theme::dark());
+
+        let rendered = buffer
+            .content
+            .iter()
+            .filter(|cell| !cell.symbol().trim().is_empty())
+            .count();
+        assert!(rendered > 0);
+    }
 }

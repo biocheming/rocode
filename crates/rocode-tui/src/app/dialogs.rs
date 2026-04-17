@@ -1,247 +1,463 @@
 use super::session_actions::TranscriptOptions;
 use super::*;
 use crate::components::ProviderConnectMode;
+use crate::context::DialogSlot;
 
 impl App {
-    pub(super) fn has_open_dialog_layer(&self) -> bool {
-        self.alert_dialog.is_open()
-            || self.help_dialog.is_open()
-            || self.status_dialog.is_open()
-            || self.session_rename_dialog.is_open()
-            || self.session_export_dialog.is_open()
-            || self.prompt_stash_dialog.is_open()
-            || self.skill_list_dialog.is_open()
-            || self.slash_popup.is_open()
-            || self.command_palette.is_open()
-            || self.model_select.is_open()
-            || self.agent_select.is_open()
-            || self.session_list_dialog.is_open()
-            || self.theme_list_dialog.is_open()
-            || self.mcp_dialog.is_open()
-            || self.timeline_dialog.is_open()
-            || self.fork_dialog.is_open()
-            || self.provider_dialog.is_open()
-            || self.subagent_dialog.is_open()
-            || self.tag_dialog.is_open()
-            || self.recovery_action_dialog.is_open()
+    pub(super) fn open_alert_dialog(&mut self) {
+        self.alert_dialog.open();
+        self.context.sync_dialog_open(DialogSlot::Alert, true);
     }
 
-    pub(super) fn close_top_dialog(&mut self) -> bool {
-        if self.alert_dialog.is_open() {
-            self.alert_dialog.close();
-            return true;
+    pub(super) fn close_alert_dialog(&mut self) {
+        self.alert_dialog.close();
+        self.context.close_dialog(DialogSlot::Alert);
+    }
+
+    pub(super) fn open_help_dialog(&mut self) {
+        self.help_dialog.open();
+        self.context.sync_dialog_open(DialogSlot::Help, true);
+    }
+
+    pub(super) fn close_help_dialog(&mut self) {
+        self.help_dialog.close();
+        self.context.close_dialog(DialogSlot::Help);
+    }
+
+    pub(super) fn open_command_palette_dialog(&mut self) {
+        self.command_palette.open();
+        self.context
+            .sync_dialog_open(DialogSlot::CommandPalette, true);
+    }
+
+    pub(super) fn close_command_palette_dialog(&mut self) {
+        self.command_palette.close();
+        self.context.close_dialog(DialogSlot::CommandPalette);
+    }
+
+    pub(super) fn open_model_select_dialog(&mut self) {
+        self.model_select.open();
+        self.context.sync_dialog_open(DialogSlot::ModelSelect, true);
+    }
+
+    pub(super) fn close_model_select_dialog(&mut self) {
+        self.model_select.close();
+        self.context.close_dialog(DialogSlot::ModelSelect);
+    }
+
+    pub(super) fn open_agent_select_dialog(&mut self) {
+        self.agent_select.open();
+        self.context.sync_dialog_open(DialogSlot::AgentSelect, true);
+    }
+
+    pub(super) fn close_agent_select_dialog(&mut self) {
+        self.agent_select.close();
+        self.context.close_dialog(DialogSlot::AgentSelect);
+    }
+
+    pub(super) fn open_status_dialog_modal(&mut self) {
+        self.status_dialog.open();
+        self.context.sync_dialog_open(DialogSlot::Status, true);
+    }
+
+    pub(super) fn close_status_dialog_modal(&mut self) {
+        self.status_dialog.close();
+        self.context.close_dialog(DialogSlot::Status);
+    }
+
+    pub(super) fn open_session_rename_dialog_modal(&mut self, session_id: String, title: String) {
+        self.session_rename_dialog.open(session_id, title);
+        self.context
+            .sync_dialog_open(DialogSlot::SessionRename, true);
+    }
+
+    pub(super) fn close_session_rename_dialog_modal(&mut self) {
+        self.session_rename_dialog.close();
+        self.context.close_dialog(DialogSlot::SessionRename);
+    }
+
+    pub(super) fn open_session_export_dialog_modal(
+        &mut self,
+        session_id: String,
+        default_filename: String,
+    ) {
+        self.session_export_dialog
+            .open(session_id, default_filename);
+        self.context
+            .sync_dialog_open(DialogSlot::SessionExport, true);
+    }
+
+    pub(super) fn close_session_export_dialog_modal(&mut self) {
+        self.session_export_dialog.close();
+        self.context.close_dialog(DialogSlot::SessionExport);
+    }
+
+    pub(super) fn open_recovery_action_dialog_modal(&mut self, items: Vec<RecoveryActionItem>) {
+        self.recovery_action_dialog.open(items);
+        self.context
+            .sync_dialog_open(DialogSlot::RecoveryAction, true);
+    }
+
+    pub(super) fn close_recovery_action_dialog_modal(&mut self) {
+        self.recovery_action_dialog.close();
+        self.context.close_dialog(DialogSlot::RecoveryAction);
+    }
+
+    pub(super) fn open_prompt_stash_dialog_modal(&mut self) {
+        self.prompt_stash_dialog.open();
+        self.context.sync_dialog_open(DialogSlot::PromptStash, true);
+    }
+
+    pub(super) fn close_prompt_stash_dialog_modal(&mut self) {
+        self.prompt_stash_dialog.close();
+        self.context.close_dialog(DialogSlot::PromptStash);
+    }
+
+    pub(super) fn open_skill_list_dialog_modal(&mut self) {
+        self.skill_list_dialog.open();
+        self.context.sync_dialog_open(DialogSlot::SkillList, true);
+    }
+
+    pub(super) fn close_skill_list_dialog_modal(&mut self) {
+        self.skill_list_dialog.close();
+        self.context.close_dialog(DialogSlot::SkillList);
+    }
+
+    pub(super) fn open_session_list_dialog_modal(&mut self, current_session_id: Option<&str>) {
+        self.session_list_dialog.open(current_session_id);
+        self.context.sync_dialog_open(DialogSlot::SessionList, true);
+    }
+
+    pub(super) fn close_session_list_dialog_modal(&mut self) {
+        self.session_list_dialog.close();
+        self.context.close_dialog(DialogSlot::SessionList);
+    }
+
+    pub(super) fn open_theme_list_dialog_modal(&mut self, current_theme: &str) {
+        self.theme_list_dialog.open(current_theme);
+        self.context.sync_dialog_open(DialogSlot::ThemeList, true);
+    }
+
+    pub(super) fn close_theme_list_dialog_modal(&mut self) {
+        let initial = self.theme_list_dialog.initial_theme_id().to_string();
+        let _ = self.context.set_theme_by_name(&initial);
+        self.theme_list_dialog.close();
+        self.context.close_dialog(DialogSlot::ThemeList);
+    }
+
+    pub(super) fn open_mcp_dialog_modal(&mut self) {
+        self.mcp_dialog.open();
+        self.context.sync_dialog_open(DialogSlot::Mcp, true);
+    }
+
+    pub(super) fn close_mcp_dialog_modal(&mut self) {
+        self.mcp_dialog.close();
+        self.context.close_dialog(DialogSlot::Mcp);
+    }
+
+    pub(super) fn open_timeline_dialog_modal(&mut self, entries: Vec<TimelineEntry>) {
+        self.timeline_dialog.open(entries);
+        self.context.sync_dialog_open(DialogSlot::Timeline, true);
+    }
+
+    pub(super) fn close_timeline_dialog_modal(&mut self) {
+        self.timeline_dialog.close();
+        self.context.close_dialog(DialogSlot::Timeline);
+    }
+
+    pub(super) fn open_fork_dialog_modal(&mut self, session_id: String, entries: Vec<ForkEntry>) {
+        self.fork_dialog.open(session_id, entries);
+        self.context.sync_dialog_open(DialogSlot::Fork, true);
+    }
+
+    pub(super) fn close_fork_dialog_modal(&mut self) {
+        self.fork_dialog.close();
+        self.context.close_dialog(DialogSlot::Fork);
+    }
+
+    pub(super) fn open_provider_dialog_modal(&mut self) {
+        self.provider_dialog.open();
+        self.context.sync_dialog_open(DialogSlot::Provider, true);
+    }
+
+    pub(super) fn close_provider_dialog_modal(&mut self) {
+        self.provider_dialog.close();
+        self.context.close_dialog(DialogSlot::Provider);
+    }
+
+    pub(super) fn close_subagent_dialog_modal(&mut self) {
+        self.subagent_dialog.close();
+        self.context.close_dialog(DialogSlot::Subagent);
+    }
+
+    pub(super) fn close_tag_dialog_modal(&mut self) {
+        self.tag_dialog.close();
+        self.context.close_dialog(DialogSlot::Tag);
+    }
+
+    pub(super) fn open_tool_call_cancel_dialog_modal(&mut self, items: Vec<ToolCallItem>) {
+        self.tool_call_cancel_dialog.open(items);
+        self.context
+            .sync_dialog_open(DialogSlot::ToolCallCancel, true);
+    }
+
+    pub(super) fn close_tool_call_cancel_dialog_modal(&mut self) {
+        self.tool_call_cancel_dialog.close();
+        self.context.close_dialog(DialogSlot::ToolCallCancel);
+    }
+
+    pub(super) fn close_slash_popup_dialog(&mut self) {
+        self.slash_popup.close();
+        self.context.close_dialog(DialogSlot::SlashPopup);
+    }
+
+    fn sync_dialog_lifecycle(&self) {
+        self.context
+            .sync_dialog_open(DialogSlot::Alert, self.alert_dialog.is_open());
+        self.context
+            .sync_dialog_open(DialogSlot::Help, self.help_dialog.is_open());
+        self.context.sync_dialog_open(
+            DialogSlot::RecoveryAction,
+            self.recovery_action_dialog.is_open(),
+        );
+        self.context
+            .sync_dialog_open(DialogSlot::Status, self.status_dialog.is_open());
+        self.context.sync_dialog_open(
+            DialogSlot::SessionRename,
+            self.session_rename_dialog.is_open(),
+        );
+        self.context.sync_dialog_open(
+            DialogSlot::SessionExport,
+            self.session_export_dialog.is_open(),
+        );
+        self.context
+            .sync_dialog_open(DialogSlot::PromptStash, self.prompt_stash_dialog.is_open());
+        self.context
+            .sync_dialog_open(DialogSlot::SkillList, self.skill_list_dialog.is_open());
+        self.context
+            .sync_dialog_open(DialogSlot::SlashPopup, self.slash_popup.is_open());
+        self.context
+            .sync_dialog_open(DialogSlot::CommandPalette, self.command_palette.is_open());
+        self.context
+            .sync_dialog_open(DialogSlot::ModelSelect, self.model_select.is_open());
+        self.context
+            .sync_dialog_open(DialogSlot::AgentSelect, self.agent_select.is_open());
+        self.context
+            .sync_dialog_open(DialogSlot::SessionList, self.session_list_dialog.is_open());
+        self.context
+            .sync_dialog_open(DialogSlot::ThemeList, self.theme_list_dialog.is_open());
+        self.context
+            .sync_dialog_open(DialogSlot::Mcp, self.mcp_dialog.is_open());
+        self.context
+            .sync_dialog_open(DialogSlot::Timeline, self.timeline_dialog.is_open());
+        self.context
+            .sync_dialog_open(DialogSlot::Fork, self.fork_dialog.is_open());
+        self.context
+            .sync_dialog_open(DialogSlot::Provider, self.provider_dialog.is_open());
+        self.context
+            .sync_dialog_open(DialogSlot::Subagent, self.subagent_dialog.is_open());
+        self.context.sync_dialog_open(
+            DialogSlot::ToolCallCancel,
+            self.tool_call_cancel_dialog.is_open(),
+        );
+        self.context
+            .sync_dialog_open(DialogSlot::Tag, self.tag_dialog.is_open());
+    }
+
+    fn close_dialog_slot(&mut self, slot: DialogSlot) -> bool {
+        match slot {
+            DialogSlot::Alert if self.alert_dialog.is_open() => self.close_alert_dialog(),
+            DialogSlot::Help if self.help_dialog.is_open() => self.close_help_dialog(),
+            DialogSlot::RecoveryAction if self.recovery_action_dialog.is_open() => {
+                self.close_recovery_action_dialog_modal()
+            }
+            DialogSlot::Status if self.status_dialog.is_open() => self.close_status_dialog_modal(),
+            DialogSlot::SessionRename if self.session_rename_dialog.is_open() => {
+                self.close_session_rename_dialog_modal()
+            }
+            DialogSlot::SessionExport if self.session_export_dialog.is_open() => {
+                self.close_session_export_dialog_modal()
+            }
+            DialogSlot::PromptStash if self.prompt_stash_dialog.is_open() => {
+                self.close_prompt_stash_dialog_modal()
+            }
+            DialogSlot::SkillList if self.skill_list_dialog.is_open() => {
+                self.close_skill_list_dialog_modal()
+            }
+            DialogSlot::SlashPopup if self.slash_popup.is_open() => self.close_slash_popup_dialog(),
+            DialogSlot::CommandPalette if self.command_palette.is_open() => {
+                self.close_command_palette_dialog()
+            }
+            DialogSlot::ModelSelect if self.model_select.is_open() => {
+                self.close_model_select_dialog()
+            }
+            DialogSlot::AgentSelect if self.agent_select.is_open() => {
+                self.close_agent_select_dialog()
+            }
+            DialogSlot::SessionList if self.session_list_dialog.is_open() => {
+                self.close_session_list_dialog_modal()
+            }
+            DialogSlot::ThemeList if self.theme_list_dialog.is_open() => {
+                self.close_theme_list_dialog_modal();
+            }
+            DialogSlot::Mcp if self.mcp_dialog.is_open() => self.close_mcp_dialog_modal(),
+            DialogSlot::Timeline if self.timeline_dialog.is_open() => {
+                self.close_timeline_dialog_modal()
+            }
+            DialogSlot::Fork if self.fork_dialog.is_open() => self.close_fork_dialog_modal(),
+            DialogSlot::Provider if self.provider_dialog.is_open() => {
+                self.close_provider_dialog_modal()
+            }
+            DialogSlot::Subagent if self.subagent_dialog.is_open() => {
+                self.close_subagent_dialog_modal()
+            }
+            DialogSlot::ToolCallCancel if self.tool_call_cancel_dialog.is_open() => {
+                self.close_tool_call_cancel_dialog_modal()
+            }
+            DialogSlot::Tag if self.tag_dialog.is_open() => self.close_tag_dialog_modal(),
+            _ => return false,
         }
-        if self.help_dialog.is_open() {
-            self.help_dialog.close();
-            return true;
-        }
-        if self.recovery_action_dialog.is_open() {
-            self.recovery_action_dialog.close();
-            return true;
-        }
-        if self.status_dialog.is_open() {
-            self.status_dialog.close();
-            return true;
-        }
-        if self.session_rename_dialog.is_open() {
-            self.session_rename_dialog.close();
-            return true;
-        }
-        if self.session_export_dialog.is_open() {
-            self.session_export_dialog.close();
-            return true;
-        }
-        if self.prompt_stash_dialog.is_open() {
-            self.prompt_stash_dialog.close();
-            return true;
-        }
-        if self.skill_list_dialog.is_open() {
-            self.skill_list_dialog.close();
-            return true;
-        }
-        if self.slash_popup.is_open() {
-            self.slash_popup.close();
-            return true;
-        }
-        if self.command_palette.is_open() {
-            self.command_palette.close();
-            return true;
-        }
-        if self.model_select.is_open() {
-            self.model_select.close();
-            return true;
-        }
-        if self.agent_select.is_open() {
-            self.agent_select.close();
-            return true;
-        }
-        if self.session_list_dialog.is_open() {
-            self.session_list_dialog.close();
-            return true;
-        }
-        if self.theme_list_dialog.is_open() {
-            let initial = self.theme_list_dialog.initial_theme_id().to_string();
-            let _ = self.context.set_theme_by_name(&initial);
-            self.theme_list_dialog.close();
-            return true;
-        }
-        if self.mcp_dialog.is_open() {
-            self.mcp_dialog.close();
-            return true;
-        }
-        if self.timeline_dialog.is_open() {
-            self.timeline_dialog.close();
-            return true;
-        }
-        if self.fork_dialog.is_open() {
-            self.fork_dialog.close();
-            return true;
-        }
-        if self.provider_dialog.is_open() {
-            self.provider_dialog.close();
-            return true;
-        }
-        if self.subagent_dialog.is_open() {
-            self.subagent_dialog.close();
-            return true;
-        }
-        if self.tool_call_cancel_dialog.is_open() {
-            self.tool_call_cancel_dialog.close();
-            return true;
-        }
-        if self.tag_dialog.is_open() {
-            self.tag_dialog.close();
-            return true;
-        }
+        true
+    }
+
+    pub(super) fn has_reactive_home_dialog_layer(&self) -> bool {
+        self.sync_dialog_lifecycle();
+        self.context.has_open_dialogs()
+    }
+
+    pub(super) fn has_non_reactive_dialog_layer(&self) -> bool {
         false
     }
 
+    pub(super) fn has_open_dialog_layer(&self) -> bool {
+        self.has_reactive_home_dialog_layer() || self.has_non_reactive_dialog_layer()
+    }
+
+    pub(super) fn close_top_dialog(&mut self) -> bool {
+        self.sync_dialog_lifecycle();
+        self.context
+            .top_close_dialog()
+            .is_some_and(|slot| self.close_dialog_slot(slot))
+    }
+
     pub(super) fn scroll_active_dialog(&mut self, up: bool) {
-        if self.prompt_stash_dialog.is_open() {
-            if up {
-                self.prompt_stash_dialog.move_up();
-            } else {
-                self.prompt_stash_dialog.move_down();
-            }
-            return;
-        }
-        if self.skill_list_dialog.is_open() {
-            if self.skill_list_dialog.is_create_mode() || self.skill_list_dialog.is_edit_mode() {
+        self.sync_dialog_lifecycle();
+        match self.context.top_scroll_dialog() {
+            Some(DialogSlot::PromptStash) => {
                 if up {
-                    self.skill_list_dialog.handle_manage_page_up();
+                    self.prompt_stash_dialog.move_up();
                 } else {
-                    self.skill_list_dialog.handle_manage_page_down();
+                    self.prompt_stash_dialog.move_down();
                 }
-            } else {
+            }
+            Some(DialogSlot::SkillList) => {
+                if self.skill_list_dialog.is_create_mode() || self.skill_list_dialog.is_edit_mode()
+                {
+                    if up {
+                        self.skill_list_dialog.handle_manage_page_up();
+                    } else {
+                        self.skill_list_dialog.handle_manage_page_down();
+                    }
+                } else {
+                    if up {
+                        self.skill_list_dialog.move_up();
+                    } else {
+                        self.skill_list_dialog.move_down();
+                    }
+                    let _ = self.refresh_skill_list_detail();
+                }
+            }
+            Some(DialogSlot::SlashPopup) => {
                 if up {
-                    self.skill_list_dialog.move_up();
+                    self.slash_popup.move_up();
                 } else {
-                    self.skill_list_dialog.move_down();
+                    self.slash_popup.move_down();
                 }
-                let _ = self.refresh_skill_list_detail();
             }
-            return;
-        }
-        if self.slash_popup.is_open() {
-            if up {
-                self.slash_popup.move_up();
-            } else {
-                self.slash_popup.move_down();
+            Some(DialogSlot::CommandPalette) => {
+                if up {
+                    self.command_palette.move_up();
+                } else {
+                    self.command_palette.move_down();
+                }
             }
-            return;
-        }
-        if self.command_palette.is_open() {
-            if up {
-                self.command_palette.move_up();
-            } else {
-                self.command_palette.move_down();
+            Some(DialogSlot::ModelSelect) => {
+                if up {
+                    self.model_select.move_up();
+                } else {
+                    self.model_select.move_down();
+                }
             }
-            return;
-        }
-        if self.model_select.is_open() {
-            if up {
-                self.model_select.move_up();
-            } else {
-                self.model_select.move_down();
+            Some(DialogSlot::AgentSelect) => {
+                if up {
+                    self.agent_select.move_up();
+                } else {
+                    self.agent_select.move_down();
+                }
             }
-            return;
-        }
-        if self.agent_select.is_open() {
-            if up {
-                self.agent_select.move_up();
-            } else {
-                self.agent_select.move_down();
+            Some(DialogSlot::SessionList) => {
+                if self.session_list_dialog.is_renaming() {
+                    return;
+                }
+                if up {
+                    self.session_list_dialog.move_up();
+                } else {
+                    self.session_list_dialog.move_down();
+                }
             }
-            return;
-        }
-        if self.session_list_dialog.is_open() {
-            if self.session_list_dialog.is_renaming() {
-                return;
+            Some(DialogSlot::ThemeList) => {
+                if up {
+                    self.theme_list_dialog.move_up();
+                } else {
+                    self.theme_list_dialog.move_down();
+                }
+                if let Some(theme_id) = self.theme_list_dialog.selected_theme_id() {
+                    let _ = self.context.set_theme_by_name(&theme_id);
+                }
             }
-            if up {
-                self.session_list_dialog.move_up();
-            } else {
-                self.session_list_dialog.move_down();
+            Some(DialogSlot::Mcp) => {
+                if up {
+                    self.mcp_dialog.move_up();
+                } else {
+                    self.mcp_dialog.move_down();
+                }
             }
-            return;
-        }
-        if self.theme_list_dialog.is_open() {
-            if up {
-                self.theme_list_dialog.move_up();
-            } else {
-                self.theme_list_dialog.move_down();
+            Some(DialogSlot::Timeline) => {
+                if up {
+                    self.timeline_dialog.move_up();
+                } else {
+                    self.timeline_dialog.move_down();
+                }
             }
-            if let Some(theme_id) = self.theme_list_dialog.selected_theme_id() {
-                let _ = self.context.set_theme_by_name(&theme_id);
+            Some(DialogSlot::Fork) => {
+                if up {
+                    self.fork_dialog.move_up();
+                } else {
+                    self.fork_dialog.move_down();
+                }
             }
-            return;
-        }
-        if self.mcp_dialog.is_open() {
-            if up {
-                self.mcp_dialog.move_up();
-            } else {
-                self.mcp_dialog.move_down();
+            Some(DialogSlot::Provider) => {
+                if up {
+                    self.provider_dialog.move_up();
+                } else {
+                    self.provider_dialog.move_down();
+                }
             }
-            return;
-        }
-        if self.timeline_dialog.is_open() {
-            if up {
-                self.timeline_dialog.move_up();
-            } else {
-                self.timeline_dialog.move_down();
+            Some(DialogSlot::Subagent) => {
+                if up {
+                    self.subagent_dialog.scroll_up();
+                } else {
+                    self.subagent_dialog.scroll_down(50);
+                }
             }
-            return;
-        }
-        if self.fork_dialog.is_open() {
-            if up {
-                self.fork_dialog.move_up();
-            } else {
-                self.fork_dialog.move_down();
+            Some(DialogSlot::Tag) => {
+                if up {
+                    self.tag_dialog.move_up();
+                } else {
+                    self.tag_dialog.move_down();
+                }
             }
-            return;
-        }
-        if self.provider_dialog.is_open() {
-            if up {
-                self.provider_dialog.move_up();
-            } else {
-                self.provider_dialog.move_down();
-            }
-            return;
-        }
-        if self.subagent_dialog.is_open() {
-            if up {
-                self.subagent_dialog.scroll_up();
-            } else {
-                self.subagent_dialog.scroll_down(50);
-            }
-            return;
-        }
-        if self.tag_dialog.is_open() {
-            if up {
-                self.tag_dialog.move_up();
-            } else {
-                self.tag_dialog.move_down();
-            }
+            _ => {}
         }
     }
 
@@ -288,7 +504,7 @@ impl App {
         if self.alert_dialog.is_open() {
             match key.code {
                 KeyCode::Esc | KeyCode::Enter => {
-                    self.alert_dialog.close();
+                    self.close_alert_dialog();
                 }
                 KeyCode::Char('c')
                     if key.modifiers.contains(KeyModifiers::CONTROL)
@@ -302,7 +518,7 @@ impl App {
         }
         if self.help_dialog.is_open() {
             if matches!(key.code, KeyCode::Esc | KeyCode::Enter) {
-                self.help_dialog.close();
+                self.close_help_dialog();
             }
             return Ok(true);
         }
@@ -312,7 +528,7 @@ impl App {
         }
         if self.session_rename_dialog.is_open() {
             match key.code {
-                KeyCode::Esc => self.session_rename_dialog.close(),
+                KeyCode::Esc => self.close_session_rename_dialog_modal(),
                 KeyCode::Backspace => self.session_rename_dialog.handle_backspace(),
                 KeyCode::Enter => {
                     if let Some((session_id, title)) = self.session_rename_dialog.confirm() {
@@ -322,7 +538,7 @@ impl App {
                                     "Failed to rename session `{}`:\n{}",
                                     session_id, err
                                 ));
-                                self.alert_dialog.open();
+                                self.open_alert_dialog();
                             } else {
                                 self.refresh_session_list_dialog();
                                 let _ = self.sync_session_from_server(&session_id);
@@ -342,7 +558,7 @@ impl App {
         }
         if self.session_export_dialog.is_open() {
             match key.code {
-                KeyCode::Esc => self.session_export_dialog.close(),
+                KeyCode::Esc => self.close_session_export_dialog_modal(),
                 KeyCode::Backspace => self.session_export_dialog.handle_backspace(),
                 KeyCode::Enter => {
                     if let Some(session_id) = self.session_export_dialog.session_id() {
@@ -350,7 +566,7 @@ impl App {
                         if filename.is_empty() {
                             self.alert_dialog
                                 .set_message("Filename cannot be empty for export.");
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         } else {
                             let options = TranscriptOptions {
                                 include_thinking: self.session_export_dialog.include_thinking,
@@ -365,15 +581,15 @@ impl App {
                                         "Session exported to `{}`.",
                                         path.display()
                                     ));
-                                    self.alert_dialog.open();
-                                    self.session_export_dialog.close();
+                                    self.open_alert_dialog();
+                                    self.close_session_export_dialog_modal();
                                 }
                                 Err(err) => {
                                     self.alert_dialog.set_message(&format!(
                                         "Failed to export session:\n{}",
                                         err
                                     ));
-                                    self.alert_dialog.open();
+                                    self.open_alert_dialog();
                                 }
                             }
                         }
@@ -393,17 +609,17 @@ impl App {
                                         "Failed to copy transcript to clipboard:\n{}",
                                         err
                                     ));
-                                    self.alert_dialog.open();
+                                    self.open_alert_dialog();
                                 } else {
                                     self.alert_dialog
                                         .set_message("Session transcript copied to clipboard.");
-                                    self.alert_dialog.open();
+                                    self.open_alert_dialog();
                                 }
                             }
                             None => {
                                 self.alert_dialog
                                     .set_message("No transcript available for current session.");
-                                self.alert_dialog.open();
+                                self.open_alert_dialog();
                             }
                         }
                     }
@@ -420,14 +636,14 @@ impl App {
         }
         if self.tool_call_cancel_dialog.is_open() {
             match key.code {
-                KeyCode::Esc => self.tool_call_cancel_dialog.close(),
+                KeyCode::Esc => self.close_tool_call_cancel_dialog_modal(),
                 KeyCode::Up => self.tool_call_cancel_dialog.previous(),
                 KeyCode::Down => self.tool_call_cancel_dialog.next(),
                 KeyCode::Enter => {
                     if let Some(tool_call_id) = self.tool_call_cancel_dialog.selected() {
-                        if let Some(session_id) = &self.active_session_id {
+                        if let Some(session_id) = self.current_session_id() {
                             if let Some(api) = self.context.get_api_client() {
-                                if let Err(e) = api.cancel_tool_call(session_id, &tool_call_id) {
+                                if let Err(e) = api.cancel_tool_call(&session_id, &tool_call_id) {
                                     self.toast.show(
                                         ToastVariant::Error,
                                         &format!("Failed to cancel tool: {}", e),
@@ -442,7 +658,7 @@ impl App {
                                 }
                             }
                         }
-                        self.tool_call_cancel_dialog.close();
+                        self.close_tool_call_cancel_dialog_modal();
                     }
                 }
                 _ => {}
@@ -451,14 +667,14 @@ impl App {
         }
         if self.prompt_stash_dialog.is_open() {
             match key.code {
-                KeyCode::Esc => self.prompt_stash_dialog.close(),
+                KeyCode::Esc => self.close_prompt_stash_dialog_modal(),
                 KeyCode::Up => self.prompt_stash_dialog.move_up(),
                 KeyCode::Down => self.prompt_stash_dialog.move_down(),
                 KeyCode::Backspace => self.prompt_stash_dialog.handle_backspace(),
                 KeyCode::Enter => {
                     if let Some(index) = self.prompt_stash_dialog.selected_index() {
                         if self.prompt.load_stash(index) {
-                            self.prompt_stash_dialog.close();
+                            self.close_prompt_stash_dialog_modal();
                         }
                     }
                 }
@@ -515,12 +731,12 @@ impl App {
                         match result {
                             Ok(message) => {
                                 self.alert_dialog.set_message(&message);
-                                self.alert_dialog.open();
+                                self.open_alert_dialog();
                             }
                             Err(error) => {
                                 self.alert_dialog
                                     .set_message(&format!("Failed to save skill:\n{}", error));
-                                self.alert_dialog.open();
+                                self.open_alert_dialog();
                             }
                         }
                     }
@@ -540,12 +756,12 @@ impl App {
                     KeyCode::Enter => match self.submit_skill_delete() {
                         Ok(message) => {
                             self.alert_dialog.set_message(&message);
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                         Err(error) => {
                             self.alert_dialog
                                 .set_message(&format!("Failed to delete skill:\n{}", error));
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                     },
                     _ => {}
@@ -553,7 +769,7 @@ impl App {
                 return Ok(true);
             }
             match key.code {
-                KeyCode::Esc => self.skill_list_dialog.close(),
+                KeyCode::Esc => self.close_skill_list_dialog_modal(),
                 KeyCode::Up => {
                     self.skill_list_dialog.move_up();
                     let _ = self.refresh_skill_list_detail();
@@ -571,7 +787,7 @@ impl App {
                 KeyCode::Enter => {
                     if let Some(skill) = self.skill_list_dialog.selected_skill() {
                         self.prompt.set_input(format!("/{} ", skill));
-                        self.skill_list_dialog.close();
+                        self.close_skill_list_dialog_modal();
                     }
                 }
                 KeyCode::Char('c')
@@ -587,7 +803,7 @@ impl App {
                     if let Err(error) = self.skill_list_dialog.begin_edit() {
                         self.alert_dialog
                             .set_message(&format!("Cannot edit skill:\n{}", error));
-                        self.alert_dialog.open();
+                        self.open_alert_dialog();
                     }
                 }
                 KeyCode::Char('d')
@@ -597,7 +813,7 @@ impl App {
                     if let Err(error) = self.skill_list_dialog.begin_delete() {
                         self.alert_dialog
                             .set_message(&format!("Cannot delete skill:\n{}", error));
-                        self.alert_dialog.open();
+                        self.open_alert_dialog();
                     }
                 }
                 KeyCode::Char('g')
@@ -607,12 +823,12 @@ impl App {
                     match self.submit_skill_guard_run() {
                         Ok(message) => {
                             self.alert_dialog.set_message(&message);
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                         Err(error) => {
                             self.alert_dialog
                                 .set_message(&format!("Failed to run skill guard:\n{}", error));
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                     }
                 }
@@ -623,12 +839,12 @@ impl App {
                     match self.submit_skill_source_guard_run() {
                         Ok(message) => {
                             self.alert_dialog.set_message(&message);
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                         Err(error) => {
                             self.alert_dialog
                                 .set_message(&format!("Failed to run source guard:\n{}", error));
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                     }
                 }
@@ -645,14 +861,14 @@ impl App {
                     match self.submit_skill_hub_index_refresh() {
                         Ok(message) => {
                             self.alert_dialog.set_message(&message);
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                         Err(error) => {
                             self.alert_dialog.set_message(&format!(
                                 "Failed to refresh source index:\n{}",
                                 error
                             ));
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                     }
                 }
@@ -663,14 +879,14 @@ impl App {
                     match self.refresh_skill_hub_state() {
                         Ok(()) => {
                             self.alert_dialog.set_message("Refreshed skill hub state.");
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                         Err(error) => {
                             self.alert_dialog.set_message(&format!(
                                 "Failed to refresh skill hub state:\n{}",
                                 error
                             ));
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                     }
                 }
@@ -681,12 +897,12 @@ impl App {
                     match self.submit_skill_hub_sync_plan() {
                         Ok(message) => {
                             self.alert_dialog.set_message(&message);
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                         Err(error) => {
                             self.alert_dialog
                                 .set_message(&format!("Failed to build hub sync plan:\n{}", error));
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                     }
                 }
@@ -697,12 +913,12 @@ impl App {
                     match self.submit_skill_hub_sync_apply() {
                         Ok(message) => {
                             self.alert_dialog.set_message(&message);
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                         Err(error) => {
                             self.alert_dialog
                                 .set_message(&format!("Failed to apply hub sync:\n{}", error));
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                     }
                 }
@@ -713,14 +929,14 @@ impl App {
                     match self.submit_skill_hub_remote_install_plan() {
                         Ok(message) => {
                             self.alert_dialog.set_message(&message);
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                         Err(error) => {
                             self.alert_dialog.set_message(&format!(
                                 "Failed to build remote install plan:\n{}",
                                 error
                             ));
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                     }
                 }
@@ -731,14 +947,14 @@ impl App {
                     match self.submit_skill_hub_remote_install_apply() {
                         Ok(message) => {
                             self.alert_dialog.set_message(&message);
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                         Err(error) => {
                             self.alert_dialog.set_message(&format!(
                                 "Failed to apply remote install:\n{}",
                                 error
                             ));
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                     }
                 }
@@ -749,14 +965,14 @@ impl App {
                     match self.submit_skill_hub_remote_update_plan() {
                         Ok(message) => {
                             self.alert_dialog.set_message(&message);
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                         Err(error) => {
                             self.alert_dialog.set_message(&format!(
                                 "Failed to build remote update plan:\n{}",
                                 error
                             ));
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                     }
                 }
@@ -767,12 +983,12 @@ impl App {
                     match self.submit_skill_hub_remote_update_apply() {
                         Ok(message) => {
                             self.alert_dialog.set_message(&message);
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                         Err(error) => {
                             self.alert_dialog
                                 .set_message(&format!("Failed to apply remote update:\n{}", error));
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                     }
                 }
@@ -783,14 +999,14 @@ impl App {
                     match self.submit_skill_hub_managed_detach() {
                         Ok(message) => {
                             self.alert_dialog.set_message(&message);
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                         Err(error) => {
                             self.alert_dialog.set_message(&format!(
                                 "Failed to detach managed skill:\n{}",
                                 error
                             ));
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                     }
                 }
@@ -801,14 +1017,14 @@ impl App {
                     match self.submit_skill_hub_managed_remove() {
                         Ok(message) => {
                             self.alert_dialog.set_message(&message);
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                         Err(error) => {
                             self.alert_dialog.set_message(&format!(
                                 "Failed to remove managed skill:\n{}",
                                 error
                             ));
-                            self.alert_dialog.open();
+                            self.open_alert_dialog();
                         }
                     }
                 }
@@ -832,12 +1048,12 @@ impl App {
 
         if self.slash_popup.is_open() {
             match key.code {
-                KeyCode::Esc => self.slash_popup.close(),
+                KeyCode::Esc => self.close_slash_popup_dialog(),
                 KeyCode::Up => self.slash_popup.move_up(),
                 KeyCode::Down => self.slash_popup.move_down(),
                 KeyCode::Backspace => {
                     if !self.slash_popup.handle_backspace() {
-                        self.slash_popup.close();
+                        self.close_slash_popup_dialog();
                     }
                 }
                 KeyCode::Enter => {
@@ -855,7 +1071,7 @@ impl App {
                     // can continue typing.  On Enter the full text goes through
                     // parse_interactive_command() which supports parameters.
                     let query = self.slash_popup.query().to_string();
-                    self.slash_popup.close();
+                    self.close_slash_popup_dialog();
                     self.prompt.set_input(format!("/{query} "));
                 }
                 KeyCode::Char(c)
@@ -870,14 +1086,14 @@ impl App {
         }
         if self.recovery_action_dialog.is_open() {
             match key.code {
-                KeyCode::Esc => self.recovery_action_dialog.close(),
+                KeyCode::Esc => self.close_recovery_action_dialog_modal(),
                 KeyCode::Up => self.recovery_action_dialog.previous(),
                 KeyCode::Down => self.recovery_action_dialog.next(),
                 KeyCode::Enter => {
                     let selected = self.recovery_action_dialog.selected();
                     if let Some(selector) = selected.as_deref() {
                         self.handle_execute_recovery_action(selector);
-                        self.recovery_action_dialog.close();
+                        self.close_recovery_action_dialog_modal();
                     }
                 }
                 _ => {}
@@ -887,13 +1103,13 @@ impl App {
 
         if self.command_palette.is_open() {
             match key.code {
-                KeyCode::Esc => self.command_palette.close(),
+                KeyCode::Esc => self.close_command_palette_dialog(),
                 KeyCode::Up => self.command_palette.move_up(),
                 KeyCode::Down => self.command_palette.move_down(),
                 KeyCode::Backspace => self.command_palette.handle_backspace(),
                 KeyCode::Enter => {
                     let action = self.command_palette.selected_action();
-                    self.command_palette.close();
+                    self.close_command_palette_dialog();
                     if let Some(action) = action {
                         self.execute_ui_action(action)?;
                     }
@@ -911,7 +1127,7 @@ impl App {
 
         if self.model_select.is_open() {
             match key.code {
-                KeyCode::Esc => self.model_select.close(),
+                KeyCode::Esc => self.close_model_select_dialog(),
                 KeyCode::Up => self.model_select.move_up(),
                 KeyCode::Down => self.model_select.move_down(),
                 KeyCode::Backspace => self.model_select.handle_backspace(),
@@ -925,7 +1141,7 @@ impl App {
                         self.context.save_recent_models(self.model_select.recent());
                         self.set_active_model_selection(model_ref, Some(provider));
                     }
-                    self.model_select.close();
+                    self.close_model_select_dialog();
                 }
                 KeyCode::Char(c)
                     if !key.modifiers.contains(KeyModifiers::CONTROL)
@@ -940,14 +1156,14 @@ impl App {
 
         if self.agent_select.is_open() {
             match key.code {
-                KeyCode::Esc => self.agent_select.close(),
+                KeyCode::Esc => self.close_agent_select_dialog(),
                 KeyCode::Up => self.agent_select.move_up(),
                 KeyCode::Down => self.agent_select.move_down(),
                 KeyCode::Enter => {
                     if let Some(agent) = self.agent_select.selected_agent() {
                         apply_selected_mode(&self.context, agent);
                     }
-                    self.agent_select.close();
+                    self.close_agent_select_dialog();
                 }
                 _ => {}
             }
@@ -968,10 +1184,10 @@ impl App {
                                         "Failed to rename session `{}`:\n{}",
                                         session_id, err
                                     ));
-                                    self.alert_dialog.open();
+                                    self.open_alert_dialog();
                                 } else {
                                     self.refresh_session_list_dialog();
-                                    if self.active_session_id.as_deref()
+                                    if self.current_session_id().as_deref()
                                         == Some(session_id.as_str())
                                     {
                                         let _ = self.sync_session_from_server(&session_id);
@@ -992,7 +1208,7 @@ impl App {
             }
 
             match key.code {
-                KeyCode::Esc => self.session_list_dialog.close(),
+                KeyCode::Esc => self.close_session_list_dialog_modal(),
                 KeyCode::Up => self.session_list_dialog.move_up(),
                 KeyCode::Down => self.session_list_dialog.move_down(),
                 KeyCode::Backspace => {
@@ -1001,11 +1217,9 @@ impl App {
                 }
                 KeyCode::Enter => {
                     let target = self.session_list_dialog.selected_session_id();
-                    self.session_list_dialog.close();
+                    self.close_session_list_dialog_modal();
                     if let Some(session_id) = target {
-                        self.context.navigate(Route::Session {
-                            session_id: session_id.clone(),
-                        });
+                        self.context.navigate_session(session_id.clone());
                         self.ensure_session_view(&session_id);
                         let _ = self.sync_session_from_server(&session_id);
                     }
@@ -1024,14 +1238,12 @@ impl App {
                                             "Failed to delete session `{}`:\n{}",
                                             session_id, err
                                         ));
-                                        self.alert_dialog.open();
+                                        self.open_alert_dialog();
                                     } else {
-                                        if self.active_session_id.as_deref()
+                                        if self.current_session_id().as_deref()
                                             == Some(session_id.as_str())
                                         {
-                                            self.context.navigate(Route::Home);
-                                            self.active_session_id = None;
-                                            self.session_view = None;
+                                            self.context.navigate_home();
                                         }
                                         self.refresh_session_list_dialog();
                                     }
@@ -1057,7 +1269,7 @@ impl App {
                 KeyCode::Esc => {
                     let initial = self.theme_list_dialog.initial_theme_id().to_string();
                     let _ = self.context.set_theme_by_name(&initial);
-                    self.theme_list_dialog.close();
+                    self.close_theme_list_dialog_modal();
                 }
                 KeyCode::Up => {
                     self.theme_list_dialog.move_up();
@@ -1081,7 +1293,7 @@ impl App {
                     if let Some(theme_id) = self.theme_list_dialog.selected_theme_id() {
                         let _ = self.context.commit_theme_by_name(&theme_id);
                     }
-                    self.theme_list_dialog.close();
+                    self.close_theme_list_dialog_modal();
                 }
                 KeyCode::Char(c)
                     if !key.modifiers.contains(KeyModifiers::CONTROL)
@@ -1099,7 +1311,7 @@ impl App {
 
         if self.mcp_dialog.is_open() {
             match key.code {
-                KeyCode::Esc => self.mcp_dialog.close(),
+                KeyCode::Esc => self.close_mcp_dialog_modal(),
                 KeyCode::Up => self.mcp_dialog.move_up(),
                 KeyCode::Down => self.mcp_dialog.move_down(),
                 KeyCode::Char('r') => {
@@ -1114,14 +1326,14 @@ impl App {
                                         "MCP `{}` auth started:\n{}\n\nComplete OAuth, then reconnect.",
                                         item.name, auth.authorization_url
                                     ));
-                                    self.alert_dialog.open();
+                                    self.open_alert_dialog();
                                 }
                                 Err(err) => {
                                     self.alert_dialog.set_message(&format!(
                                         "Failed to start MCP auth `{}`:\n{}",
                                         item.name, err
                                     ));
-                                    self.alert_dialog.open();
+                                    self.open_alert_dialog();
                                 }
                             }
                             let _ = client.authenticate_mcp(&item.name);
@@ -1137,7 +1349,7 @@ impl App {
                                     "Failed to clear MCP auth `{}`:\n{}",
                                     item.name, err
                                 ));
-                                self.alert_dialog.open();
+                                self.open_alert_dialog();
                             }
                             let _ = self.refresh_mcp_dialog();
                         }
@@ -1156,7 +1368,7 @@ impl App {
                                     "Failed to toggle MCP `{}`:\n{}",
                                     item.name, err
                                 ));
-                                self.alert_dialog.open();
+                                self.open_alert_dialog();
                             }
                             let _ = self.refresh_mcp_dialog();
                         }
@@ -1169,15 +1381,15 @@ impl App {
 
         if self.timeline_dialog.is_open() {
             match key.code {
-                KeyCode::Esc => self.timeline_dialog.close(),
+                KeyCode::Esc => self.close_timeline_dialog_modal(),
                 KeyCode::Up => self.timeline_dialog.move_up(),
                 KeyCode::Down => self.timeline_dialog.move_down(),
                 KeyCode::Enter => {
                     if let Some(msg_id) = self.timeline_dialog.selected_message_id() {
                         let msg_id = msg_id.to_string();
-                        self.timeline_dialog.close();
-                        if let Some(ref mut sv) = self.session_view {
-                            sv.scroll_to_message(&msg_id);
+                        self.close_timeline_dialog_modal();
+                        if let Some(sv) = self.context.session_view_handle() {
+                            sv.scroll_to_message(&self.context, &msg_id);
                         }
                     }
                 }
@@ -1188,7 +1400,7 @@ impl App {
 
         if self.fork_dialog.is_open() {
             match key.code {
-                KeyCode::Esc => self.fork_dialog.close(),
+                KeyCode::Esc => self.close_fork_dialog_modal(),
                 KeyCode::Up => self.fork_dialog.move_up(),
                 KeyCode::Down => self.fork_dialog.move_down(),
                 KeyCode::Enter => {
@@ -1197,27 +1409,25 @@ impl App {
                         .fork_dialog
                         .selected_message_id()
                         .map(|s| s.to_string());
-                    self.fork_dialog.close();
+                    self.close_fork_dialog_modal();
                     if let Some(sid) = session_id {
                         if let Some(client) = self.context.get_api_client() {
                             match client.fork_session(&sid, msg_id.as_deref()) {
                                 Ok(new_session) => {
                                     self.cache_session_from_api(&new_session);
-                                    self.context.navigate(Route::Session {
-                                        session_id: new_session.id.clone(),
-                                    });
+                                    self.context.navigate_session(new_session.id.clone());
                                     self.ensure_session_view(&new_session.id);
                                     let _ = self.sync_session_from_server(&new_session.id);
                                     self.alert_dialog.set_message(&format!(
                                         "Forked session created: {}",
                                         new_session.title
                                     ));
-                                    self.alert_dialog.open();
+                                    self.open_alert_dialog();
                                 }
                                 Err(err) => {
                                     self.alert_dialog
                                         .set_message(&format!("Failed to fork session:\n{}", err));
-                                    self.alert_dialog.open();
+                                    self.open_alert_dialog();
                                 }
                             }
                         }
@@ -1312,7 +1522,7 @@ impl App {
                         {
                             self.provider_dialog.clear_search();
                         } else {
-                            self.provider_dialog.close();
+                            self.close_provider_dialog_modal();
                         }
                     }
                     KeyCode::Left => self.provider_dialog.toggle_mode_prev(),
@@ -1353,7 +1563,7 @@ impl App {
 
         if self.subagent_dialog.is_open() {
             match key.code {
-                KeyCode::Esc => self.subagent_dialog.close(),
+                KeyCode::Esc => self.close_subagent_dialog_modal(),
                 KeyCode::Up => self.subagent_dialog.scroll_up(),
                 KeyCode::Down => self.subagent_dialog.scroll_down(50),
                 _ => {}
@@ -1363,11 +1573,11 @@ impl App {
 
         if self.tag_dialog.is_open() {
             match key.code {
-                KeyCode::Esc => self.tag_dialog.close(),
+                KeyCode::Esc => self.close_tag_dialog_modal(),
                 KeyCode::Up => self.tag_dialog.move_up(),
                 KeyCode::Down => self.tag_dialog.move_down(),
                 KeyCode::Char(' ') => self.tag_dialog.toggle_selection(),
-                KeyCode::Enter => self.tag_dialog.close(),
+                KeyCode::Enter => self.close_tag_dialog_modal(),
                 _ => {}
             }
             return Ok(true);

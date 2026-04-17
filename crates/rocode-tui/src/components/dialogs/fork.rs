@@ -3,10 +3,10 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState},
-    Frame,
 };
 
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 
 #[derive(Clone, Debug)]
 pub struct ForkEntry {
@@ -80,14 +80,14 @@ impl ForkDialog {
         self.selected_entry().map(|e| e.message_id.as_str())
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect, theme: &Theme) {
         if !self.open {
             return;
         }
         let dialog_width = 70u16.min(area.width.saturating_sub(4));
         let dialog_height = 20u16.min(area.height.saturating_sub(4));
         let dialog_area = centered_rect(dialog_width, dialog_height, area);
-        frame.render_widget(Clear, dialog_area);
+        surface.render_widget(Clear, dialog_area);
         let block = Block::default()
             .title(Span::styled(
                 " Fork Session ",
@@ -99,18 +99,18 @@ impl ForkDialog {
             .border_style(Style::default().fg(theme.border))
             .style(Style::default().bg(theme.background_panel));
         let inner = super::dialog_inner(block.inner(dialog_area));
-        frame.render_widget(block, dialog_area);
+        surface.render_widget(block, dialog_area);
         if self.entries.is_empty() {
             let empty = ratatui::widgets::Paragraph::new("No messages to fork from")
                 .style(Style::default().fg(theme.text_muted));
-            frame.render_widget(empty, inner);
+            surface.render_widget(empty, inner);
             return;
         }
         let hint = ratatui::widgets::Paragraph::new(
             "Select a message to fork from. Enter to confirm, Esc to cancel.",
         )
         .style(Style::default().fg(theme.text_muted));
-        frame.render_widget(
+        surface.render_widget(
             hint,
             Rect {
                 x: inner.x,
@@ -152,7 +152,7 @@ impl ForkDialog {
                 .bg(theme.background_element)
                 .add_modifier(Modifier::BOLD),
         );
-        frame.render_stateful_widget(list, list_area, &mut self.state.clone());
+        surface.render_stateful_widget(list, list_area, &mut self.state.clone());
     }
 }
 
@@ -164,4 +164,39 @@ impl Default for ForkDialog {
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     super::centered_rect(width, height, area)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    use crate::ui::BufferSurface;
+
+    #[test]
+    fn fork_dialog_renders_to_buffer_surface() {
+        let mut dialog = ForkDialog::new();
+        dialog.open(
+            "session-1".to_string(),
+            vec![ForkEntry {
+                message_id: "msg-1".to_string(),
+                role: "assistant".to_string(),
+                preview: "Refactor the session shell".to_string(),
+                timestamp: "12:34".to_string(),
+            }],
+        );
+
+        let area = Rect::new(0, 0, 120, 32);
+        let mut buffer = Buffer::empty(area);
+        let mut surface = BufferSurface::new(&mut buffer);
+
+        dialog.render(&mut surface, area, &Theme::dark());
+
+        let rendered = buffer
+            .content
+            .iter()
+            .filter(|cell| !cell.symbol().trim().is_empty())
+            .count();
+        assert!(rendered > 0);
+    }
 }

@@ -161,10 +161,12 @@ impl App {
     }
 
     pub(super) fn clear_question_tracking(&mut self, question_id: &str) {
-        self.pending_question_ids.remove(question_id);
-        self.pending_questions.remove(question_id);
-        self.pending_question_queue.retain(|id| id != question_id);
-        self.pending_question_drafts.remove(question_id);
+        self.question_runtime.pending_ids.remove(question_id);
+        self.question_runtime.pending_questions.remove(question_id);
+        self.question_runtime
+            .pending_queue
+            .retain(|id| id != question_id);
+        self.question_runtime.pending_drafts.remove(question_id);
     }
 
     pub(super) fn open_next_question_prompt(&mut self) -> bool {
@@ -172,12 +174,18 @@ impl App {
             return false;
         }
 
-        while let Some(question_id) = self.pending_question_queue.pop_front() {
-            let Some(question) = self.pending_questions.get(&question_id).cloned() else {
+        while let Some(question_id) = self.question_runtime.pending_queue.pop_front() {
+            let Some(question) = self
+                .question_runtime
+                .pending_questions
+                .get(&question_id)
+                .cloned()
+            else {
                 continue;
             };
             let draft = self
-                .pending_question_drafts
+                .question_runtime
+                .pending_drafts
                 .entry(question_id.clone())
                 .or_default()
                 .clone();
@@ -191,7 +199,7 @@ impl App {
     }
 
     pub(super) fn sync_question_requests(&mut self) -> bool {
-        self.perf.question_sync = self.perf.question_sync.saturating_add(1);
+        self.diagnostics.perf.question_sync = self.diagnostics.perf.question_sync.saturating_add(1);
         let Some(client) = self.context.get_api_client() else {
             return false;
         };
@@ -218,22 +226,31 @@ impl App {
             .iter()
             .map(|q| q.id.clone())
             .collect::<HashSet<_>>();
-        let mut changed = latest_ids != self.pending_question_ids;
+        let mut changed = latest_ids != self.question_runtime.pending_ids;
 
         for question in questions {
             let question_id = question.id.clone();
-            self.pending_questions.insert(question_id.clone(), question);
-            if self.pending_question_ids.insert(question_id.clone()) {
-                self.pending_question_queue.push_back(question_id);
+            self.question_runtime
+                .pending_questions
+                .insert(question_id.clone(), question);
+            if self
+                .question_runtime
+                .pending_ids
+                .insert(question_id.clone())
+            {
+                self.question_runtime.pending_queue.push_back(question_id);
                 changed = true;
             }
         }
 
-        self.pending_question_ids
+        self.question_runtime
+            .pending_ids
             .retain(|id| latest_ids.contains(id));
-        self.pending_questions
+        self.question_runtime
+            .pending_questions
             .retain(|id, _| latest_ids.contains(id));
-        self.pending_question_queue
+        self.question_runtime
+            .pending_queue
             .retain(|id| latest_ids.contains(id));
 
         if let Some(current_id) = self.question_prompt.current().map(|q| q.id.clone()) {
@@ -297,11 +314,15 @@ impl App {
         let Some(client) = self.context.get_api_client() else {
             self.alert_dialog
                 .set_message("Cannot answer question: no API client");
-            self.alert_dialog.open();
+            self.open_alert_dialog();
             return;
         };
 
-        let question = self.pending_questions.get(question_id).cloned();
+        let question = self
+            .question_runtime
+            .pending_questions
+            .get(question_id)
+            .cloned();
         let normalized_answers = answers
             .into_iter()
             .map(|answer| answer.trim().to_string())
@@ -310,7 +331,8 @@ impl App {
         let mut next_prompt = None;
         let answers = {
             let draft = self
-                .pending_question_drafts
+                .question_runtime
+                .pending_drafts
                 .entry(question_id.to_string())
                 .or_default();
             let current_index = draft.current_index;
@@ -365,7 +387,7 @@ impl App {
                 {
                     self.alert_dialog
                         .set_message(&format!("Failed to resume pending command:\n{}", error));
-                    self.alert_dialog.open();
+                    self.open_alert_dialog();
                 }
                 self.clear_question_tracking(question_id);
                 self.toast
@@ -375,9 +397,10 @@ impl App {
             Err(err) => {
                 self.alert_dialog
                     .set_message(&format!("Failed to submit question response:\n{}", err));
-                self.alert_dialog.open();
+                self.open_alert_dialog();
                 let current_index = self
-                    .pending_question_drafts
+                    .question_runtime
+                    .pending_drafts
                     .get(question_id)
                     .map(|draft| draft.current_index)
                     .unwrap_or(0);
@@ -395,7 +418,7 @@ impl App {
         let Some(client) = self.context.get_api_client() else {
             self.alert_dialog
                 .set_message("Cannot reject question: no API client");
-            self.alert_dialog.open();
+            self.open_alert_dialog();
             return;
         };
 
@@ -409,7 +432,7 @@ impl App {
             Err(err) => {
                 self.alert_dialog
                     .set_message(&format!("Failed to reject question:\n{}", err));
-                self.alert_dialog.open();
+                self.open_alert_dialog();
             }
         }
     }

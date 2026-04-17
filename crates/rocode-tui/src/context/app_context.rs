@@ -1,12 +1,16 @@
 use parking_lot::RwLock;
+use rocode_command::interactive::InteractiveEventsQuery;
 use rocode_command::stage_protocol::StageSummary;
 use rocode_session::SessionUsage;
 use std::collections::HashMap;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use crate::api::{ApiClient, SessionExecutionTopology, SessionTelemetrySnapshot};
+use crate::bridge::{UiBridge, UiBridgeSnapshot};
+use crate::components::SessionView;
 use crate::context::{ChildSessionInfo, KeybindRegistry, SessionContext};
-use crate::event::EventBus;
+use crate::event::{CustomEvent, Event};
 use crate::router::Router;
 use crate::theme::Theme;
 use rocode_config::{Config as AppConfig, UiPreferencesConfig};
@@ -70,10 +74,177 @@ pub enum SidebarMode {
     Hide,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SidebarLifecycleState {
+    pub mode: SidebarMode,
+    pub visible: bool,
+    pub process_selected: usize,
+    pub process_focus: bool,
+    pub child_session_selected: usize,
+    pub child_session_focus: bool,
+}
+
+impl Default for SidebarLifecycleState {
+    fn default() -> Self {
+        Self {
+            mode: SidebarMode::Auto,
+            visible: false,
+            process_selected: 0,
+            process_focus: false,
+            child_session_selected: 0,
+            child_session_focus: false,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessageDensity {
     Compact,
     Cozy,
+}
+
+pub const SESSION_SIDEBAR_WIDE_THRESHOLD: u16 = 120;
+
+#[derive(Clone, Debug)]
+pub struct UiPreferencesState {
+    pub show_header: bool,
+    pub show_scrollbar: bool,
+    pub tips_hidden: bool,
+    pub show_timestamps: bool,
+    pub show_thinking: bool,
+    pub show_tool_details: bool,
+    pub message_density: MessageDensity,
+    pub semantic_highlight: bool,
+}
+
+impl Default for UiPreferencesState {
+    fn default() -> Self {
+        Self {
+            show_header: true,
+            show_scrollbar: false,
+            tips_hidden: false,
+            show_timestamps: false,
+            show_thinking: true,
+            show_tool_details: true,
+            message_density: MessageDensity::Compact,
+            semantic_highlight: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SelectionState {
+    pub current_agent: String,
+    pub current_scheduler_profile: Option<String>,
+    pub current_model: Option<String>,
+    pub current_provider: Option<String>,
+    pub current_variant: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TuiEventsBrowserState {
+    pub session_id: String,
+    pub filter: InteractiveEventsQuery,
+    pub offset: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TuiMemoryListState {
+    pub query: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TuiMemoryDetailState {
+    pub record_id: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TuiMemoryPreviewState {
+    pub query: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TuiMemoryRuleHitsState {
+    pub raw_query: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TuiMemoryConsolidationState {
+    pub raw_request: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DialogSlot {
+    Alert,
+    Help,
+    RecoveryAction,
+    Status,
+    SessionRename,
+    SessionExport,
+    PromptStash,
+    SkillList,
+    SlashPopup,
+    CommandPalette,
+    ModelSelect,
+    AgentSelect,
+    SessionList,
+    ThemeList,
+    Mcp,
+    Timeline,
+    Fork,
+    Provider,
+    Subagent,
+    ToolCallCancel,
+    Tag,
+}
+
+#[derive(Clone, Debug, Default)]
+pub enum StatusDialogView {
+    #[default]
+    Overview,
+    Runtime,
+    Usage,
+    Insights,
+    Events(TuiEventsBrowserState),
+    MemoryList(TuiMemoryListState),
+    MemoryPreview(TuiMemoryPreviewState),
+    MemoryDetail(TuiMemoryDetailState),
+    MemoryValidation(TuiMemoryDetailState),
+    MemoryConflicts(TuiMemoryDetailState),
+    MemoryRulePacks,
+    MemoryRuleHits(TuiMemoryRuleHitsState),
+    MemoryConsolidationRuns,
+    MemoryConsolidationResult(TuiMemoryConsolidationState),
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct DialogLifecycleState {
+    pub status_dialog_view: StatusDialogView,
+    pub open_dialogs: Vec<DialogSlot>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SessionState {
+    pub data: SessionContext,
+    pub child_sessions: Vec<ChildSessionInfo>,
+    pub execution_topology: Option<SessionExecutionTopology>,
+    pub stage_summaries: Vec<StageSummary>,
+    pub session_usage: Option<SessionUsage>,
+    pub session_runtime: Option<crate::api::SessionRuntimeState>,
+}
+
+impl Deref for SessionState {
+    type Target = SessionContext;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl DerefMut for SessionState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.data
+    }
 }
 
 impl MessageDensity {
@@ -93,45 +264,67 @@ impl MessageDensity {
     }
 }
 
+const DIALOG_CLOSE_PRIORITY: [DialogSlot; 21] = [
+    DialogSlot::Alert,
+    DialogSlot::Help,
+    DialogSlot::RecoveryAction,
+    DialogSlot::Status,
+    DialogSlot::SessionRename,
+    DialogSlot::SessionExport,
+    DialogSlot::PromptStash,
+    DialogSlot::SkillList,
+    DialogSlot::SlashPopup,
+    DialogSlot::CommandPalette,
+    DialogSlot::ModelSelect,
+    DialogSlot::AgentSelect,
+    DialogSlot::SessionList,
+    DialogSlot::ThemeList,
+    DialogSlot::Mcp,
+    DialogSlot::Timeline,
+    DialogSlot::Fork,
+    DialogSlot::Provider,
+    DialogSlot::Subagent,
+    DialogSlot::ToolCallCancel,
+    DialogSlot::Tag,
+];
+
+const DIALOG_SCROLL_PRIORITY: [DialogSlot; 13] = [
+    DialogSlot::PromptStash,
+    DialogSlot::SkillList,
+    DialogSlot::SlashPopup,
+    DialogSlot::CommandPalette,
+    DialogSlot::ModelSelect,
+    DialogSlot::AgentSelect,
+    DialogSlot::SessionList,
+    DialogSlot::ThemeList,
+    DialogSlot::Mcp,
+    DialogSlot::Timeline,
+    DialogSlot::Fork,
+    DialogSlot::Provider,
+    DialogSlot::Subagent,
+];
+
 pub struct AppContext {
     pub theme: RwLock<Theme>,
     pub theme_name: RwLock<String>,
     pub router: RwLock<Router>,
     pub keybind: RwLock<KeybindRegistry>,
-    pub session: RwLock<SessionContext>,
+    pub session: RwLock<SessionState>,
+    session_view: RwLock<Option<SessionView>>,
     pub providers: RwLock<Vec<ProviderInfo>>,
     pub mcp_servers: RwLock<Vec<McpServerStatus>>,
     pub lsp_status: RwLock<Vec<LspStatus>>,
-    pub event_bus: EventBus,
-    pub current_agent: RwLock<String>,
-    pub current_scheduler_profile: RwLock<Option<String>>,
-    pub current_model: RwLock<Option<String>>,
-    pub current_provider: RwLock<Option<String>>,
-    pub current_variant: RwLock<Option<String>>,
+    pub ui_bridge: UiBridge,
+    selection: RwLock<SelectionState>,
     pub directory: RwLock<String>,
-    pub show_sidebar: RwLock<bool>,
-    pub show_header: RwLock<bool>,
-    pub show_scrollbar: RwLock<bool>,
-    pub tips_hidden: RwLock<bool>,
-    pub sidebar_mode: RwLock<SidebarMode>,
+    dialog_lifecycle: RwLock<DialogLifecycleState>,
     pub animations_enabled: RwLock<bool>,
     pub pending_permissions: RwLock<usize>,
     pub queued_prompts: RwLock<HashMap<String, usize>>,
-    pub show_timestamps: RwLock<bool>,
-    pub show_thinking: RwLock<bool>,
-    pub show_tool_details: RwLock<bool>,
-    pub message_density: RwLock<MessageDensity>,
-    pub semantic_highlight: RwLock<bool>,
+    ui_preferences: RwLock<UiPreferencesState>,
     recent_models: RwLock<Vec<(String, String)>>,
     pub has_connected_provider: RwLock<bool>,
     pub processes: RwLock<Vec<ProcessInfo>>,
-    pub child_sessions: RwLock<Vec<ChildSessionInfo>>,
-    pub execution_topology: RwLock<Option<SessionExecutionTopology>>,
-    pub stage_summaries: RwLock<Vec<StageSummary>>,
-    pub session_usage: RwLock<Option<SessionUsage>>,
-    /// Server-side aggregated runtime state, preferably fetched via
-    /// `GET /session/{id}/telemetry` and mirrored from `runtime`.
-    pub session_runtime: RwLock<Option<crate::api::SessionRuntimeState>>,
     pub api_client: RwLock<Option<Arc<ApiClient>>>,
 }
 
@@ -144,67 +337,233 @@ impl AppContext {
             theme_name: RwLock::new(default_theme_name),
             router: RwLock::new(Router::new()),
             keybind: RwLock::new(KeybindRegistry::new()),
-            session: RwLock::new(SessionContext::new()),
+            session: RwLock::new(SessionState {
+                data: SessionContext::new(),
+                ..Default::default()
+            }),
+            session_view: RwLock::new(None),
             providers: RwLock::new(Vec::new()),
             mcp_servers: RwLock::new(Vec::new()),
             lsp_status: RwLock::new(Vec::new()),
-            event_bus: EventBus::new(),
-            current_agent: RwLock::new(String::new()),
-            current_scheduler_profile: RwLock::new(None),
-            current_model: RwLock::new(None),
-            current_provider: RwLock::new(None),
-            current_variant: RwLock::new(None),
+            ui_bridge: UiBridge::new(),
+            selection: RwLock::new(SelectionState::default()),
             directory: RwLock::new(String::new()),
-            show_sidebar: RwLock::new(true),
-            show_header: RwLock::new(true),
-            show_scrollbar: RwLock::new(true),
-            tips_hidden: RwLock::new(false),
-            sidebar_mode: RwLock::new(SidebarMode::Auto),
+            dialog_lifecycle: RwLock::new(DialogLifecycleState::default()),
             animations_enabled: RwLock::new(true),
             pending_permissions: RwLock::new(0),
             queued_prompts: RwLock::new(HashMap::new()),
-            show_timestamps: RwLock::new(false),
-            show_thinking: RwLock::new(false),
-            show_tool_details: RwLock::new(true),
-            message_density: RwLock::new(MessageDensity::Compact),
-            semantic_highlight: RwLock::new(false),
+            ui_preferences: RwLock::new(UiPreferencesState::default()),
             recent_models: RwLock::new(Vec::new()),
             has_connected_provider: RwLock::new(false),
             processes: RwLock::new(Vec::new()),
-            child_sessions: RwLock::new(Vec::new()),
-            execution_topology: RwLock::new(None),
-            stage_summaries: RwLock::new(Vec::new()),
-            session_usage: RwLock::new(None),
-            session_runtime: RwLock::new(None),
             api_client: RwLock::new(None),
         }
     }
 
     pub fn apply_session_telemetry_snapshot(&self, telemetry: SessionTelemetrySnapshot) {
-        *self.execution_topology.write() = Some(telemetry.topology);
-        *self.stage_summaries.write() = telemetry.stages;
-        *self.session_usage.write() = Some(telemetry.usage);
-        *self.session_runtime.write() = Some(telemetry.runtime);
+        let mut session = self.session.write();
+        session.execution_topology = Some(telemetry.topology);
+        session.stage_summaries = telemetry.stages;
+        session.session_usage = Some(telemetry.usage);
+        session.session_runtime = Some(telemetry.runtime);
     }
 
     pub fn navigate(&self, route: crate::router::Route) {
+        match &route {
+            crate::router::Route::Session { session_id } => {
+                self.session
+                    .write()
+                    .set_current_session_id(session_id.clone());
+                self.sync_session_view_route(session_id);
+            }
+            _ => {
+                self.session.write().clear_current_session_id();
+                self.clear_session_view_handle();
+            }
+        }
         self.router.write().navigate(route);
+    }
+
+    pub fn navigate_home(&self) {
+        self.navigate(crate::router::Route::Home);
+    }
+
+    pub fn navigate_session(&self, session_id: impl Into<String>) {
+        self.navigate(crate::router::Route::Session {
+            session_id: session_id.into(),
+        });
+    }
+
+    pub fn emit_ui_event(&self, event: Event) -> bool {
+        self.ui_bridge.emit(event)
+    }
+
+    pub fn emit_custom_event(&self, event: CustomEvent) -> bool {
+        self.ui_bridge.emit_custom(event)
+    }
+
+    pub fn record_ui_event(&self, event: &crate::event::Event) {
+        self.ui_bridge.record(event);
+    }
+
+    pub fn ui_bridge_snapshot(&self) -> UiBridgeSnapshot {
+        self.ui_bridge.snapshot()
+    }
+
+    pub fn drain_ui_events(&self, limit: usize) -> Vec<Event> {
+        self.ui_bridge.drain(limit)
     }
 
     pub fn current_route(&self) -> crate::router::Route {
         self.router.read().current().clone()
     }
 
-    pub fn toggle_sidebar(&self) {
-        let mut sidebar = self.show_sidebar.write();
-        *sidebar = !*sidebar;
+    pub fn current_route_session_id(&self) -> Option<String> {
+        self.router.read().session_id().map(str::to_string)
+    }
+
+    pub fn child_sessions(&self) -> Vec<ChildSessionInfo> {
+        self.session.read().child_sessions.clone()
+    }
+
+    pub fn set_child_sessions(&self, child_sessions: Vec<ChildSessionInfo>) {
+        self.session.write().child_sessions = child_sessions;
+    }
+
+    pub fn execution_topology(&self) -> Option<SessionExecutionTopology> {
+        self.session.read().execution_topology.clone()
+    }
+
+    pub fn stage_summaries(&self) -> Vec<StageSummary> {
+        self.session.read().stage_summaries.clone()
+    }
+
+    pub fn session_usage(&self) -> Option<SessionUsage> {
+        self.session.read().session_usage.clone()
+    }
+
+    pub fn session_runtime(&self) -> Option<crate::api::SessionRuntimeState> {
+        self.session.read().session_runtime.clone()
+    }
+
+    pub fn go_back(&self) -> Option<crate::router::Route> {
+        let previous_route = {
+            let mut router = self.router.write();
+            if router.go_back() {
+                Some(router.current().clone())
+            } else {
+                None
+            }
+        };
+        if let Some(route) = &previous_route {
+            match route {
+                crate::router::Route::Session { session_id } => {
+                    self.session
+                        .write()
+                        .set_current_session_id(session_id.clone());
+                    self.sync_session_view_route(session_id);
+                }
+                _ => {
+                    self.session.write().clear_current_session_id();
+                    self.clear_session_view_handle();
+                }
+            }
+        }
+        previous_route
+    }
+
+    pub fn session_view_handle(&self) -> Option<SessionView> {
+        self.session_view.read().clone()
+    }
+
+    pub fn ensure_session_view_handle(&self, session_id: &str) -> SessionView {
+        {
+            let current = self.session_view.read();
+            if let Some(view) = current
+                .as_ref()
+                .filter(|view| view.session_id() == session_id)
+            {
+                return view.clone();
+            }
+        }
+
+        let view = SessionView::new(session_id.to_string());
+        *self.session_view.write() = Some(view.clone());
+        view
+    }
+
+    pub fn clear_session_view_handle(&self) {
+        *self.session_view.write() = None;
+    }
+
+    fn sync_session_view_route(&self, session_id: &str) {
+        let stale = self
+            .session_view
+            .read()
+            .as_ref()
+            .map(|view| view.session_id() != session_id)
+            .unwrap_or(false);
+        if stale {
+            self.clear_session_view_handle();
+        }
+    }
+
+    pub fn status_dialog_view(&self) -> StatusDialogView {
+        self.dialog_lifecycle.read().status_dialog_view.clone()
+    }
+
+    pub fn set_status_dialog_view(&self, view: StatusDialogView) {
+        self.dialog_lifecycle.write().status_dialog_view = view;
+    }
+
+    pub fn sync_dialog_open(&self, slot: DialogSlot, is_open: bool) {
+        let mut lifecycle = self.dialog_lifecycle.write();
+        let existing = lifecycle
+            .open_dialogs
+            .iter()
+            .position(|current| *current == slot);
+        match (is_open, existing) {
+            (true, None) => lifecycle.open_dialogs.push(slot),
+            (false, Some(index)) => {
+                lifecycle.open_dialogs.remove(index);
+            }
+            _ => {}
+        }
+    }
+
+    pub fn close_dialog(&self, slot: DialogSlot) {
+        self.sync_dialog_open(slot, false);
+    }
+
+    pub fn is_dialog_open(&self, slot: DialogSlot) -> bool {
+        self.dialog_lifecycle.read().open_dialogs.contains(&slot)
+    }
+
+    pub fn has_open_dialogs(&self) -> bool {
+        !self.dialog_lifecycle.read().open_dialogs.is_empty()
+    }
+
+    pub fn top_close_dialog(&self) -> Option<DialogSlot> {
+        let lifecycle = self.dialog_lifecycle.read();
+        DIALOG_CLOSE_PRIORITY
+            .iter()
+            .copied()
+            .find(|slot| lifecycle.open_dialogs.contains(slot))
+    }
+
+    pub fn top_scroll_dialog(&self) -> Option<DialogSlot> {
+        let lifecycle = self.dialog_lifecycle.read();
+        DIALOG_SCROLL_PRIORITY
+            .iter()
+            .copied()
+            .find(|slot| lifecycle.open_dialogs.contains(slot))
     }
 
     pub fn toggle_header(&self) {
         let value = {
-            let mut show = self.show_header.write();
-            *show = !*show;
-            *show
+            let mut prefs = self.ui_preferences.write();
+            prefs.show_header = !prefs.show_header;
+            prefs.show_header
         };
         self.persist_ui_preferences(UiPreferencesConfig {
             show_header: Some(value),
@@ -214,9 +573,9 @@ impl AppContext {
 
     pub fn toggle_scrollbar(&self) {
         let value = {
-            let mut show = self.show_scrollbar.write();
-            *show = !*show;
-            *show
+            let mut prefs = self.ui_preferences.write();
+            prefs.show_scrollbar = !prefs.show_scrollbar;
+            prefs.show_scrollbar
         };
         self.persist_ui_preferences(UiPreferencesConfig {
             show_scrollbar: Some(value),
@@ -226,9 +585,9 @@ impl AppContext {
 
     pub fn toggle_tips_hidden(&self) {
         let value = {
-            let mut hidden = self.tips_hidden.write();
-            *hidden = !*hidden;
-            *hidden
+            let mut prefs = self.ui_preferences.write();
+            prefs.tips_hidden = !prefs.tips_hidden;
+            prefs.tips_hidden
         };
         self.persist_ui_preferences(UiPreferencesConfig {
             tips_hidden: Some(value),
@@ -241,20 +600,29 @@ impl AppContext {
     }
 
     pub fn set_model_selection(&self, model: String, provider: Option<String>) {
-        *self.current_model.write() = Some(model);
-        *self.current_provider.write() = provider;
+        let mut selection = self.selection.write();
+        selection.current_model = Some(model);
+        selection.current_provider = provider;
     }
 
     pub fn set_model_variant(&self, variant: Option<String>) {
-        *self.current_variant.write() = variant;
+        self.selection.write().current_variant = variant;
     }
 
     pub fn current_model_variant(&self) -> Option<String> {
-        self.current_variant.read().clone()
+        self.selection.read().current_variant.clone()
+    }
+
+    pub fn current_model(&self) -> Option<String> {
+        self.selection.read().current_model.clone()
+    }
+
+    pub fn current_provider(&self) -> Option<String> {
+        self.selection.read().current_provider.clone()
     }
 
     pub fn resolve_model_info(&self, model_ref: Option<&str>) -> Option<ModelInfo> {
-        let fallback_model = self.current_model.read().clone();
+        let fallback_model = self.current_model();
         let target = model_ref
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -276,15 +644,30 @@ impl AppContext {
     }
 
     pub fn set_agent(&self, agent: String) {
-        *self.current_agent.write() = agent;
-        *self.current_scheduler_profile.write() = None;
+        let mut selection = self.selection.write();
+        selection.current_agent = agent;
+        selection.current_scheduler_profile = None;
     }
 
     pub fn set_scheduler_profile(&self, profile: Option<String>) {
-        *self.current_scheduler_profile.write() = profile;
-        if self.current_scheduler_profile.read().is_some() {
-            self.current_agent.write().clear();
+        let has_profile = profile.is_some();
+        let mut selection = self.selection.write();
+        selection.current_scheduler_profile = profile;
+        if has_profile {
+            selection.current_agent.clear();
         }
+    }
+
+    pub fn current_agent(&self) -> String {
+        self.selection.read().current_agent.clone()
+    }
+
+    pub fn current_scheduler_profile(&self) -> Option<String> {
+        self.selection.read().current_scheduler_profile.clone()
+    }
+
+    pub fn selection_state(&self) -> SelectionState {
+        self.selection.read().clone()
     }
 
     pub fn toggle_animations(&self) {
@@ -318,19 +701,22 @@ impl AppContext {
     }
 
     pub fn toggle_timestamps(&self) {
-        let mut show = self.show_timestamps.write();
-        *show = !*show;
+        let value = {
+            let mut prefs = self.ui_preferences.write();
+            prefs.show_timestamps = !prefs.show_timestamps;
+            prefs.show_timestamps
+        };
         self.persist_ui_preferences(UiPreferencesConfig {
-            show_timestamps: Some(*show),
+            show_timestamps: Some(value),
             ..Default::default()
         });
     }
 
     pub fn toggle_thinking(&self) {
         let value = {
-            let mut show = self.show_thinking.write();
-            *show = !*show;
-            *show
+            let mut prefs = self.ui_preferences.write();
+            prefs.show_thinking = !prefs.show_thinking;
+            prefs.show_thinking
         };
         self.persist_ui_preferences(UiPreferencesConfig {
             show_thinking: Some(value),
@@ -340,9 +726,9 @@ impl AppContext {
 
     pub fn toggle_tool_details(&self) {
         let value = {
-            let mut show = self.show_tool_details.write();
-            *show = !*show;
-            *show
+            let mut prefs = self.ui_preferences.write();
+            prefs.show_tool_details = !prefs.show_tool_details;
+            prefs.show_tool_details
         };
         self.persist_ui_preferences(UiPreferencesConfig {
             show_tool_details: Some(value),
@@ -352,12 +738,12 @@ impl AppContext {
 
     pub fn toggle_message_density(&self) {
         let density_str = {
-            let mut density = self.message_density.write();
-            *density = match *density {
+            let mut prefs = self.ui_preferences.write();
+            prefs.message_density = match prefs.message_density {
                 MessageDensity::Compact => MessageDensity::Cozy,
                 MessageDensity::Cozy => MessageDensity::Compact,
             };
-            density.as_str().to_string()
+            prefs.message_density.as_str().to_string()
         };
         self.persist_ui_preferences(UiPreferencesConfig {
             message_density: Some(density_str),
@@ -367,9 +753,9 @@ impl AppContext {
 
     pub fn toggle_semantic_highlight(&self) {
         let value = {
-            let mut enabled = self.semantic_highlight.write();
-            *enabled = !*enabled;
-            *enabled
+            let mut prefs = self.ui_preferences.write();
+            prefs.semantic_highlight = !prefs.semantic_highlight;
+            prefs.semantic_highlight
         };
         self.persist_ui_preferences(UiPreferencesConfig {
             semantic_highlight: Some(value),
@@ -471,20 +857,57 @@ impl AppContext {
             let _ = self.set_theme_by_name(&fallback);
         }
 
-        *self.show_header.write() = ui.and_then(|prefs| prefs.show_header).unwrap_or(true);
-        *self.show_scrollbar.write() = ui.and_then(|prefs| prefs.show_scrollbar).unwrap_or(true);
-        *self.tips_hidden.write() = ui.and_then(|prefs| prefs.tips_hidden).unwrap_or(false);
-        *self.show_timestamps.write() = ui.and_then(|prefs| prefs.show_timestamps).unwrap_or(false);
-        *self.show_thinking.write() = ui.and_then(|prefs| prefs.show_thinking).unwrap_or(false);
-        *self.show_tool_details.write() =
-            ui.and_then(|prefs| prefs.show_tool_details).unwrap_or(true);
-        *self.message_density.write() = MessageDensity::from_str_lossy(
-            ui.and_then(|prefs| prefs.message_density.as_deref())
-                .unwrap_or("compact"),
-        );
-        *self.semantic_highlight.write() = ui
-            .and_then(|prefs| prefs.semantic_highlight)
-            .unwrap_or(false);
+        *self.ui_preferences.write() = UiPreferencesState {
+            show_header: ui.and_then(|prefs| prefs.show_header).unwrap_or(true),
+            show_scrollbar: ui.and_then(|prefs| prefs.show_scrollbar).unwrap_or(false),
+            tips_hidden: ui.and_then(|prefs| prefs.tips_hidden).unwrap_or(false),
+            show_timestamps: ui.and_then(|prefs| prefs.show_timestamps).unwrap_or(false),
+            show_thinking: ui.and_then(|prefs| prefs.show_thinking).unwrap_or(true),
+            show_tool_details: ui.and_then(|prefs| prefs.show_tool_details).unwrap_or(true),
+            message_density: MessageDensity::from_str_lossy(
+                ui.and_then(|prefs| prefs.message_density.as_deref())
+                    .unwrap_or("compact"),
+            ),
+            semantic_highlight: ui
+                .and_then(|prefs| prefs.semantic_highlight)
+                .unwrap_or(false),
+        };
+    }
+
+    pub fn ui_preferences(&self) -> UiPreferencesState {
+        self.ui_preferences.read().clone()
+    }
+
+    pub fn show_header_enabled(&self) -> bool {
+        self.ui_preferences.read().show_header
+    }
+
+    pub fn show_scrollbar_enabled(&self) -> bool {
+        self.ui_preferences.read().show_scrollbar
+    }
+
+    pub fn tips_hidden(&self) -> bool {
+        self.ui_preferences.read().tips_hidden
+    }
+
+    pub fn show_timestamps_enabled(&self) -> bool {
+        self.ui_preferences.read().show_timestamps
+    }
+
+    pub fn show_thinking_enabled(&self) -> bool {
+        self.ui_preferences.read().show_thinking
+    }
+
+    pub fn show_tool_details_enabled(&self) -> bool {
+        self.ui_preferences.read().show_tool_details
+    }
+
+    pub fn message_density(&self) -> MessageDensity {
+        self.ui_preferences.read().message_density
+    }
+
+    pub fn semantic_highlight_enabled(&self) -> bool {
+        self.ui_preferences.read().semantic_highlight
     }
 
     pub fn apply_resolved_workspace_context(&self, context: &ResolvedWorkspaceContext) {
@@ -539,8 +962,7 @@ impl AppContext {
     /// Get active tool calls from the server-side session runtime state.
     /// Returns an empty HashMap if session_runtime is not available.
     pub fn get_active_tool_calls(&self) -> HashMap<String, ToolCallInfo> {
-        self.session_runtime
-            .read()
+        self.session_runtime()
             .as_ref()
             .map(|runtime| {
                 runtime
@@ -563,7 +985,7 @@ impl AppContext {
     /// Get pending permission from the server-side session runtime state.
     /// Returns None if session_runtime is not available or no pending permission.
     pub fn get_pending_permission(&self) -> Option<(String, PermissionRequestInfo)> {
-        self.session_runtime.read().as_ref().and_then(|runtime| {
+        self.session_runtime().as_ref().and_then(|runtime| {
             runtime.pending_permission.as_ref().map(|perm| {
                 (
                     perm.permission_id.clone(),
@@ -581,8 +1003,7 @@ impl AppContext {
 
     /// Check if there's a pending question from the server-side session runtime state.
     pub fn has_pending_question(&self) -> bool {
-        self.session_runtime
-            .read()
+        self.session_runtime()
             .as_ref()
             .map(|r| r.pending_question.is_some())
             .unwrap_or(false)
@@ -590,8 +1011,7 @@ impl AppContext {
 
     /// Get pending question request_id from the server-side session runtime state.
     pub fn get_pending_question_id(&self) -> Option<String> {
-        self.session_runtime
-            .read()
+        self.session_runtime()
             .as_ref()
             .and_then(|r| r.pending_question.as_ref().map(|q| q.request_id.clone()))
     }
@@ -689,4 +1109,34 @@ fn split_theme_variant(name: &str) -> Option<(&str, &str)> {
         return None;
     }
     Some((base, variant))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppContext;
+
+    #[test]
+    fn session_view_handle_follows_route_lifecycle() {
+        let context = AppContext::new();
+
+        context.navigate_session("session-1");
+        let view = context.ensure_session_view_handle("session-1");
+        assert_eq!(view.session_id(), "session-1");
+        assert_eq!(
+            context
+                .session_view_handle()
+                .as_ref()
+                .map(|view| view.session_id()),
+            Some("session-1")
+        );
+
+        context.navigate_session("session-2");
+        assert!(context.session_view_handle().is_none());
+
+        let view = context.ensure_session_view_handle("session-2");
+        assert_eq!(view.session_id(), "session-2");
+
+        context.navigate_home();
+        assert!(context.session_view_handle().is_none());
+    }
 }

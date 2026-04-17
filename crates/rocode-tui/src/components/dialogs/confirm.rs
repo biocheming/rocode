@@ -3,10 +3,10 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
-    Frame,
 };
 
 use crate::theme::Theme;
+use crate::ui::RenderSurface;
 
 pub struct ConfirmDialog {
     title: String,
@@ -58,7 +58,7 @@ impl ConfirmDialog {
         self.focused = true;
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render<S: RenderSurface>(&self, surface: &mut S, area: Rect, theme: &Theme) {
         if !self.open {
             return;
         }
@@ -67,7 +67,7 @@ impl ConfirmDialog {
         let dialog_height = 7;
         let dialog_area = centered_rect(dialog_width, dialog_height, area);
 
-        frame.render_widget(Clear, dialog_area);
+        surface.render_widget(Clear, dialog_area);
 
         let block = Block::default()
             .title(Span::styled(
@@ -81,10 +81,10 @@ impl ConfirmDialog {
             .style(Style::default().bg(theme.background_panel));
 
         let inner = super::dialog_inner(block.inner(dialog_area));
-        frame.render_widget(block, dialog_area);
+        surface.render_widget(block, dialog_area);
 
         let message_line = Line::from(Span::styled(&self.message, Style::default().fg(theme.text)));
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(message_line).centered(),
             Rect {
                 x: inner.x,
@@ -112,7 +112,7 @@ impl ConfirmDialog {
             Span::styled(format!(" {} ", self.confirm_text), confirm_style),
         ]);
 
-        frame.render_widget(
+        surface.render_widget(
             Paragraph::new(buttons).centered(),
             Rect {
                 x: inner.x,
