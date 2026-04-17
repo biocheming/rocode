@@ -17,7 +17,7 @@ use crate::file_index::FileIndex;
 use crate::theme::Theme;
 use crate::ui::RenderSurface;
 
-use super::spinner::{KnightRiderSpinner, SpinnerMode, TaskKind};
+use super::spinner::{progress_circle_icon, KnightRiderSpinner, SpinnerMode, TaskKind};
 
 const MAX_HISTORY_ENTRIES: usize = 200;
 const MAX_STASH_ENTRIES: usize = 50;
@@ -366,28 +366,14 @@ impl Prompt {
             surface.set_cursor_position(cursor_x, cursor_y);
         }
 
-        let mut info_parts = vec![
-            Span::styled(
-                if matches!(self.mode, PromptMode::Shell) {
-                    "shell"
-                } else {
-                    mode_name.as_deref().unwrap_or("auto")
-                },
-                Style::default().fg(active_color).bold(),
-            ),
-            Span::raw("  "),
-        ];
+        let mut info_parts = render_prompt_identity_spans(&self.context, self.mode, active_color);
+        info_parts.push(Span::raw("  "));
 
-        if let Some(m) = selection.current_model.as_ref() {
-            if let Some(ref p) = selection.current_provider {
-                info_parts.push(Span::styled(m.clone(), Style::default().fg(theme.text)));
-                info_parts.push(Span::styled(
-                    format!(" {p}"),
-                    Style::default().fg(theme.text_muted),
-                ));
-            } else {
-                info_parts.push(Span::styled(m.clone(), Style::default().fg(theme.text)));
-            }
+        if let Some(model_label) = prompt_model_summary(
+            selection.current_model.as_deref(),
+            selection.current_provider.as_deref(),
+        ) {
+            info_parts.push(Span::styled(model_label, Style::default().fg(theme.text)));
             if let Some(ref v) = variant {
                 info_parts.push(Span::styled(" · ", Style::default().fg(theme.text_muted)));
                 info_parts.push(Span::styled(
@@ -419,15 +405,20 @@ impl Prompt {
             );
             let spinner_chunks = Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints([Constraint::Length(9), Constraint::Min(0)])
+                .constraints([Constraint::Length(3), Constraint::Min(0)])
                 .split(spinner_row);
 
-            self.spinner.render(
-                surface,
-                spinner_chunks[0],
-                animations_enabled,
-                theme.background_element,
-            );
+            let spinner_icon = if animations_enabled {
+                progress_circle_icon()
+            } else {
+                "◌"
+            };
+            let spinner = Paragraph::new(Line::from(vec![Span::styled(
+                spinner_icon,
+                Style::default().fg(active_color),
+            )]))
+            .style(Style::default().bg(theme.background_element));
+            surface.render_widget(spinner, spinner_chunks[0]);
             let token_line = Paragraph::new(self.render_token_line(&theme))
                 .style(Style::default().bg(theme.background_element));
             surface.render_widget(token_line, spinner_chunks[1]);
@@ -1499,6 +1490,47 @@ fn spinner_mode_from_env() -> SpinnerMode {
     }
 }
 
+fn render_prompt_identity_spans(
+    context: &Arc<AppContext>,
+    mode: PromptMode,
+    accent: Color,
+) -> Vec<Span<'static>> {
+    let (icon, label) = if matches!(mode, PromptMode::Shell) {
+        ("⌘", "shell".to_string())
+    } else if let Some(profile) = context
+        .current_scheduler_profile()
+        .filter(|value| !value.trim().is_empty())
+    {
+        ("◌", profile)
+    } else if let Some(agent) = current_mode_name(context) {
+        ("◈", agent)
+    } else {
+        ("◦", "auto".to_string())
+    };
+
+    vec![
+        Span::styled(icon, Style::default().fg(accent)),
+        Span::raw(" "),
+        Span::styled(label, Style::default().fg(accent).bold()),
+    ]
+}
+
+fn prompt_model_summary(model: Option<&str>, provider: Option<&str>) -> Option<String> {
+    let model = model?.trim();
+    if model.is_empty() {
+        return None;
+    }
+
+    let normalized = provider
+        .map(str::trim)
+        .filter(|provider| !provider.is_empty())
+        .and_then(|provider| model.strip_prefix(&format!("{provider}/")))
+        .unwrap_or(model)
+        .trim();
+
+    (!normalized.is_empty()).then(|| normalized.to_string())
+}
+
 fn prev_char_boundary(input: &str, cursor_position: usize) -> Option<usize> {
     if cursor_position == 0 || cursor_position > input.len() {
         return None;
@@ -1732,6 +1764,22 @@ mod tests {
         with_isolated_prompt(|prompt| {
             assert_eq!(prompt.desired_height(80), 4);
         });
+    }
+
+    #[test]
+    fn prompt_model_summary_omits_redundant_provider_prefix() {
+        assert_eq!(
+            prompt_model_summary(
+                Some("zhipuai-coding-plan/glm-5.1"),
+                Some("zhipuai-coding-plan")
+            )
+            .as_deref(),
+            Some("glm-5.1")
+        );
+        assert_eq!(
+            prompt_model_summary(Some("claude-sonnet-4"), Some("anthropic")).as_deref(),
+            Some("claude-sonnet-4")
+        );
     }
 
     #[test]
