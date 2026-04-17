@@ -1,3 +1,20 @@
+export interface ProviderModelModalityRecord {
+  text?: boolean | null;
+  audio?: boolean | null;
+  image?: boolean | null;
+  video?: boolean | null;
+  pdf?: boolean | null;
+}
+
+export interface ProviderModelCapabilitiesRecord {
+  attachment?: boolean | null;
+  tool_call?: boolean | null;
+  reasoning?: boolean | null;
+  temperature?: boolean | null;
+  input?: ProviderModelModalityRecord | null;
+  output?: ProviderModelModalityRecord | null;
+}
+
 export interface ProviderModelRecord {
   id: string;
   name?: string;
@@ -5,6 +22,7 @@ export interface ProviderModelRecord {
   max_output_tokens?: number | null;
   cost_per_million_input?: number | null;
   cost_per_million_output?: number | null;
+  capabilities?: ProviderModelCapabilitiesRecord | null;
 }
 
 export interface ProviderRecord {

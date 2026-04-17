@@ -14,9 +14,14 @@ interface DeferredTerminalPanelProps {
 
 function TerminalLoadingFallback() {
   return (
-    <div className="roc-panel p-5 flex flex-col items-center justify-center gap-3 text-muted-foreground" data-testid="terminal-loading">
-      <h3>Loading terminal...</h3>
-      <p>The xterm.js terminal is being loaded as a separate chunk.</p>
+    <div className="roc-panel roc-rail-panel p-5" data-testid="terminal-loading">
+      <div className="roc-rail-empty">
+        <div className="roc-section-label">Terminal</div>
+        <h3 className="text-sm font-semibold tracking-tight text-foreground">Loading terminal…</h3>
+        <p className="text-sm leading-6 text-muted-foreground">
+          The xterm.js terminal is being loaded as a separate chunk.
+        </p>
+      </div>
     </div>
   );
 }
@@ -28,14 +33,15 @@ export function DeferredTerminalPanel({
 }: DeferredTerminalPanelProps) {
   if (!expanded) {
     return (
-      <div className="roc-panel p-5 grid gap-4" data-testid="terminal-collapsed">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Terminal</p>
-            <h3>PTY Sessions</h3>
+      <div className="roc-panel roc-rail-panel p-5" data-testid="terminal-collapsed">
+        <div className="roc-rail-header">
+          <div className="roc-rail-headline">
+            <p className="roc-section-label">Terminal</p>
+            <h3 className="roc-rail-title">PTY Sessions</h3>
+            <p className="roc-rail-description">Keep the shell lazy by default and only pay the xterm cost when needed.</p>
           </div>
           <button
-            className="roc-action min-h-[36px] px-4 text-sm cursor-pointer transition-colors"
+            className="roc-action roc-action-pill"
             type="button"
             data-testid="terminal-open"
             onClick={onExpand}
@@ -43,7 +49,7 @@ export function DeferredTerminalPanel({
             Open Terminal
           </button>
         </div>
-        <div className="text-center text-muted-foreground py-4">
+        <div className="roc-rail-empty">
           <p>
             Terminal stays collapsed by default, so PTY sessions and `xterm.js` are not loaded on
             first paint.

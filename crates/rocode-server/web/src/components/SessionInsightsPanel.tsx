@@ -79,16 +79,20 @@ export function SessionInsightsPanel({ activity, apiJson }: SessionInsightsPanel
       ) ?? [],
     [insights],
   );
+  const panelActionClass = "roc-action roc-action-pill";
+  const compactActionClass = "roc-action roc-action-compact justify-self-start";
+  const detailTileClass = "roc-rail-item grid gap-1 bg-card/45";
 
   return (
-    <div className="roc-panel p-5 grid gap-4 min-h-0">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Runtime Explain</p>
-          <h3>Session Insights</h3>
+    <div className="roc-panel roc-rail-panel min-h-0 p-5">
+        <div className="roc-rail-header">
+          <div className="roc-rail-headline">
+            <p className="roc-section-label">Runtime Explain</p>
+            <h3 className="roc-rail-title">Session Insights</h3>
+            <p className="roc-rail-description">Persisted telemetry, multimodal runtime, and memory traces for the current session.</p>
         </div>
         <button
-          className="roc-action min-h-[42px] px-4 cursor-pointer transition-colors"
+          className={panelActionClass}
           type="button"
           onClick={() =>
             void activity.refreshExecutionActivity(
@@ -104,22 +108,41 @@ export function SessionInsightsPanel({ activity, apiJson }: SessionInsightsPanel
       </div>
 
       {!insights ? (
-        <p className="text-sm text-muted-foreground leading-relaxed">
-          No session insights loaded yet.
-        </p>
+        <div className="roc-rail-empty">
+          <div className="roc-section-label">Runtime Explain</div>
+          <p className="text-sm font-semibold tracking-tight text-foreground">No session insights loaded yet.</p>
+          <p className="text-sm leading-6 text-muted-foreground">
+            Refresh activity after a session run to inspect telemetry, memory, and multimodal runtime detail.
+          </p>
+        </div>
       ) : (
         <>
-          <div className="grid gap-1 text-sm text-muted-foreground">
-            <p>Session: {insights.id}</p>
-            <p>Title: {insights.title}</p>
-            <p>Directory: {insights.directory}</p>
-            <p>Updated: {formatDateTime(insights.updated)}</p>
-          </div>
+          <dl className="roc-structured-dl">
+            <div className="roc-structured-row">
+              <dt className="roc-structured-key">Session</dt>
+              <dd className="text-sm text-foreground">{insights.id}</dd>
+            </div>
+            <div className="roc-structured-row">
+              <dt className="roc-structured-key">Title</dt>
+              <dd className="text-sm text-foreground">{insights.title}</dd>
+            </div>
+            <div className="roc-structured-row">
+              <dt className="roc-structured-key">Directory</dt>
+              <dd className="text-sm text-foreground break-all">{insights.directory}</dd>
+            </div>
+            <div className="roc-structured-row">
+              <dt className="roc-structured-key">Updated</dt>
+              <dd className="text-sm text-foreground">{formatDateTime(insights.updated)}</dd>
+            </div>
+          </dl>
 
           {insights.telemetry ? (
-            <div className="roc-subpanel p-4 grid gap-2 bg-background/55">
-              <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Persisted Telemetry</p>
-              <div className="flex flex-wrap gap-2">
+            <div className="roc-rail-section">
+              <div className="roc-rail-section-copy">
+                <p className="roc-section-label">Persisted Telemetry</p>
+                <h4 className="roc-rail-section-title">Stored Run Snapshot</h4>
+              </div>
+              <div className="roc-rail-meta-list">
                 <span className="roc-pill px-3 py-1.5 text-xs">version {insights.telemetry.version}</span>
                 <span className="roc-pill px-3 py-1.5 text-xs">status {insights.telemetry.last_run_status}</span>
                 <span className="roc-pill px-3 py-1.5 text-xs">stages {insights.telemetry.stage_summaries.length}</span>
@@ -134,12 +157,12 @@ export function SessionInsightsPanel({ activity, apiJson }: SessionInsightsPanel
           ) : null}
 
           {insights.multimodal ? (
-            <div className="roc-subpanel p-4 grid gap-3 bg-background/55">
-              <div>
-                <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Multimodal Explain</p>
-                <h4>{multimodalDisplayLabel(insights.multimodal) || "Attachment-backed input"}</h4>
+            <div className="roc-rail-section">
+              <div className="roc-rail-section-copy">
+                <p className="roc-section-label">Multimodal Explain</p>
+                <h4 className="roc-rail-section-title">{multimodalDisplayLabel(insights.multimodal) || "Attachment-backed input"}</h4>
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="roc-rail-meta-list">
                 <span className="roc-pill px-3 py-1.5 text-xs">message {insights.multimodal.user_message_id}</span>
                 <span className="roc-pill px-3 py-1.5 text-xs">attachments {insights.multimodal.attachment_count}</span>
                 {insights.multimodal.kinds.map((kind) => (
@@ -170,7 +193,7 @@ export function SessionInsightsPanel({ activity, apiJson }: SessionInsightsPanel
                   {insights.multimodal.attachments.map((attachment) => (
                     <div
                       key={`multimodal:${attachment.filename}:${attachment.mime}`}
-                      className="roc-item p-3 grid gap-1 bg-card/45"
+                      className={detailTileClass}
                     >
                       <strong>{attachment.filename}</strong>
                       <p className="text-xs text-muted-foreground">{attachment.mime}</p>
@@ -180,9 +203,9 @@ export function SessionInsightsPanel({ activity, apiJson }: SessionInsightsPanel
               ) : null}
               {multimodalCombinedWarnings(insights.multimodal).length ? (
                 <div className="grid gap-2">
-                  <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Warnings</p>
+                  <p className="roc-section-label">Warnings</p>
                   {multimodalCombinedWarnings(insights.multimodal).map((warning, index) => (
-                    <div key={`multimodal-warning:${index}`} className="roc-item p-3 bg-card/45 text-sm text-muted-foreground">
+                    <div key={`multimodal-warning:${index}`} className="roc-rail-item bg-card/45 text-sm text-muted-foreground">
                       {warning}
                     </div>
                   ))}
@@ -192,12 +215,12 @@ export function SessionInsightsPanel({ activity, apiJson }: SessionInsightsPanel
           ) : null}
 
           {insights.memory ? (
-            <div className="roc-subpanel p-4 grid gap-3 bg-background/55">
-              <div>
-                <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Memory Explain</p>
-                <h4>{insights.memory.summary.workspace_mode} workspace</h4>
+            <div className="roc-rail-section">
+              <div className="roc-rail-section-copy">
+                <p className="roc-section-label">Memory Explain</p>
+                <h4 className="roc-rail-section-title">{insights.memory.summary.workspace_mode} workspace</h4>
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="roc-rail-meta-list">
                 <span className="roc-pill px-3 py-1.5 text-xs">snapshot {insights.memory.summary.frozen_snapshot_items}</span>
                 <span className="roc-pill px-3 py-1.5 text-xs">prefetch {insights.memory.summary.last_prefetch_items}</span>
                 <span className="roc-pill px-3 py-1.5 text-xs">rule hits {insights.memory.summary.recent_rule_hits.length}</span>
@@ -225,12 +248,12 @@ export function SessionInsightsPanel({ activity, apiJson }: SessionInsightsPanel
               </div>
               {skillLinkedRecords.length ? (
                 <div className="grid gap-2">
-                  <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Skill-Linked Recent Records</p>
+                  <p className="roc-section-label">Skill-Linked Recent Records</p>
                   <div className="grid gap-2 md:grid-cols-2">
                     {skillLinkedRecords.map((item) => (
                       <div
                         key={`skill:${memoryRecordIdValue(item.id)}`}
-                        className="roc-item p-3 grid gap-1 bg-card/45"
+                        className={detailTileClass}
                       >
                         <div className="flex flex-wrap items-center gap-2">
                           <strong>{item.title}</strong>
@@ -240,7 +263,7 @@ export function SessionInsightsPanel({ activity, apiJson }: SessionInsightsPanel
                         </div>
                         <p className="text-xs text-muted-foreground">{item.summary}</p>
                         <button
-                          className="roc-action min-h-[32px] px-3 text-xs cursor-pointer transition-colors justify-self-start"
+                          className={compactActionClass}
                           type="button"
                           onClick={() => void loadMemoryDetail(memoryRecordIdValue(item.id))}
                         >
@@ -262,7 +285,7 @@ export function SessionInsightsPanel({ activity, apiJson }: SessionInsightsPanel
               {insights.memory.summary.recent_rule_hits.length ? (
                 <div className="grid gap-2 md:grid-cols-2">
                   {insights.memory.summary.recent_rule_hits.map((hit) => (
-                    <div key={hit.id} className="roc-item p-3 grid gap-1 bg-card/45">
+                    <div key={hit.id} className={detailTileClass}>
                       <div className="flex flex-wrap items-center gap-2">
                         <strong>{hit.hit_kind}</strong>
                         {hit.memory_id ? (
@@ -276,7 +299,7 @@ export function SessionInsightsPanel({ activity, apiJson }: SessionInsightsPanel
                       </p>
                       {hit.memory_id ? (
                         <button
-                          className="roc-action min-h-[32px] px-3 text-xs cursor-pointer transition-colors justify-self-start"
+                          className={compactActionClass}
                           type="button"
                           onClick={() => void loadMemoryDetail(memoryRecordIdValue(hit.memory_id))}
                         >
@@ -298,11 +321,11 @@ export function SessionInsightsPanel({ activity, apiJson }: SessionInsightsPanel
                   </p>
                   {(insights.memory.frozen_snapshot.items ?? []).length ? (
                     <div className="grid gap-2">
-                      <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Frozen Items</p>
+                      <p className="roc-section-label">Frozen Items</p>
                       {(insights.memory.frozen_snapshot.items ?? []).map((item) => (
                         <div
                           key={`frozen:${memoryRecordIdValue(item.card.id)}`}
-                          className="roc-item p-3 grid gap-1 bg-card/45"
+                          className={detailTileClass}
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div>
@@ -312,7 +335,7 @@ export function SessionInsightsPanel({ activity, apiJson }: SessionInsightsPanel
                               </p>
                             </div>
                             <button
-                              className="roc-action min-h-[32px] px-3 text-xs cursor-pointer transition-colors"
+                              className="roc-action roc-action-compact"
                               type="button"
                               onClick={() => void loadMemoryDetail(memoryRecordIdValue(item.card.id))}
                             >
@@ -336,11 +359,11 @@ export function SessionInsightsPanel({ activity, apiJson }: SessionInsightsPanel
                   <p>Prefetch recalled items: {(insights.memory.last_prefetch_packet.items ?? []).length}</p>
                   {(insights.memory.last_prefetch_packet.items ?? []).length ? (
                     <div className="grid gap-2">
-                      <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Prefetch Items</p>
+                      <p className="roc-section-label">Prefetch Items</p>
                       {(insights.memory.last_prefetch_packet.items ?? []).map((item) => (
                         <div
                           key={`prefetch:${memoryRecordIdValue(item.card.id)}`}
-                          className="roc-item p-3 grid gap-1 bg-card/45"
+                          className={detailTileClass}
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div>
@@ -350,7 +373,7 @@ export function SessionInsightsPanel({ activity, apiJson }: SessionInsightsPanel
                               </p>
                             </div>
                             <button
-                              className="roc-action min-h-[32px] px-3 text-xs cursor-pointer transition-colors"
+                              className="roc-action roc-action-compact"
                               type="button"
                               onClick={() => void loadMemoryDetail(memoryRecordIdValue(item.card.id))}
                             >
@@ -367,12 +390,12 @@ export function SessionInsightsPanel({ activity, apiJson }: SessionInsightsPanel
               ) : null}
               {insights.memory.recent_session_records.length ? (
                 <div className="grid gap-2 text-sm text-muted-foreground">
-                  <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Session Memory Writes</p>
+                  <p className="roc-section-label">Session Memory Writes</p>
                   <div className="grid gap-2 md:grid-cols-2">
                     {insights.memory.recent_session_records.map((record) => (
                       <div
                         key={`session:${memoryRecordIdValue(record.id)}`}
-                        className="roc-item p-3 grid gap-1 bg-card/45"
+                        className={detailTileClass}
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div>
@@ -382,7 +405,7 @@ export function SessionInsightsPanel({ activity, apiJson }: SessionInsightsPanel
                             </p>
                           </div>
                           <button
-                            className="roc-action min-h-[32px] px-3 text-xs cursor-pointer transition-colors"
+                            className="roc-action roc-action-compact"
                             type="button"
                             onClick={() => void loadMemoryDetail(memoryRecordIdValue(record.id))}
                           >
@@ -399,14 +422,14 @@ export function SessionInsightsPanel({ activity, apiJson }: SessionInsightsPanel
                 </div>
               ) : null}
               {selectedMemoryId && insightMemoryIds.has(selectedMemoryId) ? (
-                <div className="roc-subpanel p-4 grid gap-2 bg-background/70">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Memory Detail</p>
-                      <h4>{selectedMemoryId}</h4>
+                <div className="roc-rail-section bg-background/70">
+                  <div className="roc-rail-section-header">
+                    <div className="roc-rail-section-copy">
+                      <p className="roc-section-label">Memory Detail</p>
+                      <h4 className="roc-rail-section-title">{selectedMemoryId}</h4>
                     </div>
                     <button
-                      className="roc-action min-h-[32px] px-3 text-xs cursor-pointer transition-colors"
+                      className="roc-action roc-action-compact"
                       type="button"
                       onClick={() => {
                         setSelectedMemoryId(null);
@@ -418,9 +441,13 @@ export function SessionInsightsPanel({ activity, apiJson }: SessionInsightsPanel
                     </button>
                   </div>
                   {detailLoading ? (
-                    <p className="text-sm text-muted-foreground">Loading memory detail...</p>
+                    <div className="roc-state-card" data-tone="loading">
+                      <p className="text-sm text-muted-foreground">Loading memory detail...</p>
+                    </div>
                   ) : detailError ? (
-                    <p className="text-sm text-rose-700 dark:text-rose-300">{detailError}</p>
+                    <div className="roc-state-card" data-tone="danger">
+                      <p className="text-sm text-rose-700 dark:text-rose-300">{detailError}</p>
+                    </div>
                   ) : selectedMemoryDetail ? (
                     <div className="grid gap-1 text-sm text-muted-foreground">
                       <p>
@@ -444,7 +471,9 @@ export function SessionInsightsPanel({ activity, apiJson }: SessionInsightsPanel
                       ) : null}
                     </div>
                   ) : (
-                    <p className="text-sm text-muted-foreground">No detail loaded.</p>
+                    <div className="roc-state-card" data-tone="muted">
+                      <p className="text-sm text-muted-foreground">No detail loaded.</p>
+                    </div>
                   )}
                 </div>
               ) : null}

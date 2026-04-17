@@ -203,12 +203,759 @@ html[data-theme="midnight"] {
 }
 
 @layer components {
+  .roc-app-shell {
+    background:
+      radial-gradient(circle at top, color-mix(in oklch, var(--primary) 12%, transparent), transparent 38%),
+      radial-gradient(circle at 88% 0%, color-mix(in oklch, var(--accent) 46%, transparent), transparent 24%),
+      linear-gradient(
+        180deg,
+        color-mix(in oklch, var(--background) 92%, var(--card) 8%) 0%,
+        var(--background) 34%
+      );
+  }
+
+  .roc-appbar {
+    @apply border-b border-border/70 bg-background/82 backdrop-blur-xl;
+    box-shadow: 0 10px 28px -26px color-mix(in oklch, var(--foreground) 18%, transparent);
+  }
+
   .roc-panel {
-    @apply rounded-xl border border-border/45 bg-card;
+    @apply rounded-xl border border-border/45 bg-card transition-[border-color,background-color,box-shadow,transform] duration-200 ease-out;
+    box-shadow: 0 18px 44px -40px color-mix(in oklch, var(--foreground) 20%, transparent);
   }
 
   .roc-subpanel {
     @apply rounded-lg border border-border/35 bg-muted;
+  }
+
+  .roc-surface-elevated {
+    @apply rounded-[28px] border border-border/60 bg-card/88 backdrop-blur-xl transition-[border-color,background-color,box-shadow,transform] duration-200 ease-out;
+    box-shadow: 0 28px 80px -48px color-mix(in oklch, var(--foreground) 28%, transparent);
+  }
+
+  .roc-session-hero {
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in oklch, var(--card) 90%, var(--background) 10%) 0%,
+        color-mix(in oklch, var(--card) 96%, transparent) 100%
+      );
+  }
+
+  .roc-session-header {
+    @apply border-b border-border/55 pb-2.5;
+  }
+
+  .roc-sidebar-shell {
+    @apply border-r border-border/65 bg-sidebar/92 backdrop-blur-xl;
+  }
+
+  .roc-sidebar-section {
+    @apply rounded-[18px] border border-border/50 bg-background/50 backdrop-blur-sm transition-[border-color,background-color,box-shadow,transform] duration-200 ease-out;
+    box-shadow: 0 12px 30px -32px color-mix(in oklch, var(--foreground) 18%, transparent);
+  }
+
+  .roc-sidebar-item {
+    @apply w-full rounded-[15px] border border-transparent bg-transparent px-2.5 py-1.5 text-left transition-[background-color,border-color,box-shadow];
+  }
+
+  .roc-sidebar-item:hover {
+    @apply border-border/45 bg-accent/42;
+  }
+
+  .roc-sidebar-item[data-active="true"] {
+    @apply border-border/70 bg-card/86;
+    box-shadow: 0 16px 40px -34px color-mix(in oklch, var(--foreground) 26%, transparent);
+  }
+
+  .roc-sidebar-toggle {
+    @apply inline-flex size-5 items-center justify-center rounded-full border border-transparent text-muted-foreground transition-colors hover:border-border/45 hover:bg-accent/45 hover:text-foreground;
+  }
+
+  .roc-sidebar-meta {
+    @apply inline-flex items-center rounded-full border border-border/45 bg-background/74 px-2 py-0.75 text-[10px] font-medium text-muted-foreground;
+  }
+
+  .roc-feed-state {
+    @apply rounded-[28px] border border-border/55 bg-card/74 px-6 py-6 backdrop-blur-sm transition-[border-color,background-color,box-shadow,transform] duration-200 ease-out;
+    box-shadow: 0 24px 72px -52px color-mix(in oklch, var(--foreground) 24%, transparent);
+  }
+
+  .roc-note-card {
+    @apply rounded-[24px] border border-border/55 bg-card/72 backdrop-blur-sm transition-[border-color,background-color,box-shadow,transform] duration-200 ease-out;
+    box-shadow: 0 20px 56px -46px color-mix(in oklch, var(--foreground) 22%, transparent);
+  }
+
+  .roc-message-card {
+    @apply rounded-[24px] border border-border/55 bg-card/76 backdrop-blur-sm transition-[border-color,background-color,box-shadow,transform] duration-200 ease-out;
+    box-shadow: 0 18px 54px -44px color-mix(in oklch, var(--foreground) 22%, transparent);
+  }
+
+  .roc-message-card[data-tone="user"] {
+    @apply bg-secondary/86;
+  }
+
+  .roc-message-card[data-highlighted="true"] {
+    @apply border-primary/35;
+    box-shadow: 0 24px 72px -52px color-mix(in oklch, var(--primary) 36%, transparent);
+  }
+
+  .roc-message-card[data-active="true"] {
+    @apply border-amber-400/45;
+    box-shadow: 0 24px 72px -52px color-mix(in oklch, oklch(0.72 0.16 80) 34%, transparent);
+  }
+
+  .roc-message-meta-row {
+    @apply mb-2.5 flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between;
+  }
+
+  .roc-message-meta-group {
+    @apply flex min-w-0 flex-wrap items-center gap-2;
+  }
+
+  .roc-message-title {
+    @apply mb-2 text-[15px] font-semibold leading-6.5 tracking-tight text-foreground/88;
+  }
+
+  .roc-message-body {
+    @apply text-[15px] leading-6.5;
+  }
+
+  .roc-message-footer {
+    @apply mt-2 flex items-center justify-end gap-2 border-t border-border/40 pt-1.5;
+  }
+
+  .roc-message-summary {
+    @apply text-[11px] leading-5 text-muted-foreground;
+  }
+
+  .roc-detail-card {
+    @apply rounded-[22px] border border-border/50 bg-card/72 px-4 py-4 backdrop-blur-sm transition-[border-color,background-color,box-shadow,transform] duration-200 ease-out;
+    box-shadow: 0 16px 40px -36px color-mix(in oklch, var(--foreground) 18%, transparent);
+  }
+
+  .roc-detail-trigger {
+    @apply flex w-full items-start gap-3 text-left;
+  }
+
+  .roc-detail-icon {
+    @apply flex size-9 shrink-0 items-center justify-center rounded-2xl border border-border/45 bg-background/72 text-muted-foreground;
+  }
+
+  .roc-detail-title {
+    @apply mt-1 text-[15px] font-semibold leading-7 tracking-tight text-foreground;
+  }
+
+  .roc-detail-summary {
+    @apply mt-1 text-sm leading-6 text-muted-foreground;
+  }
+
+  .roc-detail-body {
+    @apply mt-4 grid gap-3 border-t border-border/35 pt-4;
+  }
+
+  .roc-section-label {
+    @apply text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground;
+  }
+
+  .roc-meta-badge {
+    @apply inline-flex items-center rounded-full border border-border/45 bg-background/76 px-2.5 py-1 text-[11px] font-medium text-muted-foreground;
+  }
+
+  .roc-data-row {
+    @apply grid gap-1.5 rounded-[18px] border border-border/40 bg-background/56 px-3.5 py-3;
+  }
+
+  .roc-structured-value {
+    @apply rounded-[16px] border border-border/35 bg-background/66 px-3 py-2.5 font-mono text-[11.5px] leading-[1.65] text-foreground whitespace-pre-wrap break-words;
+  }
+
+  .roc-structured-copy {
+    @apply break-words;
+  }
+
+  .roc-skeleton-line {
+    @apply rounded-full bg-muted/70;
+    animation: roc-pulse 1.6s ease-in-out infinite;
+  }
+
+  .roc-skeleton-panel {
+    @apply rounded-[24px] border border-border/45 bg-card/66;
+    animation: roc-pulse 1.8s ease-in-out infinite;
+  }
+
+  .roc-streaming-dot {
+    @apply size-2 rounded-full bg-primary/70;
+    animation: roc-breathe 1.4s ease-in-out infinite;
+  }
+
+  .roc-streaming-dot:nth-child(2) {
+    animation-delay: 0.18s;
+  }
+
+  .roc-streaming-dot:nth-child(3) {
+    animation-delay: 0.36s;
+  }
+
+  .roc-inline-fact {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-border/40 bg-background/70 px-2.5 py-1 text-[11px] text-foreground/82;
+  }
+
+  .roc-inline-fact-label {
+    @apply font-semibold tracking-tight text-muted-foreground;
+  }
+
+  .roc-inline-fact-value {
+    @apply font-medium text-foreground/88;
+  }
+
+  .roc-empty-suggestion {
+    @apply rounded-full border border-border/45 bg-background/72 px-3 py-2 text-xs text-foreground/80 transition-colors hover:border-border/70 hover:bg-accent/45;
+  }
+
+  .roc-history-banner {
+    @apply rounded-[22px] border border-border/50 bg-card/70 px-4 py-3 backdrop-blur-sm transition-[border-color,background-color,box-shadow,transform] duration-200 ease-out;
+    box-shadow: 0 18px 42px -38px color-mix(in oklch, var(--foreground) 22%, transparent);
+  }
+
+  .roc-banner {
+    @apply rounded-[24px] border px-4 py-3 backdrop-blur-xl transition-[border-color,background-color,box-shadow,transform,opacity] duration-200 ease-out;
+    animation: roc-fade-rise 220ms ease-out;
+    box-shadow: 0 22px 54px -42px color-mix(in oklch, var(--foreground) 24%, transparent);
+  }
+
+  .roc-banner[data-tone="warning"] {
+    border-color: color-mix(in oklch, oklch(0.78 0.13 80) 62%, var(--border));
+    background: color-mix(in oklch, oklch(0.97 0.03 88) 88%, transparent);
+    color: color-mix(in oklch, oklch(0.37 0.09 75) 78%, var(--foreground));
+  }
+
+  .roc-banner[data-tone="error"] {
+    border-color: color-mix(in oklch, var(--destructive) 56%, var(--border));
+    background: color-mix(in oklch, var(--destructive) 9%, var(--card));
+    color: color-mix(in oklch, var(--destructive) 72%, var(--foreground));
+  }
+
+  .roc-banner-dismiss {
+    @apply inline-flex size-8 items-center justify-center rounded-full border border-transparent text-current/70 transition-[background-color,border-color,color,transform] duration-150 ease-out hover:border-current/15 hover:bg-background/50 hover:text-current;
+  }
+
+  .roc-floating-overlay {
+    @apply fixed inset-0 z-50 bg-background/42 backdrop-blur-[3px] data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0;
+  }
+
+  .roc-floating-surface {
+    @apply z-50 overflow-hidden rounded-[24px] border border-border/60 bg-popover/94 text-popover-foreground backdrop-blur-xl outline-none transition-[border-color,background-color,box-shadow,transform,opacity] duration-200 ease-out data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-98 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.985];
+    box-shadow: 0 32px 96px -56px color-mix(in oklch, var(--foreground) 34%, transparent);
+  }
+
+  .roc-floating-surface[data-side="bottom"] {
+    @apply data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2;
+  }
+
+  .roc-floating-surface[data-side="top"] {
+    @apply data-[state=closed]:slide-out-to-bottom-2 data-[state=open]:slide-in-from-bottom-2;
+  }
+
+  .roc-floating-surface[data-side="left"] {
+    @apply data-[state=closed]:slide-out-to-right-2 data-[state=open]:slide-in-from-right-2;
+  }
+
+  .roc-floating-surface[data-side="right"] {
+    @apply data-[state=closed]:slide-out-to-left-2 data-[state=open]:slide-in-from-left-2;
+  }
+
+  .roc-floating-close {
+    @apply inline-flex size-8 items-center justify-center rounded-full border border-transparent text-muted-foreground transition-[background-color,border-color,color,transform] duration-150 ease-out hover:border-border/50 hover:bg-accent/70 hover:text-foreground;
+  }
+
+  .roc-surface-interactive {
+    @apply transition-[border-color,background-color,box-shadow,transform] duration-200 ease-out;
+  }
+
+  .roc-surface-interactive:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 24px 58px -44px color-mix(in oklch, var(--foreground) 26%, transparent);
+  }
+
+  .roc-state-card {
+    @apply rounded-[22px] border border-border/50 bg-card/72 px-4 py-4 text-sm backdrop-blur-sm transition-[border-color,background-color,box-shadow,transform,opacity] duration-200 ease-out;
+    box-shadow: 0 18px 40px -38px color-mix(in oklch, var(--foreground) 20%, transparent);
+    animation: roc-fade-rise 220ms ease-out;
+  }
+
+  .roc-state-card[data-tone="danger"] {
+    border-color: color-mix(in oklch, var(--destructive) 44%, var(--border));
+    background: color-mix(in oklch, var(--destructive) 7%, var(--card));
+  }
+
+  .roc-state-card[data-tone="muted"] {
+    background: color-mix(in oklch, var(--card) 68%, var(--background));
+  }
+
+  .roc-state-card[data-tone="loading"] {
+    border-color: color-mix(in oklch, var(--primary) 20%, var(--border));
+  }
+
+  .roc-status-row {
+    @apply inline-flex items-center gap-2 text-sm text-muted-foreground;
+  }
+
+  .roc-status-orb {
+    @apply flex size-9 items-center justify-center rounded-2xl border border-border/45 bg-background/78 text-muted-foreground;
+  }
+
+  .roc-status-orb[data-tone="danger"] {
+    @apply border-destructive/25 text-destructive;
+  }
+
+  .roc-status-orb[data-tone="loading"] {
+    border-color: color-mix(in oklch, var(--primary) 24%, var(--border));
+    color: color-mix(in oklch, var(--primary) 58%, var(--muted-foreground));
+  }
+
+  .roc-rail-panel,
+  .roc-side-panel {
+    @apply grid gap-4;
+  }
+
+  .roc-rail-header {
+    @apply flex items-start justify-between gap-3;
+  }
+
+  .roc-rail-headline {
+    @apply grid gap-1;
+  }
+
+  .roc-rail-title {
+    @apply text-[16px] font-semibold tracking-tight text-foreground;
+  }
+
+  .roc-rail-description {
+    @apply text-sm leading-6 text-muted-foreground;
+  }
+
+  .roc-rail-toolbar {
+    @apply flex flex-wrap items-center justify-end gap-2;
+  }
+
+  .roc-rail-section,
+  .roc-side-section {
+    @apply grid gap-3 rounded-[22px] border border-border/50 bg-card/72 p-4 backdrop-blur-sm transition-[border-color,background-color,box-shadow,transform] duration-200 ease-out;
+    box-shadow: 0 18px 44px -42px color-mix(in oklch, var(--foreground) 18%, transparent);
+  }
+
+  .roc-rail-section-header {
+    @apply flex items-start justify-between gap-3;
+  }
+
+  .roc-rail-section-copy {
+    @apply grid gap-1;
+  }
+
+  .roc-rail-section-title {
+    @apply text-[15px] font-semibold tracking-tight text-foreground;
+  }
+
+  .roc-rail-section-note {
+    @apply text-xs leading-5 text-muted-foreground;
+  }
+
+  .roc-rail-item,
+  .roc-side-item {
+    @apply rounded-[18px] border border-transparent bg-card/44 px-3 py-2.5 text-left transition-[border-color,background-color,box-shadow,transform] duration-150 ease-out;
+  }
+
+  .roc-rail-item:hover,
+  .roc-side-item:hover {
+    @apply border-border/50 bg-accent/34;
+    transform: translateY(-1px);
+  }
+
+  .roc-rail-item[data-active="true"],
+  .roc-side-item[data-active="true"] {
+    @apply border-primary/28 bg-accent/44;
+    box-shadow: 0 18px 44px -40px color-mix(in oklch, var(--primary) 24%, transparent);
+  }
+
+  .roc-rail-item[data-preview="true"],
+  .roc-side-item[data-preview="true"] {
+    border-color: color-mix(in oklch, oklch(0.72 0.16 80) 32%, var(--border));
+    background: color-mix(in oklch, oklch(0.86 0.08 88) 34%, var(--card));
+  }
+
+  .roc-rail-empty,
+  .roc-side-empty {
+    @apply flex flex-col items-center justify-center gap-3 rounded-[22px] border border-border/50 bg-card/72 px-4 py-7 text-center text-sm backdrop-blur-sm transition-[border-color,background-color,box-shadow,transform,opacity] duration-200 ease-out;
+    box-shadow: 0 18px 40px -38px color-mix(in oklch, var(--foreground) 20%, transparent);
+    animation: roc-fade-rise 220ms ease-out;
+  }
+
+  .roc-rail-link,
+  .roc-side-link {
+    @apply appearance-none border-0 bg-transparent p-0 text-xs font-medium text-primary underline underline-offset-3 transition-colors hover:text-primary/78;
+  }
+
+  .roc-rail-tab-list {
+    @apply flex flex-wrap gap-2 border-b border-border/45 pb-3;
+  }
+
+  .roc-rail-meta-list {
+    @apply flex flex-wrap gap-2;
+  }
+
+  .roc-rail-copy-list {
+    @apply grid gap-1 text-sm text-muted-foreground;
+  }
+
+  .roc-form-stack {
+    @apply grid gap-3;
+  }
+
+  .roc-form-field {
+    @apply grid gap-1.5;
+  }
+
+  .roc-form-label {
+    @apply text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground;
+  }
+
+  .roc-form-hint {
+    @apply text-xs leading-5 text-muted-foreground;
+  }
+
+  .roc-form-control {
+    @apply min-h-9 w-full rounded-xl border border-input/70 bg-background/82 px-3 py-2 text-sm tracking-tight text-foreground shadow-none transition-[color,background-color,border-color,box-shadow] outline-none placeholder:text-muted-foreground/82 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .roc-form-control:focus-visible {
+    @apply border-ring ring-[3px] ring-ring/40;
+  }
+
+  .roc-form-select {
+    @apply min-h-9 w-full appearance-none rounded-xl border border-input/70 bg-background/82 px-3 py-2 pr-9 text-sm tracking-tight text-foreground shadow-none transition-[color,background-color,border-color,box-shadow] outline-none disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none'%3E%3Cpath d='M4 6.5 8 10.5 12 6.5' stroke='%236b7280' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-position: right 0.85rem center;
+    background-repeat: no-repeat;
+    background-size: 0.8rem;
+  }
+
+  .roc-form-select:focus-visible {
+    @apply border-ring ring-[3px] ring-ring/40;
+  }
+
+  .roc-form-textarea {
+    @apply min-h-32 w-full resize-y rounded-xl border border-input/70 bg-background/82 px-3.5 py-3 text-sm leading-6 text-foreground shadow-none transition-[color,background-color,border-color,box-shadow] outline-none placeholder:text-muted-foreground/82 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .roc-form-textarea:focus-visible {
+    @apply border-ring ring-[3px] ring-ring/40;
+  }
+
+  .roc-form-checkbox-row {
+    @apply inline-flex items-center gap-3 rounded-xl border border-border/45 bg-background/58 px-3 py-2.5 text-sm text-foreground transition-[border-color,background-color] duration-150 ease-out;
+  }
+
+  .roc-form-checkbox-row:hover {
+    @apply border-border/70 bg-accent/42;
+  }
+
+  .roc-form-checkbox {
+    @apply size-4 rounded border border-input/75 bg-background/85 text-primary shadow-none outline-none;
+  }
+
+  .roc-form-checkbox:focus-visible {
+    @apply border-ring ring-[3px] ring-ring/40;
+  }
+
+  .roc-form-surface {
+    @apply grid gap-4 rounded-[20px] border border-border/45 bg-card/72 p-4 backdrop-blur-sm;
+    box-shadow: 0 18px 42px -40px color-mix(in oklch, var(--foreground) 18%, transparent);
+  }
+
+  .roc-structured-empty {
+    @apply rounded-[18px] border border-dashed border-border/45 bg-muted/26 px-3.5 py-4 text-sm italic text-muted-foreground;
+  }
+
+  .roc-structured-list {
+    @apply grid gap-2;
+  }
+
+  .roc-structured-disclosure {
+    @apply rounded-[20px] border border-border/45 bg-card/70 px-3.5 py-3 backdrop-blur-sm transition-[border-color,background-color,box-shadow] duration-150 ease-out;
+    box-shadow: 0 16px 40px -38px color-mix(in oklch, var(--foreground) 16%, transparent);
+  }
+
+  .roc-structured-summary {
+    @apply flex cursor-pointer list-none items-start justify-between gap-3 text-left;
+  }
+
+  .roc-structured-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .roc-structured-summary::marker {
+    content: "";
+  }
+
+  .roc-structured-summary-copy {
+    @apply min-w-0 grid gap-1;
+  }
+
+  .roc-structured-summary-label {
+    @apply text-sm font-semibold tracking-tight text-foreground;
+  }
+
+  .roc-structured-summary-meta {
+    @apply inline-flex items-center rounded-full border border-border/45 bg-background/76 px-2.5 py-1 text-[11px] font-medium text-muted-foreground;
+  }
+
+  .roc-structured-summary-note {
+    @apply text-xs leading-5 text-muted-foreground;
+  }
+
+  .roc-structured-body {
+    @apply mt-3 grid gap-3 border-t border-border/35 pt-3;
+  }
+
+  .roc-structured-dl {
+    @apply grid gap-2;
+  }
+
+  .roc-structured-row {
+    @apply grid gap-1.5 rounded-[16px] border border-border/35 bg-background/58 px-3 py-2.5;
+  }
+
+  .roc-structured-key {
+    @apply text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground;
+  }
+
+  .roc-structured-type {
+    @apply inline-flex items-center rounded-full border border-border/45 bg-background/76 px-2.5 py-1 text-[11px] font-medium text-muted-foreground;
+  }
+
+  .roc-structured-stack {
+    @apply grid gap-2;
+  }
+
+  .roc-structured-inline-list {
+    @apply flex flex-wrap gap-1.5;
+  }
+
+  .roc-action-compact {
+    @apply min-h-[32px] rounded-full px-3 text-xs;
+  }
+
+  .roc-action-pill {
+    @apply min-h-[36px] rounded-full px-4 text-sm;
+  }
+
+  .roc-terminal-tab {
+    @apply inline-flex items-center rounded-full border border-transparent px-4 py-2 text-sm transition-[border-color,background-color,box-shadow,transform] duration-150 ease-out;
+  }
+
+  .roc-terminal-tab:hover {
+    @apply border-border/45 bg-accent/55;
+    transform: translateY(-1px);
+  }
+
+  .roc-terminal-tab[data-active="true"] {
+    @apply border-foreground/10 bg-foreground text-background font-semibold;
+    box-shadow: 0 16px 40px -34px color-mix(in oklch, var(--foreground) 34%, transparent);
+  }
+
+  .roc-terminal-viewport {
+    @apply min-h-[24rem] rounded-[20px] border border-border/45 bg-background/86 p-2;
+    box-shadow: inset 0 1px 0 color-mix(in oklch, var(--background) 68%, transparent);
+  }
+
+  .roc-markdown-flow {
+    @apply text-[15px] leading-6.5 text-foreground/92;
+  }
+
+  .roc-markdown-flow > * + * {
+    margin-top: 0.62rem;
+  }
+
+  .roc-markdown-flow p {
+    @apply text-[15px] leading-6.5;
+  }
+
+  .roc-markdown-flow strong {
+    @apply font-semibold text-foreground;
+  }
+
+  .roc-markdown-flow a {
+    @apply font-medium text-primary underline decoration-primary/35 underline-offset-3 transition-colors;
+  }
+
+  .roc-markdown-flow a:hover {
+    color: color-mix(in oklch, var(--primary) 80%, var(--foreground) 20%);
+  }
+
+  .roc-markdown-flow p + [data-streamdown="unordered-list"],
+  .roc-markdown-flow p + [data-streamdown="ordered-list"],
+  .roc-markdown-flow [data-streamdown="unordered-list"] + p,
+  .roc-markdown-flow [data-streamdown="ordered-list"] + p,
+  .roc-markdown-flow [data-streamdown="blockquote"] + p,
+  .roc-markdown-flow p + [data-streamdown="blockquote"],
+  .roc-markdown-flow [data-streamdown="code-block"] + p,
+  .roc-markdown-flow p + [data-streamdown="code-block"] {
+    margin-top: 0.68rem;
+  }
+
+  .roc-markdown-flow h1,
+  .roc-markdown-flow h2,
+  .roc-markdown-flow h3,
+  .roc-markdown-flow h4 {
+    @apply font-semibold tracking-tight text-foreground;
+    margin-top: 1.1rem;
+    margin-bottom: 0.42rem;
+  }
+
+  .roc-markdown-flow h1 {
+    @apply text-[1.25rem] leading-8;
+  }
+
+  .roc-markdown-flow h2 {
+    @apply text-[1.12rem] leading-7;
+  }
+
+  .roc-markdown-flow h3 {
+    @apply text-base leading-7;
+  }
+
+  .roc-markdown-flow h4 {
+    @apply text-[15px] leading-6;
+  }
+
+  .roc-markdown-flow ul,
+  .roc-markdown-flow ol {
+    @apply grid gap-1 pl-5;
+  }
+
+  .roc-markdown-flow [data-streamdown="unordered-list"],
+  .roc-markdown-flow [data-streamdown="ordered-list"] {
+    @apply my-1 grid gap-1;
+    list-style-position: outside;
+    padding-left: 1.1rem;
+  }
+
+  .roc-markdown-flow [data-streamdown="unordered-list"] {
+    list-style-type: disc;
+  }
+
+  .roc-markdown-flow [data-streamdown="ordered-list"] {
+    list-style-type: decimal;
+  }
+
+  .roc-markdown-flow li {
+    @apply pl-0.5 leading-6.5;
+  }
+
+  .roc-markdown-flow [data-streamdown="list-item"] {
+    @apply pl-1 text-foreground/90;
+  }
+
+  .roc-markdown-flow [data-streamdown="list-item"]::marker {
+    color: color-mix(in oklch, var(--primary) 72%, var(--muted-foreground) 28%);
+    font-weight: 600;
+  }
+
+  .roc-markdown-flow [data-streamdown="list-item"] > p {
+    display: inline;
+  }
+
+  .roc-markdown-flow [data-streamdown="list-item"] > [data-streamdown="unordered-list"],
+  .roc-markdown-flow [data-streamdown="list-item"] > [data-streamdown="ordered-list"] {
+    @apply mt-1;
+  }
+
+  .roc-markdown-flow blockquote {
+    @apply rounded-r-[20px] border-l-[3px] border-primary/35 bg-muted/32 px-4 py-3 text-foreground/82;
+  }
+
+  .roc-markdown-flow [data-streamdown="blockquote"] {
+    @apply relative overflow-hidden rounded-[18px] border border-border/45 bg-muted/24 px-4 py-3 text-foreground/84;
+    border-left-width: 1px;
+    box-shadow: inset 0 1px 0 color-mix(in oklch, var(--card) 55%, transparent);
+  }
+
+  .roc-markdown-flow [data-streamdown="blockquote"]::before {
+    content: "";
+    position: absolute;
+    left: 0.75rem;
+    top: 0.7rem;
+    bottom: 0.7rem;
+    width: 3px;
+    border-radius: 999px;
+    background: color-mix(in oklch, var(--primary) 48%, transparent);
+  }
+
+  .roc-markdown-flow [data-streamdown="blockquote"] > * {
+    position: relative;
+    z-index: 1;
+    margin-left: 0.32rem;
+  }
+
+  .roc-markdown-flow [data-streamdown="blockquote"] > * + * {
+    margin-top: 0.42rem;
+  }
+
+  .roc-markdown-flow pre {
+    @apply overflow-x-auto rounded-[20px] border border-border/45 bg-background/72 px-4 py-3;
+  }
+
+  .roc-markdown-flow [data-streamdown="code-block"] {
+    @apply my-[0.64rem] overflow-hidden rounded-[18px] border border-border/50 bg-card/68;
+    box-shadow: 0 14px 34px -32px color-mix(in oklch, var(--foreground) 18%, transparent);
+  }
+
+  .roc-markdown-flow [data-streamdown="code-block-header"] {
+    @apply flex items-center justify-between border-b border-border/40 px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] text-muted-foreground;
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in oklch, var(--card) 78%, transparent) 0%,
+        color-mix(in oklch, var(--background) 62%, transparent) 100%
+      );
+  }
+
+  .roc-markdown-flow [data-streamdown="code-block-header"] span {
+    @apply rounded-full border border-border/45 bg-background/76 px-2.5 py-1 font-mono text-[10px] lowercase tracking-[0.14em] text-foreground/78;
+  }
+
+  .roc-markdown-flow [data-streamdown="code-block-body"] {
+    @apply rounded-none border-0 bg-transparent p-0 text-[12.5px];
+  }
+
+  .roc-markdown-flow [data-streamdown="code-block-body"] pre {
+    @apply rounded-none border-0 bg-transparent px-3 py-2.5;
+    line-height: 1.65;
+  }
+
+  .roc-markdown-flow [data-streamdown="inline-code"] {
+    @apply rounded-md border border-border/35 bg-background/78 px-1.5 py-0.5 font-mono text-[0.88em] text-foreground/88;
+  }
+
+  .roc-markdown-flow :not(pre) > code {
+    @apply rounded-md bg-muted/70 px-1.5 py-0.5 text-[0.88em];
+  }
+
+  .roc-markdown-flow hr {
+    @apply my-4 border-0 border-t border-border/45;
+  }
+
+  .roc-markdown-flow table {
+    @apply w-full border-separate border-spacing-0 overflow-hidden rounded-[18px] border border-border/45 bg-background/62 text-left text-sm;
+  }
+
+  .roc-markdown-flow thead th {
+    @apply border-b border-border/45 bg-muted/30 px-3 py-2 font-medium text-foreground;
+  }
+
+  .roc-markdown-flow tbody td {
+    @apply border-t border-border/35 px-3 py-2 align-top text-foreground/88;
   }
 
   .roc-item {
@@ -231,12 +978,111 @@ html[data-theme="midnight"] {
     @apply rounded-full border border-border/45 bg-background/70 px-2.5 py-1 text-[11px] font-medium text-muted-foreground;
   }
 
+  .roc-chip-subtle {
+    @apply inline-flex items-center rounded-full border border-border/50 bg-background/70 px-2.5 py-1 text-[11px] font-medium text-muted-foreground;
+  }
+
   .roc-action {
-    @apply inline-flex items-center justify-center rounded-lg border border-border/45 bg-background/70 text-foreground transition-colors hover:bg-accent;
+    @apply inline-flex items-center justify-center rounded-lg border border-border/45 bg-background/70 text-foreground transition-[border-color,background-color,box-shadow,transform,opacity] duration-150 ease-out hover:border-border/70 hover:bg-accent/72;
+    box-shadow: 0 12px 30px -28px color-mix(in oklch, var(--foreground) 16%, transparent);
+  }
+
+  .roc-action:hover {
+    transform: translateY(-1px);
+  }
+
+  .roc-action:disabled {
+    @apply cursor-not-allowed border-border/35 bg-muted/42 text-muted-foreground;
+    box-shadow: none;
+    transform: none;
   }
 
   .roc-textarea {
-    @apply rounded-xl border border-border/45 bg-background;
+    @apply rounded-xl border border-border/45 bg-background transition-[border-color,box-shadow,background-color] duration-150 ease-out;
+  }
+
+  .roc-composer-shell {
+    @apply overflow-hidden rounded-[18px] border border-border/60 bg-card/88 backdrop-blur-xl transition-[border-color,background-color,box-shadow,transform] duration-200 ease-out;
+    box-shadow: 0 16px 40px -38px color-mix(in oklch, var(--foreground) 20%, transparent);
+  }
+
+  .roc-composer-shell[data-drag-active="true"] {
+    border-color: color-mix(in oklch, var(--primary) 52%, var(--border));
+    background: color-mix(in oklch, var(--card) 90%, var(--primary) 10%);
+  }
+
+  .roc-toolbar-field {
+    @apply inline-flex min-w-0 items-center gap-2 rounded-full border border-border/60 bg-background/78 px-3 py-1.25;
+  }
+
+  .roc-toolbar-label {
+    @apply text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground;
+  }
+
+  .roc-toolbar-select {
+    @apply min-w-0 bg-transparent text-[12px] font-medium text-foreground outline-none;
+  }
+
+  .roc-toolbar-select option {
+    color: var(--foreground);
+    background: var(--background);
+  }
+}
+
+@keyframes roc-pulse {
+  0%,
+  100% {
+    opacity: 0.46;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+@keyframes roc-breathe {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+@keyframes roc-fade-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .roc-panel,
+  .roc-surface-elevated,
+  .roc-sidebar-section,
+  .roc-feed-state,
+  .roc-note-card,
+  .roc-message-card,
+  .roc-history-banner,
+  .roc-banner,
+  .roc-floating-surface,
+  .roc-state-card,
+  .roc-side-section,
+  .roc-side-item,
+  .roc-surface-interactive,
+  .roc-terminal-tab,
+  .roc-action,
+  .roc-textarea,
+  .roc-composer-shell {
+    transition-duration: 0ms !important;
+    animation: none !important;
+    transform: none !important;
   }
 }
 

@@ -1,5 +1,6 @@
 import type { ChangeEvent } from "react";
 import React, { Suspense, useRef } from "react";
+import { FolderTreeIcon, LoaderCircleIcon, SparklesIcon } from "lucide-react";
 import type { useConversationJump } from "../hooks/useConversationJump";
 import type { useExecutionActivity } from "../hooks/useExecutionActivity";
 import type { useSchedulerNavigation } from "../hooks/useSchedulerNavigation";
@@ -61,15 +62,19 @@ interface WorkspaceInspectorPanelProps {
 
 function InspectorLoadingCard({ label }: { label: string }) {
   return (
-    <div className="roc-panel p-5 grid gap-2.5 text-muted-foreground">
-      <h3>Loading {label}...</h3>
-      <p>This panel is being loaded as a separate chunk.</p>
+    <div className="roc-state-card grid gap-2.5" data-tone="loading">
+      <div className="roc-status-row">
+        <span className="roc-status-orb" data-tone="loading">
+          <LoaderCircleIcon className="size-4 animate-spin" />
+        </span>
+        <span>Loading {label}…</span>
+      </div>
+      <p className="text-sm leading-6 text-muted-foreground">This panel is being loaded as a separate chunk.</p>
     </div>
   );
 }
 
-const workspaceActionButtonClass =
-  "roc-action min-h-[42px] px-4 cursor-pointer transition-colors";
+const workspaceActionButtonClass = "roc-action roc-action-pill px-4 cursor-pointer";
 
 export function WorkspaceInspectorPanel({
   apiJson,
@@ -114,13 +119,14 @@ export function WorkspaceInspectorPanel({
 
   return (
     <div className="flex flex-col gap-5 min-h-0 overflow-y-auto p-5" data-testid="workspace-inspector">
-      <div className="roc-panel p-5 grid gap-3 min-h-0" data-testid="workspace-tree-card">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Workspace</p>
-            <h3>File Tree</h3>
+      <div className="roc-panel roc-rail-panel min-h-0 p-5" data-testid="workspace-tree-card">
+        <div className="roc-rail-header">
+          <div className="roc-rail-headline">
+            <p className="roc-section-label">Workspace</p>
+            <h3 className="roc-rail-title">File Tree</h3>
+            <p className="roc-rail-description break-all">{workspaceRootLabel}</p>
           </div>
-          <div className="flex items-center flex-wrap gap-2.5 justify-end">
+          <div className="roc-rail-toolbar">
             <span className="roc-pill px-3 py-1.5 text-xs">
               {workspaceLoading ? "loading" : `${fileTree?.children?.length ?? 0} items`}
             </span>
@@ -159,10 +165,16 @@ export function WorkspaceInspectorPanel({
             />
           </div>
         </div>
-        <p className="mt-2.5 text-sm leading-relaxed text-muted-foreground break-all">{workspaceRootLabel}</p>
         <div className="mt-3.5 flex flex-col gap-1 max-h-80 overflow-auto" data-testid="workspace-tree">
           {workspaceLoading ? (
-            <p className="grid gap-2.5 text-muted-foreground">Loading workspace tree...</p>
+            <div className="roc-state-card" data-tone="loading">
+              <div className="roc-status-row">
+                <span className="roc-status-orb" data-tone="loading">
+                  <LoaderCircleIcon className="size-4 animate-spin" />
+                </span>
+                <span>Loading workspace tree…</span>
+              </div>
+            </div>
           ) : fileTree ? (
             <WorkspaceTreeNode
               node={fileTree}
@@ -177,18 +189,28 @@ export function WorkspaceInspectorPanel({
               onPreviewStage={schedulerNavigation.previewStage}
             />
           ) : (
-            <p className="grid gap-2.5 text-muted-foreground">No workspace tree available yet.</p>
+            <div className="roc-rail-empty" data-tone="muted">
+              <div className="roc-status-row">
+                <span className="roc-status-orb">
+                  <FolderTreeIcon className="size-4" />
+                </span>
+                <span>No workspace tree available yet.</span>
+              </div>
+            </div>
           )}
         </div>
       </div>
 
-      <div className="roc-panel p-5 grid gap-3 min-h-0" data-testid="workspace-editor-card">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Workspace</p>
-            <h3>{selectedWorkspaceFilename || "Workspace Preview"}</h3>
+      <div className="roc-panel roc-rail-panel min-h-0 p-5" data-testid="workspace-editor-card">
+        <div className="roc-rail-header">
+          <div className="roc-rail-headline">
+            <p className="roc-section-label">Workspace</p>
+            <h3 className="roc-rail-title">{selectedWorkspaceFilename || "Workspace Preview"}</h3>
+            {selectedWorkspacePath ? (
+              <p className="roc-rail-description break-all">{selectedWorkspacePath}</p>
+            ) : null}
           </div>
-          <div className="flex items-center flex-wrap gap-2.5 justify-end">
+          <div className="roc-rail-toolbar">
             <span className="roc-pill px-3 py-1.5 text-xs">
               {selectedWorkspaceType === "directory" ? "directory" : workspaceDirty ? "dirty" : "saved"}
             </span>
@@ -242,9 +264,8 @@ export function WorkspaceInspectorPanel({
         </div>
         {selectedFilePath ? (
           <>
-            <p className="mt-2.5 text-sm leading-relaxed text-muted-foreground break-all">{selectedFilePath}</p>
             <textarea
-              className="roc-textarea mt-3.5 min-h-80 w-full resize-y p-3.5 text-foreground leading-relaxed font-mono text-sm"
+              className="roc-form-textarea mt-3.5 min-h-80 font-mono"
               data-testid="workspace-editor"
               value={selectedFileContent}
               onChange={(event) => onWorkspaceContentChange(event.target.value)}
@@ -253,18 +274,28 @@ export function WorkspaceInspectorPanel({
             />
           </>
         ) : selectedWorkspacePath && selectedWorkspaceType === "directory" ? (
-          <div className="grid gap-2.5 text-muted-foreground">
-            <h3>{selectedWorkspaceFilename || "Directory selected"}</h3>
-            <p>{selectedWorkspacePath}</p>
-            <p>
+          <div className="roc-rail-empty" data-tone="muted">
+            <div className="roc-status-row">
+              <span className="roc-status-orb">
+                <FolderTreeIcon className="size-4" />
+              </span>
+              <span>{selectedWorkspaceFilename || "Directory selected"}</span>
+            </div>
+            <p className="text-sm leading-6 text-muted-foreground">{selectedWorkspacePath}</p>
+            <p className="text-sm leading-6 text-muted-foreground">
               This directory can be referenced with `{selectedWorkspaceReference ? `@${selectedWorkspaceReference}` : "@."}`{" "}
               or attached directly as a workspace context part.
             </p>
           </div>
         ) : (
-          <div className="grid gap-2.5 text-muted-foreground">
-            <h3>{lastAssistant?.title || "No file selected"}</h3>
-            <p>
+          <div className="roc-rail-empty" data-tone="muted">
+            <div className="roc-status-row">
+              <span className="roc-status-orb">
+                <SparklesIcon className="size-4" />
+              </span>
+              <span>{lastAssistant?.title || "No file selected"}</span>
+            </div>
+            <p className="text-sm leading-6 text-muted-foreground">
               {lastAssistant?.text ||
                 "Pick a file from the workspace tree to read and edit it in the new frontend."}
             </p>

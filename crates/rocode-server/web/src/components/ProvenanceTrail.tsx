@@ -18,12 +18,14 @@ export function ProvenanceTrail({
   if (!provenance && !workspaceReference) return null;
 
   return (
-    <div className="flex flex-wrap items-center gap-2" data-testid="provenance-trail">
+    <div className="flex flex-wrap items-center gap-2 text-xs" data-testid="provenance-trail">
       {provenance ? (
         <>
-          <span className="text-muted-foreground text-sm">Source</span>
+          <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+            Source
+          </span>
           <button
-            className="text-xs text-primary underline underline-offset-2 hover:text-primary/80 transition-colors"
+            className="roc-chip-subtle text-foreground hover:border-primary/35 hover:text-primary transition-colors"
             data-testid="provenance-session"
             type="button"
             onClick={onNavigateSession}
@@ -32,7 +34,7 @@ export function ProvenanceTrail({
           </button>
           {provenance.stageId ? (
             <button
-              className="text-xs text-primary underline underline-offset-2 hover:text-primary/80 transition-colors"
+              className="roc-chip-subtle hover:border-primary/35 hover:text-primary transition-colors"
               data-testid="provenance-stage"
               type="button"
               onClick={onNavigateStage}
@@ -42,7 +44,7 @@ export function ProvenanceTrail({
           ) : null}
           {provenance.toolCallId ? (
             <button
-              className="text-xs text-primary underline underline-offset-2 hover:text-primary/80 transition-colors"
+              className="roc-chip-subtle hover:border-primary/35 hover:text-primary transition-colors"
               data-testid="provenance-tool"
               type="button"
               onClick={onNavigateToolCall}
@@ -50,14 +52,13 @@ export function ProvenanceTrail({
               tool {provenance.toolCallId}
             </button>
           ) : null}
-          {provenance.label ? <span className="text-xs text-muted-foreground">{provenance.label}</span> : null}
+          {provenance.label ? (
+            <span className="text-xs text-muted-foreground">{provenance.label}</span>
+          ) : null}
         </>
       ) : null}
       {workspaceReference ? (
-        <span
-          className="rounded-full border border-border bg-card/65 px-2.5 py-1.5 text-sm text-muted-foreground"
-          data-testid="provenance-workspace"
-        >
+        <span className="roc-chip-subtle max-w-[18rem] truncate" data-testid="provenance-workspace" title={`@${workspaceReference}`}>
           @{workspaceReference}
         </span>
       ) : null}

@@ -2,7 +2,7 @@
 
 ROCode (Rusted OpenCode) 是一个用 Rust 编写的高性能 AI 编码编排器。它将终端原生交互、多 Agent 协调、可扩展技能系统和多模型 Provider 整合为一个统一的开发工作流引擎。
 
-> **版本:** 2026.4.12 · **许可证:** MIT · **作者:** Biocheming
+> **版本:** 2026.4.17 · **许可证:** MIT · **作者:** Biocheming
 
 ---
 
@@ -68,11 +68,11 @@ rocode mcp connect my-server
 
 ### TUI 终端界面
 
-基于 ratatui 的终端 UI，支持实时流式输出、语法高亮、diff 查看、权限对话、斜杠命令自动补全、会话浏览、完整键位绑定系统。
+基于 reratui reactive 渲染主线与 ratatui 兼容层的终端 UI，支持实时流式输出、语法高亮、diff 查看、权限对话、斜杠命令自动补全、会话浏览和更细粒度的消息渲染。
 
 ### Web 界面
 
-内置 React 前端，通过 `rocode web` 启动，提供与 TUI 等价的会话交互体验。
+内置 React 前端，通过 `rocode web` 启动；当前版本已补齐更高密度的消息阅读节奏、可过滤 model picker、批量 session 删除与更统一的 workspace / session / activity 视觉体系。
 
 ### HTTP Server
 

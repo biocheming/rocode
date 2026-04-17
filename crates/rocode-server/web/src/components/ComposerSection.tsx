@@ -2,6 +2,7 @@ import type { ChangeEvent, ClipboardEvent, DragEvent, FormEvent } from "react";
 import { ComposerPanel } from "./ComposerPanel";
 import type { BreadcrumbProvenance } from "../hooks/useSchedulerNavigation";
 import type { ComposerAttachmentRecord } from "../lib/composerContext";
+import type { ProviderRecord } from "../lib/provider";
 
 interface ComposerSectionProps {
   composer: string;
@@ -14,7 +15,7 @@ interface ComposerSectionProps {
   modeOptions: Array<{ key: string; label: string }>;
   selectedMode: string;
   onModeChange: (value: string) => void;
-  modelOptions: Array<{ key: string; label: string }>;
+  providers: ProviderRecord[];
   selectedModel: string;
   onModelChange: (value: string) => void;
   references: string[];
@@ -23,6 +24,11 @@ interface ComposerSectionProps {
   selectedAttachment: ComposerAttachmentRecord | null;
   selectedWorkspacePath: string | null;
   workspaceRootPath: string;
+  contextTokensUsed?: number | null;
+  contextTokensLimit?: number | null;
+  sessionCost?: number | null;
+  inputPricePerMillion?: number | null;
+  outputPricePerMillion?: number | null;
   activeStageId: string | null;
   provenance: BreadcrumbProvenance | null;
   onPreviewStage?: (stageId: string | null) => void;
@@ -46,7 +52,7 @@ interface ComposerSectionProps {
 
 export function ComposerSection(props: ComposerSectionProps) {
   return (
-    <div className="mx-auto w-full max-w-4xl">
+    <div className="mx-auto w-full max-w-[76rem]">
       <ComposerPanel {...props} />
     </div>
   );

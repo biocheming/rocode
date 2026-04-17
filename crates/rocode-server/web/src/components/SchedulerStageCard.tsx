@@ -1,5 +1,15 @@
+import { Button } from "@/components/ui/button";
 import type { FeedMessage } from "@/lib/history";
 import { cn } from "@/lib/utils";
+import {
+  ActivityIcon,
+  ArrowUpRightIcon,
+  ChevronDownIcon,
+  GitBranchPlusIcon,
+  InfoIcon,
+  WorkflowIcon,
+} from "lucide-react";
+import { useState } from "react";
 
 interface SchedulerStageCardProps {
   message: FeedMessage;
@@ -13,10 +23,128 @@ interface SchedulerStageCardProps {
 
 function tokenSummary(message: FeedMessage) {
   return [
-    message.prompt_tokens ? `in ${message.prompt_tokens}` : null,
-    message.completion_tokens ? `out ${message.completion_tokens}` : null,
-    message.reasoning_tokens ? `reason ${message.reasoning_tokens}` : null,
+    message.prompt_tokens ? `input ${message.prompt_tokens}` : null,
+    message.completion_tokens ? `output ${message.completion_tokens}` : null,
+    message.reasoning_tokens ? `reasoning ${message.reasoning_tokens}` : null,
+    message.cache_read_tokens ? `cache read ${message.cache_read_tokens}` : null,
+    message.cache_write_tokens ? `cache write ${message.cache_write_tokens}` : null,
   ].filter(Boolean);
+}
+
+function compactText(value: unknown) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeValue(value: unknown) {
+  const text = String(value ?? "").trim();
+  if (!text) return { structured: false, text: "" };
+
+  const candidate = text.startsWith("{") || text.startsWith("[");
+  if (candidate) {
+    try {
+      return {
+        structured: true,
+        text: JSON.stringify(JSON.parse(text), null, 2),
+      };
+    } catch {
+      // Fall back to raw text.
+    }
+  }
+
+  return {
+    structured:
+      text.includes("\n") ||
+      text.length > 140 ||
+      text.includes("{") ||
+      text.includes("["),
+    text,
+  };
+}
+
+function StructuredValue({ value }: { value: unknown }) {
+  const display = normalizeValue(value);
+  if (!display.text) return null;
+
+  if (display.structured) {
+    return <pre className="roc-structured-value roc-structured-copy">{display.text}</pre>;
+  }
+
+  return <p className="roc-structured-copy text-sm leading-6 whitespace-pre-wrap text-foreground">{display.text}</p>;
+}
+
+function classifyFact(value: unknown) {
+  const display = normalizeValue(value);
+  const inline =
+    !display.structured &&
+    display.text.length > 0 &&
+    display.text.length <= 48 &&
+    !display.text.includes(",") &&
+    !display.text.includes(":");
+  return { display, inline };
+}
+
+function SummaryFact({
+  label,
+  value,
+}: {
+  label: string;
+  value: React.ReactNode;
+}) {
+  return (
+    <div className="roc-structured-row">
+      <div className="roc-structured-key">{label}</div>
+      <div>{value}</div>
+    </div>
+  );
+}
+
+function DisclosurePanel({
+  icon,
+  label,
+  title,
+  summary,
+  defaultOpen = false,
+  children,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  title: string;
+  summary?: string | null;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+
+  return (
+    <section className="roc-detail-card">
+      <button
+        type="button"
+        className="roc-detail-trigger"
+        onClick={() => setOpen((value) => !value)}
+      >
+        <div className="roc-detail-icon">{icon}</div>
+        <div className="min-w-0 flex-1">
+          <div className="roc-section-label">{label}</div>
+          <div className="roc-detail-title">{title}</div>
+          {summary ? <p className="roc-detail-summary line-clamp-2">{summary}</p> : null}
+        </div>
+        <ChevronDownIcon
+          className={cn(
+            "mt-1 ml-auto size-4 shrink-0 text-muted-foreground transition-transform duration-200",
+            open && "rotate-180",
+          )}
+        />
+      </button>
+      <div
+        className={cn(
+          "overflow-hidden transition-all duration-200",
+          open ? "max-h-[2600px]" : "max-h-0",
+        )}
+      >
+        <div className={cn(open ? "roc-detail-body" : "pt-0")}>{children}</div>
+      </div>
+    </section>
+  );
 }
 
 export function SchedulerStageCard({
@@ -34,43 +162,125 @@ export function SchedulerStageCard({
     typeof message.step === "number" ? `step ${message.step}` : null,
   ].filter(Boolean);
   const tokens = tokenSummary(message);
+  const stageTitle = message.title || message.stage || "Scheduler Stage";
+  const stageSummary =
+    compactText(message.focus) ||
+    compactText(message.last_event) ||
+    compactText(message.text) ||
+    null;
+
+  const decisionInlineFields = message.decision?.fields
+    ?.map((field) => ({
+      label: field.label ?? "Field",
+      ...classifyFact(field.value ?? ""),
+    }))
+    .filter((field) => field.inline) ?? [];
+  const decisionBlockFields = message.decision?.fields
+    ?.map((field) => ({
+      label: field.label ?? "Field",
+      ...classifyFact(field.value ?? ""),
+    }))
+    .filter((field) => !field.inline) ?? [];
 
   return (
     <article
       className={cn(
-        "rounded-xl border border-border/40 bg-card/72 p-4 grid gap-3.5",
-        (message.role ?? "assistant") === "user" && "bg-primary/10",
-        highlighted && "border-primary/35 bg-accent/45 shadow-sm",
+        "roc-message-card grid gap-4 p-5",
+        highlighted && "border-primary/35 bg-accent/34",
       )}
       data-testid="scheduler-stage-card"
       data-feed-id={message.feedId}
       data-stage-id={message.stage_id}
       data-child-session-id={message.child_session_id}
     >
-      <header className="flex gap-2 items-center text-xs uppercase tracking-wider text-muted-foreground">
-        <span>scheduler stage</span>
-        <span>{message.role ?? "assistant"}</span>
-      </header>
-      <div className="flex flex-wrap gap-2.5 items-start justify-between">
-        <div>
-          <h3>{message.title || message.stage || "Scheduler Stage"}</h3>
-          {message.focus ? <p className="text-sm text-muted-foreground italic">{message.focus}</p> : null}
-          <div className="flex flex-wrap gap-2 mt-1">
-            {message.stage_id ? (
+      <div className="roc-message-meta-row">
+        <div className="roc-message-meta-group">
+          <span className="roc-section-label">Scheduler Stage</span>
+          {(message.role ?? "assistant") !== "assistant" ? (
+            <span className="roc-meta-badge">{message.role}</span>
+          ) : null}
+        </div>
+        {chips.length ? (
+          <div className="roc-message-meta-group">
+            {chips.map((chip, index) => (
+              <span key={`${message.feedId}-chip-${index}`} className="roc-meta-badge">
+                {chip}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start gap-3">
+            <div className="roc-detail-icon size-10">
+              <WorkflowIcon className="size-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h3 className="roc-message-title mb-0 text-lg">
+                {stageTitle}
+              </h3>
+              {stageSummary ? (
+                <p className="roc-detail-summary">{stageSummary}</p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {message.stage_id ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="rounded-full"
+              data-testid="scheduler-stage-open-stage"
+              onClick={() => onNavigateStage(message.stage_id!)}
+            >
+              <ArrowUpRightIcon className="size-3.5" />
+              stage {message.stage_id}
+            </Button>
+          ) : null}
+          {message.child_session_id ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="rounded-full"
+              data-testid="scheduler-stage-open-child"
+              onClick={() =>
+                onNavigateChildSession(message.child_session_id!, {
+                  stageId: message.stage_id ?? null,
+                  toolCallId: message.tool_call_id ?? null,
+                  label: message.title || message.stage || message.stage_id || message.child_session_id,
+                })
+              }
+            >
+              <GitBranchPlusIcon className="size-3.5" />
+              child {message.child_session_id}
+            </Button>
+          ) : null}
+        </div>
+      </div>
+
+      {(message.waiting_on || message.last_event || message.child_session_id) ? (
+        <div className="grid gap-2 md:grid-cols-3">
+          {message.waiting_on ? (
+            <SummaryFact label="Waiting">
+              <p className="text-sm leading-6 text-foreground">Waiting on {message.waiting_on}</p>
+            </SummaryFact>
+          ) : null}
+          {message.last_event ? (
+            <SummaryFact label="Last Event">
+              <p className="text-sm leading-6 text-foreground">{message.last_event}</p>
+            </SummaryFact>
+          ) : null}
+          {message.child_session_id ? (
+            <SummaryFact label="Child Session">
               <button
-                className="text-xs text-primary underline underline-offset-2 hover:text-primary/80 transition-colors"
                 type="button"
-                data-testid="scheduler-stage-open-stage"
-                onClick={() => onNavigateStage(message.stage_id!)}
-              >
-                stage {message.stage_id}
-              </button>
-            ) : null}
-            {message.child_session_id ? (
-              <button
-                className="text-xs text-primary underline underline-offset-2 hover:text-primary/80 transition-colors"
-                type="button"
-                data-testid="scheduler-stage-open-child"
+                className="text-sm font-medium text-primary transition-colors hover:text-primary/80"
                 onClick={() =>
                   onNavigateChildSession(message.child_session_id!, {
                     stageId: message.stage_id ?? null,
@@ -79,120 +289,133 @@ export function SchedulerStageCard({
                   })
                 }
               >
-                child {message.child_session_id}
+                {message.child_session_id}
               </button>
-            ) : null}
-          </div>
+            </SummaryFact>
+          ) : null}
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          {chips.map((chip, index) => (
-            <span key={`${message.feedId}-chip-${index}`} className="roc-pill-outline px-3 py-2">
-              {chip}
-            </span>
-          ))}
-        </div>
-      </div>
-      {(message.waiting_on || message.last_event || message.child_session_id) && (
-        <dl className="mt-3 grid gap-2">
-          {message.waiting_on ? (
-            <div>
-              <dt>Waiting</dt>
-              <dd>{message.waiting_on}</dd>
-            </div>
-          ) : null}
-          {message.last_event ? (
-            <div>
-              <dt>Last Event</dt>
-              <dd>{message.last_event}</dd>
-            </div>
-          ) : null}
-          {message.child_session_id ? (
-            <div>
-              <dt>Child Session</dt>
-              <dd>
-                <button
-                  className="text-xs text-primary underline underline-offset-2 hover:text-primary/80 transition-colors"
-                  type="button"
-                  data-testid="scheduler-stage-open-child"
-                    onClick={() =>
-                      onNavigateChildSession(message.child_session_id!, {
-                        stageId: message.stage_id ?? null,
-                        toolCallId: message.tool_call_id ?? null,
-                        label: message.title || message.stage || message.stage_id || message.child_session_id,
-                      })
-                    }
-                >
-                  {message.child_session_id}
-                </button>
-              </dd>
-            </div>
-          ) : null}
-        </dl>
-      )}
+      ) : null}
+
       {tokens.length ? (
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-2">
           {tokens.map((token) => (
-            <span key={`${message.feedId}-${token}`} className="roc-pill-outline px-3 py-2">
+            <span key={`${message.feedId}-${token}`} className="roc-meta-badge">
               {token}
             </span>
           ))}
         </div>
       ) : null}
+
       {message.decision ? (
-        <section className="rounded-lg border border-border/35 bg-background/65 p-3 grid gap-2">
-          {message.decision.title ? <h4>{message.decision.title}</h4> : null}
+        <section className="roc-detail-card">
+          <div className="flex items-start gap-3">
+            <div className="roc-detail-icon">
+              <ActivityIcon className="size-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="roc-section-label">Decision</div>
+              <div className="roc-detail-title">
+                {message.decision.title || "Stage decision"}
+              </div>
+            </div>
+          </div>
+          <div className="roc-detail-body">
           {message.decision.fields?.length ? (
-            <dl className="mt-3 grid gap-2">
-              {message.decision.fields.map((field, index) => (
-                <div key={`${message.feedId}-decision-field-${index}`}>
-                  <dt>{field.label ?? "Field"}</dt>
-                  <dd>{field.value ?? ""}</dd>
+            <div className="grid gap-2.5">
+              {decisionInlineFields.length ? (
+                <div className="flex flex-wrap gap-2">
+                  {decisionInlineFields.map((field, index) => (
+                    <span key={`${message.feedId}-decision-inline-${index}`} className="roc-inline-fact">
+                      <span className="roc-inline-fact-label">{field.label}</span>
+                      <span className="roc-inline-fact-value">{field.display.text}</span>
+                    </span>
+                  ))}
                 </div>
-              ))}
-            </dl>
+              ) : null}
+              {decisionBlockFields.length ? (
+                <dl className="roc-structured-dl">
+                  {decisionBlockFields.map((field, index) => (
+                    <div key={`${message.feedId}-decision-field-${index}`} className="roc-structured-row">
+                      <dt className="roc-structured-key">{field.label}</dt>
+                      <dd className="m-0">
+                        <StructuredValue value={field.display.text} />
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              ) : null}
+            </div>
           ) : null}
           {message.decision.sections?.map((section, index) => (
-            <details key={`${message.feedId}-decision-section-${index}`} className="rounded-md border border-border/35 bg-muted/10 p-2.5" open>
-              <summary>{section.title || `Section ${index + 1}`}</summary>
-              <pre>{section.body || ""}</pre>
-            </details>
+            <div key={`${message.feedId}-decision-section-${index}`} className="roc-detail-card">
+              <div className="roc-section-label">{section.title || `Section ${index + 1}`}</div>
+              <div className="roc-detail-body">
+                <StructuredValue value={section.body || ""} />
+              </div>
+            </div>
           ))}
+          </div>
         </section>
       ) : null}
+
       {message.activity ? (
-        <details className="rounded-md border border-border/35 bg-muted/10 p-2.5" open>
-          <summary>Activity</summary>
-          <pre>{message.activity}</pre>
-        </details>
+        <DisclosurePanel
+          icon={<ActivityIcon className="size-4" />}
+          label="Trace"
+          title="Activity trace"
+          summary="Collapsed raw activity log for this stage."
+          defaultOpen={false}
+        >
+          <StructuredValue value={message.activity} />
+        </DisclosurePanel>
       ) : null}
+
       {message.text?.trim() ? (
-        <details className="rounded-md border border-border/35 bg-muted/10 p-2.5">
-          <summary>Raw Block</summary>
-          <pre>{message.text}</pre>
-        </details>
+        <DisclosurePanel
+          icon={<InfoIcon className="size-4" />}
+          label="Payload"
+          title="Raw stage payload"
+          summary="Structured payload emitted by the scheduler/runtime layer."
+          defaultOpen={false}
+        >
+          <StructuredValue value={message.text} />
+        </DisclosurePanel>
       ) : null}
-      {(message.active_skills?.length || message.active_agents?.length || message.active_categories?.length) && (
-        <div className="grid gap-2 text-sm text-muted-foreground">
+
+      {(message.active_skills?.length || message.active_agents?.length || message.active_categories?.length) ? (
+        <div className="grid gap-2">
           {message.active_skills?.length ? (
-            <div>
-              <span className="font-medium">Skills</span>
-              <p>{message.active_skills.join(", ")}</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="roc-section-label">Skills</span>
+              {message.active_skills.map((skill) => (
+                <span key={`${message.feedId}-skill-${skill}`} className="roc-meta-badge">
+                  {skill}
+                </span>
+              ))}
             </div>
           ) : null}
           {message.active_agents?.length ? (
-            <div>
-              <span className="font-medium">Agents</span>
-              <p>{message.active_agents.join(", ")}</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="roc-section-label">Agents</span>
+              {message.active_agents.map((agent) => (
+                <span key={`${message.feedId}-agent-${agent}`} className="roc-meta-badge">
+                  {agent}
+                </span>
+              ))}
             </div>
           ) : null}
           {message.active_categories?.length ? (
-            <div>
-              <span className="font-medium">Categories</span>
-              <p>{message.active_categories.join(", ")}</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="roc-section-label">Categories</span>
+              {message.active_categories.map((category) => (
+                <span key={`${message.feedId}-category-${category}`} className="roc-meta-badge">
+                  {category}
+                </span>
+              ))}
             </div>
           ) : null}
         </div>
-      )}
+      ) : null}
     </article>
   );
 }

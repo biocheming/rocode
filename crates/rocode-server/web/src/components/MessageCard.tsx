@@ -1,25 +1,28 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
+import { StructuredDataView } from "@/components/StructuredDataView";
 import { cn } from "@/lib/utils";
+import {
+  ActivityIcon,
+  BrainCircuitIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  CopyIcon,
+  InfoIcon,
+  SparklesIcon,
+  WrenchIcon,
+} from "lucide-react";
+import { useCallback, useState } from "react";
+import { MessageResponse } from "./ai-elements/message";
+import type { FeedMessage, OutputBlock, OutputField } from "../lib/history";
 import { SchedulerStageCard } from "./SchedulerStageCard";
 import {
-  Message,
-  MessageContent,
-  MessageToolbar,
-  MessageActions,
-  MessageAction,
-  MessageResponse,
-} from "./ai-elements/message";
-import { Button } from "@/components/ui/button";
-import {
-  CopyIcon,
-  CheckIcon,
-  ActivityIcon,
-  ChevronDownIcon,
-  BrainCircuitIcon,
-} from "lucide-react";
-import { useState, useCallback } from "react";
-import type { FeedMessage, OutputBlock } from "../lib/history";
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface MessageCardProps {
   message: FeedMessage;
@@ -33,114 +36,343 @@ interface MessageCardProps {
   ) => void;
 }
 
-function ReasoningBlock({ text }: { text: string }) {
-  const [expanded, setExpanded] = useState(false);
-
-  return (
-    <div className="rounded-xl border border-border/70 bg-muted/30 px-3 py-2">
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <BrainCircuitIcon className="size-3.5 shrink-0" />
-        <span>Reasoning</span>
-        <ChevronDownIcon
-          className={cn(
-            "ml-auto size-3.5 shrink-0 transition-transform duration-200",
-            expanded && "rotate-180"
-          )}
-        />
-      </button>
-      <div
-        className={cn(
-          "relative overflow-hidden transition-all duration-200 mt-2",
-          expanded ? "max-h-[2000px]" : "max-h-20"
-        )}
-      >
-        <p className="text-xs text-muted-foreground whitespace-pre-wrap">{text}</p>
-        {!expanded && (
-          <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-6 bg-gradient-to-t from-muted/60 to-transparent rounded-b-xl" />
-        )}
-      </div>
-    </div>
-  );
+function formatClock(ts?: number) {
+  if (typeof ts !== "number" || !Number.isFinite(ts) || ts <= 0) return null;
+  const normalized = ts > 1_000_000_000_000 ? ts : ts * 1000;
+  return new Date(normalized).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
-function StatusBlock({ message }: { message: OutputBlock }) {
-  const isError = message.tone === "error";
+function compactText(value?: string | null) {
+  return value?.replace(/\s+/g, " ").trim() ?? "";
+}
 
+function readableSummary(message: FeedMessage) {
+  const summary = compactText(message.summary);
+  if (!summary) return null;
+
+  const title = compactText(message.title);
+  const text = compactText(message.text);
+  if (summary === title || summary === text) return null;
+  if (text && text.includes(summary)) return null;
+
+  return summary;
+}
+
+function normalizeValue(value: unknown) {
+  const text = String(value ?? "").trim();
+  if (!text) return { structured: false, text: "" };
+
+  const candidate = text.startsWith("{") || text.startsWith("[");
+  if (candidate) {
+    try {
+      return {
+        structured: true,
+        text: JSON.stringify(JSON.parse(text), null, 2),
+      };
+    } catch {
+      // Keep original text when JSON parsing fails.
+    }
+  }
+
+  return {
+    structured:
+      text.includes("\n") ||
+      text.length > 140 ||
+      text.includes("{") ||
+      text.includes("["),
+    text,
+  };
+}
+
+function MetaActionButton({
+  children,
+  onClick,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+}) {
   return (
-    <div
-      className={cn(
-        "flex items-start gap-2 rounded-lg px-3 py-2 text-xs",
-        isError
-          ? "bg-destructive/10 text-destructive"
-          : "bg-muted/50 text-muted-foreground"
-      )}
+    <button
+      type="button"
+      onClick={onClick}
+      className="roc-meta-badge transition-colors hover:border-primary/35 hover:text-primary"
     >
-      <ActivityIcon className="mt-0.5 size-3.5 shrink-0" />
-      <span>{message.text}</span>
-    </div>
+      {children}
+    </button>
   );
 }
 
-function ToolBlock({ message }: { message: OutputBlock }) {
-  const [expanded, setExpanded] = useState(false);
+function StructuredText({
+  value,
+  className,
+}: {
+  value: unknown;
+  className?: string;
+}) {
+  const display = normalizeValue(value);
+  if (!display.text) return null;
+
+  if (display.structured) {
+    return <pre className={cn("roc-structured-value roc-structured-copy", className)}>{display.text}</pre>;
+  }
 
   return (
-    <div className="rounded-xl border border-border/50 bg-muted/20 px-3 py-2">
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <CheckIcon className="size-3.5 shrink-0 text-emerald-600" />
-        <span className="font-medium">{message.title || message.kind}</span>
-        <ChevronDownIcon
-          className={cn(
-            "ml-auto size-3.5 shrink-0 transition-transform duration-200",
-            expanded && "rotate-180"
-          )}
-        />
-      </button>
-      {expanded && message.text && (
-        <div className="mt-2 text-xs text-muted-foreground">
-          <MessageResponse>{message.text}</MessageResponse>
+    <p className={cn("roc-structured-copy text-sm leading-6 whitespace-pre-wrap text-foreground", className)}>
+      {display.text}
+    </p>
+  );
+}
+
+function classifyField(field: OutputField) {
+  const label = field.label?.trim() || "Field";
+  const display = normalizeValue(field.value ?? "");
+  const shortInline =
+    !display.structured &&
+    display.text.length > 0 &&
+    display.text.length <= 42 &&
+    !display.text.includes(",") &&
+    !display.text.includes(":");
+  return { label, display, shortInline };
+}
+
+function FieldList({ fields }: { fields?: OutputField[] }) {
+  if (!fields?.length) return null;
+
+  const inlineFields = fields
+    .map(classifyField)
+    .filter((field) => field.shortInline);
+  const blockFields = fields
+    .map(classifyField)
+    .filter((field) => !field.shortInline);
+
+  return (
+    <div className="roc-structured-stack">
+      {inlineFields.length ? (
+        <div className="roc-structured-inline-list">
+          {inlineFields.map((field, index) => (
+            <span key={`${field.label}-inline-${index}`} className="roc-inline-fact">
+              <span className="roc-inline-fact-label">{field.label}</span>
+              <span className="roc-inline-fact-value">{field.display.text}</span>
+            </span>
+          ))}
         </div>
-      )}
-    </div>
-  );
-}
-
-function InfoBlock({ message }: { message: OutputBlock }) {
-  return (
-    <div className="rounded-xl border border-border/50 bg-muted/20 px-3 py-2">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <ActivityIcon className="size-3.5 shrink-0" />
-        <span className="font-medium">{message.title || "Info"}</span>
-      </div>
-      {message.text ? (
-        <p className="mt-2 text-sm text-foreground whitespace-pre-wrap">{message.text}</p>
       ) : null}
-      {message.fields?.length ? (
-        <dl className="mt-3 grid gap-1.5 text-sm">
-          {message.fields.map((field, index) => (
-            <div
-              key={`${message.id ?? message.text}-field-${index}`}
-              className="grid grid-cols-[100px_1fr] gap-3 py-1.5 border-b border-border/30 last:border-0"
-            >
-              <dt className="font-medium text-muted-foreground text-xs">
-                {field.label ?? "Field"}
-              </dt>
-              <dd className="text-foreground text-xs whitespace-pre-wrap">
-                {String(field.value ?? "")}
+      {blockFields.length ? (
+        <dl className="roc-structured-dl">
+          {blockFields.map((field, index) => (
+            <div key={`${field.label}-${index}`} className="roc-structured-row">
+              <dt className="roc-structured-key">{field.label}</dt>
+              <dd className="m-0">
+                <StructuredText value={field.display.text} />
               </dd>
             </div>
           ))}
         </dl>
       ) : null}
     </div>
+  );
+}
+
+function DisclosureCard({
+  icon,
+  label,
+  title,
+  summary,
+  defaultExpanded = false,
+  children,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  title: string;
+  summary?: string | null;
+  defaultExpanded?: boolean;
+  children: React.ReactNode;
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+
+  return (
+    <section className="roc-detail-card">
+      <button
+        type="button"
+        className="roc-detail-trigger"
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <div className="roc-detail-icon">{icon}</div>
+        <div className="min-w-0 flex-1">
+          <div className="roc-section-label">{label}</div>
+          <div className="roc-detail-title">{title}</div>
+          {summary ? (
+            <p className="roc-detail-summary line-clamp-2">{summary}</p>
+          ) : null}
+        </div>
+        <ChevronDownIcon
+          className={cn(
+            "mt-1 size-4 shrink-0 text-muted-foreground transition-transform duration-200",
+            expanded && "rotate-180",
+          )}
+        />
+      </button>
+
+      <div
+        className={cn(
+          "overflow-hidden transition-all duration-200",
+          expanded ? "max-h-[2400px]" : "max-h-0",
+        )}
+      >
+        <div className={cn(expanded ? "roc-detail-body" : "pt-0")}>{children}</div>
+      </div>
+    </section>
+  );
+}
+
+function ReasoningBlock({ text }: { text: string }) {
+  return (
+    <DisclosureCard
+      icon={<BrainCircuitIcon className="size-4" />}
+      label="Reasoning"
+      title="Reasoning trace"
+      summary="Collapsed by default so the visible response keeps its reading pace."
+    >
+      <StructuredText value={text} className="text-muted-foreground" />
+    </DisclosureCard>
+  );
+}
+
+function StatusBlock({ message }: { message: OutputBlock }) {
+  const isError = message.tone === "error";
+  const title = message.title?.trim() || (isError ? "Runtime error" : "System update");
+  const summary = message.summary?.trim() || null;
+
+  return (
+    <section
+      className={cn(
+        "roc-detail-card",
+        isError && "border-destructive/30 bg-destructive/8",
+      )}
+    >
+      <div className="flex items-start gap-3">
+        <div
+          className={cn(
+            "roc-detail-icon",
+            isError ? "border-destructive/25 text-destructive" : "text-muted-foreground",
+          )}
+        >
+          <ActivityIcon className="size-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="roc-section-label">{isError ? "Error" : "Status"}</div>
+          <div className={cn("roc-detail-title", isError && "text-destructive")}>{title}</div>
+          {summary ? (
+            <p className={cn("roc-detail-summary", isError && "text-destructive/80")}>{summary}</p>
+          ) : null}
+        </div>
+      </div>
+      {message.text?.trim() || message.fields?.length ? (
+        <div className="roc-detail-body">
+          {message.text?.trim() ? (
+            <p className={cn("text-sm leading-6 whitespace-pre-wrap", isError ? "text-destructive" : "text-foreground/88")}>
+              {message.text}
+            </p>
+          ) : null}
+          {message.fields?.length ? <FieldList fields={message.fields} /> : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function InfoBlock({ message }: { message: OutputBlock }) {
+  const title = message.title?.trim() || "Context note";
+  const summary = message.summary?.trim() || null;
+
+  return (
+    <section className="roc-detail-card">
+      <div className="flex items-start gap-3">
+        <div className="roc-detail-icon">
+          <InfoIcon className="size-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="roc-section-label">Context</div>
+          <div className="roc-detail-title">{title}</div>
+          {summary ? <p className="roc-detail-summary">{summary}</p> : null}
+        </div>
+      </div>
+      {message.text?.trim() || message.fields?.length ? (
+        <div className="roc-detail-body">
+          {message.text?.trim() ? (
+            <StructuredText value={message.text} className="text-muted-foreground" />
+          ) : null}
+          {message.fields?.length ? <FieldList fields={message.fields} /> : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function ToolBlock({ message, active }: { message: OutputBlock; active: boolean }) {
+  const displaySummary = message.display?.summary?.trim() || null;
+  const summary =
+    displaySummary ||
+    message.summary?.trim() ||
+    message.detail?.trim() ||
+    message.text?.trim() ||
+    null;
+  const toolTitle =
+    message.display?.header?.trim() ||
+    message.title?.trim() ||
+    message.name?.trim() ||
+    message.kind;
+  const displayFields = message.display?.fields?.length ? message.display.fields : undefined;
+  const fields = displayFields ?? message.fields;
+  const previewText = message.display?.preview?.text?.trim() || message.preview?.trim() || null;
+  const previewKind = message.display?.preview?.kind?.trim() || null;
+  const previewTruncated = Boolean(message.display?.preview?.truncated);
+  const hasStructuredObject =
+    message.structured !== null &&
+    message.structured !== undefined &&
+    typeof message.structured === "object";
+
+  return (
+    <DisclosureCard
+      icon={<WrenchIcon className="size-4" />}
+      label="Tool"
+      title={toolTitle}
+      summary={summary}
+      defaultExpanded={active}
+    >
+      <div className="grid gap-3">
+        {message.tool_call_id || message.stage_id ? (
+          <div className="roc-message-meta-group">
+            {message.tool_call_id ? <span className="roc-meta-badge">tool {message.tool_call_id}</span> : null}
+            {message.stage_id ? <span className="roc-meta-badge">stage {message.stage_id}</span> : null}
+          </div>
+        ) : null}
+        {fields?.length ? <FieldList fields={fields} /> : null}
+        {!fields?.length && message.detail?.trim() ? (
+          <StructuredText value={message.detail} className="text-muted-foreground" />
+        ) : null}
+        {previewText ? (
+          <div className="grid gap-1.5">
+            <div className="roc-section-label">
+              {previewKind === "diff" ? "Preview" : previewKind === "code" ? "Output" : "Detail"}
+            </div>
+            <StructuredText value={previewText} className="text-muted-foreground" />
+            {previewTruncated ? (
+              <p className="text-[11px] leading-5 text-muted-foreground">Preview truncated.</p>
+            ) : null}
+          </div>
+        ) : null}
+        {hasStructuredObject ? (
+          <div className="grid gap-1.5">
+            <div className="roc-section-label">Structured</div>
+            <StructuredDataView value={message.structured} emptyLabel="No structured tool detail." />
+          </div>
+        ) : null}
+      </div>
+    </DisclosureCard>
   );
 }
 
@@ -171,22 +403,22 @@ export function MessageCard({
     );
   }
 
-  // Reasoning blocks get a special collapsible treatment
   if (message.kind === "reasoning") {
-    if (!message.text.trim()) {
-      return null;
-    }
+    if (!message.text.trim()) return null;
     return <ReasoningBlock text={message.text} />;
   }
 
-  // Status messages (including errors)
   if (message.kind === "status") {
     return <StatusBlock message={message} />;
   }
 
-  // Tool blocks get a compact collapsible
   if (message.kind === "tool") {
-    return <ToolBlock message={message} />;
+    return (
+      <ToolBlock
+        message={message}
+        active={Boolean(activeToolCallId && message.tool_call_id === activeToolCallId)}
+      />
+    );
   }
 
   if (message.kind === "multimodal_info") {
@@ -195,58 +427,114 @@ export function MessageCard({
 
   const role = message.role ?? "assistant";
   const isUser = role === "user";
+  const roleLabel = isUser ? "You" : "ROCode";
+  const clock = formatClock(message.ts);
+  const summary = readableSummary(message);
+  const active =
+    Boolean(activeStageId && message.stage_id === activeStageId) ||
+    Boolean(activeToolCallId && message.tool_call_id === activeToolCallId);
 
   return (
     <article
-      className={cn(
-        "group/message",
-        highlighted && "ring-2 ring-primary/30 ring-offset-2 ring-offset-background rounded-xl",
-        activeStageId && message.stage_id === activeStageId && "ring-2 ring-amber-500/30 ring-offset-2 ring-offset-background rounded-xl",
-      )}
+      className={cn("grid gap-1.5", isUser && "justify-items-end")}
       data-testid="message-card"
       data-feed-id={message.feedId}
       data-block-id={message.id}
       data-stage-id={message.stage_id}
       data-kind={message.kind}
     >
-      <Message from={isUser ? "user" : "assistant"}>
-        <MessageContent>
-          {/* Main content with Streamdown markdown rendering */}
+      <div className={cn("w-full", isUser ? "max-w-[82%]" : "max-w-full")}>
+        <section
+          className="roc-message-card p-3.5 md:p-4"
+          data-tone={isUser ? "user" : "assistant"}
+          data-highlighted={highlighted ? "true" : "false"}
+          data-active={active ? "true" : "false"}
+        >
+          <div className="roc-message-meta-row">
+            <div className="roc-message-meta-group">
+              <span className="roc-section-label">{roleLabel}</span>
+              {clock ? <span className="roc-meta-badge">{clock}</span> : null}
+            </div>
+            {message.stage_id || message.tool_call_id ? (
+              <div className="roc-message-meta-group">
+                {message.stage_id ? (
+                  <MetaActionButton onClick={() => onNavigateStage(message.stage_id!)}>
+                    stage {message.stage_id}
+                  </MetaActionButton>
+                ) : null}
+                {message.tool_call_id ? <span className="roc-meta-badge">tool {message.tool_call_id}</span> : null}
+              </div>
+            ) : null}
+          </div>
+
+          {message.title?.trim() && message.title.trim() !== message.text.trim() ? (
+            <div className="roc-message-title">
+              {message.title.trim()}
+            </div>
+          ) : null}
+
           {message.text ? (
-            <MessageResponse>{message.text}</MessageResponse>
+            <MessageResponse
+              className={cn(
+                "roc-markdown-flow roc-message-body size-full",
+                isUser ? "[&_p]:text-foreground" : "[&_p]:text-foreground/92",
+              )}
+            >
+              {message.text}
+            </MessageResponse>
           ) : null}
 
-          {/* Fields */}
           {message.fields?.length ? (
-            <dl className="mt-3 grid gap-1.5 text-sm">
-              {message.fields.map((field, index) => (
-                <div
-                  key={`${message.feedId}-field-${index}`}
-                  className="grid grid-cols-[100px_1fr] gap-3 py-1.5 border-b border-border/30 last:border-0"
-                >
-                  <dt className="font-medium text-muted-foreground text-xs">{field.label ?? "Field"}</dt>
-                  <dd className="text-foreground text-xs">{String(field.value ?? "")}</dd>
-                </div>
-              ))}
-            </dl>
+            <div className="mt-4">
+              <FieldList fields={message.fields} />
+            </div>
           ) : null}
-        </MessageContent>
 
-        {/* Toolbar — only for assistant messages with content */}
-        {!isUser && message.text ? (
-          <MessageToolbar>
-            <MessageActions>
-              <MessageAction
-                tooltip={copied ? "Copied!" : "Copy"}
-                onClick={handleCopy}
-                label={copied ? "Copied" : "Copy message"}
-              >
-                {copied ? <CheckIcon className="size-4" /> : <CopyIcon className="size-4" />}
-              </MessageAction>
-            </MessageActions>
-          </MessageToolbar>
-        ) : null}
-      </Message>
+          {!isUser && message.text ? (
+            <div className="roc-message-footer">
+              <div className="min-w-0 flex-1">
+                {summary ? <p className="roc-message-summary">{summary}</p> : null}
+              </div>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="roc-action-compact h-7 w-7 rounded-full text-muted-foreground hover:text-foreground"
+                      title={copied ? "Copied" : "Copy message"}
+                      onClick={handleCopy}
+                    >
+                      {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
+                      <span className="sr-only">{copied ? "Copied" : "Copy message"}</span>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    {copied ? "Copied" : "Copy message"}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+          ) : null}
+        </section>
+      </div>
+      {!isUser && message.child_session_id ? (
+        <div className="pl-1">
+          <MetaActionButton
+            onClick={() =>
+              onNavigateChildSession(message.child_session_id!, {
+                stageId: message.stage_id ?? null,
+                toolCallId: message.tool_call_id ?? null,
+                label: message.title || message.stage || message.child_session_id,
+              })
+            }
+          >
+            <SparklesIcon className="mr-1 size-3.5" />
+            Open child session {message.title || message.child_session_id}
+          </MetaActionButton>
+        </div>
+      ) : null}
     </article>
   );
 }

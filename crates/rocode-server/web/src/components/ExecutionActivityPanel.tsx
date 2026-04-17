@@ -174,7 +174,9 @@ function ExecutionNodeTree({
     <div className="pl-3 border-l-2 border-border/50">
       <div className="flex items-center gap-2">
         <button
-          className={cn("flex items-center gap-2 px-2 py-1.5 rounded-lg border-0 bg-transparent text-foreground cursor-pointer text-sm w-full text-left hover:bg-accent", stageClass === "active" && "bg-primary/15 font-semibold", stageClass === "stage-preview" && "bg-amber-100/40 dark:bg-amber-900/20", stageClass === "stage-active" && "bg-primary/8")}
+          data-active={stageClass === "active" ? "true" : "false"}
+          data-preview={stageClass === "stage-preview" ? "true" : stageClass === "stage-active" ? "true" : "false"}
+          className={cn("roc-rail-item flex w-full items-center gap-2 text-sm", stageClass === "active" && "font-semibold")}
           type="button"
           onClick={() => onSelectExecution(node.id)}
         >
@@ -184,7 +186,7 @@ function ExecutionNodeTree({
         </button>
         {jumpTarget ? (
           <button
-            className="text-xs text-primary underline underline-offset-2 cursor-pointer hover:text-primary/80 border-0 bg-transparent"
+            className="roc-rail-link"
             type="button"
             onClick={() => onJumpToConversation(jumpTarget)}
           >
@@ -236,19 +238,26 @@ export function ExecutionActivityPanel({
     setPageDraft(String(activity.activityPage));
   }, [activity.activityPage]);
 
-  const actionButtonClass =
-    "roc-action min-h-[36px] px-4 text-sm cursor-pointer transition-colors";
+  const actionButtonClass = "roc-action roc-action-pill";
+  const compactActionButtonClass = "roc-action roc-action-compact";
+  const sideSectionClass = "roc-rail-section";
+  const sideItemCardClass = "roc-rail-item grid gap-1 bg-card/45";
+  const formFieldClass = "roc-form-field";
+  const formLabelClass = "roc-form-label";
+  const formSelectClass = "roc-form-select";
+  const formInputClass = "roc-form-control";
   const recentSkillRecords =
     activity.sessionInsights?.memory?.recent_session_records.filter(
       (item) => item.linked_skill_name || item.derived_skill_name,
     ) ?? [];
 
   return (
-    <div className="roc-panel p-5 grid gap-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Scheduler</p>
-          <h3>Execution + Activity</h3>
+    <div className="roc-panel roc-rail-panel p-5">
+      <div className="roc-rail-header">
+        <div className="roc-rail-headline">
+          <p className="roc-section-label">Scheduler</p>
+          <h3 className="roc-rail-title">Execution + Activity</h3>
+          <p className="roc-rail-description">Authority-backed topology, stage runtime, and recent event flow for the current session.</p>
         </div>
         <button
           className={actionButtonClass}
@@ -268,7 +277,7 @@ export function ExecutionActivityPanel({
 
       {activity.executionTopology ? (
         <>
-          <div className="flex flex-wrap gap-2">
+          <div className="roc-rail-meta-list">
             <span className="roc-pill px-3 py-1.5 text-xs">active {activity.executionTopology.active_count}</span>
             <span className="roc-pill px-3 py-1.5 text-xs">running {activity.executionTopology.running_count}</span>
             <span className="roc-pill px-3 py-1.5 text-xs">waiting {activity.executionTopology.waiting_count}</span>
@@ -281,9 +290,9 @@ export function ExecutionActivityPanel({
           </p>
           {activity.sessionUsage ? (
             <div className="grid gap-3 md:grid-cols-2">
-              <div className="roc-subpanel p-4 grid gap-2 bg-background/55">
-                <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Session Usage</p>
-                <div className="flex flex-wrap gap-2">
+              <div className={sideSectionClass}>
+                <p className="roc-section-label">Session Usage</p>
+                <div className="roc-rail-meta-list">
                   <span className="roc-pill px-3 py-1.5 text-xs">input {activity.sessionUsage.input_tokens}</span>
                   <span className="roc-pill px-3 py-1.5 text-xs">output {activity.sessionUsage.output_tokens}</span>
                   <span className="roc-pill px-3 py-1.5 text-xs">reasoning {activity.sessionUsage.reasoning_tokens}</span>
@@ -292,18 +301,18 @@ export function ExecutionActivityPanel({
                 </div>
                 <p className="text-sm text-muted-foreground leading-relaxed">Total cost {formatMoney(activity.sessionUsage.total_cost)}</p>
               </div>
-              <div className="roc-subpanel p-4 grid gap-2 bg-background/55">
-                <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Active Stage</p>
+              <div className={sideSectionClass}>
+                <p className="roc-section-label">Active Stage</p>
                 {activity.activeStageSummary ? (
                   <>
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="roc-rail-meta-list items-center">
                       <strong>{activity.activeStageSummary.stage_name}</strong>
                       <span className="roc-pill px-3 py-1 text-xs">{activity.activeStageSummary.status}</span>
                       {activity.sessionRuntime?.active_stage_count ? (
                         <span className="roc-pill px-3 py-1 text-xs">active {activity.sessionRuntime.active_stage_count}</span>
                       ) : null}
                     </div>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="roc-rail-meta-list">
                       {typeof activity.activeStageSummary.prompt_tokens === "number" ? (
                         <span className="roc-pill px-3 py-1 text-xs">in {activity.activeStageSummary.prompt_tokens}</span>
                       ) : null}
@@ -337,17 +346,17 @@ export function ExecutionActivityPanel({
             </div>
           ) : null}
           {activity.sessionMemory ? (
-            <div className="roc-subpanel p-4 grid gap-3 bg-background/55">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Memory Runtime</p>
-                  <h4>{activity.sessionMemory.workspace_mode} workspace explain</h4>
+            <div className={sideSectionClass}>
+              <div className="roc-rail-section-header">
+                <div className="roc-rail-section-copy">
+                  <p className="roc-section-label">Memory Runtime</p>
+                  <h4 className="roc-rail-section-title">{activity.sessionMemory.workspace_mode} workspace explain</h4>
                 </div>
                 <span className="roc-pill px-3 py-1.5 text-xs">
                   snapshot {activity.sessionMemory.frozen_snapshot_items}
                 </span>
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="roc-rail-meta-list">
                 <span className="roc-pill px-3 py-1.5 text-xs">prefetch {activity.sessionMemory.last_prefetch_items}</span>
                 <span className="roc-pill px-3 py-1.5 text-xs">rule hits {activity.sessionMemory.recent_rule_hits.length}</span>
                 <span className="roc-pill px-3 py-1.5 text-xs">session writes {activity.sessionMemory.candidate_count + activity.sessionMemory.validated_count + activity.sessionMemory.rejected_count}</span>
@@ -383,8 +392,8 @@ export function ExecutionActivityPanel({
               </div>
               {recentSkillRecords.length ? (
                 <div className="grid gap-2">
-                  <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Recent Skill-Linked Memory</p>
-                  <div className="flex flex-wrap gap-2">
+                  <p className="roc-section-label">Recent Skill-Linked Memory</p>
+                  <div className="roc-rail-meta-list">
                     {recentSkillRecords.slice(0, 4).map((item) => (
                       <span key={memoryRecordIdValue(item.id)} className="roc-pill px-3 py-1.5 text-xs">
                         {item.linked_skill_name || item.derived_skill_name}: {item.title}
@@ -407,10 +416,10 @@ export function ExecutionActivityPanel({
               )}
               {activity.sessionMemory.recent_rule_hits.length ? (
                 <div className="grid gap-2">
-                  <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Recent Rule Hits</p>
+                  <p className="roc-section-label">Recent Rule Hits</p>
                   <div className="grid gap-2 md:grid-cols-2">
                     {activity.sessionMemory.recent_rule_hits.map((hit) => (
-                      <div key={hit.id} className="roc-item p-3 grid gap-1 bg-card/45">
+                      <div key={hit.id} className={sideItemCardClass}>
                         <div className="flex flex-wrap items-center gap-2">
                           <strong>{hit.hit_kind}</strong>
                           {hit.memory_id ? (
@@ -432,17 +441,20 @@ export function ExecutionActivityPanel({
           ) : null}
         </>
       ) : (
-        <p className="text-center text-muted-foreground py-4">No scheduler topology loaded yet.</p>
+        <div className="roc-rail-empty">
+          <div className="roc-section-label">Scheduler</div>
+          <p className="text-sm font-semibold tracking-tight text-foreground">No scheduler topology loaded yet.</p>
+        </div>
       )}
 
       {activity.stageSummaries.length ? (
-        <div className="roc-subpanel p-4 grid gap-3 bg-background/55">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Stage Summaries</p>
-              <h4>{activity.stageSummaries.length} stages</h4>
+        <div className={sideSectionClass}>
+          <div className="roc-rail-section-header">
+            <div className="roc-rail-section-copy">
+              <p className="roc-section-label">Stage Summaries</p>
+              <h4 className="roc-rail-section-title">{activity.stageSummaries.length} stages</h4>
             </div>
-            <p className="text-xs text-muted-foreground">
+            <p className="roc-rail-section-note">
               Authority-backed telemetry snapshot
             </p>
           </div>
@@ -455,10 +467,9 @@ export function ExecutionActivityPanel({
               return (
                 <div
                   key={stage.stage_id}
-                  className={cn(
-                    "roc-item p-4 grid gap-3 bg-card/45",
-                    isHighlighted ? "roc-item-active border-primary/40 bg-accent/45" : "hover:bg-accent/30",
-                  )}
+                  data-active={isHighlighted ? "true" : "false"}
+                  data-preview={previewStageId === stage.stage_id ? "true" : "false"}
+                  className="roc-rail-item grid gap-3 bg-card/45 p-4"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -479,14 +490,14 @@ export function ExecutionActivityPanel({
                     </div>
                     <div className="flex flex-wrap gap-2 shrink-0">
                       <button
-                        className="roc-action min-h-[32px] px-3 text-xs cursor-pointer transition-colors"
+                        className={compactActionButtonClass}
                         type="button"
                         onClick={() => onNavigateStage(stage.stage_id)}
                       >
                         Open
                       </button>
                       <button
-                        className="roc-action min-h-[32px] px-3 text-xs cursor-pointer transition-colors"
+                        className={compactActionButtonClass}
                         type="button"
                         onClick={() => activity.patchActivityFilters({ stageId: stage.stage_id })}
                       >
@@ -526,10 +537,11 @@ export function ExecutionActivityPanel({
         </div>
       ) : null}
 
-      <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-3 items-end">
-        <label>
-          <span>Stage</span>
+      <div className="grid gap-3 md:grid-cols-[repeat(3,minmax(0,1fr))_auto] md:items-end">
+        <label className={formFieldClass}>
+          <span className={formLabelClass}>Stage</span>
           <select
+            className={formSelectClass}
             value={activity.activityFilters.stageId}
             onChange={(event) => activity.patchActivityFilters({ stageId: event.target.value })}
           >
@@ -541,9 +553,10 @@ export function ExecutionActivityPanel({
             ))}
           </select>
         </label>
-        <label>
-          <span>Execution</span>
+        <label className={formFieldClass}>
+          <span className={formLabelClass}>Execution</span>
           <select
+            className={formSelectClass}
             value={activity.activityFilters.executionId}
             onChange={(event) => activity.patchActivityFilters({ executionId: event.target.value })}
           >
@@ -555,9 +568,10 @@ export function ExecutionActivityPanel({
             ))}
           </select>
         </label>
-        <label>
-          <span>Event Type</span>
+        <label className={formFieldClass}>
+          <span className={formLabelClass}>Event Type</span>
           <select
+            className={formSelectClass}
             value={activity.activityFilters.eventType}
             onChange={(event) => activity.patchActivityFilters({ eventType: event.target.value })}
           >
@@ -569,7 +583,7 @@ export function ExecutionActivityPanel({
             ))}
           </select>
         </label>
-        <button className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent" type="button" onClick={activity.clearActivityFilters}>
+        <button className={actionButtonClass} type="button" onClick={activity.clearActivityFilters}>
           Clear
         </button>
       </div>
@@ -588,21 +602,24 @@ export function ExecutionActivityPanel({
             />
           ))
         ) : (
-          <p className="text-center text-muted-foreground py-4">No active execution topology for this session.</p>
+          <div className="roc-rail-empty">
+            <div className="roc-section-label">Execution</div>
+            <p className="text-sm font-semibold tracking-tight text-foreground">No active execution topology for this session.</p>
+          </div>
         )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="rounded-xl border border-border bg-card/60 p-4 grid gap-3">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Execution</p>
-              <h4>{activity.selectedExecution?.label || "Select an execution node"}</h4>
+        <div className={sideSectionClass}>
+          <div className="roc-rail-section-header">
+            <div className="roc-rail-section-copy">
+              <p className="roc-section-label">Execution</p>
+              <h4 className="roc-rail-section-title">{activity.selectedExecution?.label || "Select an execution node"}</h4>
             </div>
             <div className="flex flex-wrap gap-2">
               {executionJump ? (
                 <button
-                  className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                  className={actionButtonClass}
                   type="button"
                   onClick={() => onJumpToConversation(executionJump)}
                 >
@@ -611,7 +628,7 @@ export function ExecutionActivityPanel({
               ) : null}
               {activity.selectedExecution ? (
                 <button
-                  className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                  className={actionButtonClass}
                   type="button"
                   disabled={!canCancelSelectedExecution}
                   onClick={() => void activity.cancelExecution(activity.selectedExecution!.id || undefined)}
@@ -629,21 +646,21 @@ export function ExecutionActivityPanel({
                 const selected = activity.selectedExecution;
                 return (
                   <>
-                    <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
-                      <div>
-                        <dt>ID</dt>
-                        <dd>{selected.id}</dd>
+                    <dl className="roc-structured-dl">
+                      <div className="roc-structured-row">
+                        <dt className="roc-structured-key">ID</dt>
+                        <dd className="text-sm text-foreground">{selected.id}</dd>
                       </div>
-                      <div>
-                        <dt>Status</dt>
-                        <dd>{selected.status}</dd>
+                      <div className="roc-structured-row">
+                        <dt className="roc-structured-key">Status</dt>
+                        <dd className="text-sm text-foreground">{selected.status}</dd>
                       </div>
-                      <div>
-                        <dt>Stage</dt>
-                        <dd>
+                      <div className="roc-structured-row">
+                        <dt className="roc-structured-key">Stage</dt>
+                        <dd className="text-sm text-foreground">
                           {selected.stage_id ? (
                             <button
-                              className="text-xs text-primary underline underline-offset-2 cursor-pointer hover:text-primary/80 border-0 bg-transparent p-0"
+                              className="roc-rail-link"
                               type="button"
                               onClick={() => onNavigateStage(selected.stage_id || "")}
                             >
@@ -654,14 +671,14 @@ export function ExecutionActivityPanel({
                           )}
                         </dd>
                       </div>
-                      <div>
-                        <dt>Updated</dt>
-                        <dd>{formatTs(selected.updated_at)}</dd>
+                      <div className="roc-structured-row">
+                        <dt className="roc-structured-key">Updated</dt>
+                        <dd className="text-sm text-foreground">{formatTs(selected.updated_at)}</dd>
                       </div>
                     </dl>
                     <div className="flex flex-wrap gap-2">
                       <button
-                        className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                        className={actionButtonClass}
                         type="button"
                         onClick={() => activity.patchActivityFilters({ executionId: selected.id || "" })}
                       >
@@ -669,7 +686,7 @@ export function ExecutionActivityPanel({
                       </button>
                       {selected.stage_id ? (
                         <button
-                          className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                          className={actionButtonClass}
                           type="button"
                           onClick={() =>
                             activity.patchActivityFilters({
@@ -690,19 +707,22 @@ export function ExecutionActivityPanel({
               })()}
             </>
           ) : (
-            <p className="text-center text-muted-foreground py-4">Choose a node to inspect its metadata and provenance.</p>
+            <div className="roc-rail-empty">
+              <div className="roc-section-label">Execution</div>
+              <p className="text-sm font-semibold tracking-tight text-foreground">Choose a node to inspect its metadata and provenance.</p>
+            </div>
           )}
         </div>
 
-        <div className="rounded-xl border border-border bg-card/60 p-4 grid gap-3">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Activity</p>
-              <h4>{activity.selectedEvent?.event_type || "Recent events"}</h4>
+        <div className={sideSectionClass}>
+          <div className="roc-rail-section-header">
+            <div className="roc-rail-section-copy">
+              <p className="roc-section-label">Activity</p>
+              <h4 className="roc-rail-section-title">{activity.selectedEvent?.event_type || "Recent events"}</h4>
             </div>
             {selectedEventJump ? (
               <button
-                className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                className={actionButtonClass}
                 type="button"
                 onClick={() => onJumpToConversation(selectedEventJump)}
               >
@@ -711,13 +731,13 @@ export function ExecutionActivityPanel({
             ) : null}
           </div>
           {activity.selectedEvent ? (
-            <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+            <dl className="roc-structured-dl">
               {activity.selectedEvent.stage_id ? (
-                <div>
-                  <dt>Stage</dt>
-                  <dd>
+                <div className="roc-structured-row">
+                  <dt className="roc-structured-key">Stage</dt>
+                  <dd className="text-sm text-foreground">
                     <button
-                      className="text-xs text-primary underline underline-offset-2 cursor-pointer hover:text-primary/80 border-0 bg-transparent p-0"
+                      className="roc-rail-link"
                       type="button"
                       onClick={() => onNavigateStage(activity.selectedEvent?.stage_id || "")}
                     >
@@ -727,11 +747,11 @@ export function ExecutionActivityPanel({
                 </div>
               ) : null}
               {selectedEventChildSessionId ? (
-                <div>
-                  <dt>Child Session</dt>
-                  <dd>
+                <div className="roc-structured-row">
+                  <dt className="roc-structured-key">Child Session</dt>
+                  <dd className="text-sm text-foreground">
                     <button
-                      className="text-xs text-primary underline underline-offset-2 cursor-pointer hover:text-primary/80 border-0 bg-transparent p-0"
+                      className="roc-rail-link"
                       type="button"
                       onClick={() =>
                         onNavigateChildSession(selectedEventChildSessionId, {
@@ -747,11 +767,11 @@ export function ExecutionActivityPanel({
                 </div>
               ) : null}
               {selectedEventJump?.toolCallId ? (
-                <div>
-                  <dt>Tool Call</dt>
-                  <dd>
+                <div className="roc-structured-row">
+                  <dt className="roc-structured-key">Tool Call</dt>
+                  <dd className="text-sm text-foreground">
                     <button
-                      className="text-xs text-primary underline underline-offset-2 cursor-pointer hover:text-primary/80 border-0 bg-transparent p-0"
+                      className="roc-rail-link"
                       type="button"
                       onClick={() =>
                         onNavigateToolCall(selectedEventJump.toolCallId!, {
@@ -772,7 +792,9 @@ export function ExecutionActivityPanel({
               activity.activityEvents.map((event, index) => (
                 <button
                   key={event.event_id || `${event.ts || "event"}:${event.event_type || index}`}
-                  className={cn("flex flex-col gap-1 px-3 py-2 rounded-lg border-0 bg-transparent text-foreground cursor-pointer text-sm text-left w-full hover:bg-accent", activity.selectedEventId === event.event_id ? "bg-primary/15 font-semibold" : previewStageId && event.stage_id === previewStageId ? "bg-amber-100/40 dark:bg-amber-900/20" : "")}
+                  data-active={activity.selectedEventId === event.event_id ? "true" : "false"}
+                  data-preview={previewStageId && event.stage_id === previewStageId ? "true" : "false"}
+                  className={cn("roc-rail-item flex w-full flex-col gap-1 text-sm", activity.selectedEventId === event.event_id && "font-semibold")}
                   type="button"
                   onClick={() => activity.setSelectedEventId(event.event_id || null)}
                 >
@@ -790,10 +812,13 @@ export function ExecutionActivityPanel({
                 </button>
               ))
             ) : (
-              <p className="text-center text-muted-foreground py-4">No recent activity events for this filter.</p>
+              <div className="roc-rail-empty">
+                <div className="roc-section-label">Activity</div>
+                <p className="text-sm font-semibold tracking-tight text-foreground">No recent activity events for this filter.</p>
+              </div>
             )}
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-background/60 px-3 py-2">
+          <div className="roc-rail-section grid gap-3 px-3 py-2">
             <p className="text-xs text-muted-foreground">
               {eventWindowLabel(
                 activity.activityPage,
@@ -804,7 +829,7 @@ export function ExecutionActivityPanel({
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <button
-                className="min-h-[32px] rounded-full px-3 border border-border bg-card/70 text-foreground text-xs inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                className={compactActionButtonClass}
                 type="button"
                 disabled={!activity.activityHasPreviousPage}
                 onClick={activity.firstActivityPage}
@@ -812,17 +837,17 @@ export function ExecutionActivityPanel({
                 First
               </button>
               <button
-                className="min-h-[32px] rounded-full px-3 border border-border bg-card/70 text-foreground text-xs inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                className={compactActionButtonClass}
                 type="button"
                 disabled={!activity.activityHasPreviousPage}
                 onClick={activity.previousActivityPage}
               >
                 Prev
               </button>
-              <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                <span>Page</span>
+              <label className="flex items-center gap-2">
+                <span className={formLabelClass}>Page</span>
                 <input
-                  className="h-8 w-16 rounded-md border border-input bg-transparent px-2 py-1 text-sm text-foreground"
+                  className={`${formInputClass} h-8 w-20 px-2.5 py-1.5`}
                   type="number"
                   min={1}
                   step={1}
@@ -837,7 +862,7 @@ export function ExecutionActivityPanel({
                 />
               </label>
               <button
-                className="min-h-[32px] rounded-full px-3 border border-border bg-card/70 text-foreground text-xs inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                className={compactActionButtonClass}
                 type="button"
                 onClick={() => {
                   const page = Number.parseInt(pageDraft, 10);
@@ -847,7 +872,7 @@ export function ExecutionActivityPanel({
                 Go
               </button>
               <button
-                className="min-h-[32px] rounded-full px-3 border border-border bg-card/70 text-foreground text-xs inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                className={compactActionButtonClass}
                 type="button"
                 disabled={!activity.activityHasNextPage}
                 onClick={activity.nextActivityPage}
@@ -861,7 +886,7 @@ export function ExecutionActivityPanel({
               <div className="flex flex-wrap gap-2">
                 {activity.selectedEvent.execution_id ? (
                   <button
-                    className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                    className={actionButtonClass}
                     type="button"
                     onClick={() =>
                       activity.patchActivityFilters({ executionId: activity.selectedEvent?.execution_id || "" })
@@ -872,7 +897,7 @@ export function ExecutionActivityPanel({
                 ) : null}
                 {activity.selectedEvent.stage_id ? (
                   <button
-                    className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                    className={actionButtonClass}
                     type="button"
                     onClick={() =>
                       activity.patchActivityFilters({ stageId: activity.selectedEvent?.stage_id || "" })
@@ -883,22 +908,22 @@ export function ExecutionActivityPanel({
                 ) : null}
                 {selectedEventChildSessionId ? (
                   <button
-                  className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
-                  type="button"
-                  onClick={() =>
-                    onNavigateChildSession(selectedEventChildSessionId, {
-                      stageId: activity.selectedEvent?.stage_id ?? null,
-                      toolCallId: selectedEventJump?.toolCallId ?? null,
-                      label: activity.selectedEvent?.event_type || selectedEventChildSessionId,
-                    })
-                  }
-                >
-                  Open Child Session
-                </button>
+                    className={actionButtonClass}
+                    type="button"
+                    onClick={() =>
+                      onNavigateChildSession(selectedEventChildSessionId, {
+                        stageId: activity.selectedEvent?.stage_id ?? null,
+                        toolCallId: selectedEventJump?.toolCallId ?? null,
+                        label: activity.selectedEvent?.event_type || selectedEventChildSessionId,
+                      })
+                    }
+                  >
+                    Open Child Session
+                  </button>
                 ) : null}
                 {selectedEventJump?.toolCallId ? (
                   <button
-                    className="min-h-[36px] rounded-full px-4 border border-border bg-card/70 text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px hover:bg-accent"
+                    className={actionButtonClass}
                     type="button"
                     onClick={() =>
                       onNavigateToolCall(selectedEventJump.toolCallId!, {

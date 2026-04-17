@@ -6,6 +6,19 @@ export interface OutputField {
   tone?: string;
 }
 
+export interface OutputPreview {
+  kind?: string;
+  text?: string;
+  truncated?: boolean;
+}
+
+export interface OutputDisplay {
+  header?: string;
+  summary?: string;
+  fields?: OutputField[];
+  preview?: OutputPreview | null;
+}
+
 export interface OutputBlock {
   kind: string;
   phase?: string;
@@ -48,6 +61,9 @@ export interface OutputBlock {
     fields?: Array<{ label?: string; value?: string; tone?: string }>;
     sections?: Array<{ title?: string; body?: string }>;
   } | null;
+  detail?: string;
+  display?: OutputDisplay | null;
+  structured?: unknown;
 }
 
 export interface MessagePartRecord {

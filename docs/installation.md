@@ -102,7 +102,7 @@ rocode version
 成功安装后输出类似：
 
 ```
-ROCode 2026.4.12
+ROCode 2026.4.17
 ```
 
 查看完整构建信息：
@@ -114,14 +114,14 @@ rocode info
 输出包括编译器版本、目标平台、构建配置和数据路径：
 
 ```
-ROCode 2026.4.12
+ROCode 2026.4.17
 
 Build Info:
   Compiler:   rustc 1.xx.x
   Profile:    release
   Target:     x86_64-unknown-linux-gnu
   Host:       x86_64-unknown-linux-gnu
-  Built at:   2026-04-12T...
+  Built at:   2026-04-17T...
 
 Paths:
   Data:       ~/.local/share/rocode

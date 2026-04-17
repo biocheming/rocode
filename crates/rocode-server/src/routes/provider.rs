@@ -129,6 +129,189 @@ pub struct ModelInfo {
     pub cost_per_million_input: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_per_million_output: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<ModelCapabilityInfo>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ModelCapabilityInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<bool>,
+    #[serde(default, skip_serializing_if = "ModelModalityInfo::is_empty")]
+    pub input: ModelModalityInfo,
+    #[serde(default, skip_serializing_if = "ModelModalityInfo::is_empty")]
+    pub output: ModelModalityInfo,
+}
+
+impl ModelCapabilityInfo {
+    fn is_empty(&self) -> bool {
+        self.attachment.is_none()
+            && self.tool_call.is_none()
+            && self.reasoning.is_none()
+            && self.temperature.is_none()
+            && self.input.is_empty()
+            && self.output.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ModelModalityInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pdf: Option<bool>,
+}
+
+impl ModelModalityInfo {
+    fn is_empty(&self) -> bool {
+        self.text.is_none()
+            && self.audio.is_none()
+            && self.image.is_none()
+            && self.video.is_none()
+            && self.pdf.is_none()
+    }
+}
+
+fn modality_contains(values: &[String], needle: &str) -> bool {
+    values.iter().any(|value| value == needle)
+}
+
+fn modality_info_from_values(values: Option<&[String]>, fallback_text: bool) -> ModelModalityInfo {
+    let Some(values) = values else {
+        return ModelModalityInfo {
+            text: fallback_text.then_some(true),
+            ..Default::default()
+        };
+    };
+
+    ModelModalityInfo {
+        text: Some(fallback_text || modality_contains(values, "text")),
+        audio: Some(modality_contains(values, "audio")),
+        image: Some(modality_contains(values, "image")),
+        video: Some(modality_contains(values, "video")),
+        pdf: Some(modality_contains(values, "pdf")),
+    }
+}
+
+fn capability_info_from_catalog(model: &ModelsDevInfo) -> Option<ModelCapabilityInfo> {
+    let input = modality_info_from_values(
+        model.modalities.as_ref().map(|modalities| modalities.input.as_ref()),
+        true,
+    );
+    let output = modality_info_from_values(
+        model.modalities.as_ref().map(|modalities| modalities.output.as_ref()),
+        true,
+    );
+    let capability = ModelCapabilityInfo {
+        attachment: Some(model.attachment),
+        tool_call: Some(model.tool_call),
+        reasoning: Some(model.reasoning),
+        temperature: Some(model.temperature),
+        input,
+        output,
+    };
+    (!capability.is_empty()).then_some(capability)
+}
+
+fn capability_info_from_runtime(model: &rocode_provider::ModelInfo) -> Option<ModelCapabilityInfo> {
+    let capability = ModelCapabilityInfo {
+        tool_call: Some(model.supports_tools),
+        input: ModelModalityInfo {
+            text: Some(true),
+            image: Some(model.supports_vision),
+            ..Default::default()
+        },
+        output: ModelModalityInfo {
+            text: Some(true),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    (!capability.is_empty()).then_some(capability)
+}
+
+fn capability_info_from_config(configured_model: &ModelConfig) -> Option<ModelCapabilityInfo> {
+    let input = modality_info_from_values(
+        configured_model
+            .modalities
+            .as_ref()
+            .and_then(|modalities| modalities.input.as_deref()),
+        false,
+    );
+    let output = modality_info_from_values(
+        configured_model
+            .modalities
+            .as_ref()
+            .and_then(|modalities| modalities.output.as_deref()),
+        false,
+    );
+    let capability = ModelCapabilityInfo {
+        attachment: configured_model.attachment,
+        tool_call: configured_model.tool_call,
+        reasoning: configured_model.reasoning,
+        temperature: configured_model.temperature,
+        input,
+        output,
+    };
+    (!capability.is_empty()).then_some(capability)
+}
+
+fn fill_missing_bool(target: &mut Option<bool>, incoming: Option<bool>) {
+    if target.is_none() {
+        *target = incoming;
+    }
+}
+
+fn override_bool(target: &mut Option<bool>, incoming: Option<bool>) {
+    if incoming.is_some() {
+        *target = incoming;
+    }
+}
+
+fn merge_fill_missing_modalities(existing: &mut ModelModalityInfo, incoming: &ModelModalityInfo) {
+    fill_missing_bool(&mut existing.text, incoming.text);
+    fill_missing_bool(&mut existing.audio, incoming.audio);
+    fill_missing_bool(&mut existing.image, incoming.image);
+    fill_missing_bool(&mut existing.video, incoming.video);
+    fill_missing_bool(&mut existing.pdf, incoming.pdf);
+}
+
+fn merge_override_modalities(existing: &mut ModelModalityInfo, incoming: &ModelModalityInfo) {
+    override_bool(&mut existing.text, incoming.text);
+    override_bool(&mut existing.audio, incoming.audio);
+    override_bool(&mut existing.image, incoming.image);
+    override_bool(&mut existing.video, incoming.video);
+    override_bool(&mut existing.pdf, incoming.pdf);
+}
+
+fn merge_fill_missing_capabilities(existing: &mut ModelCapabilityInfo, incoming: &ModelCapabilityInfo) {
+    fill_missing_bool(&mut existing.attachment, incoming.attachment);
+    fill_missing_bool(&mut existing.tool_call, incoming.tool_call);
+    fill_missing_bool(&mut existing.reasoning, incoming.reasoning);
+    fill_missing_bool(&mut existing.temperature, incoming.temperature);
+    merge_fill_missing_modalities(&mut existing.input, &incoming.input);
+    merge_fill_missing_modalities(&mut existing.output, &incoming.output);
+}
+
+fn merge_override_capabilities(existing: &mut ModelCapabilityInfo, incoming: &ModelCapabilityInfo) {
+    override_bool(&mut existing.attachment, incoming.attachment);
+    override_bool(&mut existing.tool_call, incoming.tool_call);
+    override_bool(&mut existing.reasoning, incoming.reasoning);
+    override_bool(&mut existing.temperature, incoming.temperature);
+    merge_override_modalities(&mut existing.input, &incoming.input);
+    merge_override_modalities(&mut existing.output, &incoming.output);
 }
 
 fn config_context_window(configured_model: &ModelConfig) -> Option<u64> {
@@ -167,6 +350,7 @@ pub(crate) fn catalog_model_info(
         max_output_tokens: Some(model.limit.output),
         cost_per_million_input: model.cost.as_ref().map(|cost| cost.input),
         cost_per_million_output: model.cost.as_ref().map(|cost| cost.output),
+        capabilities: capability_info_from_catalog(model),
     }
 }
 
@@ -183,6 +367,7 @@ pub(crate) fn runtime_model_info(
         max_output_tokens: Some(model.max_output_tokens),
         cost_per_million_input: Some(model.cost_per_million_input),
         cost_per_million_output: Some(model.cost_per_million_output),
+        capabilities: capability_info_from_runtime(model),
     }
 }
 
@@ -204,6 +389,7 @@ pub(crate) fn configured_model_info(
         max_output_tokens: config_max_output_tokens(configured_model),
         cost_per_million_input: config_input_price(configured_model),
         cost_per_million_output: config_output_price(configured_model),
+        capabilities: capability_info_from_config(configured_model),
     }
 }
 
@@ -226,6 +412,13 @@ fn merge_catalog_model_info(existing: &mut ModelInfo, incoming: ModelInfo) {
     if existing.cost_per_million_output.is_none() {
         existing.cost_per_million_output = incoming.cost_per_million_output;
     }
+    if let Some(incoming_capabilities) = incoming.capabilities {
+        if let Some(existing_capabilities) = existing.capabilities.as_mut() {
+            merge_fill_missing_capabilities(existing_capabilities, &incoming_capabilities);
+        } else {
+            existing.capabilities = Some(incoming_capabilities);
+        }
+    }
 }
 
 fn merge_runtime_model_info(existing: &mut ModelInfo, incoming: ModelInfo) {
@@ -245,6 +438,13 @@ fn merge_runtime_model_info(existing: &mut ModelInfo, incoming: ModelInfo) {
     if existing.cost_per_million_output.is_none() {
         existing.cost_per_million_output = incoming.cost_per_million_output;
     }
+    if let Some(incoming_capabilities) = incoming.capabilities {
+        if let Some(existing_capabilities) = existing.capabilities.as_mut() {
+            merge_fill_missing_capabilities(existing_capabilities, &incoming_capabilities);
+        } else {
+            existing.capabilities = Some(incoming_capabilities);
+        }
+    }
 }
 
 fn merge_config_model_info(existing: &mut ModelInfo, incoming: ModelInfo) {
@@ -263,6 +463,13 @@ fn merge_config_model_info(existing: &mut ModelInfo, incoming: ModelInfo) {
     }
     if incoming.cost_per_million_output.is_some() {
         existing.cost_per_million_output = incoming.cost_per_million_output;
+    }
+    if let Some(incoming_capabilities) = incoming.capabilities {
+        if let Some(existing_capabilities) = existing.capabilities.as_mut() {
+            merge_override_capabilities(existing_capabilities, &incoming_capabilities);
+        } else {
+            existing.capabilities = Some(incoming_capabilities);
+        }
     }
 }
 

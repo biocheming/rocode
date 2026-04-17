@@ -4,7 +4,7 @@
 
 ## 0. 版本
 
-- 当前版本：`v2026.4.12`
+- 当前版本：`v2026.4.17`
 - 当前 CLI 命令：`rocode`
 
 ## 1. 先选运行方式
@@ -133,6 +133,7 @@ ROCode 现在区分：
 - 当 session 正在运行时，普通输入不会插入当前 workflow 中间
 - 如果系统需要你回答，它应通过正式 question UI 发起
 - scheduler stage transcript 会被投影到主 session，而不是只藏在内部日志里
+- 当前 TUI 主会话视图已经迁入 reratui reactive session subtree，滚动、reasoning、sidebar 与消息流体验已按新渲染边界收口
 
 ### 4.2 Slash Command
 
@@ -159,9 +160,11 @@ ROCode 现在区分：
 当前 Web 以当前 workspace 为中心：
 
 - 左侧是当前 workspace 的 session tree
+- sidebar 已支持多选与删除确认，适合批量清理 session
 - settings 会显示 workspace mode / workspace root
 - skills 面板会显示 managed skill、distribution、artifact cache、lifecycle、timeline
 - isolated workspace 模式下会明确提示“当前不会继承 global config”
+- composer 现在默认单行起始、最多扩展到 10 行，并提供按 provider 分组、可过滤的 model picker
 
 如果你在 settings 里改的是全局配置，Web 也会提示这些修改是否影响当前 sandbox runtime。
 

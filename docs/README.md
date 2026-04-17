@@ -1,6 +1,6 @@
 # ROCode Docs
 
-文档基线：`v2026.4.12`（更新日期：`2026-04-12`）
+文档基线：`v2026.4.17`（更新日期：`2026-04-17`）
 
 This directory contains product-facing examples and design references for ROCode features.
 
@@ -8,6 +8,8 @@ This directory contains product-facing examples and design references for ROCode
 
 - `README.md`
   - 项目总览、启动方式、当前公开能力范围
+- `../CHANGELOG.md`
+  - 当前版本发布说明与最近一次交付摘要
 - `USER_GUIDE.md`
   - 面向使用者的命令、scheduler、TUI 交互说明
 - `docs/examples/scheduler/README.md`
@@ -37,10 +39,10 @@ This directory contains product-facing examples and design references for ROCode
 - `plans/`
   - Design notes and architecture plans
   - Use these as implementation references, not as runtime config files
-- `docs/plans/README.md`
-  - 架构计划入口
-- `docs/plans/rocode-app-blueprint.md`
-  - `rocode-app` desktop-first 原生壳蓝图
+- `docs/plans/tui-reratui-migration.md`
+  - TUI 从 ratatui 迁移到 reratui 的完整阶段计划与收口状态
+- `docs/plans/web-aesthetic-remediation.md`
+  - Web 审美债治理、Round 进度与当前 UI 语法说明
 
 ## Context Docs Entry
 
@@ -95,6 +97,7 @@ The current schema IDs are:
 - `/` 是正式 Web 入口
 - `/web/*` 是正式静态资源前缀
 - `crates/rocode-server/web-ui` 已从主线构建中清理
+- 当前 Web 交互已包含可过滤 model picker、批量 session 删除确认和更高密度的消息阅读节奏
 
 ## Skill Hub CLI
 

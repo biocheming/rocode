@@ -18,7 +18,6 @@ import {
   Trash2Icon,
   RefreshCwIcon,
   LoaderCircleIcon,
-  CheckCircleIcon,
   XCircleIcon,
   FolderIcon,
 } from "lucide-react";
@@ -33,11 +32,6 @@ interface WorktreeInfo {
 
 interface WorktreePanelProps {
   className?: string;
-}
-
-function formatDate(timestamp: number): string {
-  const date = new Date(timestamp * 1000);
-  return date.toLocaleDateString() + " " + date.toLocaleTimeString();
 }
 
 export function WorktreePanel({ className }: WorktreePanelProps) {
@@ -104,15 +98,18 @@ export function WorktreePanel({ className }: WorktreePanelProps) {
   );
 
   return (
-    <div className={cn("flex flex-col h-full overflow-hidden", className)}>
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-muted/30">
-        <div className="flex items-center gap-2">
-          <GitBranchIcon className="size-4" />
-          <h3 className="font-medium text-sm">Worktrees</h3>
-          <span className="text-xs text-muted-foreground">({worktrees.length})</span>
+    <div className={cn("roc-panel roc-rail-panel h-full overflow-hidden p-5", className)}>
+      <div className="roc-rail-header">
+        <div className="roc-rail-headline">
+          <p className="roc-section-label">Workspace</p>
+          <div className="flex items-center gap-2">
+            <GitBranchIcon className="size-4 text-muted-foreground" />
+            <h3 className="roc-rail-title">Worktrees</h3>
+            <span className="roc-pill px-3 py-1.5 text-xs">{worktrees.length}</span>
+          </div>
+          <p className="roc-rail-description">Branch sandboxes for parallel experiments without disturbing the main repository.</p>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="roc-rail-toolbar">
           <Button
             variant="ghost"
             size="icon-sm"
@@ -131,32 +128,33 @@ export function WorktreePanel({ className }: WorktreePanelProps) {
                 <PlusIcon className="size-4" />
               </Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="gap-5">
               <DialogHeader>
                 <DialogTitle>Create Worktree</DialogTitle>
                 <DialogDescription>
-                  Create a new Git worktree for experimenting with branches
-                  without affecting the main repository.
+                  Create a Git worktree for branch-specific experiments without touching the main checkout.
                 </DialogDescription>
               </DialogHeader>
-              <div className="grid gap-4 py-4">
-                <div className="grid gap-2">
-                  <label htmlFor="branch" className="text-sm font-medium">
+              <div className="roc-form-surface py-0">
+                <div className="roc-form-field">
+                  <label htmlFor="branch" className="roc-form-label">
                     Branch name (optional)
                   </label>
                   <Input
                     id="branch"
+                    className="h-9 rounded-lg"
                     placeholder="feature/experiment"
                     value={newBranchName}
                     onChange={(e) => setNewBranchName(e.target.value)}
                   />
                 </div>
-                <div className="grid gap-2">
-                  <label htmlFor="path" className="text-sm font-medium">
+                <div className="roc-form-field">
+                  <label htmlFor="path" className="roc-form-label">
                     Path (optional)
                   </label>
                   <Input
                     id="path"
+                    className="h-9 rounded-lg"
                     placeholder="repo-feature-1"
                     value={newPath}
                     onChange={(e) => setNewPath(e.target.value)}
@@ -186,37 +184,56 @@ export function WorktreePanel({ className }: WorktreePanelProps) {
         </div>
       </div>
 
-      {/* Error message */}
       {error && (
-        <div className="mx-3 mt-3 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
-          {error}
+        <div className="roc-state-card" data-tone="danger">
+          <div className="flex items-start gap-3">
+            <div className="roc-status-orb shrink-0" data-tone="danger">
+              <XCircleIcon className="size-4" />
+            </div>
+            <div className="min-w-0">
+              <div className="roc-section-label">Worktree Error</div>
+              <p className="mt-1 text-sm leading-6 text-foreground/88">{error}</p>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* Worktree list */}
-      <div className="flex-1 overflow-auto p-3 space-y-2">
+      <div className="flex-1 overflow-auto space-y-3 pr-1">
         {loading ? (
-          <div className="flex items-center justify-center py-8 text-muted-foreground">
-            <LoaderCircleIcon className="size-5 animate-spin mr-2" />
-            Loading worktrees...
+          <div className="roc-state-card flex items-center gap-3" data-tone="loading">
+            <div className="roc-status-orb shrink-0" data-tone="loading">
+              <LoaderCircleIcon className="size-4 animate-spin" />
+            </div>
+            <div className="min-w-0">
+              <div className="roc-section-label">Loading</div>
+              <p className="mt-1 text-sm leading-6 text-foreground/86">Loading worktrees and branch sandboxes…</p>
+            </div>
           </div>
         ) : worktrees.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-8 text-muted-foreground text-sm">
-            <GitBranchIcon className="size-8 opacity-30 mb-2" />
-            <p>No worktrees</p>
-            <p className="text-xs mt-1">Create a worktree to experiment safely</p>
+          <div className="roc-rail-empty py-8" data-tone="muted">
+            <div className="roc-status-orb">
+              <GitBranchIcon className="size-4" />
+            </div>
+            <div className="space-y-1">
+              <p className="text-sm font-semibold tracking-tight text-foreground">No worktrees yet</p>
+              <p className="text-sm leading-6 text-muted-foreground">Create a worktree to branch safely without disturbing the main repository.</p>
+            </div>
           </div>
         ) : (
           worktrees.map((wt) => (
             <div
               key={wt.path}
-              className="rounded-xl border bg-card/80 p-4 grid gap-3 hover:bg-card transition-colors"
+              className="roc-rail-section roc-surface-interactive"
             >
-              {/* Header */}
-              <div className="flex items-center justify-between">
+              <div className="roc-rail-section-header">
                 <div className="flex items-center gap-2 min-w-0">
                   <FolderIcon className="size-4 flex-shrink-0 text-muted-foreground" />
-                  <span className="font-medium text-sm truncate">{wt.branch}</span>
+                  <div className="roc-rail-section-copy">
+                    <span className="roc-rail-section-title truncate">{wt.branch}</span>
+                    <p className="roc-rail-section-note font-mono truncate" title={wt.path}>
+                      {wt.path}
+                    </p>
+                  </div>
                 </div>
                 <Button
                   variant="ghost"
@@ -227,14 +244,8 @@ export function WorktreePanel({ className }: WorktreePanelProps) {
                   <Trash2Icon className="size-4" />
                 </Button>
               </div>
-
-              {/* Path */}
-              <p className="text-xs text-muted-foreground font-mono truncate" title={wt.path}>
-                {wt.path}
-              </p>
-
-              {/* Head */}
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <div className="roc-rail-meta-list">
+                <span className="roc-pill px-3 py-1.5 text-xs">sandbox</span>
                 <span className="font-mono px-1.5 py-0.5 rounded bg-muted">
                   {wt.head.slice(0, 7)}
                 </span>

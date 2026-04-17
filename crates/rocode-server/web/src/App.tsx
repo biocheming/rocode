@@ -13,6 +13,7 @@ import {
 import { ComposerSection } from "./components/ComposerSection";
 import { ConversationFeedPanel } from "./components/ConversationFeedPanel";
 import { InteractionOverlays } from "./components/InteractionOverlays";
+import { SessionHeader } from "./components/SessionHeader";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { WorkspacePanel } from "./components/WorkspacePanel";
 import { cn } from "./lib/utils";
@@ -90,10 +91,12 @@ import {
   workspaceRootFromContext,
 } from "./lib/workspace";
 import {
+  AlertTriangleIcon,
   FolderTreeIcon,
   PanelLeftIcon,
   PanelLeftCloseIcon,
   SettingsIcon,
+  XIcon,
 } from "lucide-react";
 
 type ThemeId = "daylight" | "sunset" | "graphite" | "midnight";
@@ -148,17 +151,60 @@ function formatCompactTokenCount(value?: number | null) {
 
 function formatCompactMoney(value?: number | null) {
   if (typeof value !== "number" || !Number.isFinite(value)) return "$0";
-  if (value >= 1) return `$${value.toFixed(2)}`;
-  if (value >= 0.01) return `$${value.toFixed(3)}`;
-  return `$${value.toFixed(4)}`;
+  return `$${value.toFixed(2)}`;
 }
 
 function formatCompactPrice(value?: number | null) {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  if (value >= 10) return value.toFixed(0);
-  if (value >= 1) return value.toFixed(2);
-  if (value >= 0.1) return value.toFixed(3);
-  return value.toFixed(4);
+  return value.toFixed(2);
+}
+
+function formatModeDisplayLabel(
+  selectedMode: string,
+  session: SessionRecord | null,
+  modes: ExecutionMode[],
+) {
+  const explicit = selectedMode.trim();
+  if (explicit) {
+    const matched = modes.find((mode) => modeKey(mode) === explicit);
+    return matched?.name || explicit.split(":").pop() || explicit;
+  }
+
+  const hinted =
+    session?.hints?.resolved_scheduler_profile?.trim() ||
+    session?.hints?.scheduler_profile?.trim() ||
+    session?.hints?.agent?.trim() ||
+    "";
+  return hinted || "Auto";
+}
+
+function formatModelDisplayLabel(
+  activeProviderModel:
+    | {
+        id: string;
+        name?: string;
+        fullId: string;
+        providerId: string;
+      }
+    | null,
+  activeModelRef: string | null,
+) {
+  if (activeProviderModel?.name?.trim()) return activeProviderModel.name.trim();
+  if (activeProviderModel?.id?.trim()) return activeProviderModel.id.trim();
+  if (!activeModelRef) return "Auto";
+  const trimmed = activeModelRef.trim();
+  return trimmed.split("/").pop() || trimmed;
+}
+
+function compactWorkspaceLabel(path: string | null | undefined, basePath: string | null | undefined) {
+  const normalizedPath = path?.trim();
+  if (!normalizedPath) return "";
+  const normalizedBase = basePath?.trim();
+  if (!normalizedBase || normalizedBase === normalizedPath) return normalizedPath;
+  if (normalizedPath.startsWith(`${normalizedBase}/`)) {
+    return normalizedPath.slice(normalizedBase.length + 1);
+  }
+  return normalizedPath;
 }
 
 function resolveActiveModelRef(session: SessionRecord | null, selectedModel: string) {
@@ -325,9 +371,17 @@ function promptPreviewText(content: string, parts: PromptPart[]): string {
 
 function normalizeBlockText(block: OutputBlock): string {
   if (block.text?.trim()) return block.text;
+  if (block.display?.summary?.trim()) return block.display.summary;
+  if (block.detail?.trim()) return block.detail;
   if (block.summary?.trim()) return block.summary;
   if (block.preview?.trim()) return block.preview;
   if (block.body?.trim()) return block.body;
+  if (block.display?.preview?.text?.trim()) return block.display.preview.text;
+  if (block.display?.fields?.length) {
+    return block.display.fields
+      .map((field) => `${field.label ?? "Field"}: ${String(field.value ?? "")}`)
+      .join("\n");
+  }
   if (block.fields?.length) {
     return block.fields
       .map((field) => `${field.label ?? "Field"}: ${String(field.value ?? "")}`)
@@ -679,6 +733,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [statusLine, setStatusLine] = useState("ready");
   const [banner, setBanner] = useState<string | null>(null);
+  const [deletingSessions, setDeletingSessions] = useState(false);
   const [question, setQuestion] = useState<QuestionInteractionRecord | null>(null);
   const [permission, setPermission] = useState<PermissionInteractionRecord | null>(null);
   const [questionAnswers, setQuestionAnswers] = useState<Record<number, QuestionAnswerValue>>({});
@@ -800,6 +855,18 @@ export default function App() {
     onInfo: setBanner,
   });
   const sessionUsage = executionActivity.sessionUsage ?? currentSession?.telemetry?.usage ?? null;
+  const composerContextTokens = useMemo(() => {
+    if (typeof executionActivity.activeStageSummary?.estimated_context_tokens === "number") {
+      return executionActivity.activeStageSummary.estimated_context_tokens;
+    }
+    for (let index = executionActivity.stageSummaries.length - 1; index >= 0; index -= 1) {
+      const estimate = executionActivity.stageSummaries[index]?.estimated_context_tokens;
+      if (typeof estimate === "number" && Number.isFinite(estimate) && estimate > 0) {
+        return estimate;
+      }
+    }
+    return null;
+  }, [executionActivity.activeStageSummary?.estimated_context_tokens, executionActivity.stageSummaries]);
   const usedContextTokens = useMemo(() => {
     if (!sessionUsage) return 0;
     return (
@@ -853,6 +920,44 @@ export default function App() {
     }
     return detail.join(" | ");
   }, [activeProviderModel, sessionUsage?.total_cost, usedContextTokens]);
+  const modeDisplayLabel = useMemo(
+    () => formatModeDisplayLabel(selectedMode, currentSession, modes),
+    [currentSession, modes, selectedMode],
+  );
+  const modelDisplayLabel = useMemo(
+    () => formatModelDisplayLabel(activeProviderModel, activeModelRef),
+    [activeModelRef, activeProviderModel],
+  );
+  const workspacePathLabel = useMemo(
+    () =>
+      compactWorkspaceLabel(
+        currentSession?.directory || currentWorkspaceSummary?.path || null,
+        serviceRootPath || workspaceRootPath,
+      ),
+    [
+      currentSession?.directory,
+      currentWorkspaceSummary?.path,
+      serviceRootPath,
+      workspaceRootPath,
+    ],
+  );
+  const sessionSubtitle = useMemo(() => {
+    const parts: string[] = [];
+    if (currentSession?.pending_command_invocation?.title?.trim()) {
+      parts.push(currentSession.pending_command_invocation.title.trim());
+    } else if (currentSession?.pending_command_invocation?.command?.trim()) {
+      parts.push(currentSession.pending_command_invocation.command.trim());
+    }
+    if (currentSession?.telemetry?.last_run_status?.trim()) {
+      parts.push(currentSession.telemetry.last_run_status.trim());
+    }
+
+    return parts.join(" · ") || null;
+  }, [
+    currentSession?.pending_command_invocation?.command,
+    currentSession?.pending_command_invocation?.title,
+    currentSession?.telemetry?.last_run_status,
+  ]);
   const refreshExecutionActivity = executionActivity.refreshExecutionActivity;
   const conversationJump = useConversationJump({
     messages,
@@ -1455,6 +1560,54 @@ export default function App() {
     }
   };
 
+  const deleteSelectedSessions = async (sessionIds: string[]) => {
+    const uniqueIds = Array.from(new Set(sessionIds.map((id) => id.trim()).filter(Boolean)));
+    if (uniqueIds.length === 0 || deletingSessions) return;
+
+    const sessionById = new Map(sessions.map((session) => [session.id, session]));
+    const selectedSet = new Set(uniqueIds);
+    const deleteRoots = uniqueIds.filter((sessionId) => {
+      let cursor = sessionById.get(sessionId)?.parent_id ?? null;
+      while (cursor) {
+        if (selectedSet.has(cursor)) return false;
+        cursor = sessionById.get(cursor)?.parent_id ?? null;
+      }
+      return true;
+    });
+
+    if (deleteRoots.length === 0) return;
+
+    setDeletingSessions(true);
+    setBanner(null);
+
+    try {
+      for (const sessionId of deleteRoots) {
+        await api(`/session/${sessionId}`, { method: "DELETE" });
+      }
+
+      const sessionData = await fetchSessions();
+      setSessions(sessionData);
+
+      const currentStillExists =
+        selectedSessionId && sessionData.some((session) => session.id === selectedSessionId);
+      if (!currentStillExists) {
+        const workspacePath = currentWorkspaceSummary?.path ?? currentWorkspacePath;
+        const workspaceSessions = sessionData
+          .filter((session) => session.directory?.trim() === workspacePath)
+          .sort((left, right) => (right.updated ?? 0) - (left.updated ?? 0));
+        const fallback =
+          workspaceSessions.find((session) => !session.parent_id) ?? workspaceSessions[0] ?? null;
+        setSelectedSessionId(fallback?.id ?? null);
+      }
+
+      setBanner(`Deleted ${deleteRoots.length} session${deleteRoots.length === 1 ? "" : "s"}.`);
+    } catch (error) {
+      setBanner(`Failed to delete sessions: ${formatError(error)}`);
+    } finally {
+      setDeletingSessions(false);
+    }
+  };
+
   const submitPrompt = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const content = composer.trim();
@@ -1982,10 +2135,9 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-dvh flex-col bg-background text-foreground font-sans overflow-hidden">
-      {/* Header — minimal, refined */}
-      <header className="relative flex items-center justify-between border-b border-border px-6 py-3 shrink-0">
-        <div className="flex items-center gap-3">
+    <div className="roc-app-shell flex h-dvh flex-col overflow-hidden bg-background text-foreground font-sans">
+      <header className="roc-appbar relative flex shrink-0 items-center justify-between px-4 py-2.5 md:px-5">
+        <div className="flex min-w-0 items-center gap-3">
           <button
             onClick={() => setLeftSidebarOpen((value) => !value)}
             className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
@@ -1997,33 +2149,22 @@ export default function App() {
               <PanelLeftIcon className="size-4" />
             )}
           </button>
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-sm font-semibold tracking-tight text-foreground/80 truncate max-w-[10rem]">
-              {currentWorkspaceSummary?.label ?? "ROCode"}
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+              ROCode
             </span>
-            {currentSession?.title ? (
-              <>
-                <span className="text-xs text-muted-foreground/60">/</span>
-                <span className="text-xs text-muted-foreground truncate max-w-[12rem]">
-                  {currentSession.title}
-                </span>
-              </>
+            {!leftSidebarOpen && currentWorkspaceSummary?.label ? (
+              <span className="roc-chip-subtle max-w-[12rem] truncate md:max-w-[18rem]">
+                {currentWorkspaceSummary.label}
+              </span>
             ) : null}
           </div>
         </div>
         <div className="flex items-center gap-1.5">
-          {headerContextSummary ? (
-            <div
-              className="hidden lg:flex items-center rounded-full border border-border/60 bg-muted/40 px-3 py-1 text-[11px] font-medium tracking-tight text-muted-foreground"
-              title={headerContextTitle || headerContextSummary}
-            >
-              {headerContextSummary}
-            </div>
-          ) : null}
           {!rightSidebarOpen && selectedWorkspaceFilename ? (
             <button
               onClick={() => setRightSidebarOpen(true)}
-              className="hidden md:flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              className="hidden items-center gap-1.5 rounded-full border border-border/55 bg-background/72 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:flex"
               title="Show workspace"
             >
               <span className="truncate max-w-[10rem]">{selectedWorkspaceFilename}</span>
@@ -2046,10 +2187,9 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main: workspace + chat */}
       <div className="flex flex-1 overflow-hidden">
         {leftSidebarOpen && (
-          <div className="w-[22rem] shrink-0 overflow-hidden border-r border-border bg-sidebar">
+          <div className="w-[19.5rem] shrink-0 overflow-hidden border-r border-border/65 bg-sidebar/92 backdrop-blur-xl">
             <SessionSidebar
               workspaces={workspaceSummaries}
               currentWorkspacePath={currentWorkspaceSummary?.path ?? null}
@@ -2058,6 +2198,7 @@ export default function App() {
               currentWorkspaceMode={resolvedWorkspaceMode}
               sessionTree={sessionTree}
               selectedSessionId={selectedSessionId}
+              deletingSessions={deletingSessions}
               onCreateProject={(input) => {
                 void createProject(input);
               }}
@@ -2066,22 +2207,62 @@ export default function App() {
                   directory: (currentWorkspaceSummary?.path ?? serviceRootPath) || undefined,
                 });
               }}
+              onDeleteSessions={(sessionIds) => {
+                void deleteSelectedSessions(sessionIds);
+              }}
               onSelectWorkspace={selectWorkspace}
               onSelectSession={(sessionId) => setSelectedSessionId(sessionId)}
             />
           </div>
         )}
 
-        {/* Center: chat area */}
-        <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
           {banner ? (
-            <div className="px-4 pt-2">
-              <div className="rounded-lg border border-amber-300/70 bg-amber-50/60 px-3 py-2 text-xs text-amber-900 dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-200">
-                {banner}
+            <div className="mx-auto w-full max-w-[76rem] px-4 pt-3 md:px-5">
+              <div className="roc-banner flex items-start gap-3" data-tone="warning">
+                <div className="roc-status-orb mt-0.5 shrink-0" data-tone="loading">
+                  <AlertTriangleIcon className="size-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="roc-section-label">Attention</div>
+                  <p className="mt-1 text-sm leading-6 text-current/92">{banner}</p>
+                </div>
+                <button
+                  type="button"
+                  className="roc-banner-dismiss shrink-0"
+                  aria-label="Dismiss status message"
+                  onClick={() => setBanner(null)}
+                >
+                  <XIcon className="size-4" />
+                </button>
               </div>
             </div>
           ) : null}
+
+          <div className="mx-auto w-full max-w-[76rem] px-4 pt-4 pb-1 md:px-5">
+            <SessionHeader
+              title={currentSession?.title || currentWorkspaceSummary?.label || "New Session"}
+              subtitle={sessionSubtitle}
+              pathLabel={workspacePathLabel || null}
+              workspaceLabel={currentWorkspaceSummary?.label || null}
+              contextSummary={headerContextSummary || null}
+              contextTitle={headerContextTitle || null}
+              modeLabel={modeDisplayLabel}
+              modelLabel={modelDisplayLabel}
+              activeStageId={schedulerNavigation.previewStageId ?? schedulerNavigation.activeStageId}
+              currentWorkspaceReference={selectedWorkspaceReference}
+              breadcrumbs={schedulerNavigation.sessionBreadcrumbs}
+              provenance={schedulerNavigation.currentBreadcrumbProvenance}
+              onNavigateStage={schedulerNavigation.navigateToStage}
+              onNavigateBreadcrumb={schedulerNavigation.navigateToBreadcrumb}
+              onNavigateProvenanceSession={schedulerNavigation.navigateToProvenanceSession}
+              onNavigateProvenanceStage={schedulerNavigation.navigateToProvenanceStage}
+              onNavigateProvenanceToolCall={schedulerNavigation.navigateToProvenanceToolCall}
+            />
+          </div>
+
           <ConversationFeedPanel
+            sessionId={selectedSessionId}
             feedRef={feedRef}
             historyLoading={historyLoading}
             messages={messages}
@@ -2092,7 +2273,8 @@ export default function App() {
             onNavigateStage={schedulerNavigation.navigateToStage}
             onNavigateChildSession={schedulerNavigation.navigateToChildSession}
           />
-          <div className="px-6 pb-5 pt-2 shrink-0">
+
+          <div className="shrink-0 px-4 pb-5 pt-2 md:px-5">
             <ComposerSection
               composer={composer}
               composerDragActive={composerDragActive}
@@ -2104,7 +2286,7 @@ export default function App() {
               modeOptions={settingsModeOptions}
               selectedMode={selectedMode}
               onModeChange={setSelectedMode}
-              modelOptions={modelOptions}
+              providers={providers}
               selectedModel={selectedModel}
               onModelChange={setSelectedModel}
               references={composerReferences}
@@ -2113,6 +2295,11 @@ export default function App() {
               selectedAttachment={selectedAttachment}
               selectedWorkspacePath={selectedWorkspacePath}
               workspaceRootPath={workspaceBasePath || workspaceRootPath}
+              contextTokensUsed={composerContextTokens}
+              contextTokensLimit={activeProviderModel?.context_window ?? null}
+              sessionCost={sessionUsage?.total_cost ?? null}
+              inputPricePerMillion={activeProviderModel?.cost_per_million_input ?? null}
+              outputPricePerMillion={activeProviderModel?.cost_per_million_output ?? null}
               activeStageId={schedulerNavigation.activeStageId}
               provenance={schedulerNavigation.currentBreadcrumbProvenance}
               onPreviewStage={schedulerNavigation.previewStage}
@@ -2152,7 +2339,7 @@ export default function App() {
         </div>
 
         {rightSidebarOpen && (
-          <div className="w-80 shrink-0 overflow-hidden border-l border-border bg-sidebar">
+          <div className="w-80 shrink-0 overflow-hidden border-l border-border/65 bg-sidebar/92 backdrop-blur-xl">
             <WorkspacePanel
               apiJson={apiJson}
               workspaceLoading={workspaceLoading}

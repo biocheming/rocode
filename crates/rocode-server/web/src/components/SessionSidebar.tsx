@@ -1,11 +1,15 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
+  CheckSquare2,
   ChevronDown,
   ChevronRight,
   FolderPlus,
   FolderTree,
   Layers2,
   Search,
+  Square,
+  Trash2,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,7 +22,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import type { SessionTreeNode, WorkspaceSummary } from "@/lib/sidebar";
-import { cn } from "@/lib/utils";
 
 interface SessionSidebarProps {
   workspaces: WorkspaceSummary[];
@@ -28,89 +31,142 @@ interface SessionSidebarProps {
   currentWorkspaceMode: "shared" | "isolated" | null;
   sessionTree: SessionTreeNode[];
   selectedSessionId: string | null;
+  deletingSessions?: boolean;
   onCreateProject: (input: { path: string; title?: string }) => void;
   onCreateSession: () => void;
+  onDeleteSessions: (sessionIds: string[]) => void;
   onSelectWorkspace: (workspacePath: string) => void;
   onSelectSession: (sessionId: string) => void;
+}
+
+function flattenSessionIds(nodes: SessionTreeNode[]): string[] {
+  return nodes.flatMap((node) => [node.id, ...flattenSessionIds(node.children)]);
+}
+
+function workspaceModeLabel(mode: "shared" | "isolated" | null) {
+  if (mode === "shared") return "Shared root";
+  if (mode === "isolated") return "Isolated root";
+  return null;
+}
+
+function workspacePathHint(path: string | null, rootPath: string | null) {
+  const normalizedPath = path?.trim();
+  if (!normalizedPath) return null;
+  const normalizedRoot = rootPath?.trim();
+  if (!normalizedRoot || normalizedRoot === normalizedPath) return normalizedPath;
+  if (normalizedPath.startsWith(`${normalizedRoot}/`)) {
+    return normalizedPath.slice(normalizedRoot.length + 1);
+  }
+  return normalizedPath;
+}
+
+function compactPathLabel(path: string | null) {
+  const normalizedPath = path?.trim();
+  if (!normalizedPath) return null;
+  const segments = normalizedPath.split("/").filter(Boolean);
+  return segments[segments.length - 1] || normalizedPath;
 }
 
 function SessionTreeList({
   nodes,
   selectedSessionId,
+  selectionMode,
+  selectedIds,
   collapsedIds,
   depth = 0,
   onToggleCollapsed,
+  onToggleSelected,
   onSelectSession,
 }: {
   nodes: SessionTreeNode[];
   selectedSessionId: string | null;
+  selectionMode: boolean;
+  selectedIds: Set<string>;
   collapsedIds: Set<string>;
   depth?: number;
   onToggleCollapsed: (sessionId: string) => void;
+  onToggleSelected: (sessionId: string) => void;
   onSelectSession: (sessionId: string) => void;
 }) {
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-1">
       {nodes.map((node) => (
-        <div key={node.id} className="flex flex-col gap-2">
-          <div
-            className={cn(
-              "px-0 transition-colors border-l-2",
-              node.id === selectedSessionId
-                ? "bg-accent/40 border-l-primary"
-                : "hover:bg-accent/20 border-l-transparent",
-            )}
-            style={{ marginLeft: `${depth * 16}px` }}
-          >
-            <div className="flex items-start gap-1.5 px-3 py-3">
+        <div key={node.id} className="flex flex-col gap-1">
+          <div className="flex items-start gap-1.5" style={{ paddingLeft: `${depth * 12}px` }}>
+            <div className="flex w-5 shrink-0 justify-center pt-2.5">
               {node.children.length > 0 ? (
                 <button
                   type="button"
-                  className="mt-0.5 rounded-md p-0.5 text-muted-foreground hover:bg-muted"
+                  className="roc-sidebar-toggle"
                   aria-label={collapsedIds.has(node.id) ? "Expand session" : "Collapse session"}
                   onClick={() => onToggleCollapsed(node.id)}
                 >
                   {collapsedIds.has(node.id) ? (
-                    <ChevronRight className="h-3.5 w-3.5" />
+                    <ChevronRight className="h-3 w-3" />
                   ) : (
-                    <ChevronDown className="h-3.5 w-3.5" />
+                    <ChevronDown className="h-3 w-3" />
                   )}
                 </button>
               ) : (
-                <span className="w-5 shrink-0" />
+                <span className="mt-1.5 h-1 w-1 rounded-full bg-border/80" />
               )}
-
-              <button
-                type="button"
-                data-testid="session-item"
-                data-session-id={node.id}
-                className="min-w-0 flex-1 text-left"
-                onClick={() => onSelectSession(node.id)}
-              >
-                <div className="truncate text-sm font-semibold text-foreground">
-                  {node.title || "(untitled)"}
-                </div>
-                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-                  <span className="rounded-full bg-muted px-2 py-0.5">
-                    {depth === 0 ? "root" : `branch ${depth}`}
-                  </span>
-                  {node.children.length > 0 ? (
-                    <span className="rounded-full bg-muted/60 px-2 py-0.5">
-                      {node.children.length} children
-                    </span>
-                  ) : null}
-                </div>
-              </button>
             </div>
+
+            <button
+              type="button"
+              data-testid="session-item"
+              data-session-id={node.id}
+              data-active={node.id === selectedSessionId ? "true" : "false"}
+              className="roc-sidebar-item min-w-0 flex-1"
+              onClick={() => {
+                if (selectionMode) {
+                  onToggleSelected(node.id);
+                  return;
+                }
+                onSelectSession(node.id);
+              }}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[13px] font-semibold leading-5 tracking-tight text-foreground">
+                    {node.title || "(untitled)"}
+                  </div>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+                    <span>{depth === 0 ? "Root" : `Thread ${depth}`}</span>
+                    {node.children.length > 0 ? <span>{node.children.length} follow-up</span> : null}
+                  </div>
+                </div>
+                {selectionMode ? (
+                  <button
+                    type="button"
+                    className="roc-sidebar-toggle mt-0.5 shrink-0"
+                    aria-label={selectedIds.has(node.id) ? "Deselect session" : "Select session"}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onToggleSelected(node.id);
+                    }}
+                  >
+                    {selectedIds.has(node.id) ? (
+                      <CheckSquare2 className="h-3.5 w-3.5" />
+                    ) : (
+                      <Square className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                ) : null}
+              </div>
+            </button>
           </div>
 
           {node.children.length > 0 && !collapsedIds.has(node.id) ? (
             <SessionTreeList
               nodes={node.children}
               selectedSessionId={selectedSessionId}
+              selectionMode={selectionMode}
+              selectedIds={selectedIds}
               collapsedIds={collapsedIds}
               depth={depth + 1}
               onToggleCollapsed={onToggleCollapsed}
+              onToggleSelected={onToggleSelected}
               onSelectSession={onSelectSession}
             />
           ) : null}
@@ -128,8 +184,10 @@ export function SessionSidebar({
   currentWorkspaceMode,
   sessionTree,
   selectedSessionId,
+  deletingSessions = false,
   onCreateProject,
   onCreateSession,
+  onDeleteSessions,
   onSelectWorkspace,
   onSelectSession,
 }: SessionSidebarProps) {
@@ -138,6 +196,12 @@ export function SessionSidebar({
   const [newProjectPath, setNewProjectPath] = useState("");
   const [newProjectTitle, setNewProjectTitle] = useState("");
   const [collapsedSessionIds, setCollapsedSessionIds] = useState<Set<string>>(new Set());
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(new Set());
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const workspaceMode = workspaceModeLabel(currentWorkspaceMode);
+  const currentWorkspaceHint = workspacePathHint(currentWorkspacePath, currentWorkspaceRootPath);
+  const currentWorkspaceShort = compactPathLabel(currentWorkspacePath) || currentWorkspaceLabel;
 
   const filteredWorkspaces = useMemo(() => {
     const query = workspaceQuery.trim().toLowerCase();
@@ -148,6 +212,39 @@ export function SessionSidebar({
         workspace.path.toLowerCase().includes(query),
     );
   }, [workspaceQuery, workspaces]);
+
+  const visibleSessionCount = useMemo(() => {
+    const walk = (nodes: SessionTreeNode[]) =>
+      nodes.reduce((total, node) => total + 1 + walk(node.children), 0);
+    return walk(sessionTree);
+  }, [sessionTree]);
+  const showProjectsSection = workspaces.length > 1 || workspaceQuery.trim().length > 0;
+  const validSessionIds = useMemo(() => new Set(flattenSessionIds(sessionTree)), [sessionTree]);
+  const selectedCount = useMemo(
+    () => Array.from(selectedSessionIds).filter((id) => validSessionIds.has(id)).length,
+    [selectedSessionIds, validSessionIds],
+  );
+
+  useEffect(() => {
+    setSelectedSessionIds((current) => {
+      const next = new Set(Array.from(current).filter((id) => validSessionIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [validSessionIds]);
+
+  useEffect(() => {
+    if (sessionTree.length > 0) return;
+    setSelectionMode(false);
+    setSelectedSessionIds(new Set());
+    setDeleteConfirmOpen(false);
+  }, [sessionTree.length]);
+
+  useEffect(() => {
+    if (!deletingSessions) return;
+    setDeleteConfirmOpen(false);
+    setSelectionMode(false);
+    setSelectedSessionIds(new Set());
+  }, [deletingSessions]);
 
   const submitCreateProject = () => {
     const path = newProjectPath.trim();
@@ -173,18 +270,66 @@ export function SessionSidebar({
     });
   };
 
+  const toggleSelected = (sessionId: string) => {
+    setSelectedSessionIds((current) => {
+      const next = new Set(current);
+      if (next.has(sessionId)) {
+        next.delete(sessionId);
+      } else {
+        next.add(sessionId);
+      }
+      return next;
+    });
+  };
+
+  const exitSelectionMode = () => {
+    setSelectionMode(false);
+    setSelectedSessionIds(new Set());
+    setDeleteConfirmOpen(false);
+  };
+
+  const startSelectionMode = () => {
+    setSelectionMode(true);
+    setSelectedSessionIds((current) => {
+      if (selectedSessionId && validSessionIds.has(selectedSessionId)) {
+        const next = new Set(current);
+        next.add(selectedSessionId);
+        return next;
+      }
+      return current;
+    });
+  };
+
+  const confirmDeleteSelection = () => {
+    const ids = Array.from(selectedSessionIds).filter((id) => validSessionIds.has(id));
+    if (ids.length === 0) return;
+    onDeleteSessions(ids);
+  };
+
   return (
-    <aside
-      className="h-full overflow-y-auto border-r border-border bg-sidebar"
-      data-testid="session-sidebar"
-    >
-      <div className="space-y-6">
-        <div className="px-4 py-3 border-b border-border">
-          <div className="grid grid-cols-1 gap-2">
+    <aside className="roc-sidebar-shell flex h-full flex-col" data-testid="session-sidebar">
+      <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-3 py-3">
+        <section className="px-1 pt-1 pb-2">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+                Workspace
+              </p>
+              <h2 className="mt-1.5 text-base font-semibold tracking-tight text-foreground">
+                {currentWorkspaceShort || "Choose a workspace"}
+              </h2>
+              {currentWorkspaceHint && currentWorkspaceHint !== currentWorkspaceShort ? (
+                <p className="mt-1 truncate text-[11px] text-muted-foreground">{currentWorkspaceHint}</p>
+              ) : null}
+            </div>
+            {workspaceMode ? <span className="roc-pill-outline whitespace-nowrap">{workspaceMode}</span> : null}
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-2">
             <Button
               variant="outline"
               size="sm"
-              className="h-9 rounded-xl"
+              className="justify-start"
               type="button"
               data-testid="project-new"
               onClick={() => setCreateOpen(true)}
@@ -193,9 +338,9 @@ export function SessionSidebar({
               New Project
             </Button>
             <Button
-              variant="ghost"
+              variant="default"
               size="sm"
-              className="h-9 rounded-xl"
+              className="justify-start"
               type="button"
               data-testid="session-new"
               onClick={onCreateSession}
@@ -205,135 +350,175 @@ export function SessionSidebar({
               New Session
             </Button>
           </div>
-        </div>
-        <div className="flex flex-col px-4">
-          <div className="mb-3 space-y-3">
+        </section>
+
+        {showProjectsSection ? (
+          <section className="roc-sidebar-section p-3">
+            <div className="mb-2 space-y-2 px-1">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                    Projects
+                  </p>
+                </div>
+                <span className="roc-sidebar-meta">{filteredWorkspaces.length}</span>
+              </div>
+
+              {workspaces.length > 1 ? (
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={workspaceQuery}
+                    onChange={(event) => setWorkspaceQuery(event.target.value)}
+                    placeholder="Search projects"
+                    className="pl-9"
+                  />
+                </div>
+              ) : null}
+            </div>
+
+            <div className="min-h-0 overflow-y-auto pr-1">
+              <div className="flex flex-col gap-2">
+                {filteredWorkspaces.length === 0 ? (
+                  <div className="rounded-[20px] border border-dashed border-border/45 bg-muted/28 px-3.5 py-4 text-sm text-muted-foreground">
+                    {workspaces.length === 0 ? "No workspaces yet." : "No matching workspaces."}
+                  </div>
+                ) : (
+                  filteredWorkspaces.map((workspace) => (
+                    <button
+                      key={workspace.path}
+                      type="button"
+                      data-active={workspace.path === currentWorkspacePath ? "true" : "false"}
+                      className="roc-sidebar-item"
+                      title={workspace.path}
+                      onClick={() => onSelectWorkspace(workspace.path)}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="flex size-8 shrink-0 items-center justify-center rounded-2xl border border-border/50 bg-background/80">
+                          <FolderTree className="h-4 w-4 text-muted-foreground" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-semibold tracking-tight text-foreground">
+                            {workspace.label}
+                          </div>
+                          {workspacePathHint(workspace.path, currentWorkspaceRootPath) &&
+                          workspacePathHint(workspace.path, currentWorkspaceRootPath) !== workspace.label ? (
+                            <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                              {workspacePathHint(workspace.path, currentWorkspaceRootPath)}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                        <span className="roc-sidebar-meta">
+                          {workspace.sessionCount} sessions
+                        </span>
+                      </div>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          </section>
+        ) : null}
+
+        <section className="roc-sidebar-section flex min-h-0 flex-1 flex-col p-3" data-testid="session-list">
+          <div className="mb-1.5 px-1">
             <div className="flex items-center justify-between gap-2">
               <div>
-                <p className="text-[11px] font-medium tracking-[0.18em] text-muted-foreground uppercase">
-                  Workspaces
+                <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                  Sessions
                 </p>
-                <p className="text-xs text-muted-foreground">Switch projects under the current service root.</p>
               </div>
-              <span className="roc-pill px-2">
-                {filteredWorkspaces.length}
-              </span>
-            </div>
-
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={workspaceQuery}
-                onChange={(event) => setWorkspaceQuery(event.target.value)}
-                placeholder="Search workspaces"
-                className="h-9 rounded-lg border-border/60 bg-background pl-8 text-sm"
-              />
-            </div>
-          </div>
-
-          <div className="min-h-0 overflow-y-auto pr-1">
-            <div className="flex flex-col gap-2">
-              {filteredWorkspaces.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-border/40 bg-muted/30 px-3 py-4 text-sm text-muted-foreground">
-                  {workspaces.length === 0 ? "No workspaces yet." : "No matching workspaces."}
-                </div>
-              ) : (
-                filteredWorkspaces.map((workspace) => (
+              <div className="flex items-center gap-1.5">
+                {selectionMode ? (
+                  <>
+                    <button
+                      type="button"
+                      className="roc-sidebar-toggle"
+                      title="Cancel session selection"
+                      onClick={exitSelectionMode}
+                      aria-label="Cancel session selection"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      className="roc-sidebar-toggle"
+                      title={selectedCount > 0 ? `Delete ${selectedCount} selected session${selectedCount === 1 ? "" : "s"}` : "Select sessions to delete"}
+                      onClick={() => setDeleteConfirmOpen(true)}
+                      disabled={selectedCount === 0 || deletingSessions}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </>
+                ) : (
                   <button
-                    key={workspace.path}
                     type="button"
-                    className={cn(
-                      "px-3 py-2.5 text-left transition-colors border-l-2",
-                      workspace.path === currentWorkspacePath
-                        ? "bg-accent/40 border-l-primary"
-                        : "hover:bg-accent/20 border-l-transparent",
-                    )}
-                    onClick={() => onSelectWorkspace(workspace.path)}
+                    className="roc-sidebar-toggle"
+                    title="Select sessions"
+                    onClick={startSelectionMode}
+                    disabled={visibleSessionCount === 0}
                   >
-                    <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-                      <FolderTree className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span className="truncate">{workspace.label}</span>
-                    </div>
-                    <div className="mt-1 truncate text-[11px] text-muted-foreground">
-                      {workspace.path}
-                    </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-                      <span className="roc-pill px-2 py-0.5">
-                        {workspace.sessionCount} sessions
-                      </span>
-                      <span className="roc-pill px-2 py-0.5">
-                        {workspace.rootCount} roots
-                      </span>
-                    </div>
+                    <CheckSquare2 className="h-3.5 w-3.5" />
                   </button>
-                ))
-              )}
+                )}
+                <span className="roc-sidebar-meta">
+                  {selectionMode ? `${selectedCount} selected` : visibleSessionCount}
+                </span>
+              </div>
             </div>
-          </div>
-        </div>
-        <div
-          className="flex flex-col px-4"
-          data-testid="session-list"
-        >
-          <div className="mb-3">
-            <div>
-              <p className="text-[11px] font-medium tracking-[0.18em] text-muted-foreground uppercase">
-                Session Tree
-              </p>
-              <p className="truncate text-xs text-muted-foreground">
-                {currentWorkspaceLabel ? `${currentWorkspaceLabel} workspace` : "Select a workspace"}
-              </p>
-            </div>
-          </div>
-
-          <div className="mb-3 rounded-lg border border-dashed border-border/40 bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
-            This tree only shows sessions under the selected workspace.
           </div>
 
           <div className="min-h-0 overflow-y-auto pr-1">
             {sessionTree.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-border/40 bg-muted/30 px-3 py-4 text-sm text-muted-foreground">
+              <div className="rounded-[20px] border border-dashed border-border/45 bg-muted/28 px-3.5 py-4 text-sm text-muted-foreground">
                 No sessions in this workspace yet.
               </div>
             ) : (
               <SessionTreeList
                 nodes={sessionTree}
                 selectedSessionId={selectedSessionId}
+                selectionMode={selectionMode}
+                selectedIds={selectedSessionIds}
                 collapsedIds={collapsedSessionIds}
                 onToggleCollapsed={toggleCollapsed}
+                onToggleSelected={toggleSelected}
                 onSelectSession={onSelectSession}
               />
             )}
           </div>
-        </div>
+        </section>
       </div>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent>
+        <DialogContent className="gap-5">
           <DialogHeader>
             <DialogTitle>Create Project</DialogTitle>
             <DialogDescription>
               Create a new workspace folder and open its root session in the left sidebar.
             </DialogDescription>
           </DialogHeader>
-          <div className="grid gap-4 py-2">
-            <div className="grid gap-2">
-              <label htmlFor="project-path" className="text-sm font-medium">
+          <div className="roc-form-surface py-0">
+            <div className="roc-form-field">
+              <label htmlFor="project-path" className="roc-form-label">
                 Workspace Folder
               </label>
               <Input
                 id="project-path"
+                className="h-9 rounded-lg"
                 placeholder="projects/new-project"
                 value={newProjectPath}
                 onChange={(event) => setNewProjectPath(event.target.value)}
               />
             </div>
-            <div className="grid gap-2">
-              <label htmlFor="project-title" className="text-sm font-medium">
+            <div className="roc-form-field">
+              <label htmlFor="project-title" className="roc-form-label">
                 Root Session Title
               </label>
               <Input
                 id="project-title"
+                className="h-9 rounded-lg"
                 placeholder="Natural Products Workspace"
                 value={newProjectTitle}
                 onChange={(event) => setNewProjectTitle(event.target.value)}
@@ -346,6 +531,47 @@ export function SessionSidebar({
             </Button>
             <Button onClick={submitCreateProject} disabled={!newProjectPath.trim()}>
               Create Project
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <DialogContent className="gap-5">
+          <DialogHeader>
+            <DialogTitle>Delete Selected Sessions</DialogTitle>
+            <DialogDescription>
+              {selectedCount === 1
+                ? "The selected session will be deleted permanently."
+                : `The ${selectedCount} selected sessions will be deleted permanently.`}
+              {" "}
+              If a parent session is included, its follow-up threads are removed with it.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="roc-form-surface py-0">
+            <div className="roc-form-field gap-2">
+              <div className="text-sm font-medium text-foreground">
+                {selectedCount} session{selectedCount === 1 ? "" : "s"} selected
+              </div>
+              <p className="text-sm leading-6 text-muted-foreground">
+                This action cannot be undone. The current selection mode will close after deletion.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDeleteConfirmOpen(false)}
+              disabled={deletingSessions}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={confirmDeleteSelection}
+              disabled={selectedCount === 0 || deletingSessions}
+            >
+              {deletingSessions ? "Deleting…" : `Delete ${selectedCount}`}
             </Button>
           </DialogFooter>
         </DialogContent>

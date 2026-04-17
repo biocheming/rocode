@@ -1489,16 +1489,23 @@ export function SettingsDrawer({
     onConnectQueryChange(provider.id);
   };
   const secondaryButtonClass =
-    "roc-action min-h-[36px] px-4 text-foreground text-sm cursor-pointer transition-colors";
+    "roc-action roc-action-pill px-4 text-foreground text-sm cursor-pointer";
   const primaryButtonClass =
-    "min-h-[36px] rounded-lg px-5 bg-foreground text-background text-sm font-semibold inline-flex items-center justify-center cursor-pointer transition-colors disabled:cursor-not-allowed disabled:opacity-60";
+    "roc-action roc-action-pill border-foreground bg-foreground px-5 text-sm font-semibold text-background disabled:cursor-not-allowed disabled:opacity-60";
   const summaryCardClass = "rounded-lg border border-border/30 bg-card p-4 grid gap-1";
   const sectionCardClass = "grid gap-4 rounded-lg bg-muted/30 p-5";
   const mutedCardClass = "rounded-lg bg-muted/40 px-4 py-3 text-sm leading-relaxed text-muted-foreground";
   const insetCardClass = "rounded-lg border border-border/35 bg-card/80 p-4";
   const disclosureCardClass = "rounded-lg border border-border/35 bg-card/80";
   const editorTextareaClass =
-    "min-h-40 w-full resize-y rounded-lg border border-border/40 bg-background p-3.5 text-foreground leading-relaxed font-mono text-sm";
+    "roc-form-textarea min-h-40 font-mono";
+  const formFieldClass = "roc-form-field";
+  const formLabelClass = "roc-form-label";
+  const formHintClass = "roc-form-hint";
+  const inputClass = "roc-form-control";
+  const selectClass = "roc-form-select";
+  const checkboxRowClass = "roc-form-checkbox-row";
+  const checkboxClass = "roc-form-checkbox";
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-start justify-end" data-testid="settings-overlay" onClick={onClose}>
@@ -1560,8 +1567,10 @@ export function SettingsDrawer({
 
           {!loading && activeTab === "general" ? (
             <div className="grid gap-6">
-              <div className="grid gap-3">
-                <label>Theme</label>
+              <div className="roc-form-surface">
+                <div className={formFieldClass}>
+                  <label className={formLabelClass}>Theme</label>
+                </div>
                 <div className="flex flex-wrap gap-2">
                   {themes.map((item) => (
                     <button
@@ -1569,8 +1578,8 @@ export function SettingsDrawer({
                       type="button"
                       className={
                         theme === item.id
-                          ? "px-3.5 py-1.5 rounded-md cursor-pointer text-sm bg-foreground text-background font-medium"
-                          : "px-3.5 py-1.5 rounded-md cursor-pointer text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+                          ? "roc-action roc-action-pill border-foreground bg-foreground px-4 text-sm font-medium text-background"
+                          : "roc-action roc-action-pill px-4 text-sm text-muted-foreground"
                       }
                       onClick={() => onThemeChange(item.id)}
                     >
@@ -1580,10 +1589,11 @@ export function SettingsDrawer({
                 </div>
               </div>
 
-              <div className="grid gap-3">
-                <label htmlFor="settings-mode-select">Execution Mode</label>
+              <div className="roc-form-surface">
+                <label htmlFor="settings-mode-select" className={formLabelClass}>Execution Mode</label>
                 <select
                   id="settings-mode-select"
+                  className={selectClass}
                   value={selectedMode}
                   onChange={(event) => onModeChange(event.target.value)}
                 >
@@ -1596,10 +1606,11 @@ export function SettingsDrawer({
                 </select>
               </div>
 
-              <div className="grid gap-3">
-                <label htmlFor="settings-model-select">Model</label>
+              <div className="roc-form-surface">
+                <label htmlFor="settings-model-select" className={formLabelClass}>Model</label>
                 <select
                   id="settings-model-select"
+                  className={selectClass}
                   value={selectedModel}
                   onChange={(event) => onModelChange(event.target.value)}
                 >
@@ -1612,9 +1623,10 @@ export function SettingsDrawer({
                 </select>
               </div>
 
-              <div className="grid gap-3">
-                <label className="flex items-center gap-3 cursor-pointer">
+              <div className="roc-form-surface">
+                <label className={checkboxRowClass}>
                   <input
+                    className={checkboxClass}
                     type="checkbox"
                     checked={showThinking}
                     onChange={(event) => onShowThinkingChange(event.target.checked)}
@@ -1720,7 +1732,7 @@ export function SettingsDrawer({
           {!loading && activeTab === "providers" ? (
             <div className="grid gap-6">
               <form
-                className="grid gap-3"
+                className="roc-form-surface"
                 onSubmit={(event) => {
                   event.preventDefault();
                   void (async () => {
@@ -1729,18 +1741,19 @@ export function SettingsDrawer({
                   })();
                 }}
               >
-                <label htmlFor="settings-provider-connect-query">Connect Provider</label>
+                <label htmlFor="settings-provider-connect-query" className={formLabelClass}>Connect Provider</label>
                 <input
                   id="settings-provider-connect-query"
+                  className={inputClass}
                   type="text"
                   placeholder="Search provider or enter custom id"
                   value={connectQuery}
                   onChange={(event) => onConnectQueryChange(event.target.value)}
                 />
                 {connectQuery.trim() ? (
-                  <div className="grid gap-2 rounded-lg border border-border/35 bg-muted/10 p-3">
+                  <div className="grid gap-2 rounded-[18px] border border-border/35 bg-muted/10 p-3">
                     {connectResolveBusy ? (
-                      <p className="m-0 text-sm text-muted-foreground">
+                      <p className={formHintClass}>
                         Resolving provider defaults...
                       </p>
                     ) : connectResolveError ? (
@@ -1752,7 +1765,7 @@ export function SettingsDrawer({
                         <button
                           key={provider.id}
                           type="button"
-                          className="rounded-lg border border-transparent bg-transparent px-3 py-2 text-left text-sm transition-colors hover:bg-accent"
+                          className="roc-side-item grid gap-1 text-left"
                           onClick={() => chooseKnownProvider(provider)}
                         >
                           <strong>{provider.name}</strong>
@@ -1764,21 +1777,25 @@ export function SettingsDrawer({
                         </button>
                       ))
                     ) : (
-                      <p className="m-0 text-sm text-muted-foreground">
+                      <p className={formHintClass}>
                         No known provider match. This query will fall back to custom provider id{" "}
                         <code>{connectResolution?.custom_draft.provider_id || connectQuery.trim()}</code>.
                       </p>
                     )}
                   </div>
                 ) : null}
-                <input
-                  type="text"
-                  placeholder="Provider id"
-                  value={connectProviderId}
-                  onChange={(event) => onConnectProviderIdChange(event.target.value)}
-                />
+                <label className={formFieldClass}>
+                  <span className={formLabelClass}>Provider ID</span>
+                  <input
+                    className={inputClass}
+                    type="text"
+                    placeholder="Provider id"
+                    value={connectProviderId}
+                    onChange={(event) => onConnectProviderIdChange(event.target.value)}
+                  />
+                </label>
                 {exactKnownProvider ? (
-                  <p className="m-0 text-xs text-muted-foreground">
+                  <p className={formHintClass}>
                     Known provider match.
                     {exactKnownProvider.env?.length
                       ? ` Expected env: ${exactKnownProvider.env.join(", ")}.`
@@ -1788,34 +1805,46 @@ export function SettingsDrawer({
                       : ""}
                   </p>
                 ) : connectResolution?.draft.mode === "custom" ? (
-                  <p className="m-0 text-xs text-muted-foreground">
+                  <p className={formHintClass}>
                     No known provider matched. You can keep the suggested custom draft or edit the
                     provider id, base URL and protocol below.
                   </p>
                 ) : null}
-                <input
-                  type="password"
-                  placeholder="API key"
-                  value={connectApiKey}
-                  onChange={(event) => onConnectApiKeyChange(event.target.value)}
-                />
-                <input
-                  type="url"
-                  placeholder="Custom base URL (optional)"
-                  value={connectBaseUrl}
-                  onChange={(event) => onConnectBaseUrlChange(event.target.value)}
-                />
-                <select
-                  value={connectProtocol}
-                  onChange={(event) => onConnectProtocolChange(event.target.value)}
-                >
-                  {connectProtocols.map((protocol) => (
-                    <option key={protocol.id} value={protocol.id}>
-                      {protocol.name}
-                    </option>
-                  ))}
-                </select>
-                <button className="min-h-[36px] rounded-full px-5 bg-foreground border-foreground text-background text-sm font-semibold inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px" type="submit" disabled={connectBusy}>
+                <label className={formFieldClass}>
+                  <span className={formLabelClass}>API Key</span>
+                  <input
+                    className={inputClass}
+                    type="password"
+                    placeholder="API key"
+                    value={connectApiKey}
+                    onChange={(event) => onConnectApiKeyChange(event.target.value)}
+                  />
+                </label>
+                <label className={formFieldClass}>
+                  <span className={formLabelClass}>Base URL</span>
+                  <input
+                    className={inputClass}
+                    type="url"
+                    placeholder="Custom base URL (optional)"
+                    value={connectBaseUrl}
+                    onChange={(event) => onConnectBaseUrlChange(event.target.value)}
+                  />
+                </label>
+                <label className={formFieldClass}>
+                  <span className={formLabelClass}>Protocol</span>
+                  <select
+                    className={selectClass}
+                    value={connectProtocol}
+                    onChange={(event) => onConnectProtocolChange(event.target.value)}
+                  >
+                    {connectProtocols.map((protocol) => (
+                      <option key={protocol.id} value={protocol.id}>
+                        {protocol.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button className={primaryButtonClass} type="submit" disabled={connectBusy}>
                   {connectBusy ? "Connecting..." : "Connect"}
                 </button>
               </form>
@@ -1826,7 +1855,7 @@ export function SettingsDrawer({
                   <div className="flex items-center gap-2">
                     <span>{providerSummary}</span>
                     <button
-                      className="min-h-[36px] rounded-lg px-4 border border-border/40 bg-card text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-colors hover:bg-accent"
+                      className={secondaryButtonClass}
                       type="button"
                       disabled={busyKey === "provider:refresh"}
                       onClick={() => void refreshProviderCatalogue()}
@@ -1844,7 +1873,7 @@ export function SettingsDrawer({
                       </p>
                     </div>
                     <button
-                      className="min-h-[36px] rounded-lg px-4 border border-border/40 bg-card text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-colors hover:bg-accent"
+                      className={secondaryButtonClass}
                       type="button"
                       disabled={busyKey === `provider:delete:${provider.id}`}
                       onClick={() => void removeProvider(provider.id)}
@@ -1886,21 +1915,22 @@ export function SettingsDrawer({
 
           {!loading && activeTab === "scheduler" ? (
             <div className="grid gap-6">
-              <div className="grid gap-3">
-                <label htmlFor="settings-scheduler-path">Scheduler Config Path</label>
+              <div className="roc-form-surface">
+                <label htmlFor="settings-scheduler-path" className={formLabelClass}>Scheduler Config Path</label>
                 <input
                   id="settings-scheduler-path"
+                  className={inputClass}
                   type="text"
                   value={schedulerPathDraft}
                   onChange={(event) => setSchedulerPathDraft(event.target.value)}
                 />
-                <div className="text-sm text-muted-foreground leading-relaxed">
+                <div className={formHintClass}>
                   resolved {schedulerConfig?.resolved_path || "--"} · {schedulerConfig?.exists ? "exists" : "new file"}
                 </div>
               </div>
 
-              <div className="grid gap-3 col-span-full">
-                <label htmlFor="settings-scheduler-content">Scheduler Config</label>
+              <div className="roc-form-surface">
+                <label htmlFor="settings-scheduler-content" className={formLabelClass}>Scheduler Config</label>
                 <textarea
                   id="settings-scheduler-content"
                   className={editorTextareaClass}
@@ -1910,7 +1940,7 @@ export function SettingsDrawer({
                 />
                 <div className="flex items-center gap-2">
                   <button
-                    className="min-h-[36px] rounded-full px-5 bg-foreground border-foreground text-background text-sm font-semibold inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px"
+                    className={primaryButtonClass}
                     type="button"
                     disabled={busyKey === "scheduler:save"}
                     onClick={() => void saveScheduler()}
@@ -2060,7 +2090,7 @@ export function SettingsDrawer({
                       </div>
                       <div className="flex items-center gap-2">
                         <button
-                          className="min-h-[36px] rounded-lg px-4 border border-border/40 bg-card text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-colors hover:bg-accent"
+                          className={secondaryButtonClass}
                           type="button"
                           disabled={busyKey === `mcp:connect:${server.name}`}
                           onClick={() => void runMcpAction(server.name, "connect")}
@@ -2068,7 +2098,7 @@ export function SettingsDrawer({
                           Connect
                         </button>
                         <button
-                          className="min-h-[36px] rounded-lg px-4 border border-border/40 bg-card text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-colors hover:bg-accent"
+                          className={secondaryButtonClass}
                           type="button"
                           disabled={busyKey === `mcp:disconnect:${server.name}`}
                           onClick={() => void runMcpAction(server.name, "disconnect")}
@@ -2076,7 +2106,7 @@ export function SettingsDrawer({
                           Disconnect
                         </button>
                         <button
-                          className="min-h-[36px] rounded-lg px-4 border border-border/40 bg-card text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-colors hover:bg-accent"
+                          className={secondaryButtonClass}
                           type="button"
                           disabled={busyKey === `mcp:restart:${server.name}`}
                           onClick={() => void runMcpAction(server.name, "restart")}
@@ -2092,8 +2122,8 @@ export function SettingsDrawer({
               </div>
 
               {Object.entries(mcpConfigs).map(([key]) => (
-                <div key={key} className="grid gap-3 col-span-full">
-                  <label>{key}</label>
+                <div key={key} className="roc-form-surface">
+                  <label className={formLabelClass}>{key}</label>
                   <textarea
                     className={editorTextareaClass}
                     value={mcpDrafts[key] ?? ""}
@@ -2102,7 +2132,7 @@ export function SettingsDrawer({
                   />
                   <div className="flex items-center gap-2">
                     <button
-                      className="min-h-[36px] rounded-lg px-4 border border-border/40 bg-card text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-colors hover:bg-accent"
+                      className={secondaryButtonClass}
                       type="button"
                       disabled={busyKey === `mcp:save:${key}`}
                       onClick={() => void saveMcpConfig(key, mcpDrafts[key] ?? "")}
@@ -2110,7 +2140,7 @@ export function SettingsDrawer({
                       Save
                     </button>
                     <button
-                      className="min-h-[36px] rounded-lg px-4 border border-border/40 bg-card text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-colors hover:bg-accent"
+                      className={secondaryButtonClass}
                       type="button"
                       disabled={busyKey === `mcp:delete:${key}`}
                       onClick={() => void deleteMcpConfig(key)}
@@ -2121,10 +2151,11 @@ export function SettingsDrawer({
                 </div>
               ))}
 
-              <div className="grid gap-3 col-span-full">
-                <label htmlFor="settings-new-mcp-key">New MCP Config</label>
+              <div className="roc-form-surface">
+                <label htmlFor="settings-new-mcp-key" className={formLabelClass}>New MCP Config</label>
                 <input
                   id="settings-new-mcp-key"
+                  className={inputClass}
                   type="text"
                   placeholder="server name"
                   value={newMcpKey}
@@ -2137,7 +2168,7 @@ export function SettingsDrawer({
                   spellCheck={false}
                 />
                 <button
-                  className="min-h-[36px] rounded-full px-5 bg-foreground border-foreground text-background text-sm font-semibold inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px"
+                  className={primaryButtonClass}
                   type="button"
                   disabled={!newMcpKey.trim() || busyKey === `mcp:save:${newMcpKey.trim()}`}
                   onClick={() => void saveMcpConfig(newMcpKey.trim(), newMcpDraft)}
@@ -2176,8 +2207,8 @@ export function SettingsDrawer({
               </div>
 
               {Object.entries(pluginConfigs).map(([key]) => (
-                <div key={key} className="grid gap-3 col-span-full">
-                  <label>{key}</label>
+                <div key={key} className="roc-form-surface">
+                  <label className={formLabelClass}>{key}</label>
                   <textarea
                     className={editorTextareaClass}
                     value={pluginDrafts[key] ?? ""}
@@ -2186,7 +2217,7 @@ export function SettingsDrawer({
                   />
                   <div className="flex items-center gap-2">
                     <button
-                      className="min-h-[36px] rounded-lg px-4 border border-border/40 bg-card text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-colors hover:bg-accent"
+                      className={secondaryButtonClass}
                       type="button"
                       disabled={busyKey === `plugin:save:${key}`}
                       onClick={() => void savePluginConfig(key, pluginDrafts[key] ?? "")}
@@ -2194,7 +2225,7 @@ export function SettingsDrawer({
                       Save
                     </button>
                     <button
-                      className="min-h-[36px] rounded-lg px-4 border border-border/40 bg-card text-foreground text-sm inline-flex items-center justify-center cursor-pointer transition-colors hover:bg-accent"
+                      className={secondaryButtonClass}
                       type="button"
                       disabled={busyKey === `plugin:delete:${key}`}
                       onClick={() => void deletePluginConfig(key)}
@@ -2205,10 +2236,11 @@ export function SettingsDrawer({
                 </div>
               ))}
 
-              <div className="grid gap-3 col-span-full">
-                <label htmlFor="settings-new-plugin-key">New Plugin Config</label>
+              <div className="roc-form-surface">
+                <label htmlFor="settings-new-plugin-key" className={formLabelClass}>New Plugin Config</label>
                 <input
                   id="settings-new-plugin-key"
+                  className={inputClass}
                   type="text"
                   placeholder="plugin name"
                   value={newPluginKey}
@@ -2221,7 +2253,7 @@ export function SettingsDrawer({
                   spellCheck={false}
                 />
                 <button
-                  className="min-h-[36px] rounded-full px-5 bg-foreground border-foreground text-background text-sm font-semibold inline-flex items-center justify-center cursor-pointer transition-all duration-150 hover:-translate-y-px"
+                  className={primaryButtonClass}
                   type="button"
                   disabled={!newPluginKey.trim() || busyKey === `plugin:save:${newPluginKey.trim()}`}
                   onClick={() => void savePluginConfig(newPluginKey.trim(), newPluginDraft)}

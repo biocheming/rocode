@@ -131,15 +131,16 @@ export function TerminalPanel({ terminal }: TerminalPanelProps) {
   }, [terminal.activeBuffer, terminal.activeSession, terminal.resizeSession]);
 
   return (
-    <div className="roc-panel p-5 grid gap-4" data-testid="terminal-panel">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">Terminal</p>
-          <h3>PTY Sessions</h3>
+    <div className="roc-panel roc-rail-panel p-5" data-testid="terminal-panel">
+      <div className="roc-rail-header">
+        <div className="roc-rail-headline">
+          <p className="roc-section-label">Terminal</p>
+          <h3 className="roc-rail-title">PTY Sessions</h3>
+          <p className="roc-rail-description">Keep shell access in-context instead of jumping back to a legacy view.</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="roc-rail-toolbar">
           <button
-            className="roc-action min-h-[36px] px-4 text-sm cursor-pointer transition-colors"
+            className="roc-action roc-action-pill"
             type="button"
             data-testid="terminal-refresh"
             onClick={terminal.refresh}
@@ -148,7 +149,7 @@ export function TerminalPanel({ terminal }: TerminalPanelProps) {
             {terminal.loading ? "Refreshing..." : "Refresh"}
           </button>
           <button
-            className="roc-action min-h-[36px] px-4 text-sm cursor-pointer transition-colors"
+            className="roc-action roc-action-pill"
             type="button"
             data-testid="terminal-create"
             onClick={() => void terminal.createSession()}
@@ -157,7 +158,7 @@ export function TerminalPanel({ terminal }: TerminalPanelProps) {
             {terminal.creating ? "Creating..." : "+ New"}
           </button>
           <button
-            className="roc-action min-h-[36px] px-4 text-sm cursor-pointer transition-colors"
+            className="roc-action roc-action-pill"
             type="button"
             data-testid="terminal-delete"
             onClick={() => void terminal.deleteSession(terminal.activeSession!.id)}
@@ -170,17 +171,14 @@ export function TerminalPanel({ terminal }: TerminalPanelProps) {
 
       {terminal.sessions.length ? (
         <>
-          <div className="flex flex-wrap gap-2 border-b border-border pb-3">
+          <div className="roc-rail-tab-list">
             {terminal.sessions.map((session) => (
               <button
                 key={session.id}
                 data-testid="terminal-tab"
                 data-session-id={session.id}
-                className={
-                  terminal.activeId === session.id
-                    ? "px-4 py-2 rounded-lg border border-foreground/10 cursor-pointer text-sm bg-foreground text-background font-semibold"
-                    : "px-4 py-2 rounded-lg border border-transparent cursor-pointer text-sm bg-transparent text-foreground hover:bg-accent"
-                }
+                data-active={terminal.activeId === session.id ? "true" : "false"}
+                className="roc-terminal-tab"
                 type="button"
                 onClick={() => terminal.setActiveId(session.id)}
               >
@@ -191,19 +189,19 @@ export function TerminalPanel({ terminal }: TerminalPanelProps) {
 
           {terminal.activeSession ? (
             <>
-              <div className="flex flex-wrap gap-2">
+              <div className="roc-rail-meta-list">
                 <span className="roc-pill px-3 py-1.5 text-xs">{terminal.activeSession.status}</span>
                 <span className="roc-pill px-3 py-1.5 text-xs">{terminal.activeSession.cwd || "cwd unknown"}</span>
                 <span className="roc-pill px-3 py-1.5 text-xs">{terminal.activeSession.id}</span>
               </div>
-              <div className="grid gap-2">
+              <div className="roc-rail-section">
                 <div
                   ref={viewportRef}
                   data-testid="terminal-viewport"
-                  className="terminal-viewport roc-subpanel min-h-[24rem] bg-background/85 p-2"
+                  className="terminal-viewport roc-terminal-viewport"
                   onClick={() => xtermRef.current?.focus()}
                 />
-                <p className="text-xs text-muted-foreground italic">
+                <p className="roc-rail-section-note">
                   Connected to PTY WebSocket. Keyboard input is sent directly to the shell.
                 </p>
               </div>
@@ -211,9 +209,12 @@ export function TerminalPanel({ terminal }: TerminalPanelProps) {
           ) : null}
         </>
       ) : (
-        <div className="flex flex-col items-center justify-center gap-3 text-muted-foreground py-8">
-          <h3>No terminal sessions</h3>
-          <p>Create a PTY session here instead of switching back to the legacy frontend.</p>
+        <div className="roc-rail-empty">
+          <div className="roc-section-label">Terminal</div>
+          <h3 className="text-sm font-semibold tracking-tight text-foreground">No terminal sessions</h3>
+          <p className="text-sm leading-6 text-muted-foreground">
+            Create a PTY session here instead of switching back to the legacy frontend.
+          </p>
         </div>
       )}
     </div>
