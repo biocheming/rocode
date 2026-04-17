@@ -220,7 +220,7 @@ async fn event_stream(
     stream_server_events(state.event_bus.subscribe(), query.session)
 }
 
-const EVENT_OUTPUT_BLOCK_BATCH_MS: u64 = 24;
+const EVENT_OUTPUT_BLOCK_BATCH_MS: u64 = 16;
 
 pub(crate) fn stream_server_events(
     mut rx: broadcast::Receiver<String>,
@@ -230,6 +230,7 @@ pub(crate) fn stream_server_events(
 
     tokio::spawn(async move {
         let mut pending: Option<ServerEvent> = None;
+        let mut pending_due_at: Option<tokio::time::Instant> = None;
         let delay = std::time::Duration::from_millis(EVENT_OUTPUT_BLOCK_BATCH_MS);
 
         // Closure to check if an event matches the session filter.
@@ -268,6 +269,7 @@ pub(crate) fn stream_server_events(
 
         loop {
             if pending.is_some() {
+                let due_at = pending_due_at.unwrap_or_else(|| tokio::time::Instant::now() + delay);
                 tokio::select! {
                     recv = rx.recv() => {
                         match recv {
@@ -283,12 +285,14 @@ pub(crate) fn stream_server_events(
                                         }
                                     }
                                     if let Some(flushed) = pending.take() {
+                                        pending_due_at = None;
                                         if send_server_event_json(&tx, &flushed).await.is_err() {
                                             break;
                                         }
                                     }
                                     if is_mergeable_output_delta(&next) {
                                         pending = Some(next);
+                                        pending_due_at = Some(tokio::time::Instant::now() + delay);
                                     } else if send_server_event_json(&tx, &next).await.is_err() {
                                         break;
                                     }
@@ -298,6 +302,7 @@ pub(crate) fn stream_server_events(
                                         continue;
                                     }
                                     if let Some(flushed) = pending.take() {
+                                        pending_due_at = None;
                                         if send_server_event_json(&tx, &flushed).await.is_err() {
                                             break;
                                         }
@@ -309,6 +314,7 @@ pub(crate) fn stream_server_events(
                             }
                             Err(broadcast::error::RecvError::Lagged(_)) => {
                                 if let Some(flushed) = pending.take() {
+                                    pending_due_at = None;
                                     if send_server_event_json(&tx, &flushed).await.is_err() {
                                         break;
                                     }
@@ -327,8 +333,9 @@ pub(crate) fn stream_server_events(
                             }
                         }
                     }
-                    _ = tokio::time::sleep(delay) => {
+                    _ = tokio::time::sleep_until(due_at) => {
                         if let Some(flushed) = pending.take() {
+                            pending_due_at = None;
                             if send_server_event_json(&tx, &flushed).await.is_err() {
                                 break;
                             }
@@ -345,6 +352,7 @@ pub(crate) fn stream_server_events(
                             }
                             if is_mergeable_output_delta(&event) {
                                 pending = Some(event);
+                                pending_due_at = Some(tokio::time::Instant::now() + delay);
                             } else if send_server_event_json(&tx, &event).await.is_err() {
                                 break;
                             }

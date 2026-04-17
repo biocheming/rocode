@@ -27,7 +27,8 @@ pub use tools_and_output::{
     generate_session_title, generate_session_title_for_session, generate_session_title_llm,
     insert_reminders, max_steps_for_agent, merge_tool_definitions, prioritize_tool_definitions,
     resolve_tools, resolve_tools_with_mcp, resolve_tools_with_mcp_registry,
-    structured_output_system_prompt, was_plan_agent, ResolvedTool, StructuredOutputConfig,
+    sanitize_session_title_source, structured_output_system_prompt, was_plan_agent, ResolvedTool,
+    StructuredOutputConfig,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -704,7 +705,6 @@ impl SessionPrompt {
         )
         .await
     }
-
 }
 
 fn turn_looks_complex(session: &Session, turn_start_index: usize) -> bool {

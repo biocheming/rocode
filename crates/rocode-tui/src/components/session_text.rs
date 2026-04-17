@@ -55,7 +55,23 @@ pub fn render_message_text_part(
 pub fn render_text_part(text: &str, theme: &Theme, marker_color: Color) -> Vec<Line<'static>> {
     let cleaned = strip_think_tags(text);
     let renderer = MarkdownRenderer::new(theme.clone());
-    apply_assistant_marker(renderer.to_lines(&cleaned), marker_color)
+    let mut lines = Vec::new();
+    let mut markdown_buffer = Vec::new();
+
+    for raw_line in cleaned.lines() {
+        if is_system_reminder_display_line(raw_line) {
+            flush_markdown_buffer(&renderer, &mut lines, &mut markdown_buffer);
+            if !lines.last().is_none_or(line_is_blank) {
+                lines.push(Line::from(""));
+            }
+            lines.push(render_system_reminder_line(raw_line, theme));
+        } else {
+            markdown_buffer.push(raw_line.to_string());
+        }
+    }
+
+    flush_markdown_buffer(&renderer, &mut lines, &mut markdown_buffer);
+    apply_assistant_marker(lines, marker_color)
 }
 
 pub struct ReasoningRender {
@@ -277,6 +293,18 @@ fn render_scheduler_stage_part(
     }
 
     let body = block.as_ref().map(|b| b.text.as_str()).unwrap_or(text);
+    if let Some(card) = generic_stage_card_from_text(body) {
+        lines.push(Line::from(vec![
+            Span::styled("◈ ", Style::default().fg(theme.info)),
+            Span::styled(
+                card.title.clone(),
+                Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        append_decision_card_body(&mut lines, card, theme);
+        return apply_assistant_marker(lines, marker_color);
+    }
+
     let cleaned = strip_think_tags(body);
     let renderer = MarkdownRenderer::new(theme.clone());
     let body_lines = renderer.to_lines(&cleaned);
@@ -337,11 +365,46 @@ fn render_decision_stage_part(
     lines.push(Line::from(vec![
         Span::styled("◈ ", Style::default().fg(theme.info)),
         Span::styled(
-            decision.title,
+            decision.title.clone(),
             Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
         ),
     ]));
 
+    append_decision_card_body(&mut lines, decision, theme);
+
+    Some(apply_assistant_marker(lines, marker_color))
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+fn route_field_line(
+    label: &str,
+    value: &str,
+    theme: &Theme,
+    spec: &DecisionRenderSpec,
+    value_style: Style,
+) -> Line<'static> {
+    let label_style = if spec.field_label_emphasis == "bold" {
+        Style::default()
+            .fg(theme.primary)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.primary)
+    };
+    Line::from(vec![
+        Span::styled("• ", Style::default().fg(theme.border_active)),
+        Span::styled(format!("{label}: "), label_style),
+        Span::styled(value.to_string(), value_style),
+    ])
+}
+
+fn append_decision_card_body(
+    lines: &mut Vec<Line<'static>>,
+    decision: DecisionCard,
+    theme: &Theme,
+) {
     for field in decision.fields {
         lines.push(route_field_line(
             &field.label,
@@ -371,33 +434,6 @@ fn render_decision_stage_part(
             lines.push(Line::from(spans));
         }
     }
-
-    Some(apply_assistant_marker(lines, marker_color))
-}
-
-// ---------------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------------
-
-fn route_field_line(
-    label: &str,
-    value: &str,
-    theme: &Theme,
-    spec: &DecisionRenderSpec,
-    value_style: Style,
-) -> Line<'static> {
-    let label_style = if spec.field_label_emphasis == "bold" {
-        Style::default()
-            .fg(theme.primary)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme.primary)
-    };
-    Line::from(vec![
-        Span::styled("• ", Style::default().fg(theme.border_active)),
-        Span::styled(format!("{label}: "), label_style),
-        Span::styled(value.to_string(), value_style),
-    ])
 }
 
 fn decision_field_style(tone: Option<&str>, value: &str, theme: &Theme) -> Style {
@@ -670,6 +706,56 @@ fn apply_assistant_marker(lines: Vec<Line<'static>>, marker_color: Color) -> Vec
         .collect()
 }
 
+fn flush_markdown_buffer(
+    renderer: &MarkdownRenderer,
+    lines: &mut Vec<Line<'static>>,
+    markdown_buffer: &mut Vec<String>,
+) {
+    if markdown_buffer.is_empty() {
+        return;
+    }
+
+    let markdown = markdown_buffer.join("\n");
+    markdown_buffer.clear();
+    if markdown.trim().is_empty() {
+        return;
+    }
+
+    lines.extend(renderer.to_lines(&markdown));
+}
+
+fn is_system_reminder_display_line(line: &str) -> bool {
+    line.trim_start().starts_with("System Reminder Sent:")
+}
+
+fn render_system_reminder_line(line: &str, theme: &Theme) -> Line<'static> {
+    let reminder = line.trim();
+    let detail = reminder
+        .strip_prefix("System Reminder Sent:")
+        .map(str::trim)
+        .unwrap_or_default();
+
+    let mut spans = vec![
+        Span::styled("↳ ", Style::default().fg(theme.border_subtle)),
+        Span::styled(
+            "System Reminder",
+            Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
+        ),
+    ];
+    if !detail.is_empty() {
+        spans.push(Span::styled("  ", Style::default().fg(theme.border_subtle)));
+        spans.push(Span::styled(
+            detail.to_string(),
+            Style::default().fg(theme.text_muted),
+        ));
+    }
+    Line::from(spans)
+}
+
+fn line_is_blank(line: &Line<'static>) -> bool {
+    line.spans.iter().all(|span| span.content.trim().is_empty())
+}
+
 fn scheduler_stage(metadata: Option<&HashMap<String, Value>>) -> Option<&str> {
     metadata
         .and_then(|m| m.get("scheduler_stage"))
@@ -935,6 +1021,175 @@ fn decision_card_from_text(
             })
         }
         _ => None,
+    }
+}
+
+fn generic_stage_card_from_text(text: &str) -> Option<DecisionCard> {
+    let (_title, body) = split_stage_heading(text);
+    let value = parse_route_decision_value(body.trim())?;
+    let object = value.as_object()?;
+    if object.is_empty() {
+        return None;
+    }
+
+    let mut fields = Vec::new();
+    let mut sections = Vec::new();
+
+    for (key, value) in object {
+        if value.is_null() {
+            continue;
+        }
+
+        let label = prettify_token(key);
+        if let Some(field_value) = json_value_as_field(key, value) {
+            fields.push(DecisionField {
+                label,
+                value: field_value,
+                tone: generic_json_field_tone(key, value),
+            });
+            continue;
+        }
+
+        let body = json_value_as_markdown(value);
+        if body.trim().is_empty() {
+            continue;
+        }
+        sections.push(DecisionSection { title: label, body });
+    }
+
+    if fields.is_empty() && sections.is_empty() {
+        return None;
+    }
+
+    Some(DecisionCard {
+        title: "Details".to_string(),
+        spec: default_decision_render_spec(),
+        fields,
+        sections,
+    })
+}
+
+fn json_value_as_field(key: &str, value: &Value) -> Option<String> {
+    match value {
+        Value::Bool(boolean) => Some(if *boolean { "Yes" } else { "No" }.to_string()),
+        Value::Number(number) => Some(number.to_string()),
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() || trimmed.contains('\n') || trimmed.chars().count() > 100 {
+                None
+            } else {
+                Some(render_scalar_field_value(key, trimmed))
+            }
+        }
+        Value::Array(items) if !items.is_empty() && items.iter().all(is_inline_json_value) => {
+            let rendered = items
+                .iter()
+                .map(render_inline_json_value)
+                .collect::<Vec<_>>()
+                .join(", ");
+            (rendered.chars().count() <= 120).then_some(rendered)
+        }
+        _ => None,
+    }
+}
+
+fn is_inline_json_value(value: &Value) -> bool {
+    matches!(
+        value,
+        Value::Bool(_) | Value::Null | Value::Number(_) | Value::String(_)
+    )
+}
+
+fn render_inline_json_value(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(boolean) => {
+            if *boolean {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        }
+        Value::Number(number) => number.to_string(),
+        Value::String(text) => text.trim().to_string(),
+        _ => value.to_string(),
+    }
+}
+
+fn render_scalar_field_value(key: &str, value: &str) -> String {
+    if should_prettify_scalar_value(key, value) {
+        prettify_token(value)
+    } else {
+        value.to_string()
+    }
+}
+
+fn should_prettify_scalar_value(key: &str, value: &str) -> bool {
+    (key == "status"
+        || key.ends_with("_status")
+        || key == "mode"
+        || key.ends_with("_mode")
+        || key.ends_with("_strategy"))
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch == '-' || ch == '_')
+}
+
+fn generic_json_field_tone(key: &str, value: &Value) -> Option<String> {
+    if key == "status" || key.ends_with("_status") {
+        return Some("status".to_string());
+    }
+    if key.contains("error") {
+        return Some("error".to_string());
+    }
+    if key.contains("warning") {
+        return Some("warning".to_string());
+    }
+    if matches!(value, Value::Bool(true)) {
+        return Some("success".to_string());
+    }
+    None
+}
+
+fn json_value_as_markdown(value: &Value) -> String {
+    let mut lines = Vec::new();
+    append_json_markdown_lines(value, &mut lines, 0);
+    lines.join("\n")
+}
+
+fn append_json_markdown_lines(value: &Value, lines: &mut Vec<String>, indent: usize) {
+    let prefix = " ".repeat(indent);
+    match value {
+        Value::Object(map) => {
+            for (key, nested) in map {
+                let label = prettify_token(key);
+                if let Some(field_value) = json_value_as_field(key, nested) {
+                    lines.push(format!("{prefix}- {label}: {field_value}"));
+                } else {
+                    lines.push(format!("{prefix}- {label}"));
+                    append_json_markdown_lines(nested, lines, indent + 2);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                if is_inline_json_value(item) {
+                    lines.push(format!("{prefix}- {}", render_inline_json_value(item)));
+                } else {
+                    lines.push(format!("{prefix}-"));
+                    append_json_markdown_lines(item, lines, indent + 2);
+                }
+            }
+        }
+        Value::String(text) => {
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    lines.push(format!("{prefix}{trimmed}"));
+                }
+            }
+        }
+        _ => lines.push(format!("{prefix}{}", render_inline_json_value(value))),
     }
 }
 
@@ -1400,6 +1655,27 @@ mod tests {
     }
 
     #[test]
+    fn scheduler_stage_generic_json_renders_as_structured_card() {
+        let theme = Theme::default();
+        let message = message_with_stage_meta("delegation", Some("atlas"), Some(2), Some(4));
+        let rendered = render_message_text_part(
+            &message,
+            "## atlas · Delegation\n\n```json\n{\"status\":\"running\",\"estimated_context_tokens\":256,\"active_agents\":[\"planner\",\"tester\"],\"task_status\":{\"task_a\":\"done - verified\",\"task_b\":\"running\"}}\n```",
+            &theme,
+            Color::Blue,
+        );
+
+        let all_text: String = rendered.lines.iter().map(line_text).collect();
+        assert!(all_text.contains("Atlas · Delegation"));
+        assert!(all_text.contains("Details"));
+        assert!(all_text.contains("Status: Running"));
+        assert!(all_text.contains("Estimated Context Tokens: 256"));
+        assert!(all_text.contains("Active Agents: planner, tester"));
+        assert!(all_text.contains("Task Status"));
+        assert!(!all_text.contains("\"estimated_context_tokens\""));
+    }
+
+    #[test]
     fn non_scheduler_message_renders_plain_markdown() {
         let message = Message {
             id: "m1".to_string(),
@@ -1421,6 +1697,22 @@ mod tests {
         let rendered = render_message_text_part(&message, "hello", &Theme::default(), Color::Blue);
         assert!(rendered.allow_semantic_highlighting);
         assert!(line_text(&rendered.lines[0]).contains("hello"));
+    }
+
+    #[test]
+    fn system_reminder_display_renders_on_its_own_styled_line() {
+        let rendered = render_text_part(
+            "Primary answer.\n\nSystem Reminder Sent: /tmp/project/AGENTS.md",
+            &Theme::default(),
+            Color::Blue,
+        );
+
+        let all_text: Vec<String> = rendered.iter().map(line_text).collect();
+        assert!(all_text.iter().any(|line| line.contains("Primary answer.")));
+        assert!(all_text.iter().any(|line| line.contains("System Reminder")));
+        assert!(all_text
+            .iter()
+            .all(|line| !line.contains("Primary answer.System Reminder Sent")));
     }
 
     #[test]

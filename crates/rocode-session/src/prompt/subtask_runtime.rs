@@ -130,16 +130,17 @@ impl SessionPrompt {
                     disabled_tools: Vec::new(),
                     history: Vec::new(),
                 });
-            let state_snapshot = persisted
-                .get(&subsession_id)
-                .cloned()
-                .unwrap_or(PersistedSubsession {
-                    agent: subtask.agent.clone(),
-                    model: Some(default_model.clone()),
-                    directory: Some(session.directory.clone()),
-                    disabled_tools: Vec::new(),
-                    history: Vec::new(),
-                });
+            let state_snapshot =
+                persisted
+                    .get(&subsession_id)
+                    .cloned()
+                    .unwrap_or(PersistedSubsession {
+                        agent: subtask.agent.clone(),
+                        model: Some(default_model.clone()),
+                        directory: Some(session.directory.clone()),
+                        disabled_tools: Vec::new(),
+                        history: Vec::new(),
+                    });
 
             match Self::execute_persisted_subsession_prompt(
                 &state_snapshot,

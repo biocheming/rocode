@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use rocode_skill::{
-    extract_methodology_template_from_markdown, infer_runtime_skill_names, RuntimeInstructionSource,
-    SkillAuthority,
+    extract_methodology_template_from_markdown, infer_runtime_skill_names,
+    RuntimeInstructionSource, SkillAuthority,
 };
 use serde::{Deserialize, Serialize};
 
@@ -33,7 +33,9 @@ pub(super) fn extract_tool_call_history(session: &Session) -> Vec<ToolCallSummar
         .iter()
         .flat_map(|msg| msg.parts.iter())
         .filter_map(|part| match &part.part_type {
-            PartType::ToolCall { id, name, input, .. } => Some(ToolCallSummary {
+            PartType::ToolCall {
+                id, name, input, ..
+            } => Some(ToolCallSummary {
                 tool_name: name.clone(),
                 tool_input_summary: summarize_tool_input(input),
                 tool_result_summary: find_tool_result(session, id)
@@ -54,7 +56,8 @@ pub(super) fn prepare_skill_reflection(
         .cloned()
         .and_then(|value| serde_json::from_value::<Vec<RuntimeInstructionSource>>(value).ok())?;
 
-    let skill_names = infer_runtime_skill_names(std::path::Path::new(&session.directory), &instructions);
+    let skill_names =
+        infer_runtime_skill_names(std::path::Path::new(&session.directory), &instructions);
     if skill_names.is_empty() {
         return None;
     }
@@ -139,7 +142,10 @@ fn build_skill_reflection_section(reflection: &SkillReflectionData) -> String {
 
     lines.push("### Actual Tool Calls".to_string());
     for call in &reflection.tool_calls {
-        lines.push(format!("- `{}`: {}", call.tool_name, call.tool_input_summary));
+        lines.push(format!(
+            "- `{}`: {}",
+            call.tool_name, call.tool_input_summary
+        ));
     }
 
     lines.push(String::new());

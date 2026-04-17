@@ -2923,7 +2923,7 @@ pub(crate) fn first_user_message_text(session: &Session) -> Option<String> {
         .iter()
         .find(|message| matches!(message.role, MessageRole::User))
         .map(|message| message.get_text())
-        .map(|text| text.trim().to_string())
+        .map(|text| rocode_session::sanitize_session_title_source(&text))
         .filter(|text| !text.is_empty())
 }
 
@@ -3033,6 +3033,19 @@ mod tests {
         assert_eq!(
             first_user_message_text(&session).as_deref(),
             Some("First prompt")
+        );
+    }
+
+    #[test]
+    fn first_user_message_text_strips_system_reminder_content() {
+        let mut session = Session::new("project", ".");
+        session.add_user_message(
+            "Refactor the session renderer\n<system-reminder>\nInstructions from: /tmp/project/AGENTS.md\nUse reratui.\n</system-reminder>",
+        );
+
+        assert_eq!(
+            first_user_message_text(&session).as_deref(),
+            Some("Refactor the session renderer")
         );
     }
 

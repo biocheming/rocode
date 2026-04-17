@@ -96,7 +96,7 @@ fn merge_adjacent_textual_parts(parts: Vec<ContextMessagePart>) -> Vec<ContextMe
         match part {
             ContextMessagePart::Text { text } => {
                 if let Some(ContextMessagePart::Text { text: existing }) = merged.last_mut() {
-                    existing.push_str(&text);
+                    append_text_part(existing, &text);
                 } else {
                     merged.push(ContextMessagePart::Text { text });
                 }
@@ -113,6 +113,26 @@ fn merge_adjacent_textual_parts(parts: Vec<ContextMessagePart>) -> Vec<ContextMe
     }
 
     merged
+}
+
+fn append_text_part(existing: &mut String, incoming: &str) {
+    if incoming.is_empty() {
+        return;
+    }
+
+    if needs_system_reminder_separator(existing, incoming) && !existing.ends_with("\n\n") {
+        if existing.ends_with('\n') {
+            existing.push('\n');
+        } else {
+            existing.push_str("\n\n");
+        }
+    }
+
+    existing.push_str(incoming);
+}
+
+fn needs_system_reminder_separator(existing: &str, incoming: &str) -> bool {
+    !existing.trim().is_empty() && incoming.trim_start().starts_with("System Reminder Sent:")
 }
 
 pub(super) fn map_api_revert(revert: &SessionRevertInfo) -> RevertInfo {
@@ -286,6 +306,27 @@ mod tests {
         assert!(matches!(
             &merged[1],
             ContextMessagePart::Text { text } if text == "answer done"
+        ));
+    }
+
+    #[test]
+    fn merge_adjacent_textual_parts_puts_system_reminder_on_its_own_line() {
+        let parts = vec![
+            ContextMessagePart::Text {
+                text: "User-facing summary.".to_string(),
+            },
+            ContextMessagePart::Text {
+                text: "System Reminder Sent: /tmp/project/AGENTS.md".to_string(),
+            },
+        ];
+
+        let merged = merge_adjacent_textual_parts(parts);
+
+        assert_eq!(merged.len(), 1);
+        assert!(matches!(
+            &merged[0],
+            ContextMessagePart::Text { text }
+                if text == "User-facing summary.\n\nSystem Reminder Sent: /tmp/project/AGENTS.md"
         ));
     }
 }

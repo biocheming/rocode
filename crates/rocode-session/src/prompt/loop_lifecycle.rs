@@ -122,7 +122,9 @@ impl SessionPrompt {
                 .find(|m| matches!(m.role, MessageRole::User))
                 .map(|m| m.get_text())
             {
-                let immediate = tools_and_output::generate_session_title(&text);
+                let immediate = tools_and_output::generate_session_title(
+                    &tools_and_output::sanitize_session_title_source(&text),
+                );
                 if !immediate.is_empty() && immediate != "New Session" {
                     session.set_auto_title(immediate);
                 }

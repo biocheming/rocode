@@ -1,9 +1,9 @@
-use super::*;
 use super::skill_reflection::{
     augment_system_prompt_with_skill_reflection, extract_tool_call_history,
     prepare_skill_reflection, update_skill_reflection_metadata, SkillReflectionData,
     SkillUsageSummary, ToolCallSummary,
 };
+use super::*;
 use crate::message::MessagePart;
 use crate::SessionMessage;
 use async_trait::async_trait;
@@ -1027,8 +1027,7 @@ fn part_input_file_skips_none_fields_in_json() {
 
 #[tokio::test]
 async fn resolve_prompt_parts_plain_text() {
-    let parts =
-        resolve_prompt_parts("just plain text", std::path::Path::new("/tmp"), &[]).await;
+    let parts = resolve_prompt_parts("just plain text", std::path::Path::new("/tmp"), &[]).await;
     assert_eq!(parts.len(), 1);
     assert!(matches!(&parts[0], PartInput::Text { text } if text == "just plain text"));
 }

@@ -306,8 +306,63 @@ pub fn max_steps_for_agent(agent_steps: Option<u32>) -> u32 {
     agent_steps.unwrap_or(MAX_STEPS)
 }
 
+fn is_system_reminder_open_tag(line: &str) -> bool {
+    line.starts_with("<system-reminder") || line.starts_with("<system_reminder")
+}
+
+fn is_system_reminder_close_tag(line: &str) -> bool {
+    line.starts_with("</system-reminder") || line.starts_with("</system_reminder")
+}
+
+pub fn sanitize_session_title_source(text: &str) -> String {
+    let mut lines = Vec::new();
+    let mut in_system_reminder = false;
+    let mut previous_blank = false;
+
+    for raw_line in text.lines() {
+        let trimmed = raw_line.trim();
+
+        if is_system_reminder_open_tag(trimmed) {
+            in_system_reminder = true;
+            if trimmed.contains("</system-reminder>") || trimmed.contains("</system_reminder>") {
+                in_system_reminder = false;
+            }
+            continue;
+        }
+
+        if in_system_reminder {
+            if is_system_reminder_close_tag(trimmed) {
+                in_system_reminder = false;
+            }
+            continue;
+        }
+
+        if is_system_reminder_close_tag(trimmed)
+            || trimmed.starts_with("System Reminder Sent:")
+            || trimmed.starts_with("Instructions from:")
+        {
+            continue;
+        }
+
+        if trimmed.is_empty() {
+            if previous_blank {
+                continue;
+            }
+            previous_blank = true;
+            lines.push(String::new());
+            continue;
+        }
+
+        previous_blank = false;
+        lines.push(raw_line.to_string());
+    }
+
+    sanitize_display_text(&lines.join("\n")).trim().to_string()
+}
+
 pub fn generate_session_title(first_user_message: &str) -> String {
-    let first_line = first_user_message.lines().next().unwrap_or("").trim();
+    let normalized = sanitize_session_title_source(first_user_message);
+    let first_line = normalized.lines().next().unwrap_or("").trim();
 
     if first_line.chars().count() > 100 {
         format!("{}...", first_line.chars().take(97).collect::<String>())
@@ -319,7 +374,7 @@ pub fn generate_session_title(first_user_message: &str) -> String {
 }
 
 fn trim_title_source(text: &str, max_chars: usize) -> String {
-    let normalized = sanitize_display_text(text).trim().to_string();
+    let normalized = sanitize_session_title_source(text);
     if normalized.chars().count() <= max_chars {
         normalized
     } else {
@@ -333,7 +388,7 @@ pub fn compose_session_title_source(session: &Session) -> Option<(String, String
         .iter()
         .find(|message| matches!(message.role, MessageRole::User))
         .map(SessionMessage::get_text)
-        .map(|text| text.trim().to_string())
+        .map(|text| sanitize_session_title_source(&text))
         .filter(|text| !text.is_empty())?;
 
     let fallback = generate_session_title(&first_user);
@@ -375,6 +430,7 @@ pub async fn generate_session_title_for_session(
             content: Content::Text(format!(
                 "Generate a short session title (under 80 chars) for this conversation.\n\
                  Base it on the actual task and outcome, not the user's raw wording.\n\
+                 Do not mention system reminders, instruction files, or metadata wrappers.\n\
                  Reply with ONLY the title, no quotes or explanation.\n\n{}",
                 title_source
             )),
@@ -384,7 +440,7 @@ pub async fn generate_session_title_for_session(
         vec![],
         None,
         Some(
-            "You generate concise conversation titles. Prefer compact task-focused summaries. Reply with only the title."
+            "You generate concise conversation titles. Prefer compact task-focused summaries. Never mention system reminders or instruction-file wrappers. Reply with only the title."
                 .to_string(),
         ),
     );
@@ -434,22 +490,27 @@ pub async fn generate_session_title_llm(
     provider: Arc<dyn Provider>,
     model_id: &str,
 ) -> String {
-    let fallback = generate_session_title(first_user_message);
+    let normalized_first_user_message = sanitize_session_title_source(first_user_message);
+    let fallback = generate_session_title(&normalized_first_user_message);
 
     let request = session_title_request(model_id).to_chat_request_with_system(
         vec![Message {
             role: Role::User,
             content: Content::Text(format!(
                 "Generate a short title (under 80 chars) for this conversation. \
+                     Do not mention system reminders, instruction files, or metadata wrappers. \
                      Reply with ONLY the title, no quotes or explanation.\n\n{}",
-                first_user_message
+                normalized_first_user_message
             )),
             cache_control: None,
             provider_options: None,
         }],
         vec![],
         None,
-        Some("You generate concise conversation titles. Reply with only the title.".to_string()),
+        Some(
+            "You generate concise conversation titles. Never mention system reminders or instruction-file wrappers. Reply with only the title."
+                .to_string(),
+        ),
     );
 
     match provider.chat(request).await {
@@ -606,5 +667,23 @@ mod tests {
         assert!(captured.contains("User request:"));
         assert!(captured.contains("Assistant outcome:"));
         assert!(captured.contains("Implemented refined title regeneration"));
+    }
+
+    #[test]
+    fn sanitize_session_title_source_strips_system_reminder_wrappers() {
+        let cleaned = sanitize_session_title_source(
+            "帮我重构 TUI\n\n<system-reminder>\nInstructions from: /tmp/project/AGENTS.md\nBe strict.\n</system-reminder>\n\nSystem Reminder Sent: /tmp/project/AGENTS.md",
+        );
+
+        assert_eq!(cleaned, "帮我重构 TUI");
+    }
+
+    #[test]
+    fn generate_session_title_ignores_system_reminder_text() {
+        let title = generate_session_title(
+            "Fix the reratui migration flow\n<system-reminder>\nInstructions from: /tmp/project/AGENTS.md\nUse latest reratui.\n</system-reminder>",
+        );
+
+        assert_eq!(title, "Fix the reratui migration flow");
     }
 }
