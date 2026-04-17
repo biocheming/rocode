@@ -520,15 +520,7 @@ impl SessionView {
         }
 
         let show_header = snapshot.show_header;
-        let header_height = if show_header {
-            if area.width < HEADER_NARROW_THRESHOLD {
-                2u16
-            } else {
-                1u16
-            }
-        } else {
-            0u16
-        };
+        let header_height = if show_header { 2u16 } else { 0u16 };
         let session_footer_height = 1u16;
         let desired_prompt_height = prompt.desired_height(area.width);
         let total_height = area.height;
@@ -607,43 +599,85 @@ impl SessionView {
         area: Rect,
     ) {
         let theme = &snapshot.theme;
-        let is_narrow = area.width < HEADER_NARROW_THRESHOLD;
-
-        let content = if is_narrow {
-            let mut lines = vec![Line::from(vec![Span::styled(
-                format!(" # {}", snapshot.header.title),
-                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-            )])];
-            if let Some(info) = snapshot.header.context_and_cost.clone() {
-                lines.push(Line::from(Span::styled(
-                    format!("   {}", info),
-                    Style::default().fg(theme.text_muted),
-                )));
-            }
-            lines
+        let inner_width = usize::from(area.width.saturating_sub(2));
+        let status_accent = if snapshot.header.status_retrying {
+            theme.warning
         } else {
-            let title_span = Span::styled(
-                format!(" # {}", snapshot.header.title),
-                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-            );
-
-            let mut title_line_spans = vec![title_span];
-            if let Some(right_text) = snapshot.header.context_and_cost.clone() {
-                let right_text_len = right_text.len();
-                let available = area.width as usize;
-                let title_display_len = snapshot.header.title.len() + 3;
-                if available > title_display_len + right_text_len + 2 {
-                    let padding = available.saturating_sub(title_display_len + right_text_len + 2);
-                    title_line_spans.push(Span::raw(" ".repeat(padding)));
-                    title_line_spans.push(Span::styled(
-                        right_text,
-                        Style::default().fg(theme.text_muted),
-                    ));
-                    title_line_spans.push(Span::raw(" "));
-                }
-            }
-            vec![Line::from(title_line_spans)]
+            theme.primary
         };
+
+        let mut title_width = UnicodeWidthStr::width(snapshot.header.title.as_str());
+        let mut title_spans = Vec::new();
+
+        if area.width >= HEADER_NARROW_THRESHOLD {
+            if let Some(parent_title) = snapshot.header.parent_title.as_ref() {
+                title_width = title_width
+                    .saturating_add(UnicodeWidthStr::width(parent_title.as_str()))
+                    .saturating_add(3);
+                title_spans.push(Span::styled(
+                    parent_title.clone(),
+                    Style::default().fg(theme.text_muted),
+                ));
+                title_spans.push(Span::styled(" / ", Style::default().fg(theme.border)));
+            }
+        }
+
+        if snapshot.header.status_running {
+            title_width = title_width.saturating_add(2);
+            title_spans.push(Span::styled("● ", Style::default().fg(status_accent)));
+        }
+
+        title_spans.push(Span::styled(
+            snapshot.header.title.clone(),
+            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+        ));
+
+        if let Some(status_label) = snapshot.header.status_label.as_ref() {
+            let status_width = UnicodeWidthStr::width(status_label.as_str());
+            if inner_width > title_width.saturating_add(status_width).saturating_add(2) {
+                let padding = inner_width.saturating_sub(title_width + status_width);
+                title_spans.push(Span::raw(" ".repeat(padding)));
+                title_spans.push(Span::styled(
+                    status_label.clone(),
+                    Style::default()
+                        .fg(status_accent)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+        }
+
+        let subtitle = snapshot.header.subtitle.as_ref();
+        let usage = snapshot.header.usage.as_ref();
+        let subtitle_line = match (subtitle, usage) {
+            (Some(left), Some(right))
+                if inner_width
+                    > UnicodeWidthStr::width(left.as_str())
+                        .saturating_add(UnicodeWidthStr::width(right.as_str()))
+                        .saturating_add(2) =>
+            {
+                let padding = inner_width
+                    .saturating_sub(UnicodeWidthStr::width(left.as_str()))
+                    .saturating_sub(UnicodeWidthStr::width(right.as_str()));
+                Line::from(vec![
+                    Span::styled(left.clone(), Style::default().fg(theme.text_muted)),
+                    Span::raw(" ".repeat(padding)),
+                    Span::styled(right.clone(), Style::default().fg(theme.text_muted)),
+                ])
+            }
+            (Some(left), Some(right)) => Line::from(vec![
+                Span::styled(left.clone(), Style::default().fg(theme.text_muted)),
+                Span::styled("  ·  ", Style::default().fg(theme.border)),
+                Span::styled(right.clone(), Style::default().fg(theme.text_muted)),
+            ]),
+            (Some(left), None) => {
+                Line::from(Span::styled(left.clone(), Style::default().fg(theme.text_muted)))
+            }
+            (None, Some(right)) => {
+                Line::from(Span::styled(right.clone(), Style::default().fg(theme.text_muted)))
+            }
+            (None, None) => Line::from(""),
+        };
+        let content = vec![Line::from(title_spans), subtitle_line];
 
         let border_set = ratatui::symbols::border::Set {
             top_left: " ",
@@ -660,7 +694,16 @@ impl SessionView {
                 Block::default()
                     .borders(Borders::LEFT)
                     .border_set(border_set)
-                    .border_style(Style::default().fg(theme.border)),
+                    .border_style(Style::default().fg(if snapshot.header.status_running {
+                        if snapshot.header.status_retrying {
+                            theme.warning
+                        } else {
+                            theme.border_active
+                        }
+                    } else {
+                        theme.border
+                    }))
+                    .padding(ratatui::widgets::Padding::new(1, 1, 0, 0)),
             )
             .style(Style::default().bg(theme.background_panel));
 

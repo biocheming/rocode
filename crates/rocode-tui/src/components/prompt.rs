@@ -22,7 +22,7 @@ use super::spinner::{KnightRiderSpinner, SpinnerMode, TaskKind};
 const MAX_HISTORY_ENTRIES: usize = 200;
 const MAX_STASH_ENTRIES: usize = 50;
 const MAX_FRECENCY_ENTRIES: usize = 1000;
-const PROMPT_MIN_INPUT_LINES: u16 = 1;
+const PROMPT_MIN_INPUT_LINES: u16 = 2;
 const PROMPT_MAX_INPUT_LINES: u16 = 6;
 const SHELL_PLACEHOLDER: &str = "Run a command... \"ls -la\"";
 const INTERRUPT_CONFIRM_WINDOW_SECS: u64 = 5;
@@ -1728,9 +1728,9 @@ mod tests {
     }
 
     #[test]
-    fn desired_height_is_compact_when_idle_and_empty() {
+    fn desired_height_preserves_two_line_input_when_idle_and_empty() {
         with_isolated_prompt(|prompt| {
-            assert_eq!(prompt.desired_height(80), 3);
+            assert_eq!(prompt.desired_height(80), 4);
         });
     }
 

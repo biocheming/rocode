@@ -957,7 +957,7 @@ fn truncate_text(text: &str, max_chars: usize) -> String {
     out
 }
 
-fn sidebar_metadata_text(
+pub(crate) fn sidebar_metadata_text(
     metadata: &HashMap<String, serde_json::Value>,
     key: &str,
 ) -> Option<String> {
@@ -974,7 +974,9 @@ fn sidebar_metadata_bool(metadata: &HashMap<String, serde_json::Value>, key: &st
         .unwrap_or(false)
 }
 
-fn sidebar_model_summary(metadata: &HashMap<String, serde_json::Value>) -> Option<String> {
+pub(crate) fn sidebar_model_summary(
+    metadata: &HashMap<String, serde_json::Value>,
+) -> Option<String> {
     let provider = sidebar_metadata_text(metadata, "model_provider");
     let model_id = sidebar_metadata_text(metadata, "model_id");
     match (provider, model_id) {
@@ -984,7 +986,9 @@ fn sidebar_model_summary(metadata: &HashMap<String, serde_json::Value>) -> Optio
     }
 }
 
-fn sidebar_scheduler_summary(metadata: &HashMap<String, serde_json::Value>) -> Option<String> {
+pub(crate) fn sidebar_scheduler_summary(
+    metadata: &HashMap<String, serde_json::Value>,
+) -> Option<String> {
     if !sidebar_metadata_bool(metadata, "scheduler_applied") {
         return None;
     }

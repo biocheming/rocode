@@ -148,8 +148,13 @@ impl SessionMessagesSnapshot {
 
 #[derive(Clone)]
 struct SessionHeaderSnapshot {
+    parent_title: Option<String>,
     title: String,
-    context_and_cost: Option<String>,
+    subtitle: Option<String>,
+    usage: Option<String>,
+    status_label: Option<String>,
+    status_running: bool,
+    status_retrying: bool,
 }
 
 #[derive(Clone)]
@@ -179,15 +184,28 @@ impl SessionRenderSnapshot {
         let permission_count = *context.pending_permissions.read();
         let has_connected_provider = *context.has_connected_provider.read();
 
-        let (title, context_and_cost) = {
+        let selection = context.selection_state();
+        let (parent_title, title, subtitle, usage, status_label, status_running, status_retrying) = {
             let session_ctx = context.session.read();
-            let title = session_ctx
-                .sessions
-                .get(session_id)
+            let session = session_ctx.sessions.get(session_id);
+            let title = session
                 .map(|s| s.title.clone())
                 .unwrap_or_else(|| "New Session".to_string());
+            let parent_title = session
+                .and_then(|session| session.parent_id.as_ref())
+                .and_then(|parent_id| session_ctx.sessions.get(parent_id))
+                .map(|session| session.title.clone());
             let messages = session_ctx
                 .messages
+                .get(session_id)
+                .cloned()
+                .unwrap_or_default();
+            let subtitle = build_session_header_subtitle(
+                session.and_then(|session| session.metadata.as_ref()),
+                &selection,
+            );
+            let status = session_ctx
+                .session_status
                 .get(session_id)
                 .cloned()
                 .unwrap_or_default();
@@ -209,7 +227,7 @@ impl SessionRenderSnapshot {
                         .sum()
                 });
 
-            let context_and_cost = last_assistant.and_then(|assistant_msg| {
+            let usage = last_assistant.and_then(|assistant_msg| {
                 let total_tokens = context
                     .session_usage()
                     .as_ref()
@@ -246,7 +264,25 @@ impl SessionRenderSnapshot {
                 Some(parts.join("  ·  "))
             });
 
-            (title, context_and_cost)
+            let (status_label, status_running, status_retrying) = match status {
+                crate::context::SessionStatus::Running => {
+                    (Some("RUNNING".to_string()), true, false)
+                }
+                crate::context::SessionStatus::Retrying { attempt, .. } => {
+                    (Some(format!("RETRY {}", attempt)), true, true)
+                }
+                crate::context::SessionStatus::Idle => (None, false, false),
+            };
+
+            (
+                parent_title,
+                title,
+                subtitle,
+                usage,
+                status_label,
+                status_running,
+                status_retrying,
+            )
         };
 
         let (connected_lsp, connected_mcp, has_mcp_failures, has_mcp_registration_needed) = {
@@ -281,8 +317,13 @@ impl SessionRenderSnapshot {
             theme,
             show_header,
             header: SessionHeaderSnapshot {
+                parent_title,
                 title,
-                context_and_cost,
+                subtitle,
+                usage,
+                status_label,
+                status_running,
+                status_retrying,
             },
             footer: SessionFooterSnapshot {
                 directory,
@@ -295,6 +336,50 @@ impl SessionRenderSnapshot {
                     && Utc::now().timestamp().rem_euclid(15) >= 10,
             },
         }
+    }
+}
+
+fn build_session_header_subtitle(
+    metadata: Option<&HashMap<String, serde_json::Value>>,
+    selection: &crate::context::SelectionState,
+) -> Option<String> {
+    let mut parts = Vec::new();
+
+    if let Some(metadata) = metadata {
+        if let Some(agent) = super::sidebar::sidebar_metadata_text(metadata, "agent") {
+            parts.push(agent);
+        }
+        if let Some(model) = super::sidebar::sidebar_model_summary(metadata) {
+            parts.push(model);
+        }
+        if let Some(scheduler) = super::sidebar::sidebar_scheduler_summary(metadata) {
+            parts.push(scheduler);
+        }
+    }
+
+    if parts.is_empty() {
+        if !selection.current_agent.is_empty() {
+            parts.push(selection.current_agent.clone());
+        }
+        if let Some(model) = selection_model_summary(selection) {
+            parts.push(model);
+        }
+        if let Some(profile) = selection.current_scheduler_profile.as_ref() {
+            parts.push(format!("scheduler {}", profile));
+        }
+    }
+
+    (!parts.is_empty()).then(|| parts.join("  ·  "))
+}
+
+fn selection_model_summary(selection: &crate::context::SelectionState) -> Option<String> {
+    match (
+        selection.current_provider.as_ref(),
+        selection.current_model.as_ref(),
+    ) {
+        (Some(provider), Some(model)) => Some(format!("{}/{}", provider, model)),
+        (None, Some(model)) => Some(model.clone()),
+        _ => None,
     }
 }
 
