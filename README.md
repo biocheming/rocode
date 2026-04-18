@@ -91,6 +91,8 @@ cargo run -p rocode-cli -- web --hostname 127.0.0.1 --port 3000
 cargo run -p rocode-cli -- web --dir /path/to/workspace
 ```
 
+图标资产位于 `icons/`。当前已接入 Web favicon，并在 `windows-msvc` 目标编译时尝试把 `icons/rocode.ico` 嵌入 `rocode.exe`；Linux 桌面入口模板见 `packaging/linux/rocode.desktop`。
+
 ## 当前 CLI 入口
 
 当前顶层命令分组以 `crates/rocode-cli/src/cli.rs` 为准，主要包括：

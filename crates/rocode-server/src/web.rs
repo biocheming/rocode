@@ -42,12 +42,52 @@ pub async fn web_asset(Path(path): Path<String>) -> impl IntoResponse {
     }
 }
 
+pub async fn web_favicon_ico() -> impl IntoResponse {
+    binary_asset(
+        include_bytes!("../web/public/favicon.ico"),
+        HeaderValueStatic::ICON,
+    )
+}
+
+pub async fn web_favicon_png_32() -> impl IntoResponse {
+    binary_asset(
+        include_bytes!("../web/public/favicon-32.png"),
+        HeaderValueStatic::PNG,
+    )
+}
+
+pub async fn web_favicon_png_192() -> impl IntoResponse {
+    binary_asset(
+        include_bytes!("../web/public/favicon-192.png"),
+        HeaderValueStatic::PNG,
+    )
+}
+
+pub async fn web_apple_touch_icon() -> impl IntoResponse {
+    binary_asset(
+        include_bytes!("../web/public/apple-touch-icon.png"),
+        HeaderValueStatic::PNG,
+    )
+}
+
+fn binary_asset(bytes: &'static [u8], content_type: &'static str) -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, HeaderValueStatic::NO_STORE),
+        ],
+        bytes,
+    )
+}
+
 struct HeaderValueStatic;
 
 impl HeaderValueStatic {
     const CSS_UTF8: &'static str = "text/css; charset=utf-8";
+    const ICON: &'static str = "image/x-icon";
     const JS_UTF8: &'static str = "application/javascript; charset=utf-8";
     const NO_STORE: &'static str = "no-store";
+    const PNG: &'static str = "image/png";
 }
 
 #[cfg(test)]
