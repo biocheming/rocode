@@ -64,7 +64,7 @@ rocode web --dir /path/to/workspace
 
 当前 Web 正式入口是 `/`，不是历史过渡路由。
 如果用户直接双击二进制、且不在终端环境里启动，ROCode 会优先走桌面 Web 启动路径，并在打开浏览器前先确定 workspace 目录；若当前目录不可信，会尝试复用上次目录或弹出系统目录选择框。
-图标源文件位于 `icons/rocode.png` 与 `icons/rocode.ico`；Web 会使用派生 favicon，`windows-msvc` 构建会尝试把 `.ico` 嵌入生成的 `rocode.exe`，Linux 桌面分发可使用 `packaging/linux/rocode.desktop` 模板。
+图标源文件位于 `icons/rocode.png`、`icons/rocode.ico` 与 `icons/rocode.icns`；Web 会使用派生 favicon，`windows-msvc` 构建会尝试把 `.ico` 嵌入生成的 `rocode.exe`，Linux 桌面分发可使用 `packaging/linux/rocode.desktop` 模板，macOS 可通过 `./scripts/build_macos_app_bundle.sh release` 组装 Finder 可双击的 `ROCode.app`。
 
 ### 1.4 Attach
 

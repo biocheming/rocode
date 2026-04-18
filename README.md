@@ -91,7 +91,13 @@ cargo run -p rocode-cli -- web --hostname 127.0.0.1 --port 3000
 cargo run -p rocode-cli -- web --dir /path/to/workspace
 ```
 
-图标资产位于 `icons/`。当前已接入 Web favicon，并在 `windows-msvc` 目标编译时尝试把 `icons/rocode.ico` 嵌入 `rocode.exe`；Linux 桌面入口模板见 `packaging/linux/rocode.desktop`。
+图标资产位于 `icons/`。当前已接入 Web favicon，并在 `windows-msvc` 目标编译时尝试把 `icons/rocode.ico` 嵌入 `rocode.exe`；Linux 桌面入口模板见 `packaging/linux/rocode.desktop`；macOS 图标与 `.app` bundle 链路见 `icons/rocode.icns`、`packaging/macos/ROCode.iconset` 和 `scripts/build_macos_app_bundle.sh`。
+
+构建 macOS `.app` bundle：
+
+```bash
+./scripts/build_macos_app_bundle.sh release
+```
 
 ## 当前 CLI 入口
 

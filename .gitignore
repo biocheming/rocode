@@ -6,6 +6,7 @@ scripts/verify-autoresearch.sh
 AGENT.md
 # Rust build output
 target/
+/dist/
 marscode/
 plans/
 docs/plans/
