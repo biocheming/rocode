@@ -56,7 +56,14 @@ rocode serve --hostname 127.0.0.1 --port 3000
 rocode web --hostname 127.0.0.1 --port 3000
 ```
 
+如果不在目标目录里启动，可以显式指定 workspace：
+
+```bash
+rocode web --dir /path/to/workspace
+```
+
 当前 Web 正式入口是 `/`，不是历史过渡路由。
+如果用户直接双击二进制、且不在终端环境里启动，ROCode 会优先走桌面 Web 启动路径，并在打开浏览器前先确定 workspace 目录；若当前目录不可信，会尝试复用上次目录或弹出系统目录选择框。
 
 ### 1.4 Attach
 

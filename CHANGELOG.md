@@ -7,4 +7,6 @@
 - Web composer 新增可检索 model picker，按 provider 分组展示模型、上下文窗口与能力 badge；输入框改为单行起始、最多 10 行增长。
 - Web sidebar 新增 session 多选、批量删除与确认弹层，减少误删并提升会话管理效率。
 - provider 模型读面补齐 capabilities，下游 Web/TUI 可直接消费视觉、音频、PDF、附件、tool-call、reasoning 等能力信息。
+- CLI 新增 `rocode web --dir` / `rocode serve --dir`；无参数且非终端环境启动时，会自动走桌面 Web 启动路径，并先确定 workspace，再打开浏览器。
+- Web 入口新增正式 `favicon`，为后续桌面安装包 / app bundle / shortcut icon 链路提供基础品牌资产。
 - 文档与计划同步到 `v2026.4.17`，移除旧的假入口，并把当前 TUI/Web 状态改为与实现一致的描述。

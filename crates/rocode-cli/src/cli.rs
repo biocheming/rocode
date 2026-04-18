@@ -94,6 +94,8 @@ pub(crate) enum Commands {
         port: u16,
         #[arg(long, default_value = "127.0.0.1")]
         hostname: String,
+        #[arg(long)]
+        dir: Option<PathBuf>,
         #[arg(long, default_value_t = false)]
         mdns: bool,
         #[arg(long = "mdns-domain", default_value = "rocode.local")]
@@ -107,6 +109,8 @@ pub(crate) enum Commands {
         port: u16,
         #[arg(long, default_value = "127.0.0.1")]
         hostname: String,
+        #[arg(long)]
+        dir: Option<PathBuf>,
         #[arg(long, default_value_t = false)]
         mdns: bool,
         #[arg(long = "mdns-domain", default_value = "rocode.local")]

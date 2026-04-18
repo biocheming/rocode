@@ -85,6 +85,12 @@ cargo run -p rocode-cli -- serve --hostname 127.0.0.1 --port 3000
 cargo run -p rocode-cli -- web --hostname 127.0.0.1 --port 3000
 ```
 
+显式指定 workspace 打开 Web：
+
+```bash
+cargo run -p rocode-cli -- web --dir /path/to/workspace
+```
+
 ## 当前 CLI 入口
 
 当前顶层命令分组以 `crates/rocode-cli/src/cli.rs` 为准，主要包括：
@@ -199,6 +205,7 @@ rocode skill hub remove --session-id <session> --source-id <id> --source-kind re
 - TUI 与 Web 都直接读取统一的 session / skill / telemetry 读模型，而不是各端自己推断状态
 - TUI 当前已完成 reratui 迁移主线，进入以 hybrid app shell 为边界的稳定阶段
 - Web 当前已切到更高密度的消息阅读节奏、可检索 model picker、批量 session 删除与更轻的 sidebar / composer 语法
+- 无参数且非终端环境启动时，`rocode` 会默认走桌面 Web 启动路径，并优先解析/确认 workspace，再打开浏览器
 
 ## Release Notes
 

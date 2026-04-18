@@ -1,4 +1,5 @@
 use clap::Parser;
+use std::io::IsTerminal;
 
 mod agent_cmd;
 mod agent_stream_adapter;
@@ -33,7 +34,7 @@ use github::{handle_github_command, handle_pr_command};
 use import_export::{export_session_data, import_session_data};
 use mcp_cmd::handle_mcp_command;
 use run::{run_non_interactive, RunNonInteractiveOptions};
-use server::{run_acp_command, run_server_command, run_web_command};
+use server::{run_acp_command, run_desktop_web_command, run_server_command, run_web_command};
 use session_cmd::{handle_session_command, show_config};
 use skill_cmd::handle_skill_command;
 use tui::{run_tui, TuiLaunchOptions};
@@ -189,20 +190,22 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Serve {
             port,
             hostname,
+            dir,
             mdns,
             mdns_domain,
             cors,
         }) => {
-            run_server_command("serve", port, hostname, mdns, mdns_domain, cors).await?;
+            run_server_command("serve", port, hostname, dir, mdns, mdns_domain, cors).await?;
         }
         Some(Commands::Web {
             port,
             hostname,
+            dir,
             mdns,
             mdns_domain,
             cors,
         }) => {
-            run_web_command(port, hostname, mdns, mdns_domain, cors).await?;
+            run_web_command(port, hostname, dir, mdns, mdns_domain, cors).await?;
         }
         Some(Commands::Acp {
             port,
@@ -290,6 +293,13 @@ async fn main() -> anyhow::Result<()> {
             show_build_info();
         }
         None => {
+            let launched_from_desktop =
+                !std::io::stdin().is_terminal() && !std::io::stdout().is_terminal();
+            if launched_from_desktop {
+                run_desktop_web_command(0, "127.0.0.1".to_string(), false, "rocode.local".to_string(), vec![])
+                    .await?;
+                return Ok(());
+            }
             run_tui(TuiLaunchOptions {
                 project: None,
                 model: None,
