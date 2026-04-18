@@ -351,6 +351,12 @@
 | `directory_name` | string | 否 | 目录名 |
 | `file_path` | string | 否 | 文件路径 |
 
+`skill_manage` 也是 skill 自进化闭环中的正式写入点：
+
+- 复杂回合后的 skill 保存建议，最终应通过它落到 workspace authority
+- 已使用 skill 的 reflection / patch 提示，也以它作为正式修补入口
+- 写入结果会被 runtime 送入 memory observation，后续可在 validation、conflicts、consolidation 与 methodology promotion 中看到影响
+
 ### skill_hub
 
 检查托管技能治理状态、刷新来源索引、创建/应用 Hub 同步计划。
@@ -384,6 +390,22 @@
 | `remove` | 移除托管技能 |
 | `audit` | 审计记录 |
 | `guard_run` | 守卫扫描 |
+
+### memory surfaces
+
+ROCode 当前把 memory 做成正式可观测能力，而不只是内部实验数据。常用入口包括：
+
+- 交互命令：`/memory`、`/memory preview <query>`、`/memory show <id>`、`/memory validation <id>`、`/memory conflicts <id>`、`/memory rules`、`/memory hits ...`、`/memory runs`、`/memory consolidate ...`
+- HTTP 路由：`/memory/list`、`/memory/search`、`/memory/retrieval-preview`、`/memory/{id}`、`/memory/{id}/validation-report`、`/memory/{id}/conflicts`、`/memory/rule-packs`、`/memory/rule-hits`、`/memory/consolidation/runs`、`/memory/consolidate`
+
+这些入口覆盖的不是单一“搜索记忆”，而是完整治理面：
+
+- record list / detail
+- retrieval preview
+- validation report
+- conflict view
+- rule packs / rule hits
+- consolidation runs 与即时 consolidation
 
 ---
 

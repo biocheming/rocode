@@ -31,7 +31,7 @@ const FILE_INDEX_MAX_DEPTH: usize = 8;
 const FILE_SUGGESTION_LIMIT: usize = 20;
 const PROMPT_BLOCK_PAD_LEFT: u16 = 1;
 const PROMPT_BLOCK_PAD_RIGHT: u16 = 1;
-const PROMPT_BLOCK_PAD_TOP: u16 = 0;
+const PROMPT_BLOCK_PAD_TOP: u16 = 1;
 const PROMPT_BLOCK_PAD_BOTTOM: u16 = 0;
 const PROMPT_LINE_H_INSET: u16 = 1;
 
@@ -1762,7 +1762,7 @@ mod tests {
     #[test]
     fn desired_height_preserves_two_line_input_when_idle_and_empty() {
         with_isolated_prompt(|prompt| {
-            assert_eq!(prompt.desired_height(80), 4);
+            assert_eq!(prompt.desired_height(80), 5);
         });
     }
 

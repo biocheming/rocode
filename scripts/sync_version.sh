@@ -26,6 +26,8 @@ replace_in_file() {
     s/v\d{4}\.\d{1,2}\.\d{1,2}/$ENV{VERSION_TAG}/g;
     s/\d{4}-\d{2}-\d{2}/$ENV{DATE_ISO}/g;
     s/\d{4}\.\d{1,2}\.\d{1,2}/$ENV{VERSION}/g if $ARGV =~ /Cargo\.lock$/;
+    s/\d{4}\.\d{1,2}\.\d{1,2}/$ENV{VERSION}/g
+      if $ARGV =~ /(docs\/index\.md|docs\/installation\.md|package(?:-lock)?\.json)$/;
   ' "$file"
 }
 
@@ -39,8 +41,12 @@ for file in \
   "$ROOT_DIR/README.md" \
   "$ROOT_DIR/USER_GUIDE.md" \
   "$ROOT_DIR/docs/README.md" \
+  "$ROOT_DIR/docs/index.md" \
+  "$ROOT_DIR/docs/installation.md" \
   "$ROOT_DIR/docs/examples/plugins_example/README.md" \
-  "$ROOT_DIR/docs/examples/plugins_example/skill/SKILL.md"
+  "$ROOT_DIR/docs/examples/plugins_example/skill/SKILL.md" \
+  "$ROOT_DIR/crates/rocode-server/web/package.json" \
+  "$ROOT_DIR/crates/rocode-server/web/package-lock.json"
 do
   VERSION="$VERSION" VERSION_TAG="$VERSION_TAG" DATE_ISO="$DATE_ISO" replace_in_file "$file"
 done

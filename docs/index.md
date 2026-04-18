@@ -1,8 +1,8 @@
 # ROCode
 
-ROCode (Rusted OpenCode) 是一个用 Rust 编写的高性能 AI 编码编排器。它将终端原生交互、多 Agent 协调、可扩展技能系统和多模型 Provider 整合为一个统一的开发工作流引擎。
+ROCode (RustingOpenCode) 是一个用 Rust 编写的高性能 AI 编码编排器。它将终端原生交互、多 Agent 协调、可扩展技能系统和多模型 Provider 整合为一个统一的开发工作流引擎。
 
-> **版本:** 2026.4.17 · **许可证:** MIT · **作者:** Biocheming
+> **版本:** 2026.4.18 · **许可证:** MIT · **作者:** Biocheming
 
 ---
 
@@ -51,6 +51,16 @@ rocode skill hub install-plan --source-id <id> --source-kind registry --locator 
 ```
 
 所有读写命令经由 `rocode-server` 的 `/skill/hub/*` 路由进入 authority，不在 CLI 侧直接执行副作用。
+
+### Memory 与 Skill 自进化
+
+ROCode 当前已经把“会话经验 -> 可复用能力”的链路做成正式能力，而不是零散提示：
+
+- 复杂回合会触发 skillworthy 检测，并在合适时给出 skill save suggestion，提醒把经验整理成具备 trigger、validation 与 boundary 的可复用 skill。
+- 已有 skill 在运行后可以进入 skill reflection 视图，对照实际 tool call 检查是否需要 `patch`，避免 skill 内容和真实方法长期漂移。
+- `skill_manage` 的创建、补丁、文件写入与 guard 结果会进入 memory observation，形成 lesson、pattern、methodology candidate 等后续材料。
+- memory 检索只面向经过 validation / consolidation 的正式记录，并提供 retrieval preview 来解释注入原因，而不是把未经裁决的草稿直接塞回 prompt。
+- TUI、Web 与 HTTP Server 都提供 memory 的 list、detail、validation、conflicts、rule hits、consolidation runs 等可观测面。
 
 ### 多 Provider 支持
 

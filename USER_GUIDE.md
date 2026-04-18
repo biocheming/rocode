@@ -4,7 +4,7 @@
 
 ## 0. 版本
 
-- 当前版本：`v2026.4.17`
+- 当前版本：`v2026.4.18`
 - 当前 CLI 命令：`rocode`
 
 ## 1. 先选运行方式
@@ -234,9 +234,55 @@ rocode skill hub policy
 - max download bytes
 - max extract bytes
 
-## 7. MCP / Agent / Debug
+## 7. Memory 与 Skill 自进化
 
-### 7.1 MCP
+### 7.1 这不是“只会调用 skill”
+
+ROCode 当前会把复杂回合中的经验继续往前推进，而不是停留在“这次刚好做完”：
+
+- 如果一个回合出现多工具协同、编辑后验证、错误恢复等模式，运行时可能追加 `System suggestion`，提醒你把它沉淀为 skill。
+- 如果当前已加载的 skill 与真实执行步骤出现偏离，运行时也可能提示你用 `skill_manage("patch", ...)` 修正它，而不是继续让旧 skill 漂移。
+- `skill_manage` 的创建、补丁、文件更新、guard 结果都会被送入 memory observation，供后续验证和归纳。
+
+### 7.2 Memory 具体记什么
+
+Memory 记录不是随手记一句话。当前系统会保留这几类关键信息：
+
+- `evidence_refs`：证据来自哪个 session、message、tool call、stage
+- `trigger_conditions`：这条经验在什么条件下才应被召回
+- `boundaries`：什么情况下不该复用
+- `normalized_facts`：归一化后的事实与约束
+
+它的目标不是替代 session transcript，而是把可复用经验从原始会话里提纯出来。
+
+### 7.3 它如何避免“记错”或“乱注入”
+
+- 新记录先以 candidate 进入系统，不会立刻变成稳定记忆。
+- validation 会检查 scope、evidence、trigger、boundary、重复冲突、过期与不安全内容。
+- retrieval 只从 `validated` / `consolidated` 记录里取稳定内容，并通过 retrieval preview 解释为什么会注入当前回合。
+- consolidation 会把重复或相近记录收束起来，并把反复出现的 lesson 提升为 pattern / methodology candidate。
+
+### 7.4 在哪里看这些信息
+
+TUI 中可以直接使用：
+
+```text
+/memory
+/memory preview <query>
+/memory show <record_id>
+/memory validation <record_id>
+/memory conflicts <record_id>
+/memory rules
+/memory hits run=<run_id>
+/memory runs
+/memory consolidate candidates limit=10
+```
+
+Web 当前在 settings drawer 里提供 Memory 视图，可查看 records、retrieval preview、rule packs、rule hits、validation、conflicts 和 consolidation runs。
+
+## 8. MCP / Agent / Debug
+
+### 8.1 MCP
 
 ```bash
 rocode mcp list
@@ -247,7 +293,7 @@ rocode mcp auth list
 rocode mcp debug <NAME>
 ```
 
-### 7.2 Agent
+### 8.2 Agent
 
 ```bash
 rocode agent list
@@ -255,7 +301,7 @@ rocode agent create --help
 rocode debug agent <NAME>
 ```
 
-### 7.3 Debug
+### 8.3 Debug
 
 常用入口：
 

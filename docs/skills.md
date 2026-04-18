@@ -95,6 +95,42 @@ pub fn new(base_dir: impl Into<PathBuf>, config_store: Option<Arc<ConfigStore>>)
 
 ---
 
+## Skill Reflection 与自进化闭环
+
+ROCode 当前的 skill 系统不只负责“安装和读取”，还负责把运行中的经验回流为更好的 skill 与 methodology。
+
+### 运行时提示
+
+- 当一个回合呈现“编辑后验证”“错误恢复”“多工具协同”“多轮用户引导收敛”等特征时，运行时会把该回合判定为 skillworthy candidate，并追加保存提示。
+- 这个提示不是要求把整段对话原样保存，而是要求提炼出可复用的触发条件、步骤、验证方式和边界。
+
+### Reflection 视图
+
+- 如果一个 skill 在会话中被实际使用，运行时可以生成 Skill Usage Reflection。
+- 反思内容会把 skill 中记录的方法步骤与真实 tool calls 并排呈现，用于判断 skill 是否已经过时、缺步、顺序失真或验证环节不足。
+- 当偏差明显时，建议通过 `skill_manage("patch", ...)` 修补，而不是为微小变体频繁改写。
+
+### 写入后的 Memory Linkage
+
+`skill_manage` 不是孤立文件操作。写入结果会进入 memory authority 的 observation 链：
+
+- `create` 可以生成与 skill 绑定的 methodology promotion 记录
+- `patch` / `edit` / supporting file 变化会留下 linked skill observation
+- guard 未通过或存在治理告警时，系统会保留 skill feedback lesson，供后续 consolidation 使用
+
+### 从 Lesson 到 Methodology
+
+skill 自进化并不止于“写回一个 SKILL.md”：
+
+1. session 中的复杂执行先形成 lesson / pattern / candidate 级别的 memory 记录
+2. 验证通过后，重复 lesson 会被 consolidation 聚成 pattern
+3. 结构化 pattern 会被提升为 methodology candidate
+4. 已链接 skill 的 methodology candidate 会反过来成为后续 patch / refine 的依据
+
+这样 skill、session 和记忆不是三套分离系统，而是单向可审计的能力沉淀链。
+
+---
+
 ## Skill Hub -- 远程分发与托管
 
 Skill Hub 是远程 skill distribution、artifact cache 和 managed lifecycle 的统一入口。

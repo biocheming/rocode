@@ -1,6 +1,6 @@
 # ROCode Docs
 
-文档基线：`v2026.4.17`（更新日期：`2026-04-17`）
+文档基线：`v2026.4.18`（更新日期：`2026-04-18`）
 
 This directory contains product-facing examples and design references for ROCode features.
 
@@ -10,15 +10,21 @@ This directory contains product-facing examples and design references for ROCode
   - 项目总览、启动方式、当前公开能力范围
 - `../CHANGELOG.md`
   - 当前版本发布说明与最近一次交付摘要
-- `USER_GUIDE.md`
-  - 面向使用者的命令、scheduler、TUI 交互说明
-- `docs/examples/scheduler/README.md`
+- `../USER_GUIDE.md`
+  - 面向使用者的命令、scheduler、TUI 交互说明，以及 memory / skill 自进化使用心智
+- `skills.md`
+  - Skill lifecycle、skill reflection、`skill_manage` 写入与 memory linkage
+- `tools.md`
+  - 工具层参考，包括 `skill_manage` 与 memory 可观测面入口
+- `configuration.md`
+  - 配置分层、workspace 边界，以及 memory 受 workspace mode 约束的作用域说明
+- `examples/scheduler/README.md`
   - public scheduler presets、stage 默认值、当前行为说明
-- `docs/examples/scheduler/SCHEDULER_GUIDE.md`
+- `examples/scheduler/SCHEDULER_GUIDE.md`
   - Scheduler 完整使用指南（Tutorial & User Guide）
-- `docs/examples/context_docs/README.md`
+- `examples/context_docs/README.md`
   - `context_docs` schema、registry、index 示例
-- `docs/plugins_example/README.md`
+- `examples/plugins_example/README.md`
   - Skill / TS plugin / Rust 扩展示例
 
 ## Examples
@@ -117,6 +123,21 @@ rocode skill hub remove --session-id <session> --source-id <id> --source-kind re
 ```
 
 所有读写命令都通过 `rocode-server` 的 `/skill/hub/*` 路由进入 authority，不在 CLI 侧直接执行副作用。
+
+## Memory 与 Skill 自进化文档入口
+
+如果你要理解 ROCode 如何把会话经验沉淀为可复用能力，优先看：
+
+- `../README.md`
+  - 产品层能力总览，说明 memory 与 skill 自进化的正式定位
+- `../USER_GUIDE.md`
+  - 用户视角的使用方式、观察入口与风险边界
+- `skills.md`
+  - skill reflection、`skill_manage` 回写与 methodology linkage
+- `tools.md`
+  - `/memory` 与 `skill_manage` 这些运行时入口
+- `configuration.md`
+  - shared / isolated workspace mode 对 memory scope 的影响
 
 ## Skill Hub Policy
 
