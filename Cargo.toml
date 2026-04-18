@@ -95,6 +95,3 @@ ast-grep = "0.41.0"
 ast-grep-core = "0.41.0"
 ast-grep-language = "0.41.0"
 ast-grep-config = "0.41.0"
-
-[patch.crates-io]
-ratatui-widgets = { path = "third_party/ratatui-widgets" }
